@@ -170,6 +170,7 @@ test-suite dbsync-test
   hs-source-dirs: test-main
   main-is:        Main.hs
   other-modules:
+    DbSync.AppSpec
     DbSync.CliSpec
     DbSync.Config.TypesSpec
     DbSync.Config.ValidationSpec

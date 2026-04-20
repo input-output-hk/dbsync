@@ -1,0 +1,79 @@
+repository cardano-haskell-packages
+  url: https://chap.intersectmbo.org/
+  secure: True
+  root-keys:
+    3e0cce471cf09815f930210f7827266fd09045445d65923e6d0238a6cd15126f
+    443abb7fb497a134c343faf52f0b659bd7999bc06b7f63fa76dc99d631f9bea1
+    a86a1f6ce86c449c46666bda44268677abf29b5b2d2eb5ec7af903ec2f117a82
+    bcec67e8e99cabfa7764d75ad9b158d72bfacf70ca1d0ec8bc6b4406d1bf8413
+    c00aae8461a256275598500ea0e187588c35a5d5d7454fb57eac18d9edb86a56
+    d4a35cd3121aa00d18544bb0ac01c3e1691d618f462c46129271bccf39f7e8ee
+
+index-state:
+  , hackage.haskell.org 2025-09-29T13:55:56Z
+  , cardano-haskell-packages 2026-03-30T15:30:34Z
+
+active-repositories:
+  , :rest
+  , cardano-haskell-packages:override
+
+packages:
+  dbsync-db
+  dbsync
+  dbsync-smash
+
+-- ---------------------------------------------------------------------------
+-- Package flags
+-- ---------------------------------------------------------------------------
+
+package postgresql-libpq
+  flags: +use-pkg-config
+
+package cryptonite
+  flags: -support_rdrand
+
+package text
+  flags: -simdutf
+
+package snap-server
+  flags: -openssl
+
+package cardano-node
+  flags: -systemd
+
+-- ---------------------------------------------------------------------------
+-- Constraints
+-- ---------------------------------------------------------------------------
+
+constraints:
+  , text < 2.1.2
+  -- ouroboros-network-framework requires random ^>= 1.2 (< 1.3),
+  -- but hspec-core can pull in random 1.3.x. Pin to 1.2 range.
+  , random < 1.3
+
+if impl (ghc >= 9.12)
+  allow-newer:
+    , Unique:hashable
+
+-- ---------------------------------------------------------------------------
+-- Tests
+-- ---------------------------------------------------------------------------
+
+tests: True
+test-show-details: direct
+write-ghc-environment-files: always
+
+-- ---------------------------------------------------------------------------
+-- Source repository packages
+-- ---------------------------------------------------------------------------
+
+source-repository-package
+  type: git
+  location: https://github.com/IntersectMBO/cardano-node
+  tag: 0d697f14ee10a775f08c60e3839becc9131dca75
+  --sha256: sha256-zyrBw3yn69y3n0c6U0MDvezYC3GHbjJ3yJmhM4vMtUk=
+  subdir:
+    cardano-node
+    trace-dispatcher
+    trace-forward
+    trace-resources

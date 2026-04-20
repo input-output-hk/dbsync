@@ -1,0 +1,21 @@
+# Haskell
+.ghc.environment.*
+.stack-work/
+cabal.project.local
+dist-newstyle/
+dist/
+
+# HLS
+.hie/
+hie-bios/
+
+# Nix
+.direnv
+.envrc
+result*
+
+# MacOS
+.DS_Store
+
+# Logs
+log-dir/

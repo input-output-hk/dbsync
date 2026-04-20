@@ -1,0 +1,43 @@
+cabal-version: 3.6
+name:          dbsync-smash
+version:       0.1.0.0
+synopsis:      Stake pool metadata aggregation server for Cardano
+description:   HTTP server that serves pool metadata from the dbsync
+               PostgreSQL database. Depends on dbsync-db for DB access but
+               NOT on dbsync (the sync engine).
+license:       Apache-2.0
+author:        IOHK Engineering Team
+maintainer:    operations@iohk.io
+category:      Cryptocurrency
+build-type:    Simple
+
+common warnings
+  ghc-options:
+    -Wall
+    -Wcompat
+    -Wredundant-constraints
+    -Wincomplete-record-updates
+    -Wincomplete-uni-patterns
+    -Wmissing-deriving-strategies
+    -Wpartial-fields
+    -Widentities
+    -Wunused-packages
+
+common defaults
+  default-language:   GHC2021
+  default-extensions:
+    NoImplicitPrelude
+    OverloadedStrings
+    DerivingStrategies
+    GeneralizedNewtypeDeriving
+    LambdaCase
+
+library
+  import:         warnings, defaults
+  hs-source-dirs: src
+  exposed-modules:
+    DbSync.SMASH.Server
+  build-depends:
+      base                  >= 4.14 && < 5
+    , cardano-prelude
+    , dbsync-db

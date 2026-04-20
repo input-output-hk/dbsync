@@ -1,0 +1,200 @@
+cabal-version: 3.6
+name:          dbsync
+version:       0.1.0.0
+synopsis:      Cardano blockchain to PostgreSQL — reimplemented
+description:   A greenfield reimplementation of dbsync using COPY-based
+               parallel extraction, monotonic ID pre-assignment, and a projection
+               system for modular data extraction.
+license:       Apache-2.0
+author:        IOHK Engineering Team
+maintainer:    operations@iohk.io
+copyright:     2020-2025 Input Output Global Inc (IOG).
+category:      Cryptocurrency
+build-type:    Simple
+
+common warnings
+  ghc-options:
+    -Wall
+    -Wcompat
+    -Wredundant-constraints
+    -Wincomplete-record-updates
+    -Wincomplete-uni-patterns
+    -Wmissing-deriving-strategies
+    -Wpartial-fields
+    -Widentities
+    -Wunused-packages
+
+common defaults
+  default-language:   GHC2021
+  default-extensions:
+    NoImplicitPrelude
+    OverloadedStrings
+    DerivingStrategies
+    GeneralizedNewtypeDeriving
+    LambdaCase
+
+-- ---------------------------------------------------------------------------
+-- Library: sync engine logic
+-- ---------------------------------------------------------------------------
+library
+  import:         warnings, defaults
+  hs-source-dirs: src
+  exposed-modules:
+    DbSync.App
+    DbSync.AppM
+    DbSync.Cli
+    DbSync.Config
+    DbSync.Config.Node
+    DbSync.Config.Types
+    DbSync.Config.Validation
+    DbSync.Env
+    DbSync.Error
+    DbSync.Trace
+    DbSync.Trace.Types
+    DbSync.Trace.Backend
+    DbSync.Phase
+    DbSync.Phase.IngestChainHistory
+    DbSync.Phase.PreparingForChainTip
+    DbSync.Phase.FollowingChainTip
+    DbSync.Block.Receiver
+    DbSync.Block.Parser
+    DbSync.Block.Types
+    DbSync.Projection
+    DbSync.Projection.Core
+    DbSync.Projection.UTxO
+    DbSync.Projection.MultiAsset
+    DbSync.Projection.Metadata
+    DbSync.Projection.StakeDelegation
+    DbSync.Projection.ScriptsDatums
+    DbSync.Projection.Governance
+    DbSync.Projection.Cbor
+    DbSync.Projection.EpochBoundary
+    DbSync.Projection.CurrentState
+    DbSync.Id.Counter
+    DbSync.Id.DedupMap
+    DbSync.Checkpoint.Manager
+    DbSync.Checkpoint.Types
+    DbSync.Checkpoint.Serialise
+    DbSync.Ledger.Worker
+    DbSync.OffChain.Types
+    DbSync.OffChain.Fetcher
+    DbSync.OffChain.Pool
+    DbSync.OffChain.Vote
+    DbSync.Metrics
+  build-depends:
+    -- Base
+      base                            >= 4.14 && < 5
+    , cardano-prelude
+
+    -- Internal
+    , dbsync-db
+
+    -- Cardano ecosystem (from CHaP)
+    , cardano-crypto-class
+    , cardano-ledger-core
+    , cardano-ledger-byron
+    , cardano-ledger-shelley
+    , cardano-ledger-allegra
+    , cardano-ledger-mary
+    , cardano-ledger-alonzo
+    , cardano-ledger-babbage
+    , cardano-ledger-conway          >= 1.17.3
+    , cardano-slotting
+    , ouroboros-consensus             ^>= 0.30.0.1
+    , ouroboros-consensus-cardano     ^>= 0.26.0.3
+    , ouroboros-network               ^>= 0.22.6.0
+    , ouroboros-network-api           ^>= 0.16.0.0
+
+    -- Database
+    , hasql
+    , postgresql-libpq
+
+    -- Data / serialisation
+    , aeson
+    , yaml
+    , unordered-containers
+    , bytestring
+    , text
+    , serialise
+    , cborg
+    , vector
+    , containers
+
+    -- Concurrency
+    , stm
+    , async
+
+    -- Tracing
+    , contra-tracer
+
+    -- Monitoring
+    , prometheus
+
+    -- CLI
+    , optparse-applicative
+
+    -- Other
+    , mtl
+    , time
+    , transformers
+    , filepath
+    , directory
+
+-- ---------------------------------------------------------------------------
+-- Test helper library
+-- ---------------------------------------------------------------------------
+library dbsync-testlib
+  import:         warnings, defaults
+  hs-source-dirs: test
+  exposed-modules:
+    DbSync.Test.Generators
+    DbSync.Test.Fixtures
+    DbSync.Test.Helpers
+    DbSync.Test.Database
+  build-depends:
+      base
+    , dbsync
+    , hedgehog
+    , hspec
+    , bytestring
+    , text
+    , unordered-containers
+    , cardano-prelude
+
+-- ---------------------------------------------------------------------------
+-- Test runner
+-- ---------------------------------------------------------------------------
+test-suite dbsync-test
+  import:         warnings, defaults
+  type:           exitcode-stdio-1.0
+  hs-source-dirs: test-main
+  main-is:        Main.hs
+  other-modules:
+    DbSync.CliSpec
+    DbSync.Config.TypesSpec
+    DbSync.Config.ValidationSpec
+    DbSync.Config.NodeSpec
+  build-depends:
+      base
+    , dbsync
+    , dbsync:dbsync-testlib
+    , hspec
+    , hedgehog
+    , hspec-hedgehog
+    , cardano-prelude
+    , optparse-applicative
+    , text
+    , yaml
+
+-- ---------------------------------------------------------------------------
+-- Executable
+-- ---------------------------------------------------------------------------
+executable dbsync
+  import:         warnings, defaults
+  hs-source-dirs: app
+  main-is:        Main.hs
+  ghc-options:    -threaded -rtsopts "-with-rtsopts=-N -T"
+  build-depends:
+      base
+    , dbsync
+    , cardano-prelude

@@ -1,0 +1,32 @@
+{
+  "Protocol": "Cardano",
+  "RequiresNetworkMagic": "RequiresMagic",
+  "ByronGenesisFile": "byron-genesis.json",
+  "ByronGenesisHash": "abc123",
+  "ShelleyGenesisFile": "shelley-genesis.json",
+  "ShelleyGenesisHash": "def456",
+  "AlonzoGenesisFile": "alonzo-genesis.json",
+  "AlonzoGenesisHash": "789abc",
+  "ConwayGenesisFile": "conway-genesis.json",
+
+  "LastKnownBlockVersion-Major": 3,
+  "LastKnownBlockVersion-Minor": 0,
+  "LastKnownBlockVersion-Alt": 0,
+
+  "TestShelleyHardForkAtEpoch": 1,
+  "TestAllegraHardForkAtEpoch": 2,
+  "TestMaryHardForkAtEpoch": 3,
+  "TestAlonzoHardForkAtEpoch": 4,
+  "TestBabbageHardForkAtEpoch": 5,
+  "TestConwayHardForkAtEpoch": 6,
+
+  "TurnOnLogging": true,
+  "TurnOnLogMetrics": false,
+  "minSeverity": "Info",
+  "setupBackends": ["KatipBK"],
+  "defaultBackends": ["KatipBK"],
+  "setupScribes": [{"scFormat": "ScText", "scKind": "StdoutSK", "scName": "stdout", "scRotation": null}],
+  "defaultScribes": [["StdoutSK", "stdout"]],
+  "rotation": {"rpKeepFilesNum": 10, "rpLogLimitBytes": 5000000, "rpMaxAgeHours": 24},
+  "options": {"mapBackends": {}, "mapSubtrace": {}}
+}

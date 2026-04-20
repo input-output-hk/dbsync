@@ -1,0 +1,58 @@
+cabal-version: 3.6
+name:          dbsync-db
+version:       0.1.0.0
+synopsis:      PostgreSQL schema, COPY encoding, and DB interface for dbsync
+description:   Shared database layer used by both dbsync (write) and
+               dbsync-smash (read). Owns schema types, CREATE TABLE DDL
+               generation, COPY text encoding, and the connection/writer interface.
+license:       Apache-2.0
+author:        IOHK Engineering Team
+maintainer:    operations@iohk.io
+category:      Cryptocurrency
+build-type:    Simple
+
+common warnings
+  ghc-options:
+    -Wall
+    -Wcompat
+    -Wredundant-constraints
+    -Wincomplete-record-updates
+    -Wincomplete-uni-patterns
+    -Wmissing-deriving-strategies
+    -Wpartial-fields
+    -Widentities
+    -Wunused-packages
+
+common defaults
+  default-language:   GHC2021
+  default-extensions:
+    NoImplicitPrelude
+    OverloadedStrings
+    DerivingStrategies
+    GeneralizedNewtypeDeriving
+    LambdaCase
+
+library
+  import:         warnings, defaults
+  hs-source-dirs: src
+  exposed-modules:
+    DbSync.Db.Schema.Types
+    DbSync.Db.Schema.Generate
+    DbSync.Db.Schema.Version
+    DbSync.Db.Schema.Migration
+    DbSync.Db.Writer.Copy
+    DbSync.Db.Writer.Copy.Connection
+    DbSync.Db.Writer.Copy.Encoder
+    DbSync.Db.Writer.Insert
+  build-depends:
+      base                  >= 4.14 && < 5
+    , cardano-prelude
+
+    -- Database
+    , hasql
+    , postgresql-libpq
+
+    -- Data
+    , bytestring
+    , containers
+    , text

@@ -4,11 +4,11 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 
--- | Shelley+ block-level converters and shared helpers.
+-- | Post-Byron block-level converters and shared helpers.
 --
--- Ported from @Cardano.DbSync.Era.Shelley.Generic.Block@ in the original
--- cardano-db-sync. Each @from*Block@ function converts an era-specific
--- 'ShelleyBlock' into our era-independent 'GenericBlock'.
+-- All post-Byron eras (Shelley through Dijkstra) use the consensus
+-- 'ShelleyBlock' wrapper. Each @from*Block@ function converts an
+-- era-specific block into our era-independent 'GenericBlock'.
 --
 -- The block-level converters are intentionally thin — they delegate to
 -- shared helpers for header extraction and differ only in:
@@ -18,7 +18,7 @@
 --   3. Which @from*Tx@ function is mapped over transactions (currently stubbed)
 --
 -- __First pass:__ @blkTxs = []@ — transaction extraction wired in Steps 6+7.
-module DbSync.Block.Parser.Shelley
+module DbSync.Block.Parser.Block
   ( -- * Block converters (Shelley+ eras)
     fromShelleyBlock
   , fromAllegraBlock

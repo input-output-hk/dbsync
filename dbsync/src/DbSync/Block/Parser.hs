@@ -34,6 +34,15 @@ import Ouroboros.Consensus.Cardano.Block
   , StandardCrypto
   )
 
+import DbSync.Block.Parser.Block
+  ( fromAllegraBlock
+  , fromAlonzoBlock
+  , fromBabbageBlock
+  , fromConwayBlock
+  , fromDijkstraBlock
+  , fromMaryBlock
+  , fromShelleyBlock
+  )
 import DbSync.Block.Parser.Types (EpochSlotInfo (..), stubEpochSlotInfo)
 import DbSync.Block.Types (GenericBlock)
 
@@ -54,17 +63,11 @@ parseBlock :: EpochSlotInfo -> CardanoBlock StandardCrypto -> GenericBlock
 parseBlock esi = \case
   -- Byron era (pre-Shelley, includes Epoch Boundary Blocks)
   BlockByron _byronBlk     -> panic "TODO: Byron block conversion (Step 4)"
-  -- Shelley era (TPraos consensus)
-  BlockShelley _shelleyBlk -> panic "TODO: Shelley block conversion (Step 3)"
-  -- Allegra era (TPraos, adds validity intervals)
-  BlockAllegra _allegraBlk -> panic "TODO: Allegra block conversion (Step 3)"
-  -- Mary era (TPraos, adds multi-asset values)
-  BlockMary _maryBlk       -> panic "TODO: Mary block conversion (Step 3)"
-  -- Alonzo era (TPraos, adds Plutus smart contracts)
-  BlockAlonzo _alonzoBlk   -> panic "TODO: Alonzo block conversion (Step 3)"
-  -- Babbage era (Praos consensus, adds inline datums, reference scripts)
-  BlockBabbage _babbageBlk -> panic "TODO: Babbage block conversion (Step 3)"
-  -- Conway era (Praos, adds on-chain governance)
-  BlockConway _conwayBlk   -> panic "TODO: Conway block conversion (Step 3)"
-  -- Dijkstra era (Praos, post-Conway)
-  BlockDijkstra _dijkBlk   -> panic "TODO: Dijkstra block conversion (Step 3)"
+  -- Shelley+ eras — all wired to real converters
+  BlockShelley shelleyBlk  -> fromShelleyBlock esi shelleyBlk
+  BlockAllegra allegraBlk  -> fromAllegraBlock esi allegraBlk
+  BlockMary maryBlk        -> fromMaryBlock esi maryBlk
+  BlockAlonzo alonzoBlk    -> fromAlonzoBlock esi alonzoBlk
+  BlockBabbage babbageBlk  -> fromBabbageBlock esi babbageBlk
+  BlockConway conwayBlk    -> fromConwayBlock esi conwayBlk
+  BlockDijkstra dijkBlk    -> fromDijkstraBlock esi dijkBlk

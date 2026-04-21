@@ -82,10 +82,20 @@ import Ouroboros.Consensus.Cardano.Block
   )
 import Ouroboros.Network.Block (BlockNo)
 
+import DbSync.Block.Parser.Tx
+  ( fromShelleyTx
+  , fromAllegraTx
+  , fromMaryTx
+  , fromAlonzoTx
+  , fromBabbageTx
+  , fromConwayTx
+  , fromDijkstraTx
+  )
 import DbSync.Block.Parser.Types (EpochSlotInfo (..))
 import DbSync.Block.Types
   ( BlockEra (..)
   , GenericBlock (..)
+  , GenericTx
   )
 
 -- ---------------------------------------------------------------------------
@@ -93,24 +103,26 @@ import DbSync.Block.Types
 -- ---------------------------------------------------------------------------
 
 fromShelleyBlock :: EpochSlotInfo -> ShelleyBlock (TPraos StandardCrypto) ShelleyEra -> GenericBlock
-fromShelleyBlock = mkShelleyBlockTPraos Shelley
+fromShelleyBlock = mkShelleyBlockTPraos Shelley fromShelleyTx
 
 fromAllegraBlock :: EpochSlotInfo -> ShelleyBlock (TPraos StandardCrypto) AllegraEra -> GenericBlock
-fromAllegraBlock = mkShelleyBlockTPraos Allegra
+fromAllegraBlock = mkShelleyBlockTPraos Allegra fromAllegraTx
 
 fromMaryBlock :: EpochSlotInfo -> ShelleyBlock (TPraos StandardCrypto) MaryEra -> GenericBlock
-fromMaryBlock = mkShelleyBlockTPraos Mary
+fromMaryBlock = mkShelleyBlockTPraos Mary fromMaryTx
 
 fromAlonzoBlock :: EpochSlotInfo -> ShelleyBlock (TPraos StandardCrypto) AlonzoEra -> GenericBlock
-fromAlonzoBlock = mkShelleyBlockTPraos Alonzo
+fromAlonzoBlock = mkShelleyBlockTPraos Alonzo fromAlonzoTx
 
 -- | Shared TPraos block converter — all pre-Babbage eras use the same pattern.
 mkShelleyBlockTPraos
-  :: BlockEra
+  :: Ledger.EraBlockBody era
+  => BlockEra
+  -> ((Word64, Ledger.Tx era) -> GenericTx)
   -> EpochSlotInfo
   -> ShelleyBlock (TPraos StandardCrypto) era
   -> GenericBlock
-mkShelleyBlockTPraos era esi blk =
+mkShelleyBlockTPraos era txConvert esi blk =
   let slotNo = slotNumber blk
       (protoMaj, protoMin) = splitProtoVer (blockProtoVersionTPraos blk)
   in GenericBlock
@@ -129,7 +141,7 @@ mkShelleyBlockTPraos era esi blk =
     , blkVrfKey        = Just (blockVrfKeyViewTPraos blk)
     , blkOpCert        = Just (blockOpCertRawTPraos blk)
     , blkOpCertCounter = Just (blockOpCertCounterTPraos blk)
-    , blkTxs           = []  -- TODO: Wire tx converters (Step 6+7)
+    , blkTxs           = map txConvert (getTxs blk)
     }
 
 -- ---------------------------------------------------------------------------
@@ -137,21 +149,23 @@ mkShelleyBlockTPraos era esi blk =
 -- ---------------------------------------------------------------------------
 
 fromBabbageBlock :: EpochSlotInfo -> ShelleyBlock (Praos StandardCrypto) BabbageEra -> GenericBlock
-fromBabbageBlock = mkShelleyBlockPraos Babbage
+fromBabbageBlock = mkShelleyBlockPraos Babbage fromBabbageTx
 
 fromConwayBlock :: EpochSlotInfo -> ShelleyBlock (Praos StandardCrypto) ConwayEra -> GenericBlock
-fromConwayBlock = mkShelleyBlockPraos Conway
+fromConwayBlock = mkShelleyBlockPraos Conway fromConwayTx
 
 fromDijkstraBlock :: EpochSlotInfo -> ShelleyBlock (Praos StandardCrypto) DijkstraEra -> GenericBlock
-fromDijkstraBlock = mkShelleyBlockPraos Dijkstra
+fromDijkstraBlock = mkShelleyBlockPraos Dijkstra fromDijkstraTx
 
 -- | Shared Praos block converter — Babbage+ eras use the same pattern.
 mkShelleyBlockPraos
-  :: BlockEra
+  :: Ledger.EraBlockBody era
+  => BlockEra
+  -> ((Word64, Ledger.Tx era) -> GenericTx)
   -> EpochSlotInfo
   -> ShelleyBlock (Praos StandardCrypto) era
   -> GenericBlock
-mkShelleyBlockPraos era esi blk =
+mkShelleyBlockPraos era txConvert esi blk =
   let slotNo = slotNumber blk
       (protoMaj, protoMin) = splitProtoVer (blockProtoVersionPraos blk)
   in GenericBlock
@@ -170,7 +184,7 @@ mkShelleyBlockPraos era esi blk =
     , blkVrfKey        = Just (blockVrfKeyViewPraos blk)
     , blkOpCert        = Just (blockOpCertRawPraos blk)
     , blkOpCertCounter = Just (blockOpCertCounterPraos blk)
-    , blkTxs           = []  -- TODO: Wire tx converters (Step 6+7)
+    , blkTxs           = map txConvert (getTxs blk)
     }
 
 -- ---------------------------------------------------------------------------

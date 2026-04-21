@@ -61,6 +61,7 @@ library
     DbSync.Block.Receiver
     DbSync.Block.Parser
     DbSync.Block.Parser.Block
+    DbSync.Block.Parser.Byron
     DbSync.Block.Parser.Types
     DbSync.Block.Types
     DbSync.Extractor
@@ -95,7 +96,9 @@ library
     , dbsync-db
 
     -- Cardano ecosystem (from CHaP)
+    , cardano-binary
     , cardano-client
+    , cardano-crypto
     , cardano-crypto-wrapper
     , cardano-crypto-class
     , cardano-ledger-api

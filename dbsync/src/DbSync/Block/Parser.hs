@@ -43,6 +43,7 @@ import DbSync.Block.Parser.Block
   , fromMaryBlock
   , fromShelleyBlock
   )
+import DbSync.Block.Parser.Byron (fromByronBlock)
 import DbSync.Block.Parser.Types (EpochSlotInfo (..), stubEpochSlotInfo)
 import DbSync.Block.Types (GenericBlock)
 
@@ -62,7 +63,7 @@ import DbSync.Block.Types (GenericBlock)
 parseBlock :: EpochSlotInfo -> CardanoBlock StandardCrypto -> GenericBlock
 parseBlock esi = \case
   -- Byron era (pre-Shelley, includes Epoch Boundary Blocks)
-  BlockByron _byronBlk     -> panic "TODO: Byron block conversion (Step 4)"
+  BlockByron byronBlk      -> fromByronBlock esi byronBlk
   -- Shelley+ eras — all wired to real converters
   BlockShelley shelleyBlk  -> fromShelleyBlock esi shelleyBlk
   BlockAllegra allegraBlk  -> fromAllegraBlock esi allegraBlk

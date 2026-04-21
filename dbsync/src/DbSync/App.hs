@@ -17,13 +17,13 @@ import Control.Tracer (traceWith)
 
 import DbSync.Config.Types
   ( NodeConfig
-  , ProjectionConfig (..)
-  , ProjectionConfigs (..)
+  , SyncOption (..)
+  , SyncOptions (..)
   , SyncConfig (..)
   )
 import DbSync.Env (CoreEnv (..))
 import DbSync.Metrics (Metrics (..))
-import DbSync.Projection (ProjectionDef (..))
+import DbSync.Extractor (ExtractorDef (..))
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 
 -- ---------------------------------------------------------------------------
@@ -33,30 +33,30 @@ import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 -- | Build the shared core environment from parsed configs.
 --
 -- Constructs the tracer, placeholder metrics, and the list of
--- active projection definitions based on the config.
+-- active extractor definitions based on the config.
 buildCoreEnv :: AppTracer -> SyncConfig -> NodeConfig -> IO CoreEnv
 buildCoreEnv tracer syncCfg nodeCfg = do
-  let projections = buildProjections (scProjections syncCfg)
+  let extractors = buildExtractors (scOptions syncCfg)
       metrics = placeholderMetrics
   pure CoreEnv
     { ceTracer      = tracer
     , ceMetrics     = metrics
     , ceConfig      = syncCfg
     , ceNodeConfig  = nodeCfg
-    , ceProjections = projections
+    , ceExtractors = extractors
     }
 
--- | Build the list of enabled projections from config.
-buildProjections :: ProjectionConfigs -> [ProjectionDef]
-buildProjections pc = mapMaybe mkProj allProjections
+-- | Build the list of enabled extractors from config.
+buildExtractors :: SyncOptions -> [ExtractorDef]
+buildExtractors pc = mapMaybe mkProj allOptions
   where
-    mkProj :: (Text, ProjectionConfig) -> Maybe ProjectionDef
+    mkProj :: (Text, SyncOption) -> Maybe ExtractorDef
     mkProj (name, cfg)
-      | prEnabled cfg = Just $ stubProjection name
+      | prEnabled cfg = Just $ stubExtractor name
       | otherwise     = Nothing
 
-    allProjections :: [(Text, ProjectionConfig)]
-    allProjections =
+    allOptions :: [(Text, SyncOption)]
+    allOptions =
       [ ("core",             pcCore pc)
       , ("utxo",             pcUtxo pc)
       , ("multi_asset",      pcMultiAsset pc)
@@ -69,9 +69,9 @@ buildProjections pc = mapMaybe mkProj allProjections
       , ("current_state",    pcCurrentState pc)
       ]
 
--- | Placeholder projection — name only, no real extraction logic yet.
-stubProjection :: Text -> ProjectionDef
-stubProjection name = ProjectionDef
+-- | Placeholder extractor — name only, no real extraction logic yet.
+stubExtractor :: Text -> ExtractorDef
+stubExtractor name = ExtractorDef
   { pdName         = name
   , pdVersion      = 1
   , pdDependencies = []
@@ -87,22 +87,22 @@ placeholderMetrics = Metrics 0 0 0 0 0 0 0 0 0
 -- * Startup
 -- ---------------------------------------------------------------------------
 
--- | Log startup information: version, enabled projections, config summary.
+-- | Log startup information: version, enabled extractors, config summary.
 --
 -- Called once at the very start before phase detection.
 runStartup :: CoreEnv -> IO ()
 runStartup env = do
   let tracer = ceTracer env
-      projNames = map pdName (ceProjections env)
+      projNames = map pdName (ceExtractors env)
       projCount = length projNames
 
   traceWith tracer $ LogMsg Info "App" "cardano-db-sync starting" Nothing
   traceWith tracer $ LogMsg Info "App"
-    ( "Enabled projections (" <> show projCount <> "): "
-      <> showProjectionList projNames
+    ( "Enabled extractors (" <> show projCount <> "): "
+      <> showExtractorList projNames
     )
     Nothing
 
--- | Format a list of projection names for logging.
-showProjectionList :: [Text] -> Text
-showProjectionList = mconcat . intersperse ", "
+-- | Format a list of extractor names for logging.
+showExtractorList :: [Text] -> Text
+showExtractorList = mconcat . intersperse ", "

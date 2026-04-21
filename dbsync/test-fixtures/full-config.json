@@ -16,7 +16,7 @@
     "state_dir": "/data/ledger",
     "snapshot_interval": 10
   },
-  "projections": {
+  "options": {
     "core":             { "enabled": true },
     "utxo":             { "enabled": true },
     "multi_asset":      { "enabled": true },

@@ -15,8 +15,8 @@ import DbSync.Config.Types
   , LogFormat (..)
   , LoggingConfig (..)
   , MetricsConfig (..)
-  , ProjectionConfig (..)
-  , ProjectionConfigs (..)
+  , SyncOption (..)
+  , SyncOptions (..)
   , SyncConfig (..)
   , SyncMode (..)
   , SyncSettings (..)
@@ -48,11 +48,11 @@ spec = describe "DbSync.Config" $ do
           lcStateDir (scLedger cfg) `shouldBe` "/data/ledger"
           lcSnapshotInterval (scLedger cfg) `shouldBe` 10
 
-          -- Projections
-          prEnabled (pcCore (scProjections cfg)) `shouldBe` True
-          prEnabled (pcUtxo (scProjections cfg)) `shouldBe` True
-          prEnabled (pcCbor (scProjections cfg)) `shouldBe` False
-          prEnabled (pcCurrentState (scProjections cfg)) `shouldBe` False
+          -- Options
+          prEnabled (pcCore (scOptions cfg)) `shouldBe` True
+          prEnabled (pcUtxo (scOptions cfg)) `shouldBe` True
+          prEnabled (pcCbor (scOptions cfg)) `shouldBe` False
+          prEnabled (pcCurrentState (scOptions cfg)) `shouldBe` False
 
           -- Metrics
           mcPrometheusPort (scMetrics cfg) `shouldBe` 8080
@@ -82,32 +82,32 @@ spec = describe "DbSync.Config" $ do
           lgLevel (scLogging cfg) `shouldBe` "info"
           lgFormat (scLogging cfg) `shouldBe` LogFormatText
 
-          -- Standard projections enabled by default
-          prEnabled (pcCore (scProjections cfg)) `shouldBe` True
-          prEnabled (pcUtxo (scProjections cfg)) `shouldBe` True
-          prEnabled (pcMultiAsset (scProjections cfg)) `shouldBe` True
+          -- Standard extractors enabled by default
+          prEnabled (pcCore (scOptions cfg)) `shouldBe` True
+          prEnabled (pcUtxo (scOptions cfg)) `shouldBe` True
+          prEnabled (pcMultiAsset (scOptions cfg)) `shouldBe` True
           -- cbor and current_state disabled by default
-          prEnabled (pcCbor (scProjections cfg)) `shouldBe` False
-          prEnabled (pcCurrentState (scProjections cfg)) `shouldBe` False
+          prEnabled (pcCbor (scOptions cfg)) `shouldBe` False
+          prEnabled (pcCurrentState (scOptions cfg)) `shouldBe` False
 
   describe "parseConfig (no-database.json)" $ do
     it "fails with a config error" $ do
       result <- parseConfig "test-fixtures/no-database.json"
       result `shouldSatisfy` isLeft
 
-  describe "parseConfig (override-projections.json)" $ do
-    it "overrides only the specified projections" $ do
-      result <- parseConfig "test-fixtures/override-projections.json"
+  describe "parseConfig (override-options.json)" $ do
+    it "overrides only the specified options" $ do
+      result <- parseConfig "test-fixtures/override-options.json"
       case result of
         Left err -> panic $ "Parse failed: " <> show err
         Right cfg -> do
           -- Overridden to false
-          prEnabled (pcUtxo (scProjections cfg)) `shouldBe` False
-          prEnabled (pcGovernance (scProjections cfg)) `shouldBe` False
+          prEnabled (pcUtxo (scOptions cfg)) `shouldBe` False
+          prEnabled (pcGovernance (scOptions cfg)) `shouldBe` False
           -- Others stay at defaults
-          prEnabled (pcCore (scProjections cfg)) `shouldBe` True
-          prEnabled (pcMetadata (scProjections cfg)) `shouldBe` True
-          prEnabled (pcStakeDelegation (scProjections cfg)) `shouldBe` True
+          prEnabled (pcCore (scOptions cfg)) `shouldBe` True
+          prEnabled (pcMetadata (scOptions cfg)) `shouldBe` True
+          prEnabled (pcStakeDelegation (scOptions cfg)) `shouldBe` True
 
   describe "parseConfig (ingest-mode.json)" $ do
     it "parses ingest sync mode" $ do

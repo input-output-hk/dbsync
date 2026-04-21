@@ -1,6 +1,6 @@
 -- | Tests for config validation.
 --
--- Validates projection dependencies and ledger requirements.
+-- Validates option dependencies and ledger requirements.
 -- The original project had no validation here — this is new.
 module DbSync.Config.ValidationSpec
   ( spec

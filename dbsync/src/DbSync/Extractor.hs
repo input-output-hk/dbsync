@@ -1,15 +1,15 @@
 {- |
-Module      : DbSync.Projection
-Description : Projection definition types for modular data extraction.
+Module      : DbSync.Extractor
+Description : Extractor definition types for modular data extraction.
 
-A projection is a self-contained unit of extraction logic that reads
+A extractor is a self-contained unit of extraction logic that reads
 'GenericBlock' values and produces COPY rows grouped by table. Each
-projection declares its schema ('TableDef'), dependencies on other
-projections, and a pure extraction function.
+extractor declares its schema ('TableDef'), dependencies on other
+extractors, and a pure extraction function.
 -}
-module DbSync.Projection
+module DbSync.Extractor
   ( -- * Types
-    ProjectionDef (..)
+    ExtractorDef (..)
   , ExtractFn
   , ExtractState (..)
   , RowBatches (..)
@@ -28,25 +28,25 @@ import DbSync.Db.Schema.Types (TableDef)
 -- * Types
 -- ---------------------------------------------------------------------------
 
--- | Definition of a single projection.
+-- | Definition of a single extractor.
 --
--- Projections are the unit of modular extraction — each one owns a set
+-- Extractors are the unit of modular extraction — each one owns a set
 -- of tables and a pure extraction function that turns a block into
 -- COPY-ready rows.
-data ProjectionDef = ProjectionDef
+data ExtractorDef = ExtractorDef
   { pdName         :: !Text
-      -- ^ Unique projection name (e.g. "core", "utxo", "governance")
+      -- ^ Unique extractor name (e.g. "core", "utxo", "governance")
   , pdVersion      :: !Int
-      -- ^ Schema version; bump when the projection's tables change
+      -- ^ Schema version; bump when the extractor's tables change
   , pdDependencies :: ![(Text, Int)]
-      -- ^ @(projectionName, minimumVersion)@ pairs this projection depends on
+      -- ^ @(extractorName, minimumVersion)@ pairs this extractor depends on
   , pdTables       :: ![TableDef]
-      -- ^ Table definitions owned by this projection
+      -- ^ Table definitions owned by this extractor
   , pdExtract      :: !ExtractFn
       -- ^ Pure extraction function: block + state -> rows + updated state
   }
 
--- | The extraction function signature shared by all projections.
+-- | The extraction function signature shared by all extractors.
 --
 -- Given a 'GenericBlock' and the current 'ExtractState', produce
 -- a batch of COPY rows ('RowBatches') and the updated state.

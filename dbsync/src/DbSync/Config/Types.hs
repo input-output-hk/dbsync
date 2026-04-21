@@ -5,7 +5,7 @@
 -- Network-specific details come from the node config (passed via CLI).
 --
 -- Follows the original project's pattern: optional sections with defaults,
--- and a preset + override system for projections.
+-- and a preset + override system for options.
 module DbSync.Config.Types
   ( -- * Top-level config
     SyncConfig (..)
@@ -17,9 +17,9 @@ module DbSync.Config.Types
   , LoggingConfig (..)
   , LogFormat (..)
 
-    -- * Projection config
-  , ProjectionConfigs (..)
-  , ProjectionConfig (..)
+    -- * Sync options
+  , SyncOptions (..)
+  , SyncOption (..)
   , UTxOVariant (..)
   , MetadataFormat (..)
   , GovernanceVariant (..)
@@ -29,7 +29,7 @@ module DbSync.Config.Types
   , defaultLedgerConfig
   , defaultMetricsConfig
   , defaultLoggingConfig
-  , defaultProjectionConfigs
+  , defaultSyncOptions
 
     -- * Node config (extracted)
   , NodeConfig (..)
@@ -54,7 +54,7 @@ data SyncConfig = SyncConfig
   { scDatabase    :: !DatabaseConfig
   , scSync        :: !SyncSettings
   , scLedger      :: !LedgerConfig
-  , scProjections :: !ProjectionConfigs
+  , scOptions :: !SyncOptions
   , scMetrics     :: !MetricsConfig
   , scLogging     :: !LoggingConfig
   }
@@ -66,7 +66,7 @@ instance FromJSON SyncConfig where
       <$> o .:  "database"
       <*> o .:? "sync"        .!= defaultSyncSettings
       <*> o .:? "ledger"      .!= defaultLedgerConfig
-      <*> o .:? "projections" .!= defaultProjectionConfigs
+      <*> o .:? "options" .!= defaultSyncOptions
       <*> o .:? "metrics"     .!= defaultMetricsConfig
       <*> o .:? "logging"     .!= defaultLoggingConfig
 
@@ -201,30 +201,30 @@ instance FromJSON LogFormat where
       _      -> Aeson.typeMismatch "LogFormat (text|json)" (Aeson.String t)
 
 -- ---------------------------------------------------------------------------
--- * Projection config
+-- * Sync options
 -- ---------------------------------------------------------------------------
 
--- | Per-projection configuration.
+-- | Per-option configuration.
 -- Following the original project's pattern: each field is optional and defaults
--- to the value from 'defaultProjectionConfigs'. Unmentioned projections keep
+-- to the value from 'defaultSyncOptions'. Unmentioned options keep
 -- their defaults.
-data ProjectionConfigs = ProjectionConfigs
-  { pcCore            :: !ProjectionConfig
-  , pcUtxo            :: !ProjectionConfig
-  , pcMultiAsset      :: !ProjectionConfig
-  , pcMetadata        :: !ProjectionConfig
-  , pcStakeDelegation :: !ProjectionConfig
-  , pcScriptsDatums   :: !ProjectionConfig
-  , pcGovernance      :: !ProjectionConfig
-  , pcCbor            :: !ProjectionConfig
-  , pcEpochBoundary   :: !ProjectionConfig
-  , pcCurrentState    :: !ProjectionConfig
+data SyncOptions = SyncOptions
+  { pcCore            :: !SyncOption
+  , pcUtxo            :: !SyncOption
+  , pcMultiAsset      :: !SyncOption
+  , pcMetadata        :: !SyncOption
+  , pcStakeDelegation :: !SyncOption
+  , pcScriptsDatums   :: !SyncOption
+  , pcGovernance      :: !SyncOption
+  , pcCbor            :: !SyncOption
+  , pcEpochBoundary   :: !SyncOption
+  , pcCurrentState    :: !SyncOption
   }
   deriving stock (Eq, Show)
 
-instance FromJSON ProjectionConfigs where
-  parseJSON = Aeson.withObject "ProjectionConfigs" $ \o ->
-    ProjectionConfigs
+instance FromJSON SyncOptions where
+  parseJSON = Aeson.withObject "SyncOptions" $ \o ->
+    SyncOptions
       <$> o .:? "core"             .!= enabled
       <*> o .:? "utxo"             .!= enabled
       <*> o .:? "multi_asset"      .!= enabled
@@ -236,34 +236,34 @@ instance FromJSON ProjectionConfigs where
       <*> o .:? "epoch_boundary"   .!= enabled
       <*> o .:? "current_state"    .!= disabled  -- off by default (needs ledger)
     where
-      enabled  = ProjectionConfig True
-      disabled = ProjectionConfig False
+      enabled  = SyncOption True
+      disabled = SyncOption False
 
--- | Default projection config: standard projections enabled,
+-- | Default option config: standard options enabled,
 -- cbor and current_state disabled.
-defaultProjectionConfigs :: ProjectionConfigs
-defaultProjectionConfigs = ProjectionConfigs
-  { pcCore            = ProjectionConfig True
-  , pcUtxo            = ProjectionConfig True
-  , pcMultiAsset      = ProjectionConfig True
-  , pcMetadata        = ProjectionConfig True
-  , pcStakeDelegation = ProjectionConfig True
-  , pcScriptsDatums   = ProjectionConfig True
-  , pcGovernance      = ProjectionConfig True
-  , pcCbor            = ProjectionConfig False
-  , pcEpochBoundary   = ProjectionConfig True
-  , pcCurrentState    = ProjectionConfig False
+defaultSyncOptions :: SyncOptions
+defaultSyncOptions = SyncOptions
+  { pcCore            = SyncOption True
+  , pcUtxo            = SyncOption True
+  , pcMultiAsset      = SyncOption True
+  , pcMetadata        = SyncOption True
+  , pcStakeDelegation = SyncOption True
+  , pcScriptsDatums   = SyncOption True
+  , pcGovernance      = SyncOption True
+  , pcCbor            = SyncOption False
+  , pcEpochBoundary   = SyncOption True
+  , pcCurrentState    = SyncOption False
   }
 
--- | Configuration for a single projection.
-data ProjectionConfig = ProjectionConfig
+-- | Configuration for a single option.
+data SyncOption = SyncOption
   { prEnabled :: !Bool
   }
   deriving stock (Eq, Show)
 
-instance FromJSON ProjectionConfig where
-  parseJSON = Aeson.withObject "ProjectionConfig" $ \o ->
-    ProjectionConfig
+instance FromJSON SyncOption where
+  parseJSON = Aeson.withObject "SyncOption" $ \o ->
+    SyncOption
       <$> o .:? "enabled" .!= True
 
 -- | UTxO storage variants.
@@ -281,7 +281,7 @@ data MetadataFormat
   | MetadataKeysOnly
   deriving stock (Eq, Show)
 
--- | Governance projection variants.
+-- | Governance option variants.
 data GovernanceVariant
   = GovernanceProposalsOnly
   | GovernanceFull

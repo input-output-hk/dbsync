@@ -1,7 +1,10 @@
--- Parses the three required arguments:
---   @--node-config@  — path to the cardano-node config file
---   @--node-socket@  — path to the cardano-node socket
---   @--config@       — path to the db-sync YAML config
+-- | CLI argument parsing for cardano-db-sync.
+--
+-- Parses the four required arguments:
+--   @--node-config@ — path to db-sync-config.json (from the Cardano book)
+--   @--socket-path@ — path to the cardano-node Unix socket
+--   @--state-dir@   — directory for checkpoints and ledger state
+--   @--profile@     — path to profile.json (database, options, sync mode)
 module DbSync.Cli
   ( -- * Types
     CliArgs (..)
@@ -33,9 +36,10 @@ import Options.Applicative
 
 -- | Parsed CLI arguments.
 data CliArgs = CliArgs
-  { caNodeConfig :: !FilePath  -- ^ Path to the cardano-node config file
-  , caNodeSocket :: !FilePath  -- ^ Path to the cardano-node socket
-  , caConfig     :: !FilePath  -- ^ Path to the db-sync YAML config
+  { caNodeConfig :: !FilePath  -- ^ Path to db-sync-config.json (from the Cardano book)
+  , caSocketPath :: !FilePath  -- ^ Path to the cardano-node Unix socket
+  , caStateDir   :: !FilePath  -- ^ Directory for checkpoints + ledger state
+  , caProfile    :: !FilePath  -- ^ Path to profile.json (database, options, sync mode)
   }
   deriving stock (Eq, Show)
 
@@ -58,17 +62,22 @@ cliArgsP =
     <$> strOption
       ( long "node-config"
           <> metavar "FILEPATH"
-          <> help "Path to the cardano-node config file"
+          <> help "Path to db-sync-config.json (from the Cardano book)"
       )
     <*> strOption
-      ( long "node-socket"
+      ( long "socket-path"
           <> metavar "FILEPATH"
-          <> help "Path to the cardano-node socket"
+          <> help "Path to the cardano-node Unix socket"
       )
     <*> strOption
-      ( long "config"
+      ( long "state-dir"
+          <> metavar "DIRPATH"
+          <> help "Directory for checkpoints and ledger state"
+      )
+    <*> strOption
+      ( long "profile"
           <> metavar "FILEPATH"
-          <> help "Path to the db-sync YAML config file"
+          <> help "Path to profile.json (database, sync options, logging)"
       )
 
 -- | Parse CLI args from the process arguments. Exits on failure.

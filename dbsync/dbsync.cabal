@@ -40,6 +40,7 @@ library
   import:         warnings, defaults
   hs-source-dirs: src
   exposed-modules:
+    -- Modules
     DbSync.App
     DbSync.AppM
     DbSync.Cli
@@ -59,17 +60,17 @@ library
     DbSync.Block.Receiver
     DbSync.Block.Parser
     DbSync.Block.Types
-    DbSync.Projection
-    DbSync.Projection.Core
-    DbSync.Projection.UTxO
-    DbSync.Projection.MultiAsset
-    DbSync.Projection.Metadata
-    DbSync.Projection.StakeDelegation
-    DbSync.Projection.ScriptsDatums
-    DbSync.Projection.Governance
-    DbSync.Projection.Cbor
-    DbSync.Projection.EpochBoundary
-    DbSync.Projection.CurrentState
+    DbSync.Extractor
+    DbSync.Extractor.Core
+    DbSync.Extractor.UTxO
+    DbSync.Extractor.MultiAsset
+    DbSync.Extractor.Metadata
+    DbSync.Extractor.StakeDelegation
+    DbSync.Extractor.ScriptsDatums
+    DbSync.Extractor.Governance
+    DbSync.Extractor.Cbor
+    DbSync.Extractor.EpochBoundary
+    DbSync.Extractor.CurrentState
     DbSync.Id.Counter
     DbSync.Id.DedupMap
     DbSync.Checkpoint.Manager
@@ -90,7 +91,11 @@ library
     , dbsync-db
 
     -- Cardano ecosystem (from CHaP)
+    , cardano-client
+    , cardano-crypto-wrapper
     , cardano-crypto-class
+    , cardano-ledger-api
+    , cardano-ledger-binary
     , cardano-ledger-core
     , cardano-ledger-byron
     , cardano-ledger-shelley
@@ -99,11 +104,16 @@ library
     , cardano-ledger-alonzo
     , cardano-ledger-babbage
     , cardano-ledger-conway          >= 1.17.3
+    , cardano-node
     , cardano-slotting
     , ouroboros-consensus             ^>= 0.30.0.1
     , ouroboros-consensus-cardano     ^>= 0.26.0.3
+    , ouroboros-consensus-protocol
     , ouroboros-network               ^>= 0.22.6.0
     , ouroboros-network-api           ^>= 0.16.0.0
+    , ouroboros-network-framework
+    , ouroboros-network-protocols
+    , typed-protocols
 
     -- Database
     , hasql
@@ -134,9 +144,12 @@ library
     , optparse-applicative
 
     -- Other
+    , base16-bytestring
+    , extra
     , mtl
     , time
     , transformers
+    , transformers-except
     , filepath
     , directory
 

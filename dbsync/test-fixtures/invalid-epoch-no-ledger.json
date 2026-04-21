@@ -9,7 +9,7 @@
   "ledger": {
     "enabled": false
   },
-  "projections": {
+  "options": {
     "epoch_boundary": { "enabled": true }
   }
 }

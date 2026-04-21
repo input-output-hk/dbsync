@@ -22,23 +22,25 @@ main = do
   -- 1. Parse CLI
   args <- parseCliArgs
 
-  -- 2. Parse db-sync config
-  syncCfgResult <- parseConfig (caConfig args)
-  syncCfg <- case syncCfgResult of
+  -- 2. Parse profile (database, sync options, logging)
+  profileResult <- parseConfig (caProfile args)
+  profile <- case profileResult of
     Left err -> do
-      putTextLn $ "Error parsing config: " <> show err
+      putTextLn $ "Error parsing profile: " <> show err
       exitFailure
     Right cfg -> pure cfg
 
-  -- 3. Validate config
-  validCfg <- case validateConfig syncCfg of
+  -- 3. Validate profile
+  validProfile <- case validateConfig profile of
     Left errs -> do
-      putTextLn "Config validation errors:"
+      putTextLn "Profile validation errors:"
       for_ errs $ \err -> putTextLn $ "  - " <> show err
       exitFailure
     Right cfg -> pure cfg
 
-  -- 4. Parse node config
+  -- 4. Parse db-sync-config.json → extract NodeConfigFile → parse node config
+  --    TODO: currently parses --node-config path directly as node config.
+  --    Need to add db-sync-config.json parsing to extract NodeConfigFile first.
   nodeCfgResult <- parseNodeConfig (caNodeConfig args)
   nodeCfg <- case nodeCfgResult of
     Left err -> do
@@ -48,11 +50,13 @@ main = do
 
   -- 5. Build environment
   tracer <- mkStdErrTracer Info
-  env <- buildCoreEnv tracer validCfg nodeCfg
+  env <- buildCoreEnv tracer validProfile nodeCfg
 
   -- 6. Startup logging
   runStartup env
 
-  -- TODO: phase detection and phase execution
-  putTextLn "cardano-db-sync: startup complete, phase detection not yet implemented"
+  -- TODO: read genesis files → TopLevelConfig → connect to node
+  putTextLn $ "State dir: " <> toS (caStateDir args)
+  putTextLn $ "Socket: " <> toS (caSocketPath args)
+  putTextLn "cardano-db-sync: startup complete, genesis reading not yet implemented"
 

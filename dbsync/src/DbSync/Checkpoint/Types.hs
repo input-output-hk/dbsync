@@ -41,8 +41,8 @@ data Checkpoint = Checkpoint
       -- ^ Path to the serialised dedup maps on disk
   , cpLedgerPath     :: !FilePath
       -- ^ Path to the serialised ledger state snapshot
-  , cpProjections    :: ![Text]
-      -- ^ Names of enabled projections at checkpoint time
+  , cpExtractors    :: ![Text]
+      -- ^ Names of enabled extractors at checkpoint time
   , cpLastBlockHash  :: !ByteString
       -- ^ Hash of the last processed block (for chain continuity verification)
   , cpDbSyncVersion  :: !Text

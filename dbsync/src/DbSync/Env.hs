@@ -34,7 +34,7 @@ import DbSync.Config.Types (NodeConfig, SyncConfig)
 import DbSync.Id.Counter (IdCounters)
 import DbSync.Id.DedupMap (DedupMaps)
 import DbSync.Metrics (HasMetrics (..), Metrics)
-import DbSync.Projection (ProjectionDef)
+import DbSync.Extractor (ExtractorDef)
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer)
 import DbSync.Db.Writer.Copy (CopyConnections)
@@ -63,7 +63,7 @@ class HasConfig env where
 -- | Shared core environment available in every phase.
 --
 -- Contains the tracer, metrics handles, configuration, and the list
--- of active projections. Constructed once at startup.
+-- of active extractors. Constructed once at startup.
 data CoreEnv = CoreEnv
   { ceTracer      :: !AppTracer
       -- ^ Structured logging tracer (contra-tracer)
@@ -73,8 +73,8 @@ data CoreEnv = CoreEnv
       -- ^ Parsed db-sync configuration
   , ceNodeConfig  :: !NodeConfig
       -- ^ Extracted cardano-node configuration
-  , ceProjections :: ![ProjectionDef]
-      -- ^ Active projection definitions
+  , ceExtractors :: ![ExtractorDef]
+      -- ^ Active extractor definitions
   }
 
 -- | Environment for the 'IngestChainHistory' phase.

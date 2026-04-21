@@ -39,7 +39,7 @@ spec = describe "DbSync.App" $ do
       ceConfig env `shouldBe` syncCfg
       ceNodeConfig env `shouldBe` nodeCfg
 
-    it "builds projections list matching enabled config" $ do
+    it "builds extractors list matching enabled config" $ do
       (syncCfg, nodeCfg) <- loadTestConfigs
       logRef <- newIORef []
       let tracer = mkTestTracer logRef
@@ -47,7 +47,7 @@ spec = describe "DbSync.App" $ do
       -- full-config.json: 8 enabled (core, utxo, multi_asset, metadata,
       -- stake_delegation, scripts_datums, governance, epoch_boundary)
       -- 2 disabled (cbor, current_state)
-      let projCount = length (ceProjections env)
+      let projCount = length (ceExtractors env)
       projCount `shouldBe` 8
 
   describe "runStartup" $ do
@@ -61,7 +61,7 @@ spec = describe "DbSync.App" $ do
       let appInfoMsgs = [m | m <- msgs, lmComponent m == "App", lmSeverity m == Info]
       appInfoMsgs `shouldSatisfy` (not . null)
 
-    it "logs enabled projection names" $ do
+    it "logs enabled extractor names" $ do
       (syncCfg, nodeCfg) <- loadTestConfigs
       logRef <- newIORef []
       let tracer = mkTestTracer logRef
@@ -69,5 +69,5 @@ spec = describe "DbSync.App" $ do
       runStartup env
       msgs <- readIORef logRef
       let allText = mconcat [lmMessage m | m <- msgs]
-      -- Should mention "core" in the projections output
+      -- Should mention "core" in the extractors output
       allText `shouldSatisfy` (Text.isInfixOf "core")

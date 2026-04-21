@@ -62,6 +62,7 @@ library
     DbSync.Block.Parser
     DbSync.Block.Parser.Block
     DbSync.Block.Parser.Byron
+    DbSync.Block.Parser.Tx
     DbSync.Block.Parser.Types
     DbSync.Block.Types
     DbSync.Extractor
@@ -111,6 +112,7 @@ library
     , cardano-ledger-alonzo
     , cardano-ledger-babbage
     , cardano-ledger-conway          >= 1.17.3
+    , cardano-ledger-dijkstra
     , cardano-node
     , cardano-protocol-tpraos
     , cardano-slotting

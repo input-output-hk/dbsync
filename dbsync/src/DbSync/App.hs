@@ -86,7 +86,7 @@ stubExtractor name = ExtractorDef
   , pdVersion      = 1
   , pdDependencies = []
   , pdTables       = []
-  , pdExtract      = \_ st -> (mempty, st)
+  , pdProcess      = \_ _ _ -> pure ()
   }
 
 -- | Placeholder metrics until Prometheus is wired up.

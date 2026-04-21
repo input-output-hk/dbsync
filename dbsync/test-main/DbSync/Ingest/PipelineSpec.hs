@@ -2,23 +2,20 @@
 
 -- | Tests for the block processing pipeline.
 --
--- Verifies that 'processBlock' correctly composes multiple extractors,
--- threading state and merging 'RowBatches'. Uses the real 'coreExtractor'
--- plus mock extractors to test composition behaviour.
+-- Verifies that 'processBlock' correctly composes multiple extractors
+-- via 'IdResolver' + 'Writer'. Uses the real 'coreExtractor' plus
+-- mock extractors to test composition behaviour.
 module DbSync.Ingest.PipelineSpec (spec) where
 
-import Cardano.Prelude hiding (Map)
+import Cardano.Prelude
 
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
-import Data.List ((!!))
-import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as Map
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Char8 as BS8
 
 import Test.Hspec (Spec, describe, it, shouldBe)
 
@@ -27,169 +24,109 @@ import DbSync.Block.Types
   , GenericBlock (..)
   , GenericTx (..)
   )
-import DbSync.Extractor
-  ( ExtractState (..)
-  , ExtractorDef (..)
-  , RowBatches (..)
-  )
+import DbSync.Db.Schema.Core (Block (..))
+import DbSync.Db.Schema.Ids (BlockId (..), TxId (..))
+import DbSync.Extractor (ExtractState (..), ExtractorDef (..))
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
 import DbSync.Id.DedupMap (emptyMaps)
 import DbSync.Ingest.Pipeline (processBlock)
+import DbSync.Resolver.Ingest (mkIngestResolver)
+import DbSync.Writer (Writer (..))
+import DbSync.Writer.Testing (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 
 spec :: Spec
 spec = describe "DbSync.Ingest.Pipeline" $ do
-  let initState = mkInitState
 
   describe "processBlock with coreExtractor" $ do
     it "produces block, tx, and slot_leader rows" $ do
-      let (batches, _st') = processBlock [coreExtractor] blockWith2Txs initState
-          rows = unRowBatches batches
-      countRows "block" rows `shouldBe` 1
-      countRows "tx" rows `shouldBe` 2
-      countRows "slot_leader" rows `shouldBe` 1
-
-    it "gives same results as calling coreExtractor directly" $ do
-      let (batchesPipeline, st1) = processBlock [coreExtractor] blockWith2Txs initState
-          (batchesDirect, st2) = pdExtract coreExtractor blockWith2Txs initState
-      unRowBatches batchesPipeline `shouldBe` unRowBatches batchesDirect
-      esLastBlockId st1 `shouldBe` esLastBlockId st2
+      written <- runPipeline [coreExtractor] blockWith2Txs
+      length (twBlocks written) `shouldBe` 1
+      length (twTxs written) `shouldBe` 2
+      length (twSlotLeaders written) `shouldBe` 1
 
   describe "processBlock with multiple extractors" $ do
-    it "merges batches from all extractors" $ do
-      let mockExtractor = mkMockExtractor "mock_table" "mock_row_data\n"
-          (batches, _st') = processBlock [coreExtractor, mockExtractor] blockWith2Txs initState
-          rows = unRowBatches batches
-      -- Core produces block, tx, slot_leader
-      countRows "block" rows `shouldBe` 1
-      countRows "tx" rows `shouldBe` 2
-      -- Mock produces mock_table
-      countRows "mock_table" rows `shouldBe` 1
-
-    it "threads state through extractors sequentially" $ do
-      -- The second extractor should see the state from the first.
-      -- Use a mock that reads esLastBlockId (set by coreExtractor).
-      let stateReader = mkStateReadingExtractor "state_check"
-          (batches, _st') = processBlock [coreExtractor, stateReader] emptyBlock initState
-          rows = unRowBatches batches
-      -- stateReader writes the esLastBlockId it sees into a row.
-      -- After coreExtractor runs, esLastBlockId should be Just 1.
-      let checkRows = fromMaybe [] $ Map.lookup "state_check" rows
-      length checkRows `shouldBe` 1
-      -- The row content should be "1" (the block ID set by coreExtractor)
-      BS8.unpack (headDef "" checkRows) `shouldBe` "1"
+    it "runs all extractors on the block" $ do
+      commitRef <- newIORef (0 :: Int)
+      let mockExtractor = mkMockExtractor commitRef
+      written <- runPipeline [coreExtractor, mockExtractor] emptyBlock
+      -- Core produces block + slot_leader; mock does nothing visible in writer
+      length (twBlocks written) `shouldBe` 1
+      -- Verify mock ran by checking the commit ref it incremented
+      mockCount <- readIORef commitRef
+      mockCount `shouldBe` 1
 
   describe "processBlock with empty extractor list" $ do
-    it "produces empty batches" $ do
-      let (batches, _st') = processBlock [] emptyBlock initState
-      unRowBatches batches `shouldBe` Map.empty
-
-    it "returns state unchanged" $ do
-      let (_batches, st') = processBlock [] emptyBlock initState
-      st' `shouldBe` initState
+    it "writes nothing" $ do
+      written <- runPipeline [] emptyBlock
+      length (twBlocks written) `shouldBe` 0
+      length (twTxs written) `shouldBe` 0
+      length (twSlotLeaders written) `shouldBe` 0
 
   describe "processBlock: sequential blocks maintain state" $ do
     it "block IDs continue across calls" $ do
-      let block1 = emptyBlock
-          block2 = emptyBlock { blkHash = BS.replicate 32 1, blkBlockNo = BlockNo 2 }
-          (batches1, st1) = processBlock [coreExtractor] block1 initState
-          (batches2, _st2) = processBlock [coreExtractor] block2 st1
-          bid1 = firstFieldOf "block" (unRowBatches batches1)
-          bid2 = firstFieldOf "block" (unRowBatches batches2)
-      bid1 `shouldBe` "1"
-      bid2 `shouldBe` "2"
+      (w1, w2) <- runPipelineTwoBlocks [coreExtractor] emptyBlock
+        (emptyBlock { blkHash = BS.replicate 32 1, blkBlockNo = BlockNo 2 })
+      fst (headDef (panic "no block") (twBlocks w1)) `shouldBe` BlockId 1
+      fst (headDef (panic "no block") (twBlocks w2)) `shouldBe` BlockId 2
 
     it "previous_id links blocks correctly" $ do
-      let block1 = emptyBlock
-          block2 = emptyBlock { blkHash = BS.replicate 32 1, blkBlockNo = BlockNo 2 }
-          (_batches1, st1) = processBlock [coreExtractor] block1 initState
-          (batches2, _st2) = processBlock [coreExtractor] block2 st1
-          row = getFirstRow "block" (unRowBatches batches2)
-          fields = BS8.split '\t' (BS8.init row)
-      -- field 6 is previous_id, should reference block 1's ID
-      fields !! 6 `shouldBe` "1"
+      (_, w2) <- runPipelineTwoBlocks [coreExtractor] emptyBlock
+        (emptyBlock { blkHash = BS.replicate 32 1, blkBlockNo = BlockNo 2 })
+      let (_, blk2) = headDef (panic "no block") (twBlocks w2)
+      blockPreviousId blk2 `shouldBe` Just (BlockId 1)
 
     it "tx IDs continue across blocks" $ do
-      let block1 = blockWith2Txs
-          block2 = blockWith2Txs
-                     { blkHash = BS.replicate 32 2
-                     , blkBlockNo = BlockNo 2
-                     }
-          (batches1, st1) = processBlock [coreExtractor] block1 initState
-          (batches2, _st2) = processBlock [coreExtractor] block2 st1
-          txIds1 = allFirstFields "tx" (unRowBatches batches1)
-          txIds2 = allFirstFields "tx" (unRowBatches batches2)
-      txIds1 `shouldBe` ["1", "2"]
-      txIds2 `shouldBe` ["3", "4"]
+      (w1, w2) <- runPipelineTwoBlocks [coreExtractor] blockWith2Txs
+        (blockWith2Txs { blkHash = BS.replicate 32 2, blkBlockNo = BlockNo 2 })
+      map fst (twTxs w1) `shouldBe` [TxId 1, TxId 2]
+      map fst (twTxs w2) `shouldBe` [TxId 3, TxId 4]
 
     it "slot leader dedup persists across blocks" $ do
-      -- Both blocks have the same slot leader
-      let block1 = emptyBlock
-          block2 = emptyBlock { blkHash = BS.replicate 32 1, blkBlockNo = BlockNo 2 }
-          (batches1, st1) = processBlock [coreExtractor] block1 initState
-          (batches2, _st2) = processBlock [coreExtractor] block2 st1
-      countRows "slot_leader" (unRowBatches batches1) `shouldBe` 1
-      countRows "slot_leader" (unRowBatches batches2) `shouldBe` 0
+      (w1, w2) <- runPipelineTwoBlocks [coreExtractor] emptyBlock
+        (emptyBlock { blkHash = BS.replicate 32 1, blkBlockNo = BlockNo 2 })
+      length (twSlotLeaders w1) `shouldBe` 1
+      length (twSlotLeaders w2) `shouldBe` 0
 
 -- ---------------------------------------------------------------------------
 -- Mock extractors for testing composition
 -- ---------------------------------------------------------------------------
 
--- | A mock extractor that writes a fixed row to a named table.
--- Does not modify state — purely additive.
-mkMockExtractor :: Text -> ByteString -> ExtractorDef
-mkMockExtractor tableName rowData = ExtractorDef
-  { pdName         = "mock_" <> tableName
+-- | A mock extractor that increments a counter when run.
+mkMockExtractor :: IORef Int -> ExtractorDef
+mkMockExtractor countRef = ExtractorDef
+  { pdName         = "mock"
   , pdVersion      = 1
   , pdDependencies = []
   , pdTables       = []
-  , pdExtract      = \_ st ->
-      (RowBatches $ Map.singleton tableName [rowData], st)
-  }
-
--- | A mock extractor that reads esLastBlockId from the state and
--- writes it as a row. Used to verify state threading.
-mkStateReadingExtractor :: Text -> ExtractorDef
-mkStateReadingExtractor tableName = ExtractorDef
-  { pdName         = "state_reader"
-  , pdVersion      = 1
-  , pdDependencies = []
-  , pdTables       = []
-  , pdExtract      = \_ st ->
-      let val = case esLastBlockId st of
-            Nothing -> "nothing"
-            Just n  -> BS8.pack (show n)
-      in (RowBatches $ Map.singleton tableName [val], st)
+  , pdProcess      = \_ _ _ ->
+      atomicModifyIORef' countRef $ \n -> (n + 1, ())
   }
 
 -- ---------------------------------------------------------------------------
--- Helpers
+-- Test runners
 -- ---------------------------------------------------------------------------
 
-countRows :: Text -> Map Text [ByteString] -> Int
-countRows table rows = maybe 0 length (Map.lookup table rows)
+runPipeline :: [ExtractorDef] -> GenericBlock -> IO TestWriterState
+runPipeline extractors block = do
+  stRef <- newIORef mkInitState
+  wrRef <- newIORef emptyTestWriterState
+  let resolver = mkIngestResolver stRef
+      writer   = mkTestWriter wrRef
+  processBlock resolver writer extractors block
+  readIORef wrRef
 
-getFirstRow :: Text -> Map Text [ByteString] -> ByteString
-getFirstRow table rows = case Map.lookup table rows of
-  Just (r:_) -> r
-  _          -> panic $ "No rows for table: " <> table
-
-getRows :: Text -> Map Text [ByteString] -> [ByteString]
-getRows table rows = fromMaybe [] (Map.lookup table rows)
-
-firstFieldOf :: Text -> Map Text [ByteString] -> ByteString
-firstFieldOf table rows =
-  let row = getFirstRow table rows
-      fields = BS8.split '\t' (BS8.init row)
-  in safeHead "" fields
-
-allFirstFields :: Text -> Map Text [ByteString] -> [ByteString]
-allFirstFields table rows =
-  map (\row -> safeHead "" (BS8.split '\t' (BS8.init row))) (getRows table rows)
-
-safeHead :: a -> [a] -> a
-safeHead d []    = d
-safeHead _ (x:_) = x
+runPipelineTwoBlocks :: [ExtractorDef] -> GenericBlock -> GenericBlock -> IO (TestWriterState, TestWriterState)
+runPipelineTwoBlocks extractors block1 block2 = do
+  stRef <- newIORef mkInitState
+  let resolver = mkIngestResolver stRef
+  wrRef1 <- newIORef emptyTestWriterState
+  processBlock resolver (mkTestWriter wrRef1) extractors block1
+  w1 <- readIORef wrRef1
+  wrRef2 <- newIORef emptyTestWriterState
+  processBlock resolver (mkTestWriter wrRef2) extractors block2
+  w2 <- readIORef wrRef2
+  pure (w1, w2)
 
 -- ---------------------------------------------------------------------------
 -- Initial state

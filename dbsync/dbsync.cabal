@@ -77,6 +77,10 @@ library
     DbSync.Extractor.EpochBoundary
     DbSync.Extractor.CurrentState
     DbSync.Ingest.Pipeline
+    DbSync.Resolver
+    DbSync.Resolver.Ingest
+    DbSync.Writer
+    DbSync.Writer.Testing
     DbSync.Id.Counter
     DbSync.Id.DedupMap
     DbSync.Checkpoint.Manager

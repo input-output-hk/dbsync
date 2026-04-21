@@ -36,7 +36,11 @@ library
   import:         warnings, defaults
   hs-source-dirs: src
   exposed-modules:
+    DbSync.Db.Types
+    DbSync.Db.Schema.Entity
+    DbSync.Db.Schema.Ids
     DbSync.Db.Schema.Types
+    DbSync.Db.Schema.Core
     DbSync.Db.Schema.Generate
     DbSync.Db.Schema.Version
     DbSync.Db.Schema.Migration
@@ -56,3 +60,4 @@ library
     , bytestring
     , containers
     , text
+    , time

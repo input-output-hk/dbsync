@@ -55,13 +55,18 @@ type ExtractFn = GenericBlock -> ExtractState -> (RowBatches, ExtractState)
 
 -- | Mutable state threaded through extraction across blocks.
 --
--- Contains the monotonic ID counters and deduplication maps that
--- ensure stable, deterministic ID assignment during 'IngestChainHistory'.
+-- Contains the monotonic ID counters, deduplication maps, and
+-- tracking state (e.g. last block ID for previous_id resolution)
+-- that ensure stable, deterministic ID assignment during
+-- 'IngestChainHistory'.
 data ExtractState = ExtractState
-  { esIdCounters :: !IdCounters
+  { esIdCounters  :: !IdCounters
       -- ^ Per-table monotonic ID counters
-  , esDedupMaps  :: !DedupMaps
+  , esDedupMaps   :: !DedupMaps
       -- ^ Dedup maps for lookup/reference tables
+  , esLastBlockId :: !(Maybe Int64)
+      -- ^ ID of the most recently processed block (for previous_id).
+      --   'Nothing' before any block has been processed.
   }
   deriving stock (Show)
 

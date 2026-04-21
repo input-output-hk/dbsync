@@ -23,13 +23,14 @@ import Cardano.Prelude hiding ((%), Nat)
 import Cardano.Client.Subscription
   ( Decision (..)
   , SubscriptionParams (..)
+  , SubscriptionTrace (..)
   , SubscriptionTracers (..)
   , subscribe
   )
 import qualified Codec.CBOR.Term as CBOR
 import Control.Concurrent.Async (AsyncCancelled (..))
 import Control.Concurrent.STM (TBQueue, writeTBQueue)
-import Control.Tracer (Tracer, nullTracer, traceWith)
+import Control.Tracer (Tracer, contramap, nullTracer, traceWith)
 import qualified Data.ByteString.Lazy as BSL
 import qualified Network.Mux as Mux
 import Network.TypedProtocol.Peer (N (..), Nat (..))
@@ -140,7 +141,7 @@ connectToNode tracer iomgr topLevelCfg networkMagic socketPath blockQueue = do
       (supportedNodeToClientVersions (Proxy @(CardanoBlock StandardCrypto)))
       subscriptionTracers
       subscriptionParams
-      (nodeProtocols codecConfig blockQueue)
+      (nodeProtocols tracer codecConfig blockQueue)
   where
     codecConfig :: CodecConfig (CardanoBlock StandardCrypto)
     codecConfig = configCodec topLevelCfg
@@ -158,25 +159,43 @@ connectToNode tracer iomgr topLevelCfg networkMagic socketPath blockQueue = do
             Right _ -> Reconnect
         }
 
+    -- Wire up subscription tracer to see connection/disconnection events.
+    -- The other tracers stay null (mux-level detail is too noisy).
     subscriptionTracers :: SubscriptionTracers ()
     subscriptionTracers =
       SubscriptionTracers
         { stMuxTracer = nullTracer
         , stHandshakeTracer = nullTracer
-        , stSubscriptionTracer = nullTracer
+        , stSubscriptionTracer = subscriptionTracer
         , stMuxChannelTracer = nullTracer
         , stMuxBearerTracer = nullTracer
         }
 
+    subscriptionTracer :: Tracer IO (SubscriptionTrace ())
+    subscriptionTracer = contramap formatSubscriptionTrace tracer
+
+-- | Map subscription events to appropriate log severity and message.
+formatSubscriptionTrace :: SubscriptionTrace () -> LogMsg
+formatSubscriptionTrace ev =
+  let msg = show ev
+  in case ev of
+       SubscriptionReconnect ->
+         LogMsg Warning "Connection" "Node disconnected. Reconnecting..." Nothing
+       SubscriptionError e ->
+         LogMsg Warning "Connection" ("Connection error: " <> show e) Nothing
+       _ ->
+         LogMsg Info "Connection" msg Nothing
+
 -- | Build the NodeToClient protocols bundle.
 -- Only ChainSync is active — tx submission, state query, and tx monitor are null.
 nodeProtocols
-  :: CodecConfig (CardanoBlock StandardCrypto)
+  :: AppTracer
+  -> CodecConfig (CardanoBlock StandardCrypto)
   -> TBQueue (CardanoBlock StandardCrypto)
   -> Network.NodeToClientVersion
   -> BlockNodeToClientVersion (CardanoBlock StandardCrypto)
   -> NodeToClientProtocols 'Mux.InitiatorMode LocalAddress BSL.ByteString IO () Void
-nodeProtocols codecConfig blockQueue version blockVersion =
+nodeProtocols appTracer codecConfig blockQueue version blockVersion =
   NodeToClientProtocols
     { localChainSyncProtocol = chainSyncProtocol
     , localTxSubmissionProtocol = dummyTxSubmit
@@ -195,7 +214,7 @@ nodeProtocols codecConfig blockQueue version blockVersion =
             (cChainSyncCodec codecs)
             channel
             ( chainSyncClientPeerPipelined $
-                blockFetchClient blockQueue
+                blockFetchClient appTracer blockQueue
             )
         pure ((), Nothing)
 
@@ -226,14 +245,15 @@ nodeProtocols codecConfig blockQueue version blockVersion =
 -- | Simple pipelined ChainSync client that writes blocks to a TBQueue.
 -- Starts from genesis (no intersection points) and pipelines aggressively.
 blockFetchClient
-  :: TBQueue (CardanoBlock StandardCrypto)
+  :: AppTracer
+  -> TBQueue (CardanoBlock StandardCrypto)
   -> ChainSyncClientPipelined
        (CardanoBlock StandardCrypto)
        (Point (CardanoBlock StandardCrypto))
        (Tip (CardanoBlock StandardCrypto))
        IO
        ()
-blockFetchClient blockQueue =
+blockFetchClient appTracer blockQueue =
   ChainSyncClientPipelined $ pure $
     -- Start from genesis
     SendMsgFindIntersect
@@ -286,10 +306,13 @@ blockFetchClient blockQueue =
     mkClientStNext mkDecision n =
       ClientStNext
         { recvMsgRollForward = \blk tip -> do
+            let bn = blockNo blk
+            traceWith appTracer $ LogMsg Info "ChainSync"
+              ("Block " <> show bn) Nothing
             atomically $ writeTBQueue blockQueue blk
-            pure $ goTip mkDecision n (At (blockNo blk)) tip
-        , recvMsgRollBackward = \_point tip ->
-            -- During IngestChainHistory, rollbacks shouldn't happen (finalized data).
-            -- For now, just continue from the new tip.
+            pure $ goTip mkDecision n (At bn) tip
+        , recvMsgRollBackward = \point tip -> do
+            traceWith appTracer $ LogMsg Warning "ChainSync"
+              ("Rollback to " <> show point) Nothing
             pure $ goTip mkDecision n Origin tip
         }

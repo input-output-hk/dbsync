@@ -217,7 +217,9 @@ executable dbsync
       base
     , dbsync
     , cardano-prelude
+    , contra-tracer
     , filepath
     , ouroboros-network-api
     , ouroboros-network
     , stm
+    , async

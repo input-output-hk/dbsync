@@ -4,7 +4,6 @@ module Main
 
 import Cardano.Prelude
 
-import System.IO (BufferMode (..), hSetBuffering, stdout)
 import System.Exit (exitFailure)
 
 import Control.Concurrent.STM (newTBQueueIO)
@@ -19,28 +18,31 @@ import Ouroboros.Network.NodeToClient (withIOManager)
 import System.FilePath (takeDirectory, (</>))
 import DbSync.Config.Validation (validateConfig)
 import DbSync.Trace.Backend (mkStdErrTracer)
-import DbSync.Trace.Types (Severity (..))
+import Control.Tracer (traceWith)
+import DbSync.Trace.Types (LogMsg (..), Severity (..))
 
 main :: IO ()
 main = do
-  hSetBuffering stdout LineBuffering
-
-  -- 1. Parse CLI
+  -- 1. Parse CLI + create tracer immediately
   args <- parseCliArgs
+  tracer <- mkStdErrTracer Info
+
+  let logError msg = traceWith tracer $ LogMsg Error "App" msg Nothing
+      logInfo msg  = traceWith tracer $ LogMsg Info "App" msg Nothing
 
   -- 2. Parse profile (database, sync options, logging)
   profileResult <- parseConfig (caProfile args)
   profile <- case profileResult of
     Left err -> do
-      putTextLn $ "Error parsing profile: " <> show err
+      logError $ "Error parsing profile: " <> show err
       exitFailure
     Right cfg -> pure cfg
 
   -- 3. Validate profile
   validProfile <- case validateConfig profile of
     Left errs -> do
-      putTextLn "Profile validation errors:"
-      for_ errs $ \err -> putTextLn $ "  - " <> show err
+      logError "Profile validation errors:"
+      for_ errs $ \err -> logError $ "  - " <> show err
       exitFailure
     Right cfg -> pure cfg
 
@@ -48,7 +50,7 @@ main = do
   dbSyncCfgResult <- parseDbSyncNodeConfig (caDbSyncConfig args)
   dbSyncCfg <- case dbSyncCfgResult of
     Left err -> do
-      putTextLn $ "Error parsing db-sync-config.json: " <> show err
+      logError $ "Error parsing db-sync-config.json: " <> show err
       exitFailure
     Right cfg -> pure cfg
 
@@ -58,12 +60,11 @@ main = do
   nodeCfgResult <- parseNodeConfig nodeConfigPath
   nodeCfg <- case nodeCfgResult of
     Left err -> do
-      putTextLn $ "Error parsing node config (" <> toS nodeConfigPath <> "): " <> show err
+      logError $ "Error parsing node config (" <> toS nodeConfigPath <> "): " <> show err
       exitFailure
     Right cfg -> pure cfg
 
   -- 6. Build environment
-  tracer <- mkStdErrTracer Info
   env <- buildCoreEnv tracer validProfile nodeCfg
 
   -- 7. Startup logging
@@ -73,15 +74,17 @@ main = do
   genesisResult <- readCardanoGenesisConfig nodeCfg configDir
   genesisCfg <- case genesisResult of
     Left err -> do
-      putTextLn $ "Error reading genesis files: " <> show err
+      logError $ "Error reading genesis files: " <> show err
       exitFailure
-    Right gc -> pure gc
+    Right gc -> do
+      logInfo "Genesis files loaded successfully"
+      pure gc
 
   let topLevelCfg = mkTopLevelConfig nodeCfg genesisCfg
       networkMagic = getNetworkMagic genesisCfg
 
-  putTextLn $ "State dir: " <> toS (caStateDir args)
-  putTextLn $ "Socket: " <> toS (caSocketPath args)
+  traceWith tracer $ LogMsg Info "App" ("State dir: " <> toS (caStateDir args)) Nothing
+  traceWith tracer $ LogMsg Info "App" ("Socket: " <> toS (caSocketPath args)) Nothing
 
   -- 9. Connect to node and start receiving blocks
   blockQueue <- newTBQueueIO 100

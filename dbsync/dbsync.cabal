@@ -60,6 +60,8 @@ library
     DbSync.Phase.FollowingChainTip
     DbSync.Block.Receiver
     DbSync.Block.Parser
+    DbSync.Block.Parser.Shelley
+    DbSync.Block.Parser.Types
     DbSync.Block.Types
     DbSync.Extractor
     DbSync.Extractor.Core
@@ -107,6 +109,7 @@ library
     , cardano-ledger-babbage
     , cardano-ledger-conway          >= 1.17.3
     , cardano-node
+    , cardano-protocol-tpraos
     , cardano-slotting
     , ouroboros-consensus             ^>= 0.30.0.1
     , ouroboros-consensus-cardano     ^>= 0.26.0.3
@@ -150,6 +153,7 @@ library
     -- Other
     , base16-bytestring
     , extra
+    , microlens
     , mtl
     , time
     , transformers
@@ -193,16 +197,24 @@ test-suite dbsync-test
     DbSync.Config.ValidationSpec
     DbSync.Config.NodeSpec
     DbSync.Config.GenesisSpec
+    DbSync.Schema.CoreSpec
+    DbSync.Schema.GenerateSpec
+    DbSync.Extractor.CoreSpec
   build-depends:
       base
     , dbsync
+    , dbsync-db
     , dbsync:dbsync-testlib
     , hspec
     , hedgehog
     , hspec-hedgehog
     , cardano-prelude
+    , cardano-slotting
+    , bytestring
+    , containers
     , optparse-applicative
     , text
+    , time
     , yaml
 
 -- ---------------------------------------------------------------------------

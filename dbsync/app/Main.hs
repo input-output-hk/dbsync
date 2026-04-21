@@ -7,11 +7,15 @@ import Cardano.Prelude
 import System.IO (BufferMode (..), hSetBuffering, stdout)
 import System.Exit (exitFailure)
 
+import Control.Concurrent.STM (newTBQueueIO)
 import DbSync.App (buildCoreEnv, runStartup)
 import DbSync.Cli (parseCliArgs, CliArgs (..))
 import DbSync.Config (parseConfig)
+import DbSync.Config.Genesis (readCardanoGenesisConfig, mkTopLevelConfig)
 import DbSync.Config.Node (parseDbSyncNodeConfig, parseNodeConfig)
 import DbSync.Config.Types (DbSyncNodeConfig (..))
+import DbSync.Node.Connection (connectToNode, getNetworkMagic)
+import Ouroboros.Network.NodeToClient (withIOManager)
 import System.FilePath (takeDirectory, (</>))
 import DbSync.Config.Validation (validateConfig)
 import DbSync.Trace.Backend (mkStdErrTracer)
@@ -65,8 +69,22 @@ main = do
   -- 7. Startup logging
   runStartup env
 
-  -- TODO: read genesis files → TopLevelConfig → connect to node
+  -- 8. Read genesis files → TopLevelConfig
+  genesisResult <- readCardanoGenesisConfig nodeCfg configDir
+  genesisCfg <- case genesisResult of
+    Left err -> do
+      putTextLn $ "Error reading genesis files: " <> show err
+      exitFailure
+    Right gc -> pure gc
+
+  let topLevelCfg = mkTopLevelConfig nodeCfg genesisCfg
+      networkMagic = getNetworkMagic genesisCfg
+
   putTextLn $ "State dir: " <> toS (caStateDir args)
   putTextLn $ "Socket: " <> toS (caSocketPath args)
-  putTextLn "cardano-db-sync: startup complete, genesis reading not yet implemented"
+
+  -- 9. Connect to node and start receiving blocks
+  blockQueue <- newTBQueueIO 100
+  withIOManager $ \iomgr ->
+    connectToNode tracer iomgr topLevelCfg networkMagic (caSocketPath args) blockQueue
 

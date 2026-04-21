@@ -78,6 +78,7 @@ library
     DbSync.Checkpoint.Types
     DbSync.Checkpoint.Serialise
     DbSync.Ledger.Worker
+    DbSync.Node.Connection
     DbSync.OffChain.Types
     DbSync.OffChain.Fetcher
     DbSync.OffChain.Pool
@@ -109,7 +110,9 @@ library
     , cardano-slotting
     , ouroboros-consensus             ^>= 0.30.0.1
     , ouroboros-consensus-cardano     ^>= 0.26.0.3
+    , ouroboros-consensus-diffusion
     , ouroboros-consensus-protocol
+    , network-mux
     , ouroboros-network               ^>= 0.22.6.0
     , ouroboros-network-api           ^>= 0.16.0.0
     , ouroboros-network-framework
@@ -215,3 +218,6 @@ executable dbsync
     , dbsync
     , cardano-prelude
     , filepath
+    , ouroboros-network-api
+    , ouroboros-network
+    , stm

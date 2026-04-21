@@ -38,7 +38,7 @@ data DedupMap = DedupMap
   { dmMap     :: !(HashMap ByteString Int64)
   , dmCounter :: !IdCounter
   }
-  deriving stock (Show)
+  deriving stock (Eq, Show)
 
 -- | All dedup maps used during 'IngestChainHistory'.
 data DedupMaps = DedupMaps
@@ -48,7 +48,7 @@ data DedupMaps = DedupMaps
   , dmsMultiAsset   :: !DedupMap  -- ^ (policy_id ++ asset_name) -> MultiAssetId
   , dmsScriptHash   :: !DedupMap  -- ^ script hash -> ScriptId
   }
-  deriving stock (Show)
+  deriving stock (Eq, Show)
 
 -- * Construction
 

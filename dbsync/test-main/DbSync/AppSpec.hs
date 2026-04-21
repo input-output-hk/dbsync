@@ -16,6 +16,7 @@ import DbSync.Config.Node (parseNodeConfig)
 import DbSync.Config.Types (NodeConfig, SyncConfig (..))
 import DbSync.Config.Validation (validateConfig)
 import DbSync.Env (CoreEnv (..))
+import DbSync.Extractor (ExtractorDef (..))
 import DbSync.Trace.Backend (mkTestTracer)
 import DbSync.Trace.Types (LogMsg (..), Severity (..))
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
@@ -49,6 +50,17 @@ spec = describe "DbSync.App" $ do
       -- 2 disabled (cbor, current_state)
       let projCount = length (ceExtractors env)
       projCount `shouldBe` 8
+
+    it "uses real coreExtractor (not a stub) for 'core'" $ do
+      (syncCfg, nodeCfg) <- loadTestConfigs
+      logRef <- newIORef []
+      let tracer = mkTestTracer logRef
+      env <- buildCoreEnv tracer syncCfg nodeCfg
+      let coreExts = filter (\e -> pdName e == "core") (ceExtractors env)
+      length coreExts `shouldBe` 1
+      -- Real coreExtractor owns 3 tables; stub has 0
+      let tableCount = length $ pdTables (headDef (panic "no core") coreExts)
+      tableCount `shouldBe` 3
 
   describe "runStartup" $ do
     it "logs startup info from App component" $ do

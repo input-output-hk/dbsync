@@ -24,6 +24,7 @@ import DbSync.Config.Types
 import DbSync.Env (CoreEnv (..))
 import DbSync.Metrics (Metrics (..))
 import DbSync.Extractor (ExtractorDef (..))
+import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 
 -- ---------------------------------------------------------------------------
@@ -47,13 +48,22 @@ buildCoreEnv tracer syncCfg nodeCfg = do
     }
 
 -- | Build the list of enabled extractors from config.
+--
+-- Uses the real 'coreExtractor' for "core"; all other extractors
+-- are stubs until they are implemented.
 buildExtractors :: SyncOptions -> [ExtractorDef]
 buildExtractors pc = mapMaybe mkProj allOptions
   where
     mkProj :: (Text, SyncOption) -> Maybe ExtractorDef
     mkProj (name, cfg)
-      | prEnabled cfg = Just $ stubExtractor name
+      | prEnabled cfg = Just $ resolveExtractor name
       | otherwise     = Nothing
+
+    -- | Resolve a named extractor to its real implementation (if available)
+    -- or a stub (if not yet implemented).
+    resolveExtractor :: Text -> ExtractorDef
+    resolveExtractor "core" = coreExtractor
+    resolveExtractor name   = stubExtractor name
 
     allOptions :: [(Text, SyncOption)]
     allOptions =

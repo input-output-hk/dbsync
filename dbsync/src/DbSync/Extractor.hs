@@ -68,7 +68,7 @@ data ExtractState = ExtractState
       -- ^ ID of the most recently processed block (for previous_id).
       --   'Nothing' before any block has been processed.
   }
-  deriving stock (Show)
+  deriving stock (Eq, Show)
 
 -- | COPY rows grouped by table name.
 --

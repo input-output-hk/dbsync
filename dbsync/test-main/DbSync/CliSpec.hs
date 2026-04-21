@@ -18,59 +18,59 @@ spec = describe "DbSync.Cli" $ do
   describe "cliArgsParser" $ do
     it "parses all four required arguments" $ do
       let result = parseArgs
-            [ "--node-config", "/path/to/db-sync-config.json"
+            [ "--db-sync-config", "/path/to/db-sync-config.json"
             , "--socket-path", "/path/to/node.socket"
             , "--state-dir", "/data/dbsync"
-            , "--profile", "/path/to/profile.json"
+            , "--profile", "/path/to/dbsync-profile.json"
             ]
       result `shouldBe` Right CliArgs
-        { caNodeConfig = "/path/to/db-sync-config.json"
-        , caSocketPath = "/path/to/node.socket"
-        , caStateDir   = "/data/dbsync"
-        , caProfile    = "/path/to/profile.json"
+        { caDbSyncConfig = "/path/to/db-sync-config.json"
+        , caSocketPath   = "/path/to/node.socket"
+        , caStateDir     = "/data/dbsync"
+        , caProfile      = "/path/to/dbsync-profile.json"
         }
 
     it "accepts arguments in any order" $ do
       let result = parseArgs
-            [ "--profile", "profile.json"
+            [ "--profile", "dbsync-profile.json"
             , "--state-dir", "/tmp/state"
             , "--socket-path", "/run/node.socket"
-            , "--node-config", "db-sync-config.json"
+            , "--db-sync-config", "db-sync-config.json"
             ]
       result `shouldBe` Right CliArgs
-        { caNodeConfig = "db-sync-config.json"
-        , caSocketPath = "/run/node.socket"
-        , caStateDir   = "/tmp/state"
-        , caProfile    = "profile.json"
+        { caDbSyncConfig = "db-sync-config.json"
+        , caSocketPath   = "/run/node.socket"
+        , caStateDir     = "/tmp/state"
+        , caProfile      = "dbsync-profile.json"
         }
 
-    it "fails when --node-config is missing" $ do
+    it "fails when --db-sync-config is missing" $ do
       let result = parseArgs
             [ "--socket-path", "/path/to/node.socket"
             , "--state-dir", "/data"
-            , "--profile", "profile.json"
+            , "--profile", "dbsync-profile.json"
             ]
       result `shouldSatisfy` isLeft
 
     it "fails when --socket-path is missing" $ do
       let result = parseArgs
-            [ "--node-config", "db-sync-config.json"
+            [ "--db-sync-config", "db-sync-config.json"
             , "--state-dir", "/data"
-            , "--profile", "profile.json"
+            , "--profile", "dbsync-profile.json"
             ]
       result `shouldSatisfy` isLeft
 
     it "fails when --state-dir is missing" $ do
       let result = parseArgs
-            [ "--node-config", "db-sync-config.json"
+            [ "--db-sync-config", "db-sync-config.json"
             , "--socket-path", "/path/to/node.socket"
-            , "--profile", "profile.json"
+            , "--profile", "dbsync-profile.json"
             ]
       result `shouldSatisfy` isLeft
 
     it "fails when --profile is missing" $ do
       let result = parseArgs
-            [ "--node-config", "db-sync-config.json"
+            [ "--db-sync-config", "db-sync-config.json"
             , "--socket-path", "/path/to/node.socket"
             , "--state-dir", "/data"
             ]

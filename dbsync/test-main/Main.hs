@@ -6,6 +6,7 @@ import Cardano.Prelude
 
 import qualified DbSync.AppSpec as AppSpec
 import qualified DbSync.CliSpec as CliSpec
+import qualified DbSync.Config.GenesisSpec as ConfigGenesisSpec
 import qualified DbSync.Config.NodeSpec as ConfigNodeSpec
 import qualified DbSync.Config.TypesSpec as ConfigTypesSpec
 import qualified DbSync.Config.ValidationSpec as ConfigValidationSpec
@@ -18,3 +19,4 @@ main = hspec $ do
   ConfigTypesSpec.spec
   ConfigValidationSpec.spec
   ConfigNodeSpec.spec
+  ConfigGenesisSpec.spec

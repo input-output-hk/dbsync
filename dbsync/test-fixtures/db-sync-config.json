@@ -1,0 +1,18 @@
+{
+  "NetworkName": "mainnet",
+  "NodeConfigFile": "config.json",
+  "PrometheusPort": 8080,
+  "EnableFutureGenesis": true,
+  "insert_options": {
+    "tx_cbor": "disable",
+    "pool_stat": "enable"
+  },
+  "TurnOnLogging": true,
+  "minSeverity": "Info",
+  "setupBackends": ["KatipBK"],
+  "defaultBackends": ["KatipBK"],
+  "setupScribes": [{"scFormat": "ScText", "scKind": "StdoutSK", "scName": "stdout", "scRotation": null}],
+  "defaultScribes": [["StdoutSK", "stdout"]],
+  "rotation": {"rpKeepFilesNum": 10, "rpLogLimitBytes": 5000000, "rpMaxAgeHours": 24},
+  "options": {"mapBackends": {}, "mapSubtrace": {}}
+}

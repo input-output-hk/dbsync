@@ -1,10 +1,10 @@
 -- | CLI argument parsing for cardano-db-sync.
 --
 -- Parses the four required arguments:
---   @--node-config@ — path to db-sync-config.json (from the Cardano book)
---   @--socket-path@ — path to the cardano-node Unix socket
---   @--state-dir@   — directory for checkpoints and ledger state
---   @--profile@     — path to profile.json (database, options, sync mode)
+--   @--db-sync-config@ — path to db-sync-config.json (from the Cardano book)
+--   @--socket-path@    — path to the cardano-node Unix socket
+--   @--state-dir@      — directory for checkpoints and ledger state
+--   @--profile@        — path to dbsync-profile.json (database, options, sync mode)
 module DbSync.Cli
   ( -- * Types
     CliArgs (..)
@@ -36,10 +36,10 @@ import Options.Applicative
 
 -- | Parsed CLI arguments.
 data CliArgs = CliArgs
-  { caNodeConfig :: !FilePath  -- ^ Path to db-sync-config.json (from the Cardano book)
-  , caSocketPath :: !FilePath  -- ^ Path to the cardano-node Unix socket
-  , caStateDir   :: !FilePath  -- ^ Directory for checkpoints + ledger state
-  , caProfile    :: !FilePath  -- ^ Path to profile.json (database, options, sync mode)
+  { caDbSyncConfig :: !FilePath  -- ^ Path to db-sync-config.json (from the Cardano book)
+  , caSocketPath   :: !FilePath  -- ^ Path to the cardano-node Unix socket
+  , caStateDir     :: !FilePath  -- ^ Directory for checkpoints + ledger state
+  , caProfile      :: !FilePath  -- ^ Path to dbsync-profile.json (database, options, sync mode)
   }
   deriving stock (Eq, Show)
 
@@ -60,7 +60,7 @@ cliArgsP :: Parser CliArgs
 cliArgsP =
   CliArgs
     <$> strOption
-      ( long "node-config"
+      ( long "db-sync-config"
           <> metavar "FILEPATH"
           <> help "Path to db-sync-config.json (from the Cardano book)"
       )

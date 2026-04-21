@@ -31,7 +31,10 @@ module DbSync.Config.Types
   , defaultLoggingConfig
   , defaultSyncOptions
 
-    -- * Node config (extracted)
+    -- * DB-sync node config (from db-sync-config.json)
+  , DbSyncNodeConfig (..)
+
+    -- * Node config (from config.json)
   , NodeConfig (..)
   , NetworkMagicConfig (..)
 
@@ -288,11 +291,32 @@ data GovernanceVariant
   deriving stock (Eq, Show)
 
 -- ---------------------------------------------------------------------------
--- * Node config (extracted)
+-- * DB-sync node config (from db-sync-config.json — the book's file)
+-- ---------------------------------------------------------------------------
+
+-- | Fields extracted from db-sync-config.json (the file users download from
+-- the Cardano book). We only extract what we need — NodeConfigFile to find
+-- the real node config, plus optional metadata. All iohk-monitoring keys
+-- and insert_options are ignored.
+data DbSyncNodeConfig = DbSyncNodeConfig
+  { dscNodeConfigFile :: !FilePath     -- ^ Path to the real node config.json (relative)
+  , dscNetworkName    :: !(Maybe Text) -- ^ "mainnet", "preprod", etc.
+  , dscPrometheusPort :: !(Maybe Int)  -- ^ Prometheus metrics port
+  }
+  deriving stock (Eq, Show)
+
+instance FromJSON DbSyncNodeConfig where
+  parseJSON = Aeson.withObject "DbSyncNodeConfig" $ \o ->
+    DbSyncNodeConfig
+      <$> o .:  "NodeConfigFile"
+      <*> o .:? "NetworkName"
+      <*> o .:? "PrometheusPort"
+
+-- ---------------------------------------------------------------------------
+-- * Node config (from config.json — the real cardano-node config)
 -- ---------------------------------------------------------------------------
 
 -- | Whether the network requires magic (testnets) or not (mainnet).
--- Mirrors the original's RequiresNetworkMagic from cardano-crypto.
 data NetworkMagicConfig
   = RequiresNoMagic   -- ^ Mainnet (magic = 764824073)
   | RequiresMagic     -- ^ Testnet (magic read from genesis)
@@ -307,10 +331,10 @@ instance FromJSON NetworkMagicConfig where
                              "NetworkMagicConfig (RequiresNoMagic|RequiresMagic)"
                              (Aeson.String t)
 
--- | Relevant fields extracted from the cardano-node config JSON.
--- Follows the same key names as the original node config (ByronGenesisFile, etc.)
--- so we can parse real production configs directly.
--- We ignore the logging/tracing keys — only extract what db-sync needs.
+-- | Fields extracted from the cardano-node config.json.
+-- Contains genesis file paths, hashes, network magic, and optional
+-- hard fork trigger epochs (only present on testnets).
+-- All logging/tracing/P2P keys are ignored.
 data NodeConfig = NodeConfig
   { ncByronGenesisFile     :: !FilePath
   , ncByronGenesisHash     :: !Text
@@ -321,6 +345,13 @@ data NodeConfig = NodeConfig
   , ncConwayGenesisFile    :: !FilePath
   , ncConwayGenesisHash    :: !(Maybe Text)
   , ncRequiresNetworkMagic :: !NetworkMagicConfig
+    -- Hard fork triggers (optional — only on testnets)
+  , ncTestShelleyHardForkAtEpoch :: !(Maybe Word64)
+  , ncTestAllegraHardForkAtEpoch :: !(Maybe Word64)
+  , ncTestMaryHardForkAtEpoch    :: !(Maybe Word64)
+  , ncTestAlonzoHardForkAtEpoch  :: !(Maybe Word64)
+  , ncTestBabbageHardForkAtEpoch :: !(Maybe Word64)
+  , ncTestConwayHardForkAtEpoch  :: !(Maybe Word64)
   }
   deriving stock (Eq, Show)
 
@@ -336,6 +367,12 @@ instance FromJSON NodeConfig where
       <*> o .:  "ConwayGenesisFile"
       <*> o .:? "ConwayGenesisHash"
       <*> o .:  "RequiresNetworkMagic"
+      <*> o .:? "TestShelleyHardForkAtEpoch"
+      <*> o .:? "TestAllegraHardForkAtEpoch"
+      <*> o .:? "TestMaryHardForkAtEpoch"
+      <*> o .:? "TestAlonzoHardForkAtEpoch"
+      <*> o .:? "TestBabbageHardForkAtEpoch"
+      <*> o .:? "TestConwayHardForkAtEpoch"
 
 -- ---------------------------------------------------------------------------
 -- * Errors

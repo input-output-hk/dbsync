@@ -45,6 +45,7 @@ library
     DbSync.AppM
     DbSync.Cli
     DbSync.Config
+    DbSync.Config.Genesis
     DbSync.Config.Node
     DbSync.Config.Types
     DbSync.Config.Validation
@@ -188,6 +189,7 @@ test-suite dbsync-test
     DbSync.Config.TypesSpec
     DbSync.Config.ValidationSpec
     DbSync.Config.NodeSpec
+    DbSync.Config.GenesisSpec
   build-depends:
       base
     , dbsync
@@ -212,3 +214,4 @@ executable dbsync
       base
     , dbsync
     , cardano-prelude
+    , filepath

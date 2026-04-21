@@ -1,22 +1,37 @@
--- | Node configuration parsing.
+-- | Node configuration parsing — two stages.
 --
--- Extracts the subset of the cardano-node config JSON that db-sync needs.
--- The node config contains many keys (tracing, P2P, etc.) that we ignore —
--- we only parse genesis file paths, hashes, and network magic.
--- Follows the original project's pattern in Cardano.DbSync.Config.Node.
+-- Stage 1: Parse @db-sync-config.json@ (from the Cardano book) to extract
+-- the @NodeConfigFile@ path that points to the real node config.
+--
+-- Stage 2: Parse the referenced @config.json@ to extract genesis file paths,
+-- hashes, network magic, and optional hard fork triggers.
 module DbSync.Config.Node
-  ( -- * Parsing
-    parseNodeConfig
+  ( -- * Stage 1: db-sync-config.json
+    parseDbSyncNodeConfig
+
+    -- * Stage 2: config.json (the real node config)
+  , parseNodeConfig
   ) where
 
 import Cardano.Prelude
 
 import qualified Data.Yaml as Yaml
 
-import DbSync.Config.Types (ConfigError (..), NodeConfig)
+import DbSync.Config.Types (ConfigError (..), DbSyncNodeConfig, NodeConfig)
 
--- | Parse a cardano-node config JSON file, extracting fields relevant to db-sync.
--- Ignores all logging/tracing/P2P keys — only extracts genesis paths and network magic.
+-- | Stage 1: Parse db-sync-config.json to extract the NodeConfigFile path.
+-- Ignores all iohk-monitoring keys and insert_options — only extracts
+-- NodeConfigFile, NetworkName, and PrometheusPort.
+parseDbSyncNodeConfig :: FilePath -> IO (Either ConfigError DbSyncNodeConfig)
+parseDbSyncNodeConfig fp = do
+  result <- Yaml.decodeFileEither fp
+  pure $ case result of
+    Left err  -> Left $ ConfigParseError (show err)
+    Right cfg -> Right cfg
+
+-- | Stage 2: Parse the cardano-node config.json.
+-- Extracts genesis file paths, hashes, network magic, and optional
+-- hard fork triggers. Ignores all logging/tracing/P2P keys.
 parseNodeConfig :: FilePath -> IO (Either ConfigError NodeConfig)
 parseNodeConfig fp = do
   result <- Yaml.decodeFileEither fp

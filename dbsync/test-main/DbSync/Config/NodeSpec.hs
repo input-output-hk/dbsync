@@ -1,22 +1,46 @@
--- | Tests for cardano-node config parsing.
+-- | Tests for node configuration parsing.
 --
--- We only extract genesis paths, hashes, and network magic from the
--- node config. All the logging/tracing/P2P keys are ignored.
+-- Two-stage parsing:
+--   1. Parse db-sync-config.json → extract NodeConfigFile path
+--   2. Parse the referenced config.json → NodeConfig with genesis paths, hashes, triggers
 module DbSync.Config.NodeSpec
   ( spec
   ) where
 
 import Cardano.Prelude
 
-import DbSync.Config.Node (parseNodeConfig)
+import DbSync.Config.Node (parseDbSyncNodeConfig, parseNodeConfig)
 import DbSync.Config.Types
-  ( NetworkMagicConfig (..)
+  ( DbSyncNodeConfig (..)
+  , NetworkMagicConfig (..)
   , NodeConfig (..)
   )
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 spec :: Spec
 spec = describe "DbSync.Config.Node" $ do
+  describe "parseDbSyncNodeConfig" $ do
+    it "extracts NodeConfigFile from db-sync-config.json" $ do
+      result <- parseDbSyncNodeConfig "test-fixtures/db-sync-config.json"
+      case result of
+        Left err -> panic $ "Parse failed: " <> show err
+        Right dsc ->
+          dscNodeConfigFile dsc `shouldBe` "config.json"
+
+    it "extracts optional NetworkName" $ do
+      result <- parseDbSyncNodeConfig "test-fixtures/db-sync-config.json"
+      case result of
+        Left err -> panic $ "Parse failed: " <> show err
+        Right dsc ->
+          dscNetworkName dsc `shouldBe` Just "mainnet"
+
+    it "parses the real db-sync-config.json" $ do
+      result <- parseDbSyncNodeConfig "/Volumes/Cmdv4TB/Code/IOG/testnet/db-sync-config.json"
+      case result of
+        Left err -> panic $ "Parse failed: " <> show err
+        Right dsc ->
+          dscNodeConfigFile dsc `shouldBe` "config.json"
+
   describe "parseNodeConfig (mainnet-style)" $ do
     it "extracts genesis file paths" $ do
       result <- parseNodeConfig "test-fixtures/node-config.json"
@@ -47,6 +71,13 @@ spec = describe "DbSync.Config.Node" $ do
         Right nc ->
           ncRequiresNetworkMagic nc `shouldBe` RequiresNoMagic
 
+    it "defaults hard fork triggers to Nothing on mainnet" $ do
+      result <- parseNodeConfig "test-fixtures/node-config.json"
+      case result of
+        Left err -> panic $ "Parse failed: " <> show err
+        Right nc ->
+          ncTestShelleyHardForkAtEpoch nc `shouldBe` Nothing
+
   describe "parseNodeConfig (testnet-style)" $ do
     it "extracts RequiresMagic for testnets" $ do
       result <- parseNodeConfig "test-fixtures/node-config-testnet.json"
@@ -62,15 +93,17 @@ spec = describe "DbSync.Config.Node" $ do
         Right nc ->
           ncConwayGenesisHash nc `shouldBe` Nothing
 
-    it "ignores test hard fork epoch keys without failing" $ do
-      -- The node config has TestShelleyHardForkAtEpoch etc.
-      -- We don't parse them — just make sure they don't cause failure
+    it "parses testnet hard fork trigger epochs" $ do
       result <- parseNodeConfig "test-fixtures/node-config-testnet.json"
-      result `shouldSatisfy` isRight
+      case result of
+        Left err -> panic $ "Parse failed: " <> show err
+        Right nc -> do
+          ncTestShelleyHardForkAtEpoch nc `shouldBe` Just 1
+          ncTestAlonzoHardForkAtEpoch nc `shouldBe` Just 4
+          ncTestConwayHardForkAtEpoch nc `shouldBe` Just 6
 
   describe "parseNodeConfig (real production config)" $ do
     it "parses the actual testnet node config" $ do
-      -- Test against the real config from the cookbook
       result <- parseNodeConfig "/Volumes/Cmdv4TB/Code/IOG/testnet/config.json"
       case result of
         Left err -> panic $ "Parse failed: " <> show err

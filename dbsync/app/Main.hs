@@ -10,7 +10,9 @@ import System.Exit (exitFailure)
 import DbSync.App (buildCoreEnv, runStartup)
 import DbSync.Cli (parseCliArgs, CliArgs (..))
 import DbSync.Config (parseConfig)
-import DbSync.Config.Node (parseNodeConfig)
+import DbSync.Config.Node (parseDbSyncNodeConfig, parseNodeConfig)
+import DbSync.Config.Types (DbSyncNodeConfig (..))
+import System.FilePath (takeDirectory, (</>))
 import DbSync.Config.Validation (validateConfig)
 import DbSync.Trace.Backend (mkStdErrTracer)
 import DbSync.Trace.Types (Severity (..))
@@ -39,20 +41,28 @@ main = do
     Right cfg -> pure cfg
 
   -- 4. Parse db-sync-config.json → extract NodeConfigFile → parse node config
-  --    TODO: currently parses --node-config path directly as node config.
-  --    Need to add db-sync-config.json parsing to extract NodeConfigFile first.
-  nodeCfgResult <- parseNodeConfig (caNodeConfig args)
-  nodeCfg <- case nodeCfgResult of
+  dbSyncCfgResult <- parseDbSyncNodeConfig (caDbSyncConfig args)
+  dbSyncCfg <- case dbSyncCfgResult of
     Left err -> do
-      putTextLn $ "Error parsing node config: " <> show err
+      putTextLn $ "Error parsing db-sync-config.json: " <> show err
       exitFailure
     Right cfg -> pure cfg
 
-  -- 5. Build environment
+  -- 5. Resolve NodeConfigFile relative to db-sync-config.json directory, then parse
+  let configDir = takeDirectory (caDbSyncConfig args)
+      nodeConfigPath = configDir </> dscNodeConfigFile dbSyncCfg
+  nodeCfgResult <- parseNodeConfig nodeConfigPath
+  nodeCfg <- case nodeCfgResult of
+    Left err -> do
+      putTextLn $ "Error parsing node config (" <> toS nodeConfigPath <> "): " <> show err
+      exitFailure
+    Right cfg -> pure cfg
+
+  -- 6. Build environment
   tracer <- mkStdErrTracer Info
   env <- buildCoreEnv tracer validProfile nodeCfg
 
-  -- 6. Startup logging
+  -- 7. Startup logging
   runStartup env
 
   -- TODO: read genesis files → TopLevelConfig → connect to node

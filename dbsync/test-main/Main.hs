@@ -14,6 +14,7 @@ import qualified DbSync.Extractor.CoreSpec as ExtractorCoreSpec
 import qualified DbSync.Ingest.PipelineSpec as IngestPipelineSpec
 import qualified DbSync.Schema.CoreSpec as SchemaCoreSpec
 import qualified DbSync.Schema.GenerateSpec as SchemaGenerateSpec
+import qualified DbSync.Schema.InitSpec as SchemaInitSpec
 import Test.Hspec (hspec)
 
 main :: IO ()
@@ -28,3 +29,4 @@ main = hspec $ do
   SchemaGenerateSpec.spec
   ExtractorCoreSpec.spec
   IngestPipelineSpec.spec
+  SchemaInitSpec.spec

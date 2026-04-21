@@ -207,6 +207,7 @@ test-suite dbsync-test
     DbSync.Schema.GenerateSpec
     DbSync.Extractor.CoreSpec
     DbSync.Ingest.PipelineSpec
+    DbSync.Schema.InitSpec
   build-depends:
       base
     , dbsync

@@ -42,6 +42,7 @@ library
     DbSync.Db.Schema.Types
     DbSync.Db.Schema.Core
     DbSync.Db.Schema.Generate
+    DbSync.Db.Schema.Init
     DbSync.Db.Schema.Version
     DbSync.Db.Schema.Migration
     DbSync.Db.Writer.Copy
@@ -61,3 +62,6 @@ library
     , containers
     , text
     , time
+
+    -- System
+    , process

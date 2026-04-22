@@ -26,6 +26,7 @@
     "scripts_datums":   { "enabled": true },
     "governance":       { "enabled": true },
     "cbor":             { "enabled": false },
+    "epoch_sync_stats": { "enabled": true },
     "epoch_boundary":   { "enabled": true },
     "current_state":    { "enabled": false }
   },

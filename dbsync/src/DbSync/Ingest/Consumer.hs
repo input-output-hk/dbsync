@@ -30,13 +30,14 @@ import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import DbSync.Block.Parser (parseBlock)
 import DbSync.Block.Types (GenericBlock (..))
 import DbSync.Copy.Writer (CopyWriter (..))
+import DbSync.Db.Schema.EpochSyncStats (EpochSyncStats (..), SyncPhase (..))
 import DbSync.Extractor (ExtractState, ExtractorDef)
 import DbSync.Ingest.Pipeline (processBlock)
 import DbSync.Node.Connection (CardanoBlock)
-import DbSync.Resolver (IdResolver)
+import DbSync.Resolver (IdResolver (..))
 import DbSync.StateQuery (SlotDetails (..), StateQueryVar, getSlotDetails)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
-import DbSync.Writer (Writer)
+import DbSync.Writer (Writer (..))
 
 import Ouroboros.Consensus.Block (blockSlot)
 import Ouroboros.Consensus.BlockchainTime.WallClock.Types (SystemStart)
@@ -97,11 +98,26 @@ runConsumer tracer sqv systemStart extractors queue resolver writer copyWriter _
                 blocksPerSec = if elapsed > 0
                   then fromIntegral blockCount / realToFrac elapsed
                   else 0
+                elapsedSec :: Double
+                elapsedSec = realToFrac elapsed
+
+            -- Write epoch sync stats before commit
+            essId <- assignEpochSyncStatsId resolver
+            let ess = EpochSyncStats
+                  { epochSyncStatsEpochNo         = unEpochNo prev
+                  , epochSyncStatsBlocksProcessed  = blockCount
+                  , epochSyncStatsBlocksPerSec     = blocksPerSec
+                  , epochSyncStatsElapsedSec       = elapsedSec
+                  , epochSyncStatsSyncedAt         = now
+                  , epochSyncStatsPhase            = IngestChainHistory
+                  }
+            writeEpochSyncStats writer essId ess
+
             traceWith tracer $ LogMsg Info "Ingest"
               ( "Epoch " <> show (unEpochNo prev) <> " complete | "
                 <> show blockCount <> " blocks | "
                 <> show (round blocksPerSec :: Int) <> " blocks/sec | "
-                <> show (round (realToFrac elapsed :: Double) :: Int) <> "s"
+                <> show (round elapsedSec :: Int) <> "s"
               ) Nothing
             cwCommit copyWriter
             cwReopen copyWriter

@@ -37,6 +37,12 @@ module DbSync.Db.Schema.Ids
   , PoolRetireId (..)
   , PoolRelayId (..)
 
+    -- * CBOR table IDs
+  , TxCborId (..)
+
+    -- * EpochSyncStats table IDs
+  , EpochSyncStatsId (..)
+
     -- * Referenced by other tables
   , PoolHashId (..)
   , StakeAddressId (..)
@@ -140,6 +146,22 @@ newtype PoolRetireId = PoolRetireId { getPoolRetireId :: Int64 }
   deriving stock (Eq, Ord, Show)
 
 newtype PoolRelayId = PoolRelayId { getPoolRelayId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- ---------------------------------------------------------------------------
+-- * CBOR table IDs
+-- ---------------------------------------------------------------------------
+
+-- | Primary key for the @tx_cbor@ table.
+newtype TxCborId = TxCborId { getTxCborId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- ---------------------------------------------------------------------------
+-- * EpochSyncStats table IDs
+-- ---------------------------------------------------------------------------
+
+-- | Primary key for the @epoch_sync_stats@ table.
+newtype EpochSyncStatsId = EpochSyncStatsId { getEpochSyncStatsId :: Int64 }
   deriving stock (Eq, Ord, Show)
 
 -- ---------------------------------------------------------------------------

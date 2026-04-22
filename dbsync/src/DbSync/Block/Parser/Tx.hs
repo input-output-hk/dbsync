@@ -95,6 +95,12 @@ txHashId tx = Crypto.hashToBytes $ extractHash $ Core.hashAnnotated (tx ^. Core.
 getTxSize :: Core.EraTx era => Core.Tx era -> Word64
 getTxSize tx = fromIntegral $ tx ^. Core.sizeTxF
 
+-- | Raw CBOR bytes of the full transaction (for tx_cbor table).
+getTxCborBytes :: Core.EraTx era => Core.Tx era -> ByteString
+getTxCborBytes = toStrictBytes . serialize'
+  where
+    toStrictBytes = toS
+
 -- | Extract inputs from a transaction body.
 mkTxIn :: Core.EraTxBody era => Core.TxBody era -> [GenericTxIn]
 mkTxIn txBody = map fromTxIn $ toList $ txBody ^. Core.inputsTxBodyL
@@ -372,6 +378,7 @@ fromShelleyTx (blkIndex, tx) =
     , txWithdrawals      = mkTxWithdrawals txBody
     , txMetadata         = getTxMetadataRaw tx
     , txMint             = []
+    , txCborRaw          = Just (getTxCborBytes tx)
     }
 
 -- ---------------------------------------------------------------------------
@@ -404,6 +411,7 @@ fromAllegraTx (blkIndex, tx) =
     , txWithdrawals      = mkTxWithdrawals txBody
     , txMetadata         = getTxMetadataRaw tx
     , txMint             = []
+    , txCborRaw          = Just (getTxCborBytes tx)
     }
 
 -- ---------------------------------------------------------------------------
@@ -436,6 +444,7 @@ fromMaryTx (blkIndex, tx) =
     , txWithdrawals      = mkTxWithdrawals txBody
     , txMetadata         = getTxMetadataRaw tx
     , txMint             = getMint txBody
+    , txCborRaw          = Just (getTxCborBytes tx)
     }
 
 -- ---------------------------------------------------------------------------
@@ -470,6 +479,7 @@ fromAlonzoTx (blkIndex, tx) =
     , txWithdrawals      = mkTxWithdrawals txBody
     , txMetadata         = getTxMetadataRaw tx
     , txMint             = getMint txBody
+    , txCborRaw          = Just (getTxCborBytes tx)
     }
 
 -- ---------------------------------------------------------------------------
@@ -505,6 +515,7 @@ fromBabbageTx (blkIndex, tx) =
     , txWithdrawals      = mkTxWithdrawals txBody
     , txMetadata         = getTxMetadataRaw tx
     , txMint             = getMint txBody
+    , txCborRaw          = Just (getTxCborBytes tx)
     }
 
 -- ---------------------------------------------------------------------------
@@ -541,6 +552,7 @@ fromConwayTx (blkIndex, tx) =
     , txWithdrawals      = mkTxWithdrawals txBody
     , txMetadata         = getTxMetadataRaw tx
     , txMint             = getMint txBody
+    , txCborRaw          = Just (getTxCborBytes tx)
     }
 -- ---------------------------------------------------------------------------
 -- * Dijkstra era (same structure as Conway, uses fallback cert conversion)
@@ -576,4 +588,5 @@ fromDijkstraTx (blkIndex, tx) =
     , txWithdrawals      = mkTxWithdrawals txBody
     , txMetadata         = getTxMetadataRaw tx
     , txMint             = getMint txBody
+    , txCborRaw          = Just (getTxCborBytes tx)
     }

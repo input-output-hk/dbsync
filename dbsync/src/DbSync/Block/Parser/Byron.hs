@@ -142,6 +142,7 @@ fromByronTx _parentBlk blockIndex txAux =
     , txWithdrawals      = []
     , txMetadata         = Nothing
     , txMint             = []
+    , txCborRaw          = Nothing  -- Byron: serialisation format differs, skip
     }
 
 fromByronTxIn :: Byron.TxIn -> GenericTxIn

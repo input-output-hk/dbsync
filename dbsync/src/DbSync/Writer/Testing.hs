@@ -85,6 +85,12 @@ mkTestWriter ref = Writer
   , writePoolRetire      = \_ _ -> pure ()
   , writePoolRelay       = \_ _ -> pure ()
 
+    -- CBOR (no-op)
+  , writeTxCbor = \_ _ -> pure ()
+
+    -- EpochSyncStats (no-op)
+  , writeEpochSyncStats = \_ _ -> pure ()
+
     -- Transaction control
   , commit =
       atomicModifyIORef' ref $ \s ->

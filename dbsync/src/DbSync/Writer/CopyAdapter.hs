@@ -13,6 +13,7 @@ module DbSync.Writer.CopyAdapter
 import Cardano.Prelude
 
 import DbSync.Copy.Writer (CopyWriter (..))
+import DbSync.Db.Schema.CBOR (encodeTxCborCopy)
 import DbSync.Db.Schema.Core
   ( encodeBlockCopy
   , encodeSlotLeaderCopy
@@ -37,6 +38,7 @@ import DbSync.Db.Schema.StakeDelegation
   , encodeDelegationCopy
   , encodeWithdrawalCopy
   )
+import DbSync.Db.Schema.EpochSyncStats (encodeEpochSyncStatsCopy)
 import DbSync.Db.Schema.Pool
   ( encodePoolHashCopy
   , encodePoolUpdateCopy
@@ -110,6 +112,14 @@ mkCopyWriterAdapter cw = Writer
       cwWriteRow cw "pool_retire" (encodePoolRetireCopy prid pr)
   , writePoolRelay = \prid pr ->
       cwWriteRow cw "pool_relay" (encodePoolRelayCopy prid pr)
+
+    -- CBOR
+  , writeTxCbor = \tcid tc ->
+      cwWriteRow cw "tx_cbor" (encodeTxCborCopy tcid tc)
+
+    -- EpochSyncStats
+  , writeEpochSyncStats = \essid ess ->
+      cwWriteRow cw "epoch_sync_stats" (encodeEpochSyncStatsCopy essid ess)
 
     -- Transaction control
   , commit = cwCommit cw

@@ -19,13 +19,15 @@ module DbSync.Writer
 
 import Cardano.Prelude
 
+import DbSync.Db.Schema.CBOR (TxCbor)
 import DbSync.Db.Schema.Core (Block, SlotLeader, Tx)
-import DbSync.Db.Schema.UTxO (TxOut, TxIn, CollateralTxIn, ReferenceTxIn)
+import DbSync.Db.Schema.EpochSyncStats (EpochSyncStats)
+import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Metadata (TxMetadata)
 import DbSync.Db.Schema.MultiAsset (MultiAsset, MaTxMint, MaTxOut)
-import DbSync.Db.Schema.StakeDelegation (StakeAddress, StakeRegistration, StakeDeregistration, Delegation, Withdrawal)
 import DbSync.Db.Schema.Pool (PoolHash, PoolUpdate, PoolMetadataRef, PoolOwner, PoolRetire, PoolRelay)
-import DbSync.Db.Schema.Ids
+import DbSync.Db.Schema.StakeDelegation (StakeAddress, StakeRegistration, StakeDeregistration, Delegation, Withdrawal)
+import DbSync.Db.Schema.UTxO (TxOut, TxIn, CollateralTxIn, ReferenceTxIn)
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -81,6 +83,16 @@ data Writer m = Writer
   , writePoolOwner       :: !(PoolOwnerId -> PoolOwner -> m ())
   , writePoolRetire      :: !(PoolRetireId -> PoolRetire -> m ())
   , writePoolRelay       :: !(PoolRelayId -> PoolRelay -> m ())
+
+    -- ---------------------------------------------------------------
+    -- CBOR tables
+    -- ---------------------------------------------------------------
+  , writeTxCbor :: !(TxCborId -> TxCbor -> m ())
+
+    -- ---------------------------------------------------------------
+    -- EpochSyncStats tables
+    -- ---------------------------------------------------------------
+  , writeEpochSyncStats :: !(EpochSyncStatsId -> EpochSyncStats -> m ())
 
     -- ---------------------------------------------------------------
     -- Transaction control

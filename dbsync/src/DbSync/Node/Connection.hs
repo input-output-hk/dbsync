@@ -266,9 +266,11 @@ blockFetchClient appTracer blockQueue =
         , recvMsgIntersectNotFound = \tip      -> pure $ goTip policy Zero Origin tip
         }
   where
-    -- Free-flowing: no artificial pipeline depth limit
+    -- Pipeline depth limits: start requesting at 10 in-flight,
+    -- cap at 50 in-flight. Balances throughput with memory/backpressure.
+    -- Unlimited (0/maxBound) causes memory growth and TCP backpressure.
     policy :: MkPipelineDecision
-    policy = pipelineDecisionLowHighMark 0 maxBound
+    policy = pipelineDecisionLowHighMark 10 50
 
     goTip
       :: MkPipelineDecision

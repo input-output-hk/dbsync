@@ -30,6 +30,8 @@ import DbSync.Extractor.Metadata (metadataExtractor)
 import DbSync.Extractor.MultiAsset (multiAssetExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Extractor.Pool (poolExtractor)
+import DbSync.Extractor.Cbor (cborExtractor)
+import DbSync.Extractor.EpochSyncStats (epochSyncStatsExtractor)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 
 -- ---------------------------------------------------------------------------
@@ -73,6 +75,8 @@ buildExtractors pc = mapMaybe mkProj allOptions
     resolveExtractor "multi_asset"      = multiAssetExtractor
     resolveExtractor "stake_delegation" = stakeDelegationExtractor
     resolveExtractor "pool"             = poolExtractor
+    resolveExtractor "cbor"             = cborExtractor
+    resolveExtractor "epoch_sync_stats" = epochSyncStatsExtractor
     resolveExtractor name               = stubExtractor name
 
     allOptions :: [(Text, SyncOption)]
@@ -86,6 +90,7 @@ buildExtractors pc = mapMaybe mkProj allOptions
       , ("scripts_datums",   pcScriptsDatums pc)
       , ("governance",       pcGovernance pc)
       , ("cbor",             pcCbor pc)
+      , ("epoch_sync_stats", pcEpochSyncStats pc)
       , ("epoch_boundary",   pcEpochBoundary pc)
       , ("current_state",    pcCurrentState pc)
       ]

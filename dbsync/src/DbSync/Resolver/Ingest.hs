@@ -159,4 +159,16 @@ mkIngestResolver stRef = IdResolver
       let (i, ctr') = nextId (icPoolRelayId $ esIdCounters st)
           st' = st { esIdCounters = (esIdCounters st) { icPoolRelayId = ctr' } }
       in (st', PoolRelayId i)
+
+    -- CBOR IDs
+  , assignTxCborId = atomicModifyIORef' stRef $ \st ->
+      let (i, ctr') = nextId (icTxCborId $ esIdCounters st)
+          st' = st { esIdCounters = (esIdCounters st) { icTxCborId = ctr' } }
+      in (st', TxCborId i)
+
+    -- EpochSyncStats IDs
+  , assignEpochSyncStatsId = atomicModifyIORef' stRef $ \st ->
+      let (i, ctr') = nextId (icEpochSyncStatsId $ esIdCounters st)
+          st' = st { esIdCounters = (esIdCounters st) { icEpochSyncStatsId = ctr' } }
+      in (st', EpochSyncStatsId i)
   }

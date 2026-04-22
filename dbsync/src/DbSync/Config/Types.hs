@@ -221,6 +221,7 @@ data SyncOptions = SyncOptions
   , pcScriptsDatums   :: !SyncOption
   , pcGovernance      :: !SyncOption
   , pcCbor            :: !SyncOption
+  , pcEpochSyncStats  :: !SyncOption
   , pcEpochBoundary   :: !SyncOption
   , pcCurrentState    :: !SyncOption
   }
@@ -238,6 +239,7 @@ instance FromJSON SyncOptions where
       <*> o .:? "scripts_datums"   .!= enabled
       <*> o .:? "governance"       .!= enabled
       <*> o .:? "cbor"             .!= disabled  -- off by default (large)
+      <*> o .:? "epoch_sync_stats" .!= enabled
       <*> o .:? "epoch_boundary"   .!= enabled
       <*> o .:? "current_state"    .!= disabled  -- off by default (needs ledger)
     where
@@ -257,6 +259,7 @@ defaultSyncOptions = SyncOptions
   , pcScriptsDatums   = SyncOption True
   , pcGovernance      = SyncOption True
   , pcCbor            = SyncOption False
+  , pcEpochSyncStats  = SyncOption True
   , pcEpochBoundary   = SyncOption True
   , pcCurrentState    = SyncOption False
   }

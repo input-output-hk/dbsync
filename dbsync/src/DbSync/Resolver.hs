@@ -18,10 +18,10 @@ module DbSync.Resolver
 import Cardano.Prelude
 
 import DbSync.Db.Schema.Core (SlotLeader)
-import DbSync.Db.Schema.MultiAsset (MultiAsset)
-import DbSync.Db.Schema.StakeDelegation (StakeAddress)
-import DbSync.Db.Schema.Pool (PoolHash)
 import DbSync.Db.Schema.Ids
+import DbSync.Db.Schema.MultiAsset (MultiAsset)
+import DbSync.Db.Schema.Pool (PoolHash)
+import DbSync.Db.Schema.StakeDelegation (StakeAddress)
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -129,4 +129,18 @@ data IdResolver m = IdResolver
 
     -- | Assign the next pool_relay ID.
   , assignPoolRelayId :: !(m PoolRelayId)
+
+    -- ---------------------------------------------------------------
+    -- CBOR extractor IDs
+    -- ---------------------------------------------------------------
+
+    -- | Assign the next tx_cbor ID.
+  , assignTxCborId :: !(m TxCborId)
+
+    -- ---------------------------------------------------------------
+    -- EpochSyncStats IDs
+    -- ---------------------------------------------------------------
+
+    -- | Assign the next epoch_sync_stats ID.
+  , assignEpochSyncStatsId :: !(m EpochSyncStatsId)
   }

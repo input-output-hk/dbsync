@@ -75,6 +75,7 @@ library
     DbSync.Extractor.ScriptsDatums
     DbSync.Extractor.Governance
     DbSync.Extractor.Cbor
+    DbSync.Extractor.EpochSyncStats
     DbSync.Extractor.EpochBoundary
     DbSync.Extractor.CurrentState
     DbSync.Copy.Connection

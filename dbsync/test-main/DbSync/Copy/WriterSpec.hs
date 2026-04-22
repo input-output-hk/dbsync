@@ -199,6 +199,8 @@ mkInitState = ExtractState
       , icPoolOwnerId           = mkIdCounter 1
       , icPoolRetireId          = mkIdCounter 1
       , icPoolRelayId           = mkIdCounter 1
+      , icTxCborId              = mkIdCounter 1
+      , icEpochSyncStatsId      = mkIdCounter 1
       }
   , esDedupMaps   = emptyMaps
   , esLastBlockId = Nothing
@@ -285,4 +287,5 @@ mkTx idx txH = GenericTx
   , txWithdrawals       = []
   , txMetadata          = Nothing
   , txMint              = []
+  , txCborRaw           = Nothing
   }

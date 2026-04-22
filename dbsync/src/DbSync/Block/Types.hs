@@ -95,6 +95,10 @@ data GenericTx = GenericTx
   , txMetadata          :: !(Maybe ByteString)  -- ^ Raw CBOR metadata
   , txMint              :: ![(ByteString, ByteString, Integer)]
       -- ^ [(policy_id, asset_name, quantity)]
+  , txCborRaw           :: !(Maybe ByteString)
+      -- ^ Raw CBOR-encoded transaction bytes (for tx_cbor table).
+      --   'Nothing' only for Byron-era transactions where serialisation
+      --   to the original format is non-trivial.
   -- TODO: Add governance fields (proposals, voting procedures)
   -- TODO: Add script/datum/redeemer fields
   }

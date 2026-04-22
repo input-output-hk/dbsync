@@ -54,6 +54,8 @@ data IdCounters = IdCounters
   , icPoolOwnerId           :: !IdCounter
   , icPoolRetireId          :: !IdCounter
   , icPoolRelayId           :: !IdCounter
+  , icTxCborId              :: !IdCounter
+  , icEpochSyncStatsId      :: !IdCounter
   }
   deriving stock (Eq, Show)
 

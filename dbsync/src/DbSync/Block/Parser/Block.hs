@@ -91,7 +91,7 @@ import DbSync.Block.Parser.Tx
   , fromConwayTx
   , fromDijkstraTx
   )
-import DbSync.Block.Parser.Types (EpochSlotInfo (..))
+import DbSync.StateQuery (SlotDetails (..))
 import DbSync.Block.Types
   ( BlockEra (..)
   , GenericBlock (..)
@@ -102,16 +102,16 @@ import DbSync.Block.Types
 -- * Block converters: TPraos eras (Shelley, Allegra, Mary, Alonzo)
 -- ---------------------------------------------------------------------------
 
-fromShelleyBlock :: EpochSlotInfo -> ShelleyBlock (TPraos StandardCrypto) ShelleyEra -> GenericBlock
+fromShelleyBlock :: SlotDetails -> ShelleyBlock (TPraos StandardCrypto) ShelleyEra -> GenericBlock
 fromShelleyBlock = mkShelleyBlockTPraos Shelley fromShelleyTx
 
-fromAllegraBlock :: EpochSlotInfo -> ShelleyBlock (TPraos StandardCrypto) AllegraEra -> GenericBlock
+fromAllegraBlock :: SlotDetails -> ShelleyBlock (TPraos StandardCrypto) AllegraEra -> GenericBlock
 fromAllegraBlock = mkShelleyBlockTPraos Allegra fromAllegraTx
 
-fromMaryBlock :: EpochSlotInfo -> ShelleyBlock (TPraos StandardCrypto) MaryEra -> GenericBlock
+fromMaryBlock :: SlotDetails -> ShelleyBlock (TPraos StandardCrypto) MaryEra -> GenericBlock
 fromMaryBlock = mkShelleyBlockTPraos Mary fromMaryTx
 
-fromAlonzoBlock :: EpochSlotInfo -> ShelleyBlock (TPraos StandardCrypto) AlonzoEra -> GenericBlock
+fromAlonzoBlock :: SlotDetails -> ShelleyBlock (TPraos StandardCrypto) AlonzoEra -> GenericBlock
 fromAlonzoBlock = mkShelleyBlockTPraos Alonzo fromAlonzoTx
 
 -- | Shared TPraos block converter — all pre-Babbage eras use the same pattern.
@@ -119,28 +119,28 @@ mkShelleyBlockTPraos
   :: Ledger.EraBlockBody era
   => BlockEra
   -> ((Word64, Ledger.Tx era) -> GenericTx)
-  -> EpochSlotInfo
+  -> SlotDetails
   -> ShelleyBlock (TPraos StandardCrypto) era
   -> GenericBlock
-mkShelleyBlockTPraos era txConvert esi blk =
-  let slotNo = slotNumber blk
-      (protoMaj, protoMin) = splitProtoVer (blockProtoVersionTPraos blk)
+mkShelleyBlockTPraos era txConvert sd blk =
+  let (protoMaj, protoMin) = splitProtoVer (blockProtoVersionTPraos blk)
   in GenericBlock
     { blkEra           = era
     , blkHash          = blockHash blk
     , blkPreviousHash  = blockPrevHash blk
-    , blkSlotNo        = slotNo
+    , blkSlotNo        = sdSlotNo sd
     , blkBlockNo       = blockNumber blk
-    , blkEpochNo       = esiSlotToEpochNo esi slotNo
-    , blkEpochSlotNo   = esiSlotToEpochSlot esi slotNo
+    , blkEpochNo       = sdEpochNo sd
+    , blkEpochSlotNo   = sdEpochSlot sd
     , blkSize          = blockSize blk
-    , blkTime          = esiSlotToUTCTime esi slotNo
+    , blkTime          = sdSlotTime sd
     , blkSlotLeader    = blockIssuerRaw blk
     , blkProtoMajor    = protoMaj
     , blkProtoMinor    = protoMin
     , blkVrfKey        = Just (blockVrfKeyViewTPraos blk)
     , blkOpCert        = Just (blockOpCertRawTPraos blk)
     , blkOpCertCounter = Just (blockOpCertCounterTPraos blk)
+    , blkIsEBB         = False
     , blkTxs           = map txConvert (getTxs blk)
     }
 
@@ -148,13 +148,13 @@ mkShelleyBlockTPraos era txConvert esi blk =
 -- * Block converters: Praos eras (Babbage, Conway, Dijkstra)
 -- ---------------------------------------------------------------------------
 
-fromBabbageBlock :: EpochSlotInfo -> ShelleyBlock (Praos StandardCrypto) BabbageEra -> GenericBlock
+fromBabbageBlock :: SlotDetails -> ShelleyBlock (Praos StandardCrypto) BabbageEra -> GenericBlock
 fromBabbageBlock = mkShelleyBlockPraos Babbage fromBabbageTx
 
-fromConwayBlock :: EpochSlotInfo -> ShelleyBlock (Praos StandardCrypto) ConwayEra -> GenericBlock
+fromConwayBlock :: SlotDetails -> ShelleyBlock (Praos StandardCrypto) ConwayEra -> GenericBlock
 fromConwayBlock = mkShelleyBlockPraos Conway fromConwayTx
 
-fromDijkstraBlock :: EpochSlotInfo -> ShelleyBlock (Praos StandardCrypto) DijkstraEra -> GenericBlock
+fromDijkstraBlock :: SlotDetails -> ShelleyBlock (Praos StandardCrypto) DijkstraEra -> GenericBlock
 fromDijkstraBlock = mkShelleyBlockPraos Dijkstra fromDijkstraTx
 
 -- | Shared Praos block converter — Babbage+ eras use the same pattern.
@@ -162,28 +162,28 @@ mkShelleyBlockPraos
   :: Ledger.EraBlockBody era
   => BlockEra
   -> ((Word64, Ledger.Tx era) -> GenericTx)
-  -> EpochSlotInfo
+  -> SlotDetails
   -> ShelleyBlock (Praos StandardCrypto) era
   -> GenericBlock
-mkShelleyBlockPraos era txConvert esi blk =
-  let slotNo = slotNumber blk
-      (protoMaj, protoMin) = splitProtoVer (blockProtoVersionPraos blk)
+mkShelleyBlockPraos era txConvert sd blk =
+  let (protoMaj, protoMin) = splitProtoVer (blockProtoVersionPraos blk)
   in GenericBlock
     { blkEra           = era
     , blkHash          = blockHash blk
     , blkPreviousHash  = blockPrevHash blk
-    , blkSlotNo        = slotNo
+    , blkSlotNo        = sdSlotNo sd
     , blkBlockNo       = blockNumber blk
-    , blkEpochNo       = esiSlotToEpochNo esi slotNo
-    , blkEpochSlotNo   = esiSlotToEpochSlot esi slotNo
+    , blkEpochNo       = sdEpochNo sd
+    , blkEpochSlotNo   = sdEpochSlot sd
     , blkSize          = blockSize blk
-    , blkTime          = esiSlotToUTCTime esi slotNo
+    , blkTime          = sdSlotTime sd
     , blkSlotLeader    = blockIssuerRaw blk
     , blkProtoMajor    = protoMaj
     , blkProtoMinor    = protoMin
     , blkVrfKey        = Just (blockVrfKeyViewPraos blk)
     , blkOpCert        = Just (blockOpCertRawPraos blk)
     , blkOpCertCounter = Just (blockOpCertCounterPraos blk)
+    , blkIsEBB         = False
     , blkTxs           = map txConvert (getTxs blk)
     }
 

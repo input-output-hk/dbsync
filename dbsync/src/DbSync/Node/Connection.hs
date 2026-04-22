@@ -6,7 +6,7 @@
 -- | ChainSync node connection.
 --
 -- Connects to a cardano-node via Unix socket, runs the ChainSync
--- mini-protocol, and pushes received blocks to a 'TBQueue'.
+-- mini-protocol, and pushes received blocks to a 'TQueue'.
 -- Adapted from the original cardano-db-sync Sync.hs.
 module DbSync.Node.Connection
   ( -- * Types
@@ -29,7 +29,7 @@ import Cardano.Client.Subscription
   )
 import qualified Codec.CBOR.Term as CBOR
 import Control.Concurrent.Async (AsyncCancelled (..))
-import Control.Concurrent.STM (TBQueue, writeTBQueue)
+import Control.Concurrent.STM (TQueue, writeTQueue)
 import Control.Tracer (Tracer, contramap, nullTracer, traceWith)
 import qualified Data.ByteString.Lazy as BSL
 import qualified Network.Mux as Mux
@@ -76,10 +76,10 @@ import Ouroboros.Network.NodeToClient
   , NodeToClientProtocols (..)
   , TraceSendRecv
   , localSnocket
-  , localStateQueryPeerNull
   , localTxMonitorPeerNull
   , localTxSubmissionPeerNull
   )
+import Ouroboros.Network.Protocol.LocalStateQuery.Client (localStateQueryClientPeer)
 import qualified Ouroboros.Network.NodeToClient.Version as Network
 import Ouroboros.Network.Protocol.ChainSync.ClientPipelined
   ( ChainSyncClientPipelined (..)
@@ -101,6 +101,7 @@ import qualified Ouroboros.Network.Snocket as Snocket
 import Cardano.Slotting.Slot (WithOrigin (..))
 
 import DbSync.Config.Genesis (GenesisConfig (..), ShelleyConfig (..))
+import DbSync.StateQuery (StateQueryVar, localStateQueryHandler)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 
 -- * Types
@@ -122,7 +123,7 @@ getNetworkMagic gc = NetworkMagic $ sgNetworkMagic (scConfig $ gcShelley gc)
 -- ---------------------------------------------------------------------------
 
 -- | Connect to a cardano-node and run the ChainSync protocol.
--- Received blocks are written to the provided 'TBQueue'.
+-- Received blocks are written to the provided 'TQueue'.
 -- This function blocks indefinitely (reconnects on failure).
 connectToNode
   :: AppTracer
@@ -130,9 +131,10 @@ connectToNode
   -> TopLevelConfig (CardanoBlock StandardCrypto)
   -> NetworkMagic
   -> FilePath                                    -- ^ Node socket path
-  -> TBQueue (CardanoBlock StandardCrypto)        -- ^ Block queue
+  -> TQueue (CardanoBlock StandardCrypto)         -- ^ Block queue
+  -> StateQueryVar                               -- ^ For LocalStateQuery (epoch interpreter)
   -> IO ()
-connectToNode tracer iomgr topLevelCfg networkMagic socketPath blockQueue = do
+connectToNode tracer iomgr topLevelCfg networkMagic socketPath blockQueue stateQueryVar = do
   traceWith tracer $ LogMsg Info "Connection" ("Connecting to node via " <> toS socketPath) Nothing
   void $
     subscribe
@@ -141,7 +143,7 @@ connectToNode tracer iomgr topLevelCfg networkMagic socketPath blockQueue = do
       (supportedNodeToClientVersions (Proxy @(CardanoBlock StandardCrypto)))
       subscriptionTracers
       subscriptionParams
-      (nodeProtocols tracer codecConfig blockQueue)
+      (nodeProtocols tracer codecConfig blockQueue stateQueryVar)
   where
     codecConfig :: CodecConfig (CardanoBlock StandardCrypto)
     codecConfig = configCodec topLevelCfg
@@ -191,11 +193,12 @@ formatSubscriptionTrace ev =
 nodeProtocols
   :: AppTracer
   -> CodecConfig (CardanoBlock StandardCrypto)
-  -> TBQueue (CardanoBlock StandardCrypto)
+  -> TQueue (CardanoBlock StandardCrypto)
+  -> StateQueryVar
   -> Network.NodeToClientVersion
   -> BlockNodeToClientVersion (CardanoBlock StandardCrypto)
   -> NodeToClientProtocols 'Mux.InitiatorMode LocalAddress BSL.ByteString IO () Void
-nodeProtocols appTracer codecConfig blockQueue version blockVersion =
+nodeProtocols appTracer codecConfig blockQueue stateQueryVar version blockVersion =
   NodeToClientProtocols
     { localChainSyncProtocol = chainSyncProtocol
     , localTxSubmissionProtocol = dummyTxSubmit
@@ -228,7 +231,7 @@ nodeProtocols appTracer codecConfig blockQueue version blockVersion =
     dummyStateQuery =
       InitiatorProtocolOnly $
         Mux.mkMiniProtocolCbFromPeerSt $
-          const (nullTracer, cStateQueryCodec codecs, stateQueryInitState, localStateQueryPeerNull)
+          const (nullTracer, cStateQueryCodec codecs, stateQueryInitState, localStateQueryClientPeer $ localStateQueryHandler stateQueryVar)
       where
         stateQueryInitState = LocalStateQuery.StateIdle
 
@@ -242,11 +245,11 @@ nodeProtocols appTracer codecConfig blockQueue version blockVersion =
 -- * ChainSync pipelined client
 -- ---------------------------------------------------------------------------
 
--- | Simple pipelined ChainSync client that writes blocks to a TBQueue.
+-- | Simple pipelined ChainSync client that writes blocks to a TQueue.
 -- Starts from genesis (no intersection points) and pipelines aggressively.
 blockFetchClient
   :: AppTracer
-  -> TBQueue (CardanoBlock StandardCrypto)
+  -> TQueue (CardanoBlock StandardCrypto)
   -> ChainSyncClientPipelined
        (CardanoBlock StandardCrypto)
        (Point (CardanoBlock StandardCrypto))
@@ -263,9 +266,9 @@ blockFetchClient appTracer blockQueue =
         , recvMsgIntersectNotFound = \tip      -> pure $ goTip policy Zero Origin tip
         }
   where
-    -- Pipeline window: request up to 50 blocks ahead
+    -- Free-flowing: no artificial pipeline depth limit
     policy :: MkPipelineDecision
-    policy = pipelineDecisionLowHighMark 1 50
+    policy = pipelineDecisionLowHighMark 0 maxBound
 
     goTip
       :: MkPipelineDecision
@@ -307,9 +310,9 @@ blockFetchClient appTracer blockQueue =
       ClientStNext
         { recvMsgRollForward = \blk tip -> do
             let bn = blockNo blk
-            traceWith appTracer $ LogMsg Info "ChainSync"
+            traceWith appTracer $ LogMsg Debug "ChainSync"
               ("Block " <> show bn) Nothing
-            atomically $ writeTBQueue blockQueue blk
+            atomically $ writeTQueue blockQueue blk
             pure $ goTip mkDecision n (At bn) tip
         , recvMsgRollBackward = \point tip -> do
             traceWith appTracer $ LogMsg Warning "ChainSync"

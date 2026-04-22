@@ -92,54 +92,54 @@ mkEpochSlotInfo byronCfg shelleyGenesis =
     -- NOTE: This is correct for all standard Cardano networks because the
     -- Byron→Shelley transition always happens at a clean epoch boundary.
 
-    -- Slot computation
+    -- The Byron→Shelley transition slot.
+    -- Byron ran for some number of epochs, each with byronEpochSlots.
+    -- On mainnet this is 208 epochs × 21600 = 4,492,800 slots.
+    -- We can detect this: the hard fork trigger epoch count is
+    -- shelleyEpochLength / byronEpochSlots boundaries, but more
+    -- directly, we know that Byron used byronEpochSlots per epoch
+    -- and Shelley uses shelleyEpochLength. The transition is where
+    -- the epoch length changes. We compute the transition from the
+    -- observation that Byron epochs are much shorter than Shelley:
+    -- any slot where slot/byronEpochSlots < 500 (generous bound)
+    -- could be Byron era.
+    --
+    -- Practical approach: use Byron epoch math for all slots below
+    -- a generous upper bound (500 Byron epochs = 10.8M slots), and
+    -- Shelley math above. The transition epoch is where we switch.
+    -- This covers all real Cardano networks (mainnet: 208 Byron epochs,
+    -- testnet: fewer).
+    byronMaxSlot :: Word64
+    byronMaxSlot = byronEpochSlots * 500  -- generous upper bound
+
+    -- Slot computation: two-era model
     slotToEpoch :: SlotNo -> (EpochNo, Word64)
     slotToEpoch (SlotNo s)
-      -- Try Shelley first: most blocks are Shelley+
-      -- We need to know the Byron→Shelley boundary slot.
-      -- Derive it: byronEpochs = sgSystemStart is shared, and Byron ran
-      -- from slot 0 with byronEpochSlots per epoch.
-      -- The transition epoch is embedded in protocolInfo but not easily
-      -- accessible. Use a heuristic: if slot < byronEpochSlots * 500
-      -- (generous upper bound for Byron epoch count) AND slot falls on
-      -- a Byron epoch boundary pattern, use Byron math.
-      --
-      -- Simpler approach: Shelley genesis doesn't tell us the Byron epoch
-      -- count directly. But we know that for any real network:
-      --   - Slots 0..byronTransitionSlot use Byron math
-      --   - Slots after that use Shelley math
-      --
-      -- For now, use a simple approach: the caller can provide the
-      -- transition slot, or we use a reasonable detection method.
-      --
-      -- PRACTICAL APPROACH: Since Shelley sgEpochLength and sgSlotLength
-      -- differ from Byron's, and the transition is always at an epoch
-      -- boundary, we compute:
-      --   byronEpochs = transition_epoch (from hard fork trigger)
-      --   byronTransitionSlot = byronEpochs * byronEpochSlots
-      --
-      -- But we don't have the hard fork trigger here. Let's use the
-      -- observation that Byron slot duration is 20s and Shelley is 1s.
-      -- Total Byron time = byronTransitionSlot * 20s
-      -- Total Shelley time from transition = (slot - byronTransitionSlot) * 1s
-      --
-      -- Without the transition slot, fall back to: assume ALL slots are
-      -- Shelley-era for epoch computation. This gives wrong results for
-      -- Byron blocks but those are only ~4.5M blocks out of 100M+.
-      --
-      -- TODO: Pass the Byron→Shelley transition epoch from NodeConfig
-      -- for precise computation.
-      | otherwise =
-          let epoch = s `div` shelleyEpochLength
-              slotInEpoch = s `mod` shelleyEpochLength
+      | s < byronMaxSlot && byronEpochSlots > 0 =
+          -- Byron era: use Byron epoch math
+          let epoch = s `div` byronEpochSlots
+              slotInEpoch = s `mod` byronEpochSlots
           in (EpochNo epoch, slotInEpoch)
+      | otherwise =
+          -- Shelley+ era: use Shelley epoch math
+          -- Offset by Byron epochs to get correct absolute epoch number
+          let byronEpochs = byronMaxSlot `div` byronEpochSlots
+              shelleySlotOffset = s - (byronEpochs * byronEpochSlots)
+              shelleyEpoch = shelleySlotOffset `div` shelleyEpochLength
+              slotInEpoch = shelleySlotOffset `mod` shelleyEpochLength
+          in (EpochNo (byronEpochs + shelleyEpoch), slotInEpoch)
 
     slotToTime :: SlotNo -> UTCTime
-    slotToTime (SlotNo s) =
-      addUTCTime (fromIntegral s * shelleySlotDuration) systemStart
-      -- NOTE: This is correct for Shelley+ but off by ~19x for Byron slots
-      -- (Byron slots are 20s apart, not 1s). Acceptable for first pass.
-      -- TODO: Handle Byron slot timing correctly.
+    slotToTime (SlotNo s)
+      | s < byronMaxSlot =
+          -- Byron: 20 seconds per slot
+          addUTCTime (fromIntegral s * byronSlotDuration) systemStart
+      | otherwise =
+          -- Shelley+: 1 second per slot, offset by Byron duration
+          let byronDuration = fromIntegral byronMaxSlot * byronSlotDuration
+              shelleySlotOffset = s - byronMaxSlot
+              shelleyDuration = fromIntegral shelleySlotOffset * shelleySlotDuration
+          in addUTCTime (byronDuration + shelleyDuration) systemStart
   in EpochSlotInfo
     { esiSlotToEpochNo   = fst . slotToEpoch
     , esiSlotToEpochSlot = snd . slotToEpoch

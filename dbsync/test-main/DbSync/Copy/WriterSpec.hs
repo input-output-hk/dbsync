@@ -225,6 +225,7 @@ emptyBlock = GenericBlock
   , blkVrfKey       = Just "vrf_vk1test"
   , blkOpCert       = Just (BS.replicate 32 0)
   , blkOpCertCounter = Just 0
+  , blkIsEBB        = False
   , blkTxs          = []
   }
 

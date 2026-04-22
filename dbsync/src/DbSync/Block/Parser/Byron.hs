@@ -32,7 +32,7 @@ import Ouroboros.Consensus.Byron.Ledger (ByronBlock (..))
 
 import Cardano.Binary (serialize')
 
-import DbSync.Block.Parser.Types (EpochSlotInfo (..))
+import DbSync.StateQuery (SlotDetails (..))
 import DbSync.Block.Types
   ( BlockEra (..)
   , GenericBlock (..)
@@ -47,37 +47,37 @@ import DbSync.Block.Types
 
 -- | Convert a 'ByronBlock' into a 'GenericBlock'.
 -- Dispatches between regular blocks and Epoch Boundary Blocks (EBBs).
-fromByronBlock :: EpochSlotInfo -> ByronBlock -> GenericBlock
-fromByronBlock esi blk =
+fromByronBlock :: SlotDetails -> ByronBlock -> GenericBlock
+fromByronBlock sd blk =
   case byronBlockRaw blk of
-    Byron.ABOBBlock ablk    -> fromByronRegularBlock esi ablk
-    Byron.ABOBBoundary abblk -> fromByronEBB esi abblk
+    Byron.ABOBBlock ablk    -> fromByronRegularBlock sd ablk
+    Byron.ABOBBoundary abblk -> fromByronEBB sd abblk
 
 -- ---------------------------------------------------------------------------
 -- * Regular Byron block
 -- ---------------------------------------------------------------------------
 
-fromByronRegularBlock :: EpochSlotInfo -> Byron.ABlock ByteString -> GenericBlock
-fromByronRegularBlock esi blk =
-  let slotNo = SlotNo (byronSlotNumber blk)
-      pv = Byron.headerProtocolVersion (Byron.blockHeader blk)
+fromByronRegularBlock :: SlotDetails -> Byron.ABlock ByteString -> GenericBlock
+fromByronRegularBlock sd blk =
+  let pv = Byron.headerProtocolVersion (Byron.blockHeader blk)
       txs = Byron.unTxPayload (Byron.bodyTxPayload (Byron.blockBody blk))
   in GenericBlock
     { blkEra           = Byron
     , blkHash          = byronRegularBlockHash blk
     , blkPreviousHash  = byronPreviousHash blk
-    , blkSlotNo        = slotNo
+    , blkSlotNo        = sdSlotNo sd
     , blkBlockNo       = BlockNo (byronBlockNumber blk)
-    , blkEpochNo       = esiSlotToEpochNo esi slotNo
-    , blkEpochSlotNo   = esiSlotToEpochSlot esi slotNo
+    , blkEpochNo       = sdEpochNo sd
+    , blkEpochSlotNo   = sdEpochSlot sd
     , blkSize          = fromIntegral (Byron.blockLength blk)
-    , blkTime          = esiSlotToUTCTime esi slotNo
+    , blkTime          = sdSlotTime sd
     , blkSlotLeader    = byronSlotLeaderHash blk
     , blkProtoMajor    = fromIntegral (Byron.pvMajor pv)
     , blkProtoMinor    = fromIntegral (Byron.pvMinor pv)
     , blkVrfKey        = Nothing   -- Byron has no VRF
     , blkOpCert        = Nothing   -- Byron has no operational certificates
     , blkOpCertCounter = Nothing
+    , blkIsEBB         = False
     , blkTxs           = zipWith (fromByronTx blk) [0 ..] txs
     }
 
@@ -87,25 +87,25 @@ fromByronRegularBlock esi blk =
 
 -- | EBBs are Byron-era artifacts with no transactions and no real slot number.
 -- We use slot 0 as a placeholder and the epoch from the EBB header.
-fromByronEBB :: EpochSlotInfo -> Byron.ABoundaryBlock ByteString -> GenericBlock
-fromByronEBB esi blk =
-  let slotNo = SlotNo 0  -- EBBs don't have a real slot
-  in GenericBlock
+fromByronEBB :: SlotDetails -> Byron.ABoundaryBlock ByteString -> GenericBlock
+fromByronEBB sd blk =
+  GenericBlock
     { blkEra           = Byron
     , blkHash          = Crypto.abstractHashToBytes (Byron.boundaryHashAnnotated blk)
     , blkPreviousHash  = byronEbbPrevHash blk
-    , blkSlotNo        = slotNo
+    , blkSlotNo        = sdSlotNo sd
     , blkBlockNo       = BlockNo 0  -- EBBs don't have a block number
-    , blkEpochNo       = esiSlotToEpochNo esi slotNo
-    , blkEpochSlotNo   = 0
+    , blkEpochNo       = sdEpochNo sd
+    , blkEpochSlotNo   = sdEpochSlot sd
     , blkSize          = fromIntegral (Byron.boundaryBlockLength blk)
-    , blkTime          = esiSlotToUTCTime esi slotNo
+    , blkTime          = sdSlotTime sd
     , blkSlotLeader    = BS.replicate 28 '\0'  -- synthetic null leader for EBBs
     , blkProtoMajor    = 0
     , blkProtoMinor    = 0
     , blkVrfKey        = Nothing
     , blkOpCert        = Nothing
     , blkOpCertCounter = Nothing
+    , blkIsEBB         = True
     , blkTxs           = []  -- EBBs have no transactions
     }
 

@@ -6,20 +6,38 @@ import Cardano.Prelude
 
 import System.Exit (exitFailure)
 
-import Control.Concurrent.STM (newTBQueueIO)
+import Control.Concurrent.Async (withAsync, wait)
+import Control.Concurrent.STM (newTQueueIO)
+import Control.Tracer (traceWith)
+import Data.IORef (newIORef)
+import System.FilePath (takeDirectory, (</>))
+
 import DbSync.App (buildCoreEnv, runStartup)
 import DbSync.Cli (parseCliArgs, CliArgs (..))
 import DbSync.Config (parseConfig)
-import DbSync.Config.Genesis (readCardanoGenesisConfig, mkTopLevelConfig)
+import DbSync.Config.Genesis (readCardanoGenesisConfig, mkTopLevelConfig, GenesisConfig (..), ShelleyConfig (..))
+import Ouroboros.Consensus.BlockchainTime.WallClock.Types (SystemStart (..))
+import Ouroboros.Consensus.Shelley.Node (ShelleyGenesis (..))
 import DbSync.Config.Node (parseDbSyncNodeConfig, parseNodeConfig)
-import DbSync.Config.Types (DbSyncNodeConfig (..))
-import DbSync.Node.Connection (connectToNode, getNetworkMagic)
-import Ouroboros.Network.NodeToClient (withIOManager)
-import System.FilePath (takeDirectory, (</>))
+import DbSync.Config.Types (DbSyncNodeConfig (..), DatabaseConfig (..), SyncConfig (..))
 import DbSync.Config.Validation (validateConfig)
+import DbSync.Copy.Writer (CopyWriter (..), mkCopyWriter, closeCopyWriter)
+import DbSync.Db.Schema.Init (initSchema, checkSchemaVersions)
+import DbSync.Env (CoreEnv (..))
+import DbSync.Extractor (ExtractState (..), ExtractorDef (..))
+import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
+import DbSync.Id.DedupMap (emptyMaps)
+import DbSync.Ingest.Consumer (runConsumer)
+import DbSync.Node.Connection (connectToNode, getNetworkMagic)
+import DbSync.Resolver.Ingest (mkIngestResolver)
+import DbSync.StateQuery (newStateQueryVar)
 import DbSync.Trace.Backend (mkStdErrTracer)
-import Control.Tracer (traceWith)
 import DbSync.Trace.Types (LogMsg (..), Severity (..))
+import DbSync.Writer.CopyAdapter (mkCopyWriterAdapter)
+
+import qualified Data.Text.Encoding as TE
+
+import Ouroboros.Network.NodeToClient (withIOManager)
 
 main :: IO ()
 main = do
@@ -83,11 +101,61 @@ main = do
   let topLevelCfg = mkTopLevelConfig nodeCfg genesisCfg
       networkMagic = getNetworkMagic genesisCfg
 
-  traceWith tracer $ LogMsg Info "App" ("State dir: " <> toS (caStateDir args)) Nothing
-  traceWith tracer $ LogMsg Info "App" ("Socket: " <> toS (caSocketPath args)) Nothing
+  logInfo $ "State dir: " <> toS (caStateDir args)
+  logInfo $ "Socket: " <> toS (caSocketPath args)
 
-  -- 9. Connect to node and start receiving blocks
-  blockQueue <- newTBQueueIO 100
+  -- 9. Build StateQueryVar for epoch/slot computation via HardFork Interpreter
+  stateQueryVar <- newStateQueryVar
+
+  -- 10. Database connection string from profile
+  let dbCfg = scDatabase validProfile
+      connStr = TE.encodeUtf8 $ "dbname=" <> dcName dbCfg
+
+  -- 11. Schema creation (idempotent)
+  let extractors = ceExtractors env
+      tableDefs = concatMap pdTables extractors
+      versions = map (\e -> (pdName e, pdVersion e)) extractors
+  logInfo "Creating schema..."
+  initSchema tableDefs versions (TE.decodeUtf8 connStr)
+  logInfo "Schema ready"
+
+  -- 12. Build the ingest pipeline
+  stRef <- newIORef mkInitState
+  copyWriter <- mkCopyWriter connStr tableDefs
+  let resolver = mkIngestResolver stRef
+      writer   = mkCopyWriterAdapter copyWriter
+
+  -- 13. Start block reception + consumer
+  blockQueue <- newTQueueIO
+  logInfo "Starting block ingestion..."
+
+  -- SystemStart needed by the state query interpreter
+  let systemStart = SystemStart (sgSystemStart $ scConfig $ gcShelley genesisCfg)
+
   withIOManager $ \iomgr ->
-    connectToNode tracer iomgr topLevelCfg networkMagic (caSocketPath args) blockQueue
+    withAsync (connectToNode tracer iomgr topLevelCfg networkMagic (caSocketPath args) blockQueue stateQueryVar) $ \nodeThread -> do
+      -- Consumer runs on the main thread; node receiver runs on async thread
+      -- If either throws, the other is cancelled (withAsync guarantee)
+      runConsumer tracer stateQueryVar systemStart extractors blockQueue resolver writer copyWriter stRef
+        `finally` do
+          logInfo "Shutting down COPY writer..."
+          cwCommit copyWriter `catch` \(e :: SomeException) ->
+            logError $ "Error during final commit: " <> show e
+          closeCopyWriter copyWriter
 
+-- | Initial extraction state for IngestChainHistory.
+mkInitState :: ExtractState
+mkInitState = ExtractState
+  { esIdCounters = IdCounters
+      { icBlockId        = mkIdCounter 1
+      , icTxId           = mkIdCounter 1
+      , icTxOutId        = mkIdCounter 1
+      , icSlotLeaderId   = mkIdCounter 1
+      , icStakeAddressId = mkIdCounter 1
+      , icPoolHashId     = mkIdCounter 1
+      , icMultiAssetId   = mkIdCounter 1
+      , icScriptId       = mkIdCounter 1
+      }
+  , esDedupMaps   = emptyMaps
+  , esLastBlockId = Nothing
+  }

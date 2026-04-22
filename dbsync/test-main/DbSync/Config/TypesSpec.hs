@@ -34,8 +34,8 @@ spec = describe "DbSync.Config" $ do
           -- Database
           dcHost (scDatabase cfg) `shouldBe` "localhost"
           dcPort (scDatabase cfg) `shouldBe` 5432
-          dcName (scDatabase cfg) `shouldBe` "cardano"
-          dcUser (scDatabase cfg) `shouldBe` "postgres"
+          dcName (scDatabase cfg) `shouldBe` "cexplorer"
+          dcUser (scDatabase cfg) `shouldBe` ""
           dcPassword (scDatabase cfg) `shouldBe` ""
 
           -- Sync settings

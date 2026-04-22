@@ -78,9 +78,11 @@ library
     DbSync.Extractor.CurrentState
     DbSync.Copy.Connection
     DbSync.Copy.Writer
+    DbSync.Ingest.Consumer
     DbSync.Ingest.Pipeline
     DbSync.Resolver
     DbSync.Resolver.Ingest
+    DbSync.StateQuery
     DbSync.Writer
     DbSync.Writer.CopyAdapter
     DbSync.Writer.Testing
@@ -245,10 +247,14 @@ executable dbsync
   build-depends:
       base
     , dbsync
+    , dbsync-db
     , cardano-prelude
     , contra-tracer
     , filepath
+    , ouroboros-consensus
+    , ouroboros-consensus-cardano
     , ouroboros-network-api
     , ouroboros-network
     , stm
     , async
+    , text

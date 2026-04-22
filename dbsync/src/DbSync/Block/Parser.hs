@@ -7,14 +7,10 @@
 --
 -- The dispatch pattern-matches on the Hard Fork Combinator era tags
 -- ('BlockByron', 'BlockShelley', etc.) and delegates to era-specific
--- converters in "DbSync.Block.Parser.Byron" and "DbSync.Block.Parser.Shelley".
+-- converters in "DbSync.Block.Parser.Byron" and "DbSync.Block.Parser.Block".
 module DbSync.Block.Parser
   ( -- * Parsing
     parseBlock
-
-    -- * Re-exports
-  , EpochSlotInfo (..)
-  , stubEpochSlotInfo
   ) where
 
 import Cardano.Prelude
@@ -44,8 +40,8 @@ import DbSync.Block.Parser.Block
   , fromShelleyBlock
   )
 import DbSync.Block.Parser.Byron (fromByronBlock)
-import DbSync.Block.Parser.Types (EpochSlotInfo (..), stubEpochSlotInfo)
 import DbSync.Block.Types (GenericBlock)
+import DbSync.StateQuery (SlotDetails)
 
 -- ---------------------------------------------------------------------------
 -- * HFC era dispatch
@@ -53,22 +49,18 @@ import DbSync.Block.Types (GenericBlock)
 
 -- | Convert a 'CardanoBlock' from the node into an era-independent 'GenericBlock'.
 --
--- This is the main entry point for block parsing. It dispatches on the
--- HFC era tag and delegates to era-specific converters.
---
--- __Deferred features (first pass):__
---
---   * Redeemers, scripts, and governance fields are set to empty\/default.
---   * These will be populated when their respective extractors are implemented.
-parseBlock :: EpochSlotInfo -> CardanoBlock StandardCrypto -> GenericBlock
-parseBlock esi = \case
+-- Takes 'SlotDetails' (computed from the HardFork Interpreter) which provides
+-- the correct epoch number, slot-within-epoch, and time for any slot across
+-- all era transitions.
+parseBlock :: SlotDetails -> CardanoBlock StandardCrypto -> GenericBlock
+parseBlock sd = \case
   -- Byron era (pre-Shelley, includes Epoch Boundary Blocks)
-  BlockByron byronBlk      -> fromByronBlock esi byronBlk
+  BlockByron byronBlk      -> fromByronBlock sd byronBlk
   -- Shelley+ eras — all wired to real converters
-  BlockShelley shelleyBlk  -> fromShelleyBlock esi shelleyBlk
-  BlockAllegra allegraBlk  -> fromAllegraBlock esi allegraBlk
-  BlockMary maryBlk        -> fromMaryBlock esi maryBlk
-  BlockAlonzo alonzoBlk    -> fromAlonzoBlock esi alonzoBlk
-  BlockBabbage babbageBlk  -> fromBabbageBlock esi babbageBlk
-  BlockConway conwayBlk    -> fromConwayBlock esi conwayBlk
-  BlockDijkstra dijkBlk    -> fromDijkstraBlock esi dijkBlk
+  BlockShelley shelleyBlk  -> fromShelleyBlock sd shelleyBlk
+  BlockAllegra allegraBlk  -> fromAllegraBlock sd allegraBlk
+  BlockMary maryBlk        -> fromMaryBlock sd maryBlk
+  BlockAlonzo alonzoBlk    -> fromAlonzoBlock sd alonzoBlk
+  BlockBabbage babbageBlk  -> fromBabbageBlock sd babbageBlk
+  BlockConway conwayBlk    -> fromConwayBlock sd conwayBlk
+  BlockDijkstra dijkBlk    -> fromDijkstraBlock sd dijkBlk

@@ -62,6 +62,7 @@ data GenericBlock = GenericBlock
   , blkVrfKey        :: !(Maybe Text)     -- ^ VRF verification key (Bech32), Shelley+
   , blkOpCert        :: !(Maybe ByteString) -- ^ Operational certificate key (32 bytes), Shelley+
   , blkOpCertCounter :: !(Maybe Word64)   -- ^ Op cert counter, Shelley+
+  , blkIsEBB         :: !Bool              -- ^ True for Byron Epoch Boundary Blocks
   , blkTxs           :: ![GenericTx]
   }
   deriving stock (Show)

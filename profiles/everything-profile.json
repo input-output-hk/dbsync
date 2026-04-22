@@ -2,7 +2,7 @@
   "database": {
     "host": "localhost",
     "port": 5432,
-    "name": "dbsync_test",
+    "name": "cexplorer",
     "user": "",
     "password": ""
   },
@@ -25,9 +25,9 @@
     "pool":             { "enabled": true },
     "scripts_datums":   { "enabled": true },
     "governance":       { "enabled": true },
-    "cbor":             { "enabled": false },
+    "cbor":             { "enabled": true },
     "epoch_boundary":   { "enabled": true },
-    "current_state":    { "enabled": false }
+    "current_state":    { "enabled": true }
   },
   "metrics": {
     "prometheus_port": 8080

@@ -45,11 +45,11 @@ spec = describe "DbSync.App" $ do
       logRef <- newIORef []
       let tracer = mkTestTracer logRef
       env <- buildCoreEnv tracer syncCfg nodeCfg
-      -- full-config.json: 8 enabled (core, utxo, multi_asset, metadata,
-      -- stake_delegation, scripts_datums, governance, epoch_boundary)
+      -- full-config.json: 9 enabled (core, utxo, multi_asset, metadata,
+      -- stake_delegation, pool, scripts_datums, governance, epoch_boundary)
       -- 2 disabled (cbor, current_state)
       let projCount = length (ceExtractors env)
-      projCount `shouldBe` 8
+      projCount `shouldBe` 9
 
     it "uses real coreExtractor (not a stub) for 'core'" $ do
       (syncCfg, nodeCfg) <- loadTestConfigs

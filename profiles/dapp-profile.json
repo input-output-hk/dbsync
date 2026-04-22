@@ -2,31 +2,29 @@
   "database": {
     "host": "localhost",
     "port": 5432,
-    "name": "dbsync_test",
+    "name": "cexplorer",
     "user": "",
     "password": ""
   },
   "sync": {
     "mode": "auto",
     "checkpoint_dir": "/data/checkpoints",
-    "copy_connections": 12
+    "copy_connections": 8
   },
   "ledger": {
-    "enabled": true,
-    "state_dir": "/data/ledger",
-    "snapshot_interval": 10
+    "enabled": false
   },
   "options": {
     "core":             { "enabled": true },
     "utxo":             { "enabled": true },
     "multi_asset":      { "enabled": true },
     "metadata":         { "enabled": true },
-    "stake_delegation": { "enabled": true },
-    "pool":             { "enabled": true },
+    "stake_delegation": { "enabled": false },
+    "pool":             { "enabled": false },
     "scripts_datums":   { "enabled": true },
-    "governance":       { "enabled": true },
+    "governance":       { "enabled": false },
     "cbor":             { "enabled": false },
-    "epoch_boundary":   { "enabled": true },
+    "epoch_boundary":   { "enabled": false },
     "current_state":    { "enabled": false }
   },
   "metrics": {

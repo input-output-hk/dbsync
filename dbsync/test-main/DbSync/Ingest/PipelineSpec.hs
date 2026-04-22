@@ -148,7 +148,16 @@ mkInitState = ExtractState
       , icStakeAddressId     = mkIdCounter 1
       , icPoolHashId         = mkIdCounter 1
       , icMultiAssetId       = mkIdCounter 1
-      , icScriptId           = mkIdCounter 1
+      , icScriptId              = mkIdCounter 1
+      , icStakeRegistrationId   = mkIdCounter 1
+      , icStakeDeregistrationId = mkIdCounter 1
+      , icDelegationId          = mkIdCounter 1
+      , icWithdrawalId          = mkIdCounter 1
+      , icPoolUpdateId          = mkIdCounter 1
+      , icPoolMetadataRefId     = mkIdCounter 1
+      , icPoolOwnerId           = mkIdCounter 1
+      , icPoolRetireId          = mkIdCounter 1
+      , icPoolRelayId           = mkIdCounter 1
       }
   , esDedupMaps   = emptyMaps
   , esLastBlockId = Nothing

@@ -36,7 +36,7 @@ fi
 echo "Using dbsync binary: $dbsync"
 
 # Default profile (uses the full-config test fixture)
-PROFILE="${PROFILE:-$PROJECT_DIR/dbsync/test-fixtures/full-config.json}"
+PROFILE="${PROFILE:-$PROJECT_DIR/profiles/everything-profile.json}"
 
 # Kill any previous instances
 echo "Cleaning up previous instances..."

@@ -44,7 +44,16 @@ data IdCounters = IdCounters
   , icStakeAddressId     :: !IdCounter
   , icPoolHashId         :: !IdCounter
   , icMultiAssetId       :: !IdCounter
-  , icScriptId           :: !IdCounter
+  , icScriptId              :: !IdCounter
+  , icStakeRegistrationId   :: !IdCounter
+  , icStakeDeregistrationId :: !IdCounter
+  , icDelegationId          :: !IdCounter
+  , icWithdrawalId          :: !IdCounter
+  , icPoolUpdateId          :: !IdCounter
+  , icPoolMetadataRefId     :: !IdCounter
+  , icPoolOwnerId           :: !IdCounter
+  , icPoolRetireId          :: !IdCounter
+  , icPoolRelayId           :: !IdCounter
   }
   deriving stock (Eq, Show)
 

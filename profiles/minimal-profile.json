@@ -1,0 +1,37 @@
+{
+  "database": {
+    "host": "localhost",
+    "port": 5432,
+    "name": "cexplorer",
+    "user": "",
+    "password": ""
+  },
+  "sync": {
+    "mode": "auto",
+    "checkpoint_dir": "/data/checkpoints",
+    "copy_connections": 4
+  },
+  "ledger": {
+    "enabled": false
+  },
+  "options": {
+    "core":             { "enabled": true },
+    "utxo":             { "enabled": false },
+    "multi_asset":      { "enabled": false },
+    "metadata":         { "enabled": false },
+    "stake_delegation": { "enabled": false },
+    "pool":             { "enabled": false },
+    "scripts_datums":   { "enabled": false },
+    "governance":       { "enabled": false },
+    "cbor":             { "enabled": false },
+    "epoch_boundary":   { "enabled": false },
+    "current_state":    { "enabled": false }
+  },
+  "metrics": {
+    "prometheus_port": 8080
+  },
+  "logging": {
+    "level": "info",
+    "format": "text"
+  }
+}

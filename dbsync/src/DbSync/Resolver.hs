@@ -19,6 +19,8 @@ import Cardano.Prelude
 
 import DbSync.Db.Schema.Core (SlotLeader)
 import DbSync.Db.Schema.MultiAsset (MultiAsset)
+import DbSync.Db.Schema.StakeDelegation (StakeAddress)
+import DbSync.Db.Schema.Pool (PoolHash)
 import DbSync.Db.Schema.Ids
 
 -- ---------------------------------------------------------------------------
@@ -84,4 +86,47 @@ data IdResolver m = IdResolver
 
     -- | Assign the next ma_tx_out ID.
   , assignMaTxOutId  :: !(m MaTxOutId)
+
+    -- ---------------------------------------------------------------
+    -- StakeDelegation extractor IDs
+    -- ---------------------------------------------------------------
+
+    -- | Resolve a stake address by its credential hash.
+    -- Returns @(StakeAddressId, isNew)@.
+  , resolveStakeAddress :: !(ByteString -> StakeAddress -> m (StakeAddressId, Bool))
+
+    -- | Assign the next stake_registration ID.
+  , assignStakeRegistrationId :: !(m StakeRegistrationId)
+
+    -- | Assign the next stake_deregistration ID.
+  , assignStakeDeregistrationId :: !(m StakeDeregistrationId)
+
+    -- | Assign the next delegation ID.
+  , assignDelegationId :: !(m DelegationId)
+
+    -- | Assign the next withdrawal ID.
+  , assignWithdrawalId :: !(m WithdrawalId)
+
+    -- ---------------------------------------------------------------
+    -- Pool extractor IDs
+    -- ---------------------------------------------------------------
+
+    -- | Resolve a pool hash by its key hash.
+    -- Returns @(PoolHashId, isNew)@.
+  , resolvePoolHash :: !(ByteString -> PoolHash -> m (PoolHashId, Bool))
+
+    -- | Assign the next pool_update ID.
+  , assignPoolUpdateId :: !(m PoolUpdateId)
+
+    -- | Assign the next pool_metadata_ref ID.
+  , assignPoolMetadataRefId :: !(m PoolMetadataRefId)
+
+    -- | Assign the next pool_owner ID.
+  , assignPoolOwnerId :: !(m PoolOwnerId)
+
+    -- | Assign the next pool_retire ID.
+  , assignPoolRetireId :: !(m PoolRetireId)
+
+    -- | Assign the next pool_relay ID.
+  , assignPoolRelayId :: !(m PoolRelayId)
   }

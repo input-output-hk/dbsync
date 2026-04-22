@@ -217,6 +217,7 @@ data SyncOptions = SyncOptions
   , pcMultiAsset      :: !SyncOption
   , pcMetadata        :: !SyncOption
   , pcStakeDelegation :: !SyncOption
+  , pcPool            :: !SyncOption
   , pcScriptsDatums   :: !SyncOption
   , pcGovernance      :: !SyncOption
   , pcCbor            :: !SyncOption
@@ -233,6 +234,7 @@ instance FromJSON SyncOptions where
       <*> o .:? "multi_asset"      .!= enabled
       <*> o .:? "metadata"         .!= enabled
       <*> o .:? "stake_delegation" .!= enabled
+      <*> o .:? "pool"             .!= enabled
       <*> o .:? "scripts_datums"   .!= enabled
       <*> o .:? "governance"       .!= enabled
       <*> o .:? "cbor"             .!= disabled  -- off by default (large)
@@ -251,6 +253,7 @@ defaultSyncOptions = SyncOptions
   , pcMultiAsset      = SyncOption True
   , pcMetadata        = SyncOption True
   , pcStakeDelegation = SyncOption True
+  , pcPool            = SyncOption True
   , pcScriptsDatums   = SyncOption True
   , pcGovernance      = SyncOption True
   , pcCbor            = SyncOption False

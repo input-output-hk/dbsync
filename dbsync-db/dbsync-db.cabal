@@ -44,6 +44,8 @@ library
     DbSync.Db.Schema.UTxO
     DbSync.Db.Schema.Metadata
     DbSync.Db.Schema.MultiAsset
+    DbSync.Db.Schema.StakeDelegation
+    DbSync.Db.Schema.Pool
     DbSync.Db.Schema.Generate
     DbSync.Db.Schema.Init
     DbSync.Db.Schema.Version

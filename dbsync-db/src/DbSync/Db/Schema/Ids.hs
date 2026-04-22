@@ -24,6 +24,19 @@ module DbSync.Db.Schema.Ids
   , MaTxMintId (..)
   , MaTxOutId (..)
 
+    -- * StakeDelegation table IDs
+  , StakeRegistrationId (..)
+  , StakeDeregistrationId (..)
+  , DelegationId (..)
+  , WithdrawalId (..)
+
+    -- * Pool table IDs
+  , PoolUpdateId (..)
+  , PoolMetadataRefId (..)
+  , PoolOwnerId (..)
+  , PoolRetireId (..)
+  , PoolRelayId (..)
+
     -- * Referenced by other tables
   , PoolHashId (..)
   , StakeAddressId (..)
@@ -92,6 +105,41 @@ newtype MaTxMintId = MaTxMintId { getMaTxMintId :: Int64 }
 
 -- | Primary key for the @ma_tx_out@ table.
 newtype MaTxOutId = MaTxOutId { getMaTxOutId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- ---------------------------------------------------------------------------
+-- * StakeDelegation table IDs
+-- ---------------------------------------------------------------------------
+
+newtype StakeRegistrationId = StakeRegistrationId { getStakeRegistrationId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+newtype StakeDeregistrationId = StakeDeregistrationId { getStakeDeregistrationId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+newtype DelegationId = DelegationId { getDelegationId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+newtype WithdrawalId = WithdrawalId { getWithdrawalId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- ---------------------------------------------------------------------------
+-- * Pool table IDs
+-- ---------------------------------------------------------------------------
+
+newtype PoolUpdateId = PoolUpdateId { getPoolUpdateId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+newtype PoolMetadataRefId = PoolMetadataRefId { getPoolMetadataRefId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+newtype PoolOwnerId = PoolOwnerId { getPoolOwnerId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+newtype PoolRetireId = PoolRetireId { getPoolRetireId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+newtype PoolRelayId = PoolRelayId { getPoolRelayId :: Int64 }
   deriving stock (Eq, Ord, Show)
 
 -- ---------------------------------------------------------------------------

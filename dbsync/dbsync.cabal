@@ -71,6 +71,7 @@ library
     DbSync.Extractor.MultiAsset
     DbSync.Extractor.Metadata
     DbSync.Extractor.StakeDelegation
+    DbSync.Extractor.Pool
     DbSync.Extractor.ScriptsDatums
     DbSync.Extractor.Governance
     DbSync.Extractor.Cbor

@@ -2,7 +2,7 @@
   "database": {
     "host": "localhost",
     "port": 5432,
-    "name": "cexplorer",
+    "name": "dbsync_test",
     "user": "",
     "password": ""
   }

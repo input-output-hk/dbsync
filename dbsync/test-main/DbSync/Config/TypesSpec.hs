@@ -34,7 +34,7 @@ spec = describe "DbSync.Config" $ do
           -- Database
           dcHost (scDatabase cfg) `shouldBe` "localhost"
           dcPort (scDatabase cfg) `shouldBe` 5432
-          dcName (scDatabase cfg) `shouldBe` "cexplorer"
+          dcName (scDatabase cfg) `shouldBe` "dbsync_test"
           dcUser (scDatabase cfg) `shouldBe` ""
           dcPassword (scDatabase cfg) `shouldBe` ""
 
@@ -86,6 +86,7 @@ spec = describe "DbSync.Config" $ do
           prEnabled (pcCore (scOptions cfg)) `shouldBe` True
           prEnabled (pcUtxo (scOptions cfg)) `shouldBe` True
           prEnabled (pcMultiAsset (scOptions cfg)) `shouldBe` True
+          prEnabled (pcPool (scOptions cfg)) `shouldBe` True
           -- cbor and current_state disabled by default
           prEnabled (pcCbor (scOptions cfg)) `shouldBe` False
           prEnabled (pcCurrentState (scOptions cfg)) `shouldBe` False

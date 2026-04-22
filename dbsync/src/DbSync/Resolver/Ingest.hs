@@ -16,6 +16,8 @@ import Data.IORef (IORef, atomicModifyIORef', readIORef)
 
 import DbSync.Db.Schema.Core (SlotLeader)
 import DbSync.Db.Schema.MultiAsset (MultiAsset)
+import DbSync.Db.Schema.StakeDelegation (StakeAddress)
+import DbSync.Db.Schema.Pool (PoolHash)
 import DbSync.Db.Schema.Ids
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Id.Counter (IdCounters (..), nextId)
@@ -98,4 +100,63 @@ mkIngestResolver stRef = IdResolver
       let (mid, ctr') = nextId (icMaTxOutId $ esIdCounters st)
           st' = st { esIdCounters = (esIdCounters st) { icMaTxOutId = ctr' } }
       in (st', MaTxOutId mid)
+
+    -- StakeDelegation IDs
+  , resolveStakeAddress = \hash _sa -> atomicModifyIORef' stRef $ \st ->
+      let (saId, isNew, dedupMap') =
+            lookupOrInsert hash (dmsStakeAddress $ esDedupMaps st)
+          st' = st { esDedupMaps = (esDedupMaps st) { dmsStakeAddress = dedupMap' } }
+      in (st', (StakeAddressId saId, isNew))
+
+  , assignStakeRegistrationId = atomicModifyIORef' stRef $ \st ->
+      let (i, ctr') = nextId (icStakeRegistrationId $ esIdCounters st)
+          st' = st { esIdCounters = (esIdCounters st) { icStakeRegistrationId = ctr' } }
+      in (st', StakeRegistrationId i)
+
+  , assignStakeDeregistrationId = atomicModifyIORef' stRef $ \st ->
+      let (i, ctr') = nextId (icStakeDeregistrationId $ esIdCounters st)
+          st' = st { esIdCounters = (esIdCounters st) { icStakeDeregistrationId = ctr' } }
+      in (st', StakeDeregistrationId i)
+
+  , assignDelegationId = atomicModifyIORef' stRef $ \st ->
+      let (i, ctr') = nextId (icDelegationId $ esIdCounters st)
+          st' = st { esIdCounters = (esIdCounters st) { icDelegationId = ctr' } }
+      in (st', DelegationId i)
+
+  , assignWithdrawalId = atomicModifyIORef' stRef $ \st ->
+      let (i, ctr') = nextId (icWithdrawalId $ esIdCounters st)
+          st' = st { esIdCounters = (esIdCounters st) { icWithdrawalId = ctr' } }
+      in (st', WithdrawalId i)
+
+    -- Pool IDs
+  , resolvePoolHash = \hash _ph -> atomicModifyIORef' stRef $ \st ->
+      let (phId, isNew, dedupMap') =
+            lookupOrInsert hash (dmsPoolHash $ esDedupMaps st)
+          st' = st { esDedupMaps = (esDedupMaps st) { dmsPoolHash = dedupMap' } }
+      in (st', (PoolHashId phId, isNew))
+
+  , assignPoolUpdateId = atomicModifyIORef' stRef $ \st ->
+      let (i, ctr') = nextId (icPoolUpdateId $ esIdCounters st)
+          st' = st { esIdCounters = (esIdCounters st) { icPoolUpdateId = ctr' } }
+      in (st', PoolUpdateId i)
+
+  , assignPoolMetadataRefId = atomicModifyIORef' stRef $ \st ->
+      let (i, ctr') = nextId (icPoolMetadataRefId $ esIdCounters st)
+          st' = st { esIdCounters = (esIdCounters st) { icPoolMetadataRefId = ctr' } }
+      in (st', PoolMetadataRefId i)
+
+  , assignPoolOwnerId = atomicModifyIORef' stRef $ \st ->
+      let (i, ctr') = nextId (icPoolOwnerId $ esIdCounters st)
+          st' = st { esIdCounters = (esIdCounters st) { icPoolOwnerId = ctr' } }
+      in (st', PoolOwnerId i)
+
+  , assignPoolRetireId = atomicModifyIORef' stRef $ \st ->
+      let (i, ctr') = nextId (icPoolRetireId $ esIdCounters st)
+          st' = st { esIdCounters = (esIdCounters st) { icPoolRetireId = ctr' } }
+      in (st', PoolRetireId i)
+
+  , assignPoolRelayId = atomicModifyIORef' stRef $ \st ->
+      let (i, ctr') = nextId (icPoolRelayId $ esIdCounters st)
+          st' = st { esIdCounters = (esIdCounters st) { icPoolRelayId = ctr' } }
+      in (st', PoolRelayId i)
   }

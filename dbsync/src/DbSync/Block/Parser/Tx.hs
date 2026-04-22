@@ -40,15 +40,21 @@ import qualified Cardano.Ledger.Core as Core
 import qualified Cardano.Ledger.Address as Ledger
 import Cardano.Ledger.Allegra.Core (invalidBefore, invalidHereafter, vldtTxBodyL)
 import qualified Cardano.Ledger.Alonzo.Tx as Alonzo
-import Cardano.Ledger.BaseTypes (TxIx (..), strictMaybeToMaybe)
+import Cardano.Ledger.BaseTypes (TxIx (..), strictMaybeToMaybe, unboundRational, portToWord16, dnsToText, urlToText)
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway.TxBody (ctbTreasuryDonation)
+import Cardano.Ledger.Conway.TxCert
+import Cardano.Ledger.Credential (StakeCredential)
+import qualified Cardano.Ledger.Credential as Ledger
 import Cardano.Ledger.Dijkstra.TxBody (dtbTreasuryDonation)
 import Cardano.Ledger.Hashes (extractHash)
+import qualified Cardano.Ledger.Keys as Ledger
 import Cardano.Ledger.Mary.Value (MaryValue (..), MultiAsset (..), PolicyID (..), AssetName (..))
+import Cardano.Ledger.Shelley.TxCert
 import qualified Cardano.Ledger.Shelley.TxBody as Shelley
+import qualified Cardano.Ledger.State as PoolP
 import qualified Cardano.Ledger.TxIn as Ledger
-import Cardano.Slotting.Slot (SlotNo (..))
+import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 
 import qualified Data.ByteString.Base16 as Base16
 import qualified Data.ByteString.Short as SBS
@@ -72,6 +78,9 @@ import DbSync.Block.Types
   , GenericTxOut (..)
   , GenericTxCertificate (..)
   , GenericTxWithdrawal (..)
+  , CertAction (..)
+  , PoolRegistrationData (..)
+  , PoolRelayData (..)
   )
 
 -- ---------------------------------------------------------------------------
@@ -158,17 +167,133 @@ mkTxWithdrawals bd =
         , txwAmount        = fromIntegral c
         }
 
--- | Extract certificates as raw CBOR bytes.
--- Full certificate parsing is deferred to the StakeDelegation extractor.
-mkTxCertificatesRaw :: Core.EraTxBody era => Core.TxBody era -> [GenericTxCertificate]
-mkTxCertificatesRaw bd =
-  zipWith toCertRaw [0 ..] $ toList (bd ^. Core.certsTxBodyL)
+-- | Extract certificates from a Shelley-Babbage era tx body.
+-- These eras share the ShelleyTxCert certificate type.
+mkTxCertificatesShelleyEra :: Core.EraTxBody era => (Core.TxCert era -> CertAction) -> Core.TxBody era -> [GenericTxCertificate]
+mkTxCertificatesShelleyEra convert bd =
+  zipWith toCert [0 ..] $ toList (bd ^. Core.certsTxBodyL)
   where
-    toCertRaw idx cert =
+    toCert idx cert =
       GenericTxCertificate
         { txCertIndex = idx
-        , txCertBytes = serialize' cert
+        , txCertAction = convert cert
         }
+
+-- | Convert a ShelleyTxCert (any Shelley-Babbage era) to CertAction.
+-- The ShelleyTxCert type is parametric over era but has the same constructors.
+shelleyCertToAction :: ShelleyTxCert era -> CertAction
+shelleyCertToAction = \case
+  ShelleyTxCertDelegCert deleg -> shelleyDelegAction deleg
+  ShelleyTxCertPool pool       -> poolCertAction pool
+  ShelleyTxCertMir _mir        -> CertMIR ""  -- MIR raw bytes deferred (pre-Conway only)
+  ShelleyTxCertGenesisDeleg _  -> CertOther "genesis-deleg"
+
+-- | Convert a ConwayTxCert (Conway/Dijkstra era) to CertAction.
+conwayCertToAction :: ConwayTxCert era -> CertAction
+conwayCertToAction = \case
+  ConwayTxCertDeleg deleg -> conwayDelegAction deleg
+  ConwayTxCertPool pool   -> poolCertAction pool
+  ConwayTxCertGov gov     -> conwayGovAction gov
+
+-- | Convert Shelley delegation cert subtypes.
+shelleyDelegAction :: ShelleyDelegCert -> CertAction
+shelleyDelegAction = \case
+  ShelleyRegCert cred   -> CertStakeRegistration (credToBytes cred) Nothing
+  ShelleyUnRegCert cred -> CertStakeDeregistration (credToBytes cred)
+  ShelleyDelegCert cred poolHash ->
+    CertDelegation (credToBytes cred) (keyHashToBytes poolHash)
+
+-- | Convert Conway delegation cert subtypes.
+conwayDelegAction :: ConwayDelegCert -> CertAction
+conwayDelegAction = \case
+  ConwayRegCert cred mDeposit ->
+    CertStakeRegistration (credToBytes cred) (coinToWord64 <$> strictMaybeToMaybe mDeposit)
+  ConwayUnRegCert cred _mDeposit ->
+    CertStakeDeregistration (credToBytes cred)
+  ConwayDelegCert cred delegatee -> case delegatee of
+    DelegStake poolHash ->
+      CertDelegation (credToBytes cred) (keyHashToBytes poolHash)
+    DelegVote _drep ->
+      CertConwayDelegVote (credToBytes cred) ""  -- DRep hash deferred to Governance extractor
+    DelegStakeVote poolHash _drep ->
+      CertConwayDelegStakeVote (credToBytes cred) (keyHashToBytes poolHash) ""
+  ConwayRegDelegCert cred delegatee mDeposit -> case delegatee of
+    DelegStake poolHash ->
+      CertConwayRegDeleg (credToBytes cred) (keyHashToBytes poolHash) (Just $ coinToWord64 mDeposit)
+    DelegVote _drep ->
+      -- Registration + vote delegation: register as stake, DRep deferred to Governance
+      CertStakeRegistration (credToBytes cred) (Just $ coinToWord64 mDeposit)
+    DelegStakeVote poolHash _drep ->
+      CertConwayDelegStakeVote (credToBytes cred) (keyHashToBytes poolHash) ""
+
+-- | Convert Conway governance cert subtypes.
+-- Anchor and DRep data is placeholder — full extraction deferred to Governance extractor.
+conwayGovAction :: ConwayGovCert -> CertAction
+conwayGovAction = \case
+  ConwayRegDRep cred coin _mAnchor ->
+    CertDRepRegistration (credToBytes cred) (coinToWord64 coin) Nothing
+  ConwayUnRegDRep cred coin ->
+    CertDRepDeregistration (credToBytes cred) (coinToWord64 coin)
+  ConwayAuthCommitteeHotKey coldKey hotKey ->
+    CertCommitteeAuth (credToBytes coldKey) (credToBytes hotKey)
+  ConwayResignCommitteeColdKey coldKey _mAnchor ->
+    CertCommitteeResign (credToBytes coldKey) Nothing
+  ConwayUpdateDRep cred _mAnchor ->
+    CertDRepUpdate (credToBytes cred) Nothing
+
+-- | Convert a pool certificate (shared between Shelley and Conway).
+poolCertAction :: Core.PoolCert -> CertAction
+poolCertAction = \case
+  Core.RegPool params ->
+    CertPoolRegistration $ poolParamsToData params
+  Core.RetirePool poolHash epochNo ->
+    CertPoolRetirement (keyHashToBytes poolHash) (unEpochNo epochNo)
+
+-- | Extract pool registration data from PoolParams.
+poolParamsToData :: PoolP.PoolParams -> PoolRegistrationData
+poolParamsToData pp = PoolRegistrationData
+  { prdPoolHash    = keyHashToBytes (PoolP.ppId pp)
+  , prdVrfKeyHash  = Crypto.hashToBytes (Ledger.fromVRFVerKeyHash (PoolP.ppVrf pp))
+  , prdPledge      = coinToWord64 (PoolP.ppPledge pp)
+  , prdCost        = coinToWord64 (PoolP.ppCost pp)
+  , prdMargin      = realToFrac $ unboundRational (PoolP.ppMargin pp)
+  , prdRewardAddr  = Ledger.serialiseRewardAccount (PoolP.ppRewardAccount pp)
+  , prdOwners      = map keyHashToBytes $ toList (PoolP.ppOwners pp)
+  , prdRelays      = map relayToData $ toList (PoolP.ppRelays pp)
+  , prdMetadata    = poolMetadataToData <$> strictMaybeToMaybe (PoolP.ppMetadata pp)
+  }
+
+-- | Convert a pool relay to our generic type.
+relayToData :: PoolP.StakePoolRelay -> PoolRelayData
+relayToData = \case
+  PoolP.SingleHostAddr mPort mIpv4 mIpv6 ->
+    PoolRelaySingleAddr
+      (portToWord16 <$> strictMaybeToMaybe mPort)
+      (show <$> strictMaybeToMaybe mIpv4)
+      (show <$> strictMaybeToMaybe mIpv6)
+  PoolP.SingleHostName mPort name ->
+    PoolRelayDnsName
+      (portToWord16 <$> strictMaybeToMaybe mPort)
+      (dnsToText name)
+  PoolP.MultiHostName name ->
+    PoolRelayDnsSrv (dnsToText name)
+
+-- | Convert pool metadata to (URL, hash).
+poolMetadataToData :: PoolP.PoolMetadata -> (Text, ByteString)
+poolMetadataToData md = (urlToText (PoolP.pmUrl md), PoolP.pmHash md)
+
+-- | Serialise a stake credential to raw bytes.
+credToBytes :: Ledger.Credential kr -> ByteString
+credToBytes (Ledger.KeyHashObj (Ledger.KeyHash h))    = Crypto.hashToBytes h
+credToBytes (Ledger.ScriptHashObj (Core.ScriptHash h)) = Crypto.hashToBytes h
+
+-- | Serialise a KeyHash to raw bytes.
+keyHashToBytes :: Ledger.KeyHash r -> ByteString
+keyHashToBytes (Ledger.KeyHash h) = Crypto.hashToBytes h
+
+-- | Coin to Word64.
+coinToWord64 :: Coin -> Word64
+coinToWord64 (Coin c) = fromIntegral c
 
 -- | Extract raw metadata CBOR, if present.
 getTxMetadataRaw :: Core.EraTx era => Core.Tx era -> Maybe ByteString
@@ -243,7 +368,7 @@ fromShelleyTx (blkIndex, tx) =
     , txCollateralInputs = []
     , txReferenceInputs  = []
     , txCollateralOutput = Nothing
-    , txCertificates     = mkTxCertificatesRaw txBody
+    , txCertificates     = mkTxCertificatesShelleyEra shelleyCertToAction txBody
     , txWithdrawals      = mkTxWithdrawals txBody
     , txMetadata         = getTxMetadataRaw tx
     , txMint             = []
@@ -275,7 +400,7 @@ fromAllegraTx (blkIndex, tx) =
     , txCollateralInputs = []
     , txReferenceInputs  = []
     , txCollateralOutput = Nothing
-    , txCertificates     = mkTxCertificatesRaw txBody
+    , txCertificates     = mkTxCertificatesShelleyEra shelleyCertToAction txBody
     , txWithdrawals      = mkTxWithdrawals txBody
     , txMetadata         = getTxMetadataRaw tx
     , txMint             = []
@@ -307,7 +432,7 @@ fromMaryTx (blkIndex, tx) =
     , txCollateralInputs = []
     , txReferenceInputs  = []
     , txCollateralOutput = Nothing
-    , txCertificates     = mkTxCertificatesRaw txBody
+    , txCertificates     = mkTxCertificatesShelleyEra shelleyCertToAction txBody
     , txWithdrawals      = mkTxWithdrawals txBody
     , txMetadata         = getTxMetadataRaw tx
     , txMint             = getMint txBody
@@ -341,7 +466,7 @@ fromAlonzoTx (blkIndex, tx) =
     , txCollateralInputs = collIns
     , txReferenceInputs  = []
     , txCollateralOutput = Nothing
-    , txCertificates     = mkTxCertificatesRaw txBody
+    , txCertificates     = mkTxCertificatesShelleyEra shelleyCertToAction txBody
     , txWithdrawals      = mkTxWithdrawals txBody
     , txMetadata         = getTxMetadataRaw tx
     , txMint             = getMint txBody
@@ -376,7 +501,7 @@ fromBabbageTx (blkIndex, tx) =
     , txCollateralInputs = collIns
     , txReferenceInputs  = refIns
     , txCollateralOutput = Nothing  -- TODO: extract Babbage collateral output
-    , txCertificates     = mkTxCertificatesRaw txBody
+    , txCertificates     = mkTxCertificatesShelleyEra shelleyCertToAction txBody
     , txWithdrawals      = mkTxWithdrawals txBody
     , txMetadata         = getTxMetadataRaw tx
     , txMint             = getMint txBody
@@ -412,14 +537,13 @@ fromConwayTx (blkIndex, tx) =
     , txCollateralInputs = collIns
     , txReferenceInputs  = refIns
     , txCollateralOutput = Nothing  -- TODO: extract collateral output
-    , txCertificates     = mkTxCertificatesRaw txBody
+    , txCertificates     = mkTxCertificatesShelleyEra conwayCertToAction txBody
     , txWithdrawals      = mkTxWithdrawals txBody
     , txMetadata         = getTxMetadataRaw tx
     , txMint             = getMint txBody
     }
-
 -- ---------------------------------------------------------------------------
--- * Dijkstra era (same structure as Conway)
+-- * Dijkstra era (same structure as Conway, uses fallback cert conversion)
 -- ---------------------------------------------------------------------------
 
 fromDijkstraTx :: (Word64, Core.Tx DijkstraEra) -> GenericTx
@@ -448,7 +572,7 @@ fromDijkstraTx (blkIndex, tx) =
     , txCollateralInputs = collIns
     , txReferenceInputs  = refIns
     , txCollateralOutput = Nothing
-    , txCertificates     = mkTxCertificatesRaw txBody
+    , txCertificates     = mkTxCertificatesShelleyEra (\c -> CertOther (serialize' c)) txBody
     , txWithdrawals      = mkTxWithdrawals txBody
     , txMetadata         = getTxMetadataRaw tx
     , txMint             = getMint txBody

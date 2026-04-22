@@ -17,6 +17,9 @@ module DbSync.Block.Types
   , GenericTxOut (..)
   , GenericTxCertificate (..)
   , GenericTxWithdrawal (..)
+  , CertAction (..)
+  , PoolRegistrationData (..)
+  , PoolRelayData (..)
   , BlockEra (..)
   ) where
 
@@ -118,17 +121,107 @@ data GenericTxOut = GenericTxOut
   }
   deriving stock (Show)
 
--- | A certificate within a transaction (stake registration, delegation, etc.).
--- Placeholder — will be expanded with specific certificate types.
+-- | A certificate within a transaction.
+--
+-- Carries structured certificate data so extractors can dispatch on
+-- the certificate kind without re-deserializing CBOR.
 data GenericTxCertificate = GenericTxCertificate
-  { txCertIndex :: !Word16
-  , txCertBytes :: !ByteString  -- ^ Raw CBOR for now
+  { txCertIndex  :: !Word16
+  , txCertAction :: !CertAction
   }
+  deriving stock (Show)
+
+-- | Discriminated union of all certificate kinds across eras.
+--
+-- Stake-related certs are consumed by the StakeDelegation extractor.
+-- Pool-related certs are consumed by the Pool extractor.
+-- Governance certs are consumed by the Governance extractor (future).
+data CertAction
+  -- Stake delegation certificates (Shelley+)
+  = CertStakeRegistration
+      !ByteString              -- ^ Stake credential hash (raw 28 bytes)
+      !(Maybe Word64)          -- ^ Deposit (Conway+ only; Nothing for Shelley-Babbage)
+  | CertStakeDeregistration
+      !ByteString              -- ^ Stake credential hash
+  | CertDelegation
+      !ByteString              -- ^ Stake credential hash
+      !ByteString              -- ^ Pool key hash (28 bytes)
+
+  -- Pool certificates (Shelley+)
+  | CertPoolRegistration !PoolRegistrationData
+  | CertPoolRetirement
+      !ByteString              -- ^ Pool key hash
+      !Word64                  -- ^ Retiring epoch number
+
+  -- Conway combined delegation certificates
+  | CertConwayRegDeleg
+      !ByteString              -- ^ Stake credential hash
+      !ByteString              -- ^ Pool key hash
+      !(Maybe Word64)          -- ^ Deposit
+  | CertConwayDelegVote
+      !ByteString              -- ^ Stake credential hash
+      !ByteString              -- ^ DRep credential hash (or special: always-abstain / always-no-confidence)
+  | CertConwayDelegStakeVote
+      !ByteString              -- ^ Stake credential hash
+      !ByteString              -- ^ Pool key hash
+      !ByteString              -- ^ DRep credential hash
+
+  -- Conway governance certificates (for future Governance extractor)
+  | CertDRepRegistration
+      !ByteString              -- ^ DRep credential hash
+      !Word64                  -- ^ Deposit
+      !(Maybe ByteString)      -- ^ Anchor URL hash (if present)
+  | CertDRepDeregistration
+      !ByteString              -- ^ DRep credential hash
+      !Word64                  -- ^ Deposit refund
+  | CertDRepUpdate
+      !ByteString              -- ^ DRep credential hash
+      !(Maybe ByteString)      -- ^ Anchor URL hash (if present)
+  | CertCommitteeAuth
+      !ByteString              -- ^ Cold key credential hash
+      !ByteString              -- ^ Hot key credential hash
+  | CertCommitteeResign
+      !ByteString              -- ^ Cold key credential hash
+      !(Maybe ByteString)      -- ^ Anchor hash
+
+  -- MIR certificates (pre-Conway only)
+  | CertMIR !ByteString        -- ^ Raw CBOR of MIR cert
+
+  -- Fallback for unhandled/future certificate types
+  | CertOther !ByteString      -- ^ Raw CBOR bytes
+  deriving stock (Show)
+
+-- | Pool registration data extracted from a @PoolRegistration@ certificate.
+data PoolRegistrationData = PoolRegistrationData
+  { prdPoolHash    :: !ByteString          -- ^ Pool key hash (28 bytes)
+  , prdVrfKeyHash  :: !ByteString          -- ^ VRF verification key hash (32 bytes)
+  , prdPledge      :: !Word64              -- ^ Pledge in Lovelace
+  , prdCost        :: !Word64              -- ^ Fixed cost in Lovelace
+  , prdMargin      :: !Double              -- ^ Pool margin (rational as Double)
+  , prdRewardAddr  :: !ByteString          -- ^ Serialised reward account
+  , prdOwners      :: ![ByteString]        -- ^ Stake key hashes of pool owners
+  , prdRelays      :: ![PoolRelayData]     -- ^ Pool relay definitions
+  , prdMetadata    :: !(Maybe (Text, ByteString))
+      -- ^ @(metadataURL, metadataHash)@ if present
+  }
+  deriving stock (Show)
+
+-- | Pool relay information from a pool registration certificate.
+data PoolRelayData
+  = PoolRelaySingleAddr
+      !(Maybe Word16)          -- ^ Port
+      !(Maybe Text)            -- ^ IPv4 address
+      !(Maybe Text)            -- ^ IPv6 address
+  | PoolRelayDnsName
+      !(Maybe Word16)          -- ^ Port
+      !Text                    -- ^ DNS A/AAAA record name
+  | PoolRelayDnsSrv
+      !Text                    -- ^ DNS SRV record name
   deriving stock (Show)
 
 -- | A withdrawal within a transaction.
 data GenericTxWithdrawal = GenericTxWithdrawal
-  { txwRewardAddress :: !ByteString  -- ^ Stake address credential
+  { txwRewardAddress :: !ByteString  -- ^ Serialised reward account (29 bytes)
   , txwAmount        :: !Word64      -- ^ Amount in Lovelace
   }
   deriving stock (Show)

@@ -30,6 +30,21 @@ import DbSync.Db.Schema.MultiAsset
   , encodeMaTxMintCopy
   , encodeMaTxOutCopy
   )
+import DbSync.Db.Schema.StakeDelegation
+  ( encodeStakeAddressCopy
+  , encodeStakeRegistrationCopy
+  , encodeStakeDeregistrationCopy
+  , encodeDelegationCopy
+  , encodeWithdrawalCopy
+  )
+import DbSync.Db.Schema.Pool
+  ( encodePoolHashCopy
+  , encodePoolUpdateCopy
+  , encodePoolMetadataRefCopy
+  , encodePoolOwnerCopy
+  , encodePoolRetireCopy
+  , encodePoolRelayCopy
+  )
 import DbSync.Writer (Writer (..))
 
 -- ---------------------------------------------------------------------------
@@ -69,6 +84,32 @@ mkCopyWriterAdapter cw = Writer
       cwWriteRow cw "ma_tx_mint" (encodeMaTxMintCopy mid m)
   , writeMaTxOut = \mid m ->
       cwWriteRow cw "ma_tx_out" (encodeMaTxOutCopy mid m)
+
+    -- StakeDelegation
+  , writeStakeAddress = \sid sa ->
+      cwWriteRow cw "stake_address" (encodeStakeAddressCopy sid sa)
+  , writeStakeRegistration = \sid sr ->
+      cwWriteRow cw "stake_registration" (encodeStakeRegistrationCopy sid sr)
+  , writeStakeDeregistration = \sid sd ->
+      cwWriteRow cw "stake_deregistration" (encodeStakeDeregistrationCopy sid sd)
+  , writeDelegation = \did d ->
+      cwWriteRow cw "delegation" (encodeDelegationCopy did d)
+  , writeWithdrawal = \wid w ->
+      cwWriteRow cw "withdrawal" (encodeWithdrawalCopy wid w)
+
+    -- Pool
+  , writePoolHash = \pid ph ->
+      cwWriteRow cw "pool_hash" (encodePoolHashCopy pid ph)
+  , writePoolUpdate = \puid pu ->
+      cwWriteRow cw "pool_update" (encodePoolUpdateCopy puid pu)
+  , writePoolMetadataRef = \pmid pm ->
+      cwWriteRow cw "pool_metadata_ref" (encodePoolMetadataRefCopy pmid pm)
+  , writePoolOwner = \poid po ->
+      cwWriteRow cw "pool_owner" (encodePoolOwnerCopy poid po)
+  , writePoolRetire = \prid pr ->
+      cwWriteRow cw "pool_retire" (encodePoolRetireCopy prid pr)
+  , writePoolRelay = \prid pr ->
+      cwWriteRow cw "pool_relay" (encodePoolRelayCopy prid pr)
 
     -- Transaction control
   , commit = cwCommit cw

@@ -29,6 +29,7 @@ validateConfig cfg =
       [ checkEpochBoundaryRequiresLedger cfg
       , checkCurrentStateRequiresLedger cfg
       , checkMultiAssetRequiresUtxo cfg
+      , checkPoolRequiresStakeDelegation cfg
       ]
 
 -- ---------------------------------------------------------------------------
@@ -73,6 +74,21 @@ checkMultiAssetRequiresUtxo cfg
           "multi_asset extractor requires utxo extractor to be enabled. \
           \multi_asset data (ma_tx_mint, ma_tx_out) references tx_out rows \
           \from the utxo extractor."
+      ]
+  | otherwise = []
+  where
+    extractors = scOptions cfg
+
+-- | pool (pool_update, pool_owner, etc.) references stake_address rows from the
+-- StakeDelegation extractor (for reward addresses and owner stake keys).
+-- Both extractors also share the pool_hash dedup table.
+checkPoolRequiresStakeDelegation :: SyncConfig -> [ConfigError]
+checkPoolRequiresStakeDelegation cfg
+  | prEnabled (pcPool extractors) && not (prEnabled (pcStakeDelegation extractors)) =
+      [ ConfigValidationError
+          "pool extractor requires stake_delegation extractor to be enabled. \
+          \pool_update and pool_owner reference stake_address rows from the \
+          \stake_delegation extractor, and both share the pool_hash dedup table."
       ]
   | otherwise = []
   where

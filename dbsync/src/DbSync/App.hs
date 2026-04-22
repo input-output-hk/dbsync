@@ -28,6 +28,8 @@ import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Extractor.UTxO (utxoExtractor)
 import DbSync.Extractor.Metadata (metadataExtractor)
 import DbSync.Extractor.MultiAsset (multiAssetExtractor)
+import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
+import DbSync.Extractor.Pool (poolExtractor)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 
 -- ---------------------------------------------------------------------------
@@ -68,8 +70,10 @@ buildExtractors pc = mapMaybe mkProj allOptions
     resolveExtractor "core"        = coreExtractor
     resolveExtractor "utxo"        = utxoExtractor
     resolveExtractor "metadata"    = metadataExtractor
-    resolveExtractor "multi_asset" = multiAssetExtractor
-    resolveExtractor name          = stubExtractor name
+    resolveExtractor "multi_asset"      = multiAssetExtractor
+    resolveExtractor "stake_delegation" = stakeDelegationExtractor
+    resolveExtractor "pool"             = poolExtractor
+    resolveExtractor name               = stubExtractor name
 
     allOptions :: [(Text, SyncOption)]
     allOptions =
@@ -78,6 +82,7 @@ buildExtractors pc = mapMaybe mkProj allOptions
       , ("multi_asset",      pcMultiAsset pc)
       , ("metadata",         pcMetadata pc)
       , ("stake_delegation", pcStakeDelegation pc)
+      , ("pool",             pcPool pc)
       , ("scripts_datums",   pcScriptsDatums pc)
       , ("governance",       pcGovernance pc)
       , ("cbor",             pcCbor pc)

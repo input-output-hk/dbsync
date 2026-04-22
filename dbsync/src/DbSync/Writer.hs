@@ -23,6 +23,8 @@ import DbSync.Db.Schema.Core (Block, SlotLeader, Tx)
 import DbSync.Db.Schema.UTxO (TxOut, TxIn, CollateralTxIn, ReferenceTxIn)
 import DbSync.Db.Schema.Metadata (TxMetadata)
 import DbSync.Db.Schema.MultiAsset (MultiAsset, MaTxMint, MaTxOut)
+import DbSync.Db.Schema.StakeDelegation (StakeAddress, StakeRegistration, StakeDeregistration, Delegation, Withdrawal)
+import DbSync.Db.Schema.Pool (PoolHash, PoolUpdate, PoolMetadataRef, PoolOwner, PoolRetire, PoolRelay)
 import DbSync.Db.Schema.Ids
 
 -- ---------------------------------------------------------------------------
@@ -60,6 +62,25 @@ data Writer m = Writer
   , writeMultiAsset :: !(MultiAssetId -> MultiAsset -> m ())
   , writeMaTxMint   :: !(MaTxMintId -> MaTxMint -> m ())
   , writeMaTxOut    :: !(MaTxOutId -> MaTxOut -> m ())
+
+    -- ---------------------------------------------------------------
+    -- StakeDelegation tables
+    -- ---------------------------------------------------------------
+  , writeStakeAddress        :: !(StakeAddressId -> StakeAddress -> m ())
+  , writeStakeRegistration   :: !(StakeRegistrationId -> StakeRegistration -> m ())
+  , writeStakeDeregistration :: !(StakeDeregistrationId -> StakeDeregistration -> m ())
+  , writeDelegation          :: !(DelegationId -> Delegation -> m ())
+  , writeWithdrawal          :: !(WithdrawalId -> Withdrawal -> m ())
+
+    -- ---------------------------------------------------------------
+    -- Pool tables
+    -- ---------------------------------------------------------------
+  , writePoolHash        :: !(PoolHashId -> PoolHash -> m ())
+  , writePoolUpdate      :: !(PoolUpdateId -> PoolUpdate -> m ())
+  , writePoolMetadataRef :: !(PoolMetadataRefId -> PoolMetadataRef -> m ())
+  , writePoolOwner       :: !(PoolOwnerId -> PoolOwner -> m ())
+  , writePoolRetire      :: !(PoolRetireId -> PoolRetire -> m ())
+  , writePoolRelay       :: !(PoolRelayId -> PoolRelay -> m ())
 
     -- ---------------------------------------------------------------
     -- Transaction control

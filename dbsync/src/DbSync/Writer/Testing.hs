@@ -70,6 +70,21 @@ mkTestWriter ref = Writer
   , writeMaTxMint   = \_ _ -> pure ()
   , writeMaTxOut    = \_ _ -> pure ()
 
+    -- StakeDelegation (no-ops)
+  , writeStakeAddress        = \_ _ -> pure ()
+  , writeStakeRegistration   = \_ _ -> pure ()
+  , writeStakeDeregistration = \_ _ -> pure ()
+  , writeDelegation          = \_ _ -> pure ()
+  , writeWithdrawal          = \_ _ -> pure ()
+
+    -- Pool (no-ops)
+  , writePoolHash        = \_ _ -> pure ()
+  , writePoolUpdate      = \_ _ -> pure ()
+  , writePoolMetadataRef = \_ _ -> pure ()
+  , writePoolOwner       = \_ _ -> pure ()
+  , writePoolRetire      = \_ _ -> pure ()
+  , writePoolRelay       = \_ _ -> pure ()
+
     -- Transaction control
   , commit =
       atomicModifyIORef' ref $ \s ->

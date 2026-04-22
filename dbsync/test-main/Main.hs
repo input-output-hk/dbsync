@@ -15,6 +15,7 @@ import qualified DbSync.Ingest.PipelineSpec as IngestPipelineSpec
 import qualified DbSync.Schema.CoreSpec as SchemaCoreSpec
 import qualified DbSync.Schema.GenerateSpec as SchemaGenerateSpec
 import qualified DbSync.Schema.InitSpec as SchemaInitSpec
+import qualified DbSync.Copy.WriterSpec as CopyWriterSpec
 import Test.Hspec (hspec)
 
 main :: IO ()
@@ -30,3 +31,4 @@ main = hspec $ do
   ExtractorCoreSpec.spec
   IngestPipelineSpec.spec
   SchemaInitSpec.spec
+  CopyWriterSpec.spec

@@ -45,8 +45,6 @@ library
     DbSync.Db.Schema.Init
     DbSync.Db.Schema.Version
     DbSync.Db.Schema.Migration
-    DbSync.Db.Writer.Copy
-    DbSync.Db.Writer.Copy.Connection
     DbSync.Db.Writer.Copy.Encoder
     DbSync.Db.Writer.Insert
   build-depends:

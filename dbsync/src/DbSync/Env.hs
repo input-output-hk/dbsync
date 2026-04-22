@@ -37,7 +37,7 @@ import DbSync.Metrics (HasMetrics (..), Metrics)
 import DbSync.Extractor (ExtractorDef)
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer)
-import DbSync.Db.Writer.Copy (CopyConnections)
+import DbSync.Copy.Writer (CopyWriter)
 
 -- ---------------------------------------------------------------------------
 -- * Placeholder types
@@ -89,8 +89,8 @@ data IngestEnv = IngestEnv
       -- ^ Blocks received from the node, awaiting extraction
   , ieLedgerQueue :: !(TBQueue GenericBlock)
       -- ^ Blocks forwarded to the ledger state worker
-  , ieCopyConns   :: !CopyConnections
-      -- ^ Per-table COPY protocol connections
+  , ieCopyWriter  :: !CopyWriter
+      -- ^ Multi-threaded COPY writer (per-table TBQueues + worker threads)
   , ieDedupMaps   :: !(IORef DedupMaps)
       -- ^ Mutable deduplication maps (updated each block)
   , ieIdCounters  :: !(IORef IdCounters)

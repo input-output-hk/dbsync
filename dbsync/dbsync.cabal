@@ -76,10 +76,13 @@ library
     DbSync.Extractor.Cbor
     DbSync.Extractor.EpochBoundary
     DbSync.Extractor.CurrentState
+    DbSync.Copy.Connection
+    DbSync.Copy.Writer
     DbSync.Ingest.Pipeline
     DbSync.Resolver
     DbSync.Resolver.Ingest
     DbSync.Writer
+    DbSync.Writer.CopyAdapter
     DbSync.Writer.Testing
     DbSync.Id.Counter
     DbSync.Id.DedupMap
@@ -189,6 +192,7 @@ library dbsync-testlib
     , hspec
     , bytestring
     , text
+    , process
     , unordered-containers
     , cardano-prelude
 
@@ -212,6 +216,7 @@ test-suite dbsync-test
     DbSync.Extractor.CoreSpec
     DbSync.Ingest.PipelineSpec
     DbSync.Schema.InitSpec
+    DbSync.Copy.WriterSpec
   build-depends:
       base
     , dbsync

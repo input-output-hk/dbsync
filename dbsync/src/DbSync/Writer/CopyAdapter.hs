@@ -4,13 +4,7 @@
 --
 -- The extractors call @Writer.writeBlock@, @Writer.writeTx@, etc. with
 -- typed records. This adapter encodes each record to COPY text format
--- (via the encoders in @DbSync.Db.Schema.Core@) and dispatches to the
--- 'CopyWriter' queue for the appropriate table.
---
--- This is the only module that knows BOTH the typed record structure
--- AND the 'CopyWriter' queue interface. Adding a new extractor
--- (e.g. UTxO) means adding @writeTxOut@, @writeTxIn@ here and wiring
--- in the corresponding COPY encoders.
+-- and dispatches to the 'CopyWriter' queue for the appropriate table.
 module DbSync.Writer.CopyAdapter
   ( -- * Construction
     mkCopyWriterAdapter
@@ -24,6 +18,18 @@ import DbSync.Db.Schema.Core
   , encodeSlotLeaderCopy
   , encodeTxCopy
   )
+import DbSync.Db.Schema.UTxO
+  ( encodeTxOutCopy
+  , encodeTxInCopy
+  , encodeCollateralTxInCopy
+  , encodeReferenceTxInCopy
+  )
+import DbSync.Db.Schema.Metadata (encodeTxMetadataCopy)
+import DbSync.Db.Schema.MultiAsset
+  ( encodeMultiAssetCopy
+  , encodeMaTxMintCopy
+  , encodeMaTxOutCopy
+  )
 import DbSync.Writer (Writer (..))
 
 -- ---------------------------------------------------------------------------
@@ -32,20 +38,38 @@ import DbSync.Writer (Writer (..))
 
 -- | Build a 'Writer IO' that encodes typed records and dispatches to
 -- a 'CopyWriter'.
---
--- Each @write*@ function calls the corresponding COPY encoder from
--- @DbSync.Db.Schema.Core@ and then dispatches the resulting 'ByteString'
--- to the appropriate table's 'TBQueue' via 'cwWriteRow'.
 mkCopyWriterAdapter :: CopyWriter -> Writer IO
 mkCopyWriterAdapter cw = Writer
-  { writeBlock = \bid blk ->
+  { -- Core
+    writeBlock = \bid blk ->
       cwWriteRow cw "block" (encodeBlockCopy bid blk)
-
   , writeTx = \tid tx ->
       cwWriteRow cw "tx" (encodeTxCopy tid tx)
-
   , writeSlotLeader = \slid sl ->
       cwWriteRow cw "slot_leader" (encodeSlotLeaderCopy slid sl)
 
+    -- UTxO
+  , writeTxOut = \oid txo ->
+      cwWriteRow cw "tx_out" (encodeTxOutCopy oid txo)
+  , writeTxIn = \iid ti ->
+      cwWriteRow cw "tx_in" (encodeTxInCopy iid ti)
+  , writeCollateralTxIn = \iid ci ->
+      cwWriteRow cw "collateral_tx_in" (encodeCollateralTxInCopy iid ci)
+  , writeReferenceTxIn = \iid ri ->
+      cwWriteRow cw "reference_tx_in" (encodeReferenceTxInCopy iid ri)
+
+    -- Metadata
+  , writeTxMetadata = \mid md ->
+      cwWriteRow cw "tx_metadata" (encodeTxMetadataCopy mid md)
+
+    -- MultiAsset
+  , writeMultiAsset = \mid ma ->
+      cwWriteRow cw "multi_asset" (encodeMultiAssetCopy mid ma)
+  , writeMaTxMint = \mid m ->
+      cwWriteRow cw "ma_tx_mint" (encodeMaTxMintCopy mid m)
+  , writeMaTxOut = \mid m ->
+      cwWriteRow cw "ma_tx_out" (encodeMaTxOutCopy mid m)
+
+    -- Transaction control
   , commit = cwCommit cw
   }

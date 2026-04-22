@@ -5,14 +5,13 @@
 -- Extracts the fundamental tables: @block@, @tx@, and @slot_leader@.
 -- This extractor is always enabled and cannot be disabled.
 --
--- The extraction logic uses the 'IdResolver' for ID assignment and
--- the 'Writer' for row output, so the same code works in both
--- 'IngestChainHistory' (COPY + DedupMaps) and 'FollowingChainTip'
--- (INSERT + DB queries).
+-- Uses pre-assigned IDs from 'BlockContext' — it does NOT call
+-- 'assignBlockId' or 'assignTxId' itself. Those are assigned
+-- centrally by 'processBlock'.
 module DbSync.Extractor.Core
   ( coreExtractor
 
-    -- * Internal helpers (exported for testing)
+    -- * Internal helpers (exported for testing and Pipeline)
   , mkBlock
   , mkTx
   , mkSlotLeader
@@ -37,7 +36,7 @@ import DbSync.Db.Schema.Core
   )
 import DbSync.Db.Schema.Ids (BlockId (..), SlotLeaderId, TxId)
 import DbSync.Db.Types (DbLovelace (..), DbWord64 (..))
-import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn)
+import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
 import DbSync.Resolver (IdResolver (..))
 import DbSync.Writer (Writer (..))
 
@@ -64,35 +63,28 @@ coreExtractor = ExtractorDef
 
 -- | Process a single block through the core extractor.
 --
--- 1. Resolve the slot leader (dedup lookup-or-insert)
--- 2. If new slot leader, write the SlotLeader row
--- 3. Assign a BlockId
--- 4. Write the Block row
--- 5. For each transaction, assign TxId and write Tx row
+-- Uses pre-assigned IDs from BlockContext:
+-- 1. Write slot leader row if new
+-- 2. Write block row
+-- 3. Write tx rows
 processCore :: ProcessBlockFn
-processCore resolver writer genBlock = do
-  -- 1. Slot leader resolution
-  let leaderHash = blkSlotLeader genBlock
-      leader = mkSlotLeader genBlock
-  (slId, isNew) <- resolveSlotLeader resolver leaderHash leader
+processCore _resolver writer ctx = do
+  let gb = bcGenBlock ctx
+      blockId = bcBlockId ctx
+      slId = bcSlotLeaderId ctx
 
-  -- 2. Write slot leader row if new
-  when isNew $
-    writeSlotLeader writer slId leader
+  -- 1. Write slot leader row if new
+  when (bcSlotLeaderNew ctx) $
+    writeSlotLeader writer slId (mkSlotLeader gb)
 
-  -- 3. Resolve previous block and assign block ID
-  previousId <- resolvePrevBlock resolver (blkPreviousHash genBlock)
-  blockId <- assignBlockId resolver
-
-  -- 4. Build and write block
-  let block = mkBlock genBlock previousId slId
+  -- 2. Write block
+  let block = mkBlock gb (bcPrevBlockId ctx) slId
   writeBlock writer blockId block
 
-  -- 5. Process transactions
-  forM_ (blkTxs genBlock) $ \gtx -> do
-    txId <- assignTxId resolver
-    let tx = mkTx blockId gtx
-    writeTx writer txId tx
+  -- 3. Write transactions
+  forM_ (bcTxs ctx) $ \tc -> do
+    let tx = mkTx blockId (tcGenTx tc)
+    writeTx writer (tcTxId tc) tx
 
 -- ---------------------------------------------------------------------------
 -- * Record builders (pure, shared across phases)

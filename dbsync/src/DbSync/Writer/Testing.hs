@@ -40,23 +40,37 @@ emptyTestWriterState = TestWriterState [] [] [] 0
 -- * Construction
 -- ---------------------------------------------------------------------------
 
--- | Build a 'Writer' that accumulates all written records in the given 'IORef'.
---
--- For use in tests. No IO, no database — just list append.
+-- | Build a 'Writer' that accumulates Core records in the given 'IORef'.
+-- UTxO, Metadata, and MultiAsset write functions are no-ops in this
+-- writer — use a specialised test writer if you need to capture those.
 mkTestWriter :: IORef TestWriterState -> Writer IO
 mkTestWriter ref = Writer
-  { writeBlock = \bid blk ->
+  { -- Core
+    writeBlock = \bid blk ->
       atomicModifyIORef' ref $ \s ->
         (s { twBlocks = twBlocks s ++ [(bid, blk)] }, ())
-
   , writeTx = \tid tx ->
       atomicModifyIORef' ref $ \s ->
         (s { twTxs = twTxs s ++ [(tid, tx)] }, ())
-
   , writeSlotLeader = \slid sl ->
       atomicModifyIORef' ref $ \s ->
         (s { twSlotLeaders = twSlotLeaders s ++ [(slid, sl)] }, ())
 
+    -- UTxO (no-ops for core-only tests)
+  , writeTxOut          = \_ _ -> pure ()
+  , writeTxIn           = \_ _ -> pure ()
+  , writeCollateralTxIn = \_ _ -> pure ()
+  , writeReferenceTxIn  = \_ _ -> pure ()
+
+    -- Metadata (no-op)
+  , writeTxMetadata = \_ _ -> pure ()
+
+    -- MultiAsset (no-ops)
+  , writeMultiAsset = \_ _ -> pure ()
+  , writeMaTxMint   = \_ _ -> pure ()
+  , writeMaTxOut    = \_ _ -> pure ()
+
+    -- Transaction control
   , commit =
       atomicModifyIORef' ref $ \s ->
         (s { twCommits = twCommits s + 1 }, ())

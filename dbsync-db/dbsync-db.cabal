@@ -41,6 +41,9 @@ library
     DbSync.Db.Schema.Ids
     DbSync.Db.Schema.Types
     DbSync.Db.Schema.Core
+    DbSync.Db.Schema.UTxO
+    DbSync.Db.Schema.Metadata
+    DbSync.Db.Schema.MultiAsset
     DbSync.Db.Schema.Generate
     DbSync.Db.Schema.Init
     DbSync.Db.Schema.Version

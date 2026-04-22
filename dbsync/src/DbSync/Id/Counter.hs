@@ -31,14 +31,20 @@ data IdCounter = IdCounter
 -- | All ID counters used during 'IngestChainHistory'.
 -- Each counter tracks the next ID for its table/entity.
 data IdCounters = IdCounters
-  { icBlockId        :: !IdCounter
-  , icTxId           :: !IdCounter
-  , icTxOutId        :: !IdCounter
-  , icSlotLeaderId   :: !IdCounter
-  , icStakeAddressId :: !IdCounter
-  , icPoolHashId     :: !IdCounter
-  , icMultiAssetId   :: !IdCounter
-  , icScriptId       :: !IdCounter
+  { icBlockId            :: !IdCounter
+  , icTxId               :: !IdCounter
+  , icTxOutId            :: !IdCounter
+  , icTxInId             :: !IdCounter
+  , icCollateralTxInId   :: !IdCounter
+  , icReferenceTxInId    :: !IdCounter
+  , icTxMetadataId       :: !IdCounter
+  , icMaTxMintId         :: !IdCounter
+  , icMaTxOutId          :: !IdCounter
+  , icSlotLeaderId       :: !IdCounter
+  , icStakeAddressId     :: !IdCounter
+  , icPoolHashId         :: !IdCounter
+  , icMultiAssetId       :: !IdCounter
+  , icScriptId           :: !IdCounter
   }
   deriving stock (Eq, Show)
 

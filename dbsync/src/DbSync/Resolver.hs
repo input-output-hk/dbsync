@@ -6,7 +6,7 @@
 -- during block processing. Two implementations exist:
 --
 -- * 'DbSync.Resolver.Ingest' — DedupMap\/Counter-based for 'IngestChainHistory'
--- * (future) @DbSync.Resolver.Follow@ — SELECT→INSERT for 'FollowingChainTip'
+-- * (future) @DbSync.Resolver.Follow@ — SELECT->INSERT for 'FollowingChainTip'
 --
 -- Extractors are parameterised by 'IdResolver' so the same extraction
 -- logic works in both phases.
@@ -18,7 +18,8 @@ module DbSync.Resolver
 import Cardano.Prelude
 
 import DbSync.Db.Schema.Core (SlotLeader)
-import DbSync.Db.Schema.Ids (BlockId, SlotLeaderId, TxId)
+import DbSync.Db.Schema.MultiAsset (MultiAsset)
+import DbSync.Db.Schema.Ids
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -28,33 +29,59 @@ import DbSync.Db.Schema.Ids (BlockId, SlotLeaderId, TxId)
 --
 -- The @m@ parameter is the effect monad — 'IO' in production,
 -- potentially a test monad in tests.
---
--- Two implementations:
---
--- * __IngestChainHistory__: 'assignBlockId' increments a counter;
---   'resolveSlotLeader' does a DedupMap lookup-or-insert.
---   All in-memory, no database queries.
---
--- * __FollowingChainTip__: 'assignBlockId' returns an ID from
---   @INSERT ... RETURNING id@; 'resolveSlotLeader' does
---   @SELECT → INSERT if missing@. No in-memory caches.
 data IdResolver m = IdResolver
-  { -- | Assign the next block ID.
-    -- Ingest: increment counter. Follow: reserved (Writer does INSERT RETURNING).
+  { -- ---------------------------------------------------------------
+    -- Core (shared IDs — used by processBlock centrally)
+    -- ---------------------------------------------------------------
+
+    -- | Assign the next block ID.
     assignBlockId     :: !(m BlockId)
 
     -- | Assign the next transaction ID.
-    -- Ingest: increment counter. Follow: reserved (Writer does INSERT RETURNING).
   , assignTxId        :: !(m TxId)
+
+    -- | Assign the next transaction output ID.
+  , assignTxOutId     :: !(m TxOutId)
 
     -- | Resolve a slot leader by its hash.
     -- Returns @(SlotLeaderId, isNew)@. When @isNew = True@, the caller
     -- should also write the 'SlotLeader' row via the 'Writer'.
-    -- Ingest: DedupMap lookup-or-insert. Follow: SELECT → INSERT if missing.
   , resolveSlotLeader :: !(ByteString -> SlotLeader -> m (SlotLeaderId, Bool))
 
     -- | Look up the previous block's ID by its hash.
-    -- Ingest: returns the last assigned BlockId (sequential processing).
-    -- Follow: @SELECT id FROM block WHERE hash = $1@.
   , resolvePrevBlock  :: !(ByteString -> m (Maybe BlockId))
+
+    -- ---------------------------------------------------------------
+    -- UTxO extractor IDs
+    -- ---------------------------------------------------------------
+
+    -- | Assign the next tx_in ID.
+  , assignTxInId           :: !(m TxInId)
+
+    -- | Assign the next collateral_tx_in ID.
+  , assignCollateralTxInId :: !(m CollateralTxInId)
+
+    -- | Assign the next reference_tx_in ID.
+  , assignReferenceTxInId  :: !(m ReferenceTxInId)
+
+    -- ---------------------------------------------------------------
+    -- Metadata extractor IDs
+    -- ---------------------------------------------------------------
+
+    -- | Assign the next tx_metadata ID.
+  , assignTxMetadataId :: !(m TxMetadataId)
+
+    -- ---------------------------------------------------------------
+    -- MultiAsset extractor IDs
+    -- ---------------------------------------------------------------
+
+    -- | Resolve a multi-asset by its (policy ++ name) key.
+    -- Returns @(MultiAssetId, isNew)@.
+  , resolveMultiAsset :: !(ByteString -> MultiAsset -> m (MultiAssetId, Bool))
+
+    -- | Assign the next ma_tx_mint ID.
+  , assignMaTxMintId :: !(m MaTxMintId)
+
+    -- | Assign the next ma_tx_out ID.
+  , assignMaTxOutId  :: !(m MaTxOutId)
   }

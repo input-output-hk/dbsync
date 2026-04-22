@@ -13,15 +13,20 @@ module DbSync.Extractor
     ExtractorDef (..)
   , ProcessBlockFn
 
+    -- * Block context (pre-assigned shared IDs)
+  , BlockContext (..)
+  , TxContext (..)
+
     -- * Re-exports (for ExtractState used by IngestResolver)
   , ExtractState (..)
   ) where
 
 import Cardano.Prelude
 
-import DbSync.Block.Types (GenericBlock)
+import DbSync.Block.Types (GenericBlock, GenericTx)
 import DbSync.Id.Counter (IdCounters)
 import DbSync.Id.DedupMap (DedupMaps)
+import DbSync.Db.Schema.Ids (BlockId, SlotLeaderId, TxId, TxOutId)
 import DbSync.Db.Schema.Types (TableDef)
 import DbSync.Resolver (IdResolver)
 import DbSync.Writer (Writer)
@@ -50,10 +55,38 @@ data ExtractorDef = ExtractorDef
 
 -- | Process a single block through this extractor.
 --
--- Parameterised by 'IdResolver' (where IDs come from) and 'Writer'
--- (where rows go). The same function works for both phases — only
--- the resolver and writer implementations change.
-type ProcessBlockFn = IdResolver IO -> Writer IO -> GenericBlock -> IO ()
+-- Parameterised by 'IdResolver' (for per-extractor ID assignment)
+-- and 'Writer' (where rows go). Receives a 'BlockContext' with
+-- pre-assigned shared IDs (BlockId, TxId, TxOutId).
+type ProcessBlockFn = IdResolver IO -> Writer IO -> BlockContext -> IO ()
+
+-- ---------------------------------------------------------------------------
+-- * Block context (pre-assigned shared IDs)
+-- ---------------------------------------------------------------------------
+
+-- | A block with pre-assigned shared IDs.
+--
+-- The pipeline assigns 'BlockId', 'SlotLeaderId', per-tx 'TxId',
+-- and per-output 'TxOutId' centrally. Extractors consume these
+-- without needing to know about each other's execution order.
+data BlockContext = BlockContext
+  { bcBlockId      :: !BlockId
+  , bcSlotLeaderId :: !SlotLeaderId
+  , bcSlotLeaderNew :: !Bool
+      -- ^ 'True' when this slot leader was seen for the first time
+  , bcPrevBlockId  :: !(Maybe BlockId)
+  , bcGenBlock     :: !GenericBlock
+  , bcTxs          :: ![TxContext]
+  }
+
+-- | A transaction with pre-assigned shared IDs.
+data TxContext = TxContext
+  { tcTxId   :: !TxId
+  , tcGenTx  :: !GenericTx
+  , tcOutIds :: ![TxOutId]
+      -- ^ Pre-assigned TxOutId for each output, in order.
+      -- @length tcOutIds == length (txOutputs tcGenTx)@
+  }
 
 -- ---------------------------------------------------------------------------
 -- * ExtractState (used by IngestResolver)

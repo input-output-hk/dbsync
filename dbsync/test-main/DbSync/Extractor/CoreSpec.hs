@@ -29,6 +29,7 @@ import DbSync.Db.Schema.Ids (BlockId (..), SlotLeaderId (..), TxId (..))
 import DbSync.Extractor (ExtractState (..), ExtractorDef (..))
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
+import DbSync.Ingest.Pipeline (processBlock)
 import DbSync.Id.DedupMap (emptyMaps)
 import DbSync.Resolver.Ingest (mkIngestResolver)
 import DbSync.Writer.Testing (TestWriterState (..), emptyTestWriterState, mkTestWriter)
@@ -130,7 +131,7 @@ runCore block = do
   wrRef <- newIORef emptyTestWriterState
   let resolver = mkIngestResolver stRef
       writer   = mkTestWriter wrRef
-  pdProcess coreExtractor resolver writer block
+  processBlock resolver writer [coreExtractor] block
   readIORef wrRef
 
 -- | Run the core extractor on two blocks sequentially, return separate results.
@@ -140,11 +141,11 @@ runCoreTwoBlocks block1 block2 = do
   wrRef1 <- newIORef emptyTestWriterState
   let resolver = mkIngestResolver stRef
       writer1  = mkTestWriter wrRef1
-  pdProcess coreExtractor resolver writer1 block1
+  processBlock resolver writer1 [coreExtractor] block1
   w1 <- readIORef wrRef1
   wrRef2 <- newIORef emptyTestWriterState
   let writer2 = mkTestWriter wrRef2
-  pdProcess coreExtractor resolver writer2 block2
+  processBlock resolver writer2 [coreExtractor] block2
   w2 <- readIORef wrRef2
   pure (w1, w2)
 
@@ -155,14 +156,20 @@ runCoreTwoBlocks block1 block2 = do
 mkInitState :: ExtractState
 mkInitState = ExtractState
   { esIdCounters = IdCounters
-      { icBlockId        = mkIdCounter 1
-      , icTxId           = mkIdCounter 1
-      , icTxOutId        = mkIdCounter 1
-      , icSlotLeaderId   = mkIdCounter 1
-      , icStakeAddressId = mkIdCounter 1
-      , icPoolHashId     = mkIdCounter 1
-      , icMultiAssetId   = mkIdCounter 1
-      , icScriptId       = mkIdCounter 1
+      { icBlockId            = mkIdCounter 1
+      , icTxId               = mkIdCounter 1
+      , icTxOutId            = mkIdCounter 1
+      , icTxInId             = mkIdCounter 1
+      , icCollateralTxInId   = mkIdCounter 1
+      , icReferenceTxInId    = mkIdCounter 1
+      , icTxMetadataId       = mkIdCounter 1
+      , icMaTxMintId         = mkIdCounter 1
+      , icMaTxOutId          = mkIdCounter 1
+      , icSlotLeaderId       = mkIdCounter 1
+      , icStakeAddressId     = mkIdCounter 1
+      , icPoolHashId         = mkIdCounter 1
+      , icMultiAssetId       = mkIdCounter 1
+      , icScriptId           = mkIdCounter 1
       }
   , esDedupMaps   = emptyMaps
   , esLastBlockId = Nothing

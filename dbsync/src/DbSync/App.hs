@@ -25,6 +25,9 @@ import DbSync.Env (CoreEnv (..))
 import DbSync.Metrics (Metrics (..))
 import DbSync.Extractor (ExtractorDef (..))
 import DbSync.Extractor.Core (coreExtractor)
+import DbSync.Extractor.UTxO (utxoExtractor)
+import DbSync.Extractor.Metadata (metadataExtractor)
+import DbSync.Extractor.MultiAsset (multiAssetExtractor)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 
 -- ---------------------------------------------------------------------------
@@ -62,8 +65,11 @@ buildExtractors pc = mapMaybe mkProj allOptions
     -- | Resolve a named extractor to its real implementation (if available)
     -- or a stub (if not yet implemented).
     resolveExtractor :: Text -> ExtractorDef
-    resolveExtractor "core" = coreExtractor
-    resolveExtractor name   = stubExtractor name
+    resolveExtractor "core"        = coreExtractor
+    resolveExtractor "utxo"        = utxoExtractor
+    resolveExtractor "metadata"    = metadataExtractor
+    resolveExtractor "multi_asset" = multiAssetExtractor
+    resolveExtractor name          = stubExtractor name
 
     allOptions :: [(Text, SyncOption)]
     allOptions =
@@ -86,7 +92,7 @@ stubExtractor name = ExtractorDef
   , pdVersion      = 1
   , pdDependencies = []
   , pdTables       = []
-  , pdProcess      = \_ _ _ -> pure ()
+  , pdProcess      = \_ _ _ -> pure ()  -- no-op stub
   }
 
 -- | Placeholder metrics until Prometheus is wired up.

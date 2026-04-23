@@ -91,7 +91,8 @@ mkCopyWriter :: HasCallStack => ByteString -> [TableDef] -> IO CopyWriter
 mkCopyWriter connStr tableDefs = do
   channels <- forM tableDefs $ \td -> do
     cc    <- openCopyConnection connStr td
-    queue <- newTBQueueIO 10000
+    let queueBound = tableQueueBound (tdName td)
+    queue <- newTBQueueIO queueBound
     ready <- newEmptyMVar
     worker <- async $ copyWorkerLoop cc queue ready
     link worker  -- propagate worker exceptions to parent
@@ -144,6 +145,20 @@ closeCopyWriter = cwClose
 -- ---------------------------------------------------------------------------
 -- * Worker thread
 -- ---------------------------------------------------------------------------
+
+-- | Per-table queue bounds. Large-data tables (@tx_cbor@, @tx_metadata@)
+-- get smaller bounds to limit pinned memory accumulation from serialised
+-- CBOR ByteStrings. Small-row tables keep high bounds for throughput.
+--
+-- Alonzo+ transactions average 10-50KB of CBOR each:
+--
+--   * @tx_cbor@:     ~50KB/row × 200 = ~10MB max
+--   * @tx_metadata@: ~1KB/row  × 500 = ~500KB max
+--   * other tables:  ~200B/row × 10K = ~2MB max
+tableQueueBound :: Text -> Natural
+tableQueueBound "tx_cbor"     = 200
+tableQueueBound "tx_metadata" = 500
+tableQueueBound _             = 10000
 
 -- | Per-table writer thread loop.
 --

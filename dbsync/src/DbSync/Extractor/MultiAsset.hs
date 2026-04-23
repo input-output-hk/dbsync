@@ -15,6 +15,7 @@ module DbSync.Extractor.MultiAsset
 import Cardano.Prelude
 
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Short as SBS
 
 import DbSync.Block.Types (GenericTx (..), GenericTxOut (..))
 import DbSync.Db.Schema.Ids (MultiAssetId (..), TxOutId (..))
@@ -84,13 +85,15 @@ resolveAndWriteMultiAsset
   -> ByteString    -- ^ asset name
   -> IO MultiAssetId
 resolveAndWriteMultiAsset resolver writer policy name = do
-  let key = policy <> name  -- dedup key
+  -- Build key as ShortByteString directly to avoid an intermediate
+  -- pinned ByteString from (<>). SBS is unpinned and GC-friendly.
+  let key = SBS.toShort policy <> SBS.toShort name
       ma = MultiAsset
         { multiAssetPolicy      = policy
         , multiAssetName        = name
         , multiAssetFingerprint = mkFingerprint policy name
         }
-  (maId, isNew) <- resolveMultiAsset resolver key ma
+  (maId, isNew) <- resolveMultiAsset resolver key ma  -- key is ShortByteString
   when isNew $
     writeMultiAsset writer maId ma
   pure maId

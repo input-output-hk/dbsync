@@ -26,7 +26,7 @@ import DbSync.Db.Schema.Init (initSchema, checkSchemaVersions)
 import DbSync.Env (CoreEnv (..))
 import DbSync.Extractor (ExtractState (..), ExtractorDef (..))
 import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
-import DbSync.Id.DedupMap (emptyMaps)
+import DbSync.Id.DedupMap (newMaps)
 import DbSync.Ingest.Consumer (runConsumer)
 import DbSync.Node.Connection (connectToNode, getNetworkMagic)
 import DbSync.Resolver.Ingest (mkIngestResolver)
@@ -121,8 +121,9 @@ main = do
 
   -- 12. Build the ingest pipeline
   stRef <- newIORef mkInitState
+  dedupMaps <- newMaps
   copyWriter <- mkCopyWriter connStr tableDefs
-  let resolver = mkIngestResolver stRef
+  let resolver = mkIngestResolver stRef dedupMaps
       writer   = mkCopyWriterAdapter copyWriter
 
   -- 13. Start block reception + consumer
@@ -144,6 +145,7 @@ main = do
           closeCopyWriter copyWriter
 
 -- | Initial extraction state for IngestChainHistory.
+-- Dedup maps are created separately via 'newMaps' (mutable hash tables).
 mkInitState :: ExtractState
 mkInitState = ExtractState
   { esIdCounters = IdCounters
@@ -173,6 +175,5 @@ mkInitState = ExtractState
       , icTxCborId              = mkIdCounter 1
       , icEpochSyncStatsId      = mkIdCounter 1
       }
-  , esDedupMaps   = emptyMaps
   , esLastBlockId = Nothing
   }

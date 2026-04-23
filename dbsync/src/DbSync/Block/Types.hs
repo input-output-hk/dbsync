@@ -92,13 +92,19 @@ data GenericTx = GenericTx
   , txCollateralOutput  :: !(Maybe GenericTxOut)
   , txCertificates      :: ![GenericTxCertificate]
   , txWithdrawals       :: ![GenericTxWithdrawal]
-  , txMetadata          :: !(Maybe ByteString)  -- ^ Raw CBOR metadata
+  , txMetadata          :: Maybe ByteString
+      -- ^ Raw CBOR metadata. Intentionally lazy — @serialize'@ is deferred
+      -- until the Metadata extractor forces this field. If the extractor is
+      -- disabled, @serialize'@ never runs (zero cost). Matches the original
+      -- cardano-db-sync design.
   , txMint              :: ![(ByteString, ByteString, Integer)]
       -- ^ [(policy_id, asset_name, quantity)]
-  , txCborRaw           :: !(Maybe ByteString)
+  , txCborRaw           :: Maybe ByteString
       -- ^ Raw CBOR-encoded transaction bytes (for tx_cbor table).
-      --   'Nothing' only for Byron-era transactions where serialisation
-      --   to the original format is non-trivial.
+      -- Intentionally lazy — @serialize'@ is deferred until the CBOR
+      -- extractor forces this field. This prevents accumulation of large
+      -- pinned ByteStrings during parsing. @Nothing@ for Byron-era
+      -- transactions where serialisation is non-trivial.
   -- TODO: Add governance fields (proposals, voting procedures)
   -- TODO: Add script/datum/redeemer fields
   }

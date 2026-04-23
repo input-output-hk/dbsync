@@ -29,7 +29,7 @@ import DbSync.Db.Schema.Ids (BlockId (..), TxId (..))
 import DbSync.Extractor (ExtractState (..), ExtractorDef (..))
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
-import DbSync.Id.DedupMap (emptyMaps)
+import DbSync.Id.DedupMap (newMaps)
 import DbSync.Ingest.Pipeline (processBlock)
 import DbSync.Resolver.Ingest (mkIngestResolver)
 import DbSync.Writer (Writer (..))
@@ -110,8 +110,9 @@ mkMockExtractor countRef = ExtractorDef
 runPipeline :: [ExtractorDef] -> GenericBlock -> IO TestWriterState
 runPipeline extractors block = do
   stRef <- newIORef mkInitState
+  dedupMaps <- newMaps
   wrRef <- newIORef emptyTestWriterState
-  let resolver = mkIngestResolver stRef
+  let resolver = mkIngestResolver stRef dedupMaps
       writer   = mkTestWriter wrRef
   processBlock resolver writer extractors block
   readIORef wrRef
@@ -119,7 +120,8 @@ runPipeline extractors block = do
 runPipelineTwoBlocks :: [ExtractorDef] -> GenericBlock -> GenericBlock -> IO (TestWriterState, TestWriterState)
 runPipelineTwoBlocks extractors block1 block2 = do
   stRef <- newIORef mkInitState
-  let resolver = mkIngestResolver stRef
+  dedupMaps <- newMaps
+  let resolver = mkIngestResolver stRef dedupMaps
   wrRef1 <- newIORef emptyTestWriterState
   processBlock resolver (mkTestWriter wrRef1) extractors block1
   w1 <- readIORef wrRef1
@@ -161,7 +163,6 @@ mkInitState = ExtractState
       , icTxCborId              = mkIdCounter 1
       , icEpochSyncStatsId      = mkIdCounter 1
       }
-  , esDedupMaps   = emptyMaps
   , esLastBlockId = Nothing
   }
 

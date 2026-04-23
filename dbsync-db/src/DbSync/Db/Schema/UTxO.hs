@@ -30,14 +30,14 @@ module DbSync.Db.Schema.UTxO
 
 import Cardano.Prelude
 
-import qualified Data.ByteString.Char8 as BS8
-import qualified Data.Text.Encoding as TE
-
-import DbSync.Db.Schema.Core (encodeHex, encodeInt64, encodeWord64, encodeBool)
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Types
 import DbSync.Db.Types (DbLovelace (..))
+import qualified Data.ByteString.Char8 as BS8
+import qualified Data.Text.Encoding as TE
+
+import DbSync.Db.Schema.Core (encodeHex, encodeInt64, encodeWord64, encodeBool)
 import DbSync.Db.Writer.Copy.Encoder (encodeToCopyRow)
 
 -- ---------------------------------------------------------------------------

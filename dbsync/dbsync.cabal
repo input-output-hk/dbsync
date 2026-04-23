@@ -147,6 +147,7 @@ library
     , aeson
     , yaml
     , unordered-containers
+    , hashtables
     , bytestring
     , text
     , serialise
@@ -245,6 +246,13 @@ executable dbsync
   import:         warnings, defaults
   hs-source-dirs: app
   main-is:        Main.hs
+  -- RTS flags modelled on the original cardano-db-sync (-A16m -N3)
+  -- but with a larger nursery (-A64m) because COPY encoding creates
+  -- many short-lived ByteStrings that should die in the nursery.
+  --   -A64m  : 64 MB nursery (vs default 4 MB) — minor GC 16x less often
+  --   -N3    : 3 capabilities — fewer caps to sync on GC pauses
+  --   -T     : enable GHC runtime statistics
+  --   --disable-delayed-os-memory-return : return freed pages to OS immediately
   ghc-options:    -threaded -rtsopts "-with-rtsopts=-N -T"
   build-depends:
       base

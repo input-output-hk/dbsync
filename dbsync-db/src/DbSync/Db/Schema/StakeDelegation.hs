@@ -28,13 +28,13 @@ module DbSync.Db.Schema.StakeDelegation
 
 import Cardano.Prelude
 
-import qualified Data.Text.Encoding as TE
-
-import DbSync.Db.Schema.Core (encodeHex, encodeInt64, encodeWord64)
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Types
 import DbSync.Db.Types (DbLovelace (..))
+import qualified Data.Text.Encoding as TE
+
+import DbSync.Db.Schema.Core (encodeHex, encodeInt64, encodeWord64)
 import DbSync.Db.Writer.Copy.Encoder (encodeToCopyRow)
 
 -- ---------------------------------------------------------------------------

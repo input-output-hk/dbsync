@@ -17,6 +17,7 @@ module DbSync.Resolver
 
 import Cardano.Prelude
 
+import Data.ByteString.Short (ShortByteString)
 import DbSync.Db.Schema.Core (SlotLeader)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.MultiAsset (MultiAsset)
@@ -78,8 +79,10 @@ data IdResolver m = IdResolver
     -- ---------------------------------------------------------------
 
     -- | Resolve a multi-asset by its (policy ++ name) key.
+    -- Key is 'ShortByteString' (unpinned) to avoid pinned ByteString
+    -- concatenation in the hot multi-asset lookup path.
     -- Returns @(MultiAssetId, isNew)@.
-  , resolveMultiAsset :: !(ByteString -> MultiAsset -> m (MultiAssetId, Bool))
+  , resolveMultiAsset :: !(ShortByteString -> MultiAsset -> m (MultiAssetId, Bool))
 
     -- | Assign the next ma_tx_mint ID.
   , assignMaTxMintId :: !(m MaTxMintId)

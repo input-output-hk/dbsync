@@ -33,7 +33,7 @@ import DbSync.Db.Schema.Types (TableDef)
 import DbSync.Extractor (ExtractState (..), ExtractorDef (..))
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
-import DbSync.Id.DedupMap (emptyMaps)
+import DbSync.Id.DedupMap (newMaps)
 import DbSync.Ingest.Pipeline (processBlock)
 import DbSync.Resolver.Ingest (mkIngestResolver)
 import DbSync.Test.Database (queryTestDb, testConnBs, testConnStr, truncateAllTables)
@@ -121,8 +121,9 @@ spec = describe "DbSync.Copy.Writer (multi-threaded, full pipeline)" $
         truncateAllTables coreTableNames
         -- Simulate 2 epochs: write block, commit, reopen, write another block, commit
         stRef <- newIORef mkInitState
+        dedupMaps <- newMaps
         cw <- mkCopyWriter testConnBs coreTables
-        let resolver = mkIngestResolver stRef
+        let resolver = mkIngestResolver stRef dedupMaps
             writer   = mkCopyWriterAdapter cw
 
         -- Epoch 1
@@ -161,8 +162,9 @@ spec = describe "DbSync.Copy.Writer (multi-threaded, full pipeline)" $
 runPipelineToDb :: [GenericBlock] -> IO ()
 runPipelineToDb blocks = do
   stRef <- newIORef mkInitState
+  dedupMaps <- newMaps
   cw <- mkCopyWriter testConnBs coreTables
-  let resolver = mkIngestResolver stRef
+  let resolver = mkIngestResolver stRef dedupMaps
       writer   = mkCopyWriterAdapter cw
   forM_ blocks $ \blk ->
     processBlock resolver writer [coreExtractor] blk
@@ -202,7 +204,6 @@ mkInitState = ExtractState
       , icTxCborId              = mkIdCounter 1
       , icEpochSyncStatsId      = mkIdCounter 1
       }
-  , esDedupMaps   = emptyMaps
   , esLastBlockId = Nothing
   }
 

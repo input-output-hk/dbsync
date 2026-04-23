@@ -25,7 +25,6 @@ import Cardano.Prelude
 
 import DbSync.Block.Types (GenericBlock, GenericTx)
 import DbSync.Id.Counter (IdCounters)
-import DbSync.Id.DedupMap (DedupMaps)
 import DbSync.Db.Schema.Ids (BlockId, SlotLeaderId, TxId, TxOutId)
 import DbSync.Db.Schema.Types (TableDef)
 import DbSync.Resolver (IdResolver)
@@ -94,15 +93,19 @@ data TxContext = TxContext
 
 -- | Mutable state threaded during 'IngestChainHistory'.
 --
--- Contains the monotonic ID counters, deduplication maps, and
--- tracking state that ensure stable, deterministic ID assignment.
+-- Contains the monotonic ID counters and tracking state that ensure
+-- stable, deterministic ID assignment.
+--
+-- Deduplication maps ('DedupMaps') live separately as mutable hash
+-- tables — they are passed directly to the resolver, not through
+-- this 'IORef'-wrapped record. This avoids CAS-loop overhead for
+-- dedup operations and eliminates path-copying GC pressure.
+--
 -- NOT used during 'FollowingChainTip' — the 'IdResolver' handles
 -- ID assignment via PostgreSQL directly.
 data ExtractState = ExtractState
   { esIdCounters  :: !IdCounters
       -- ^ Per-table monotonic ID counters
-  , esDedupMaps   :: !DedupMaps
-      -- ^ Dedup maps for lookup/reference tables
   , esLastBlockId :: !(Maybe Int64)
       -- ^ ID of the most recently processed block (for previous_id).
       --   'Nothing' before any block has been processed.

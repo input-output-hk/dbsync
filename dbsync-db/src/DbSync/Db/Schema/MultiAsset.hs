@@ -23,6 +23,7 @@ module DbSync.Db.Schema.MultiAsset
 import Cardano.Prelude
 
 import qualified Data.ByteString.Char8 as BS8
+
 import qualified Data.Text.Encoding as TE
 
 import DbSync.Db.Schema.Core (encodeHex, encodeInt64, encodeWord64)
@@ -147,7 +148,6 @@ encodeMaTxOutCopy (MaTxOutId mid) m =
 -- * Internal helpers
 -- ---------------------------------------------------------------------------
 
--- | Encode a signed 'Integer' as a decimal ASCII string.
--- Needed for mint/burn quantities which can be negative.
+-- | Encode a signed 'Integer' as a decimal ASCII ByteString.
 encodeInteger :: Integer -> ByteString
 encodeInteger = BS8.pack . show

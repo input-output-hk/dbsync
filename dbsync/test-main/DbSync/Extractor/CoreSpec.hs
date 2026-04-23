@@ -30,7 +30,7 @@ import DbSync.Extractor (ExtractState (..), ExtractorDef (..))
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
 import DbSync.Ingest.Pipeline (processBlock)
-import DbSync.Id.DedupMap (emptyMaps)
+import DbSync.Id.DedupMap (newMaps)
 import DbSync.Resolver.Ingest (mkIngestResolver)
 import DbSync.Writer.Testing (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 
@@ -128,8 +128,9 @@ spec = do
 runCore :: GenericBlock -> IO TestWriterState
 runCore block = do
   stRef <- newIORef mkInitState
+  dedupMaps <- newMaps
   wrRef <- newIORef emptyTestWriterState
-  let resolver = mkIngestResolver stRef
+  let resolver = mkIngestResolver stRef dedupMaps
       writer   = mkTestWriter wrRef
   processBlock resolver writer [coreExtractor] block
   readIORef wrRef
@@ -138,8 +139,9 @@ runCore block = do
 runCoreTwoBlocks :: GenericBlock -> GenericBlock -> IO (TestWriterState, TestWriterState)
 runCoreTwoBlocks block1 block2 = do
   stRef <- newIORef mkInitState
+  dedupMaps <- newMaps
   wrRef1 <- newIORef emptyTestWriterState
-  let resolver = mkIngestResolver stRef
+  let resolver = mkIngestResolver stRef dedupMaps
       writer1  = mkTestWriter wrRef1
   processBlock resolver writer1 [coreExtractor] block1
   w1 <- readIORef wrRef1
@@ -182,7 +184,6 @@ mkInitState = ExtractState
       , icTxCborId              = mkIdCounter 1
       , icEpochSyncStatsId      = mkIdCounter 1
       }
-  , esDedupMaps   = emptyMaps
   , esLastBlockId = Nothing
   }
 

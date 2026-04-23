@@ -39,6 +39,9 @@ import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer)
 import DbSync.Copy.Writer (CopyWriter)
 
+-- NOTE: DedupMaps is internally mutable (BasicHashTable + IORef counters).
+-- No IORef wrapper needed — the hash tables are mutated in-place.
+
 -- ---------------------------------------------------------------------------
 -- * Placeholder types
 -- ---------------------------------------------------------------------------
@@ -80,8 +83,8 @@ data CoreEnv = CoreEnv
 -- | Environment for the 'IngestChainHistory' phase.
 --
 -- Extends 'CoreEnv' with mutable state needed for bulk COPY ingestion:
--- block queues, COPY connections, ID counters, dedup maps, and an
--- epoch-boundary signal.
+-- block queues, COPY connections, ID counters, mutable dedup hash tables,
+-- and an epoch-boundary signal.
 data IngestEnv = IngestEnv
   { ieCore        :: !CoreEnv
       -- ^ Shared core environment
@@ -91,8 +94,8 @@ data IngestEnv = IngestEnv
       -- ^ Blocks forwarded to the ledger state worker
   , ieCopyWriter  :: !CopyWriter
       -- ^ Multi-threaded COPY writer (per-table TBQueues + worker threads)
-  , ieDedupMaps   :: !(IORef DedupMaps)
-      -- ^ Mutable deduplication maps (updated each block)
+  , ieDedupMaps   :: !DedupMaps
+      -- ^ Mutable deduplication maps (internally mutable hash tables)
   , ieIdCounters  :: !(IORef IdCounters)
       -- ^ Mutable ID counters (updated each block)
   , ieEpochSignal :: !(TMVar EpochNo)

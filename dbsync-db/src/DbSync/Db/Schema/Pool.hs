@@ -32,6 +32,7 @@ module DbSync.Db.Schema.Pool
 import Cardano.Prelude
 
 import qualified Data.ByteString.Char8 as BS8
+
 import qualified Data.Text.Encoding as TE
 
 import DbSync.Db.Schema.Core (encodeHex, encodeInt64, encodeWord64)
@@ -276,7 +277,6 @@ encodePoolRelayCopy (PoolRelayId prid) pr =
 -- * Internal helpers
 -- ---------------------------------------------------------------------------
 
--- | Encode a 'Double' as a decimal ASCII string.
--- Used for pool margin encoding.
+-- | Encode a 'Double' as a decimal ASCII ByteString.
 encodeDouble :: Double -> ByteString
 encodeDouble = BS8.pack . show

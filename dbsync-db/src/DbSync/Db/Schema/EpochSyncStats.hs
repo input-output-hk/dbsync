@@ -5,7 +5,6 @@
 --
 -- Tracks sync performance metrics at each epoch boundary:
 -- blocks processed, throughput, elapsed time, and sync phase.
--- Replaces the original @epoch_sync_time@ table with enhanced metrics.
 module DbSync.Db.Schema.EpochSyncStats
   ( -- * Schema types
     EpochSyncStats (..)

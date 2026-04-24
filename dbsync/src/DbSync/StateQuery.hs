@@ -7,9 +7,6 @@
 -- LocalStateQuery mini-protocol. The interpreter correctly maps
 -- any slot to its epoch, time, and position across all era
 -- transitions (Byron → Shelley → Allegra → ...).
---
--- Ported from @Cardano.DbSync.LocalStateQuery@ and
--- @Cardano.DbSync.StateQuery@ in the original cardano-db-sync.
 module DbSync.StateQuery
   ( -- * Types
     SlotDetails (..)
@@ -182,7 +179,6 @@ getHistoryInterpreter sqv = do
 
 -- | Build a 'Qry' that computes 'SlotDetails' for a given slot.
 -- Uses the HardFork Interpreter's built-in epoch\/slot\/time calculation.
--- Ported from @Cardano.DbSync.StateQuery.querySlotDetails@.
 querySlotDetails :: SystemStart -> SlotNo -> Qry SlotDetails
 querySlotDetails start absSlot = do
   absTime <- qryFromExpr $

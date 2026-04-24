@@ -32,7 +32,6 @@ type instance Key TxMetadata = TxMetadataId
 -- ---------------------------------------------------------------------------
 
 -- | The @tx_metadata@ table.
--- Ported from @Cardano.Db.Schema.Core.Base.TxMetadata@.
 data TxMetadata = TxMetadata
   { txMetadataKey   :: !DbWord64         -- ^ Metadata key (integer)
   , txMetadataJson  :: !(Maybe Text)     -- ^ JSON representation (nullable)

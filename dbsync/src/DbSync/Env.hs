@@ -4,11 +4,16 @@
 Module      : DbSync.Env
 Description : Environment records for the three sync phases.
 
-Defines 'CoreEnv' (shared configuration), 'IngestEnv' (bulk COPY phase),
-and 'FollowEnv' (live chain-following phase). Orphan instances for
-'HasTracer', 'HasMetrics', and 'HasConfig' are defined here to avoid
-circular imports between the class-defining modules and the concrete
-environment types.
+Defines 'CoreEnv' (shared configuration), 'IngestEnv' (bulk COPY
+phase), and 'FollowEnv' (live chain-following phase). Orphan
+instances for 'HasTracer', 'HasMetrics', and 'HasConfig' are defined
+here to avoid circular imports between the class-defining modules
+and the concrete environment types.
+
+The ledger feature is represented as a sum type 'HasLedgerEnv'
+carried on 'IngestEnv' (see 'DbSync.Ledger.Types'); the block queue
+and epoch-coordination 'TMVar's for the 'LedgerWorker' thread live
+inside that type, so the ledger-disabled path allocates none of it.
 -}
 module DbSync.Env
   ( -- * Environment types
@@ -25,19 +30,19 @@ module DbSync.Env
 
 import Cardano.Prelude
 
-import Cardano.Slotting.Slot (EpochNo)
-import Control.Concurrent.STM (TBQueue, TMVar, TVar)
+import Control.Concurrent.STM (TBQueue, TVar)
 import Data.IORef (IORef)
 
 import DbSync.Block.Types (GenericBlock)
 import DbSync.Config.Types (NodeConfig, SyncConfig)
+import DbSync.Copy.Writer (CopyWriter)
+import DbSync.Extractor (ExtractorDef)
 import DbSync.Id.Counter (IdCounters)
 import DbSync.Id.DedupMap (DedupMaps)
+import DbSync.Ledger.Types (HasLedgerEnv)
 import DbSync.Metrics (HasMetrics (..), Metrics)
-import DbSync.Extractor (ExtractorDef)
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer)
-import DbSync.Copy.Writer (CopyWriter)
 
 -- NOTE: DedupMaps is internally mutable (BasicHashTable + IORef counters).
 -- No IORef wrapper needed — the hash tables are mutated in-place.
@@ -46,9 +51,11 @@ import DbSync.Copy.Writer (CopyWriter)
 -- * Placeholder types
 -- ---------------------------------------------------------------------------
 
--- | Placeholder for the full ledger state.
--- Will be replaced with the real Ouroboros ledger state type once the
--- ledger worker is implemented.
+-- | Placeholder for the 'FollowingChainTip' ledger state.
+--
+-- This will be replaced with a proper
+-- 'DbSync.Ledger.Types.DbSyncStateRef' reference once the FCT
+-- transition wires the inline-apply path.
 type LedgerState = ()
 
 -- ---------------------------------------------------------------------------
@@ -68,38 +75,40 @@ class HasConfig env where
 -- Contains the tracer, metrics handles, configuration, and the list
 -- of active extractors. Constructed once at startup.
 data CoreEnv = CoreEnv
-  { ceTracer      :: !AppTracer
-      -- ^ Structured logging tracer (contra-tracer)
-  , ceMetrics     :: !Metrics
-      -- ^ Prometheus metrics handles
-  , ceConfig      :: !SyncConfig
-      -- ^ Parsed db-sync configuration
-  , ceNodeConfig  :: !NodeConfig
-      -- ^ Extracted cardano-node configuration
+  { ceTracer     :: !AppTracer
+    -- ^ Structured logging tracer (contra-tracer)
+  , ceMetrics    :: !Metrics
+    -- ^ Prometheus metrics handles
+  , ceConfig     :: !SyncConfig
+    -- ^ Parsed db-sync configuration
+  , ceNodeConfig :: !NodeConfig
+    -- ^ Extracted cardano-node configuration
   , ceExtractors :: ![ExtractorDef]
-      -- ^ Active extractor definitions
+    -- ^ Active extractor definitions
   }
 
 -- | Environment for the 'IngestChainHistory' phase.
 --
--- Extends 'CoreEnv' with mutable state needed for bulk COPY ingestion:
--- block queues, COPY connections, ID counters, mutable dedup hash tables,
--- and an epoch-boundary signal.
+-- Extends 'CoreEnv' with mutable state needed for bulk COPY
+-- ingestion: block queue, COPY connections, ID counters, mutable
+-- dedup hash tables, plus the ledger subsystem 'HasLedgerEnv'
+-- which is either @LedgerEnabled !LedgerEnv@ (carrying its own
+-- block queue + epoch-coordination 'TMVar's + snapshot queue) or
+-- @LedgerDisabled !NoLedgerEnv@ (allocating nothing ledger-stateful).
 data IngestEnv = IngestEnv
-  { ieCore        :: !CoreEnv
-      -- ^ Shared core environment
-  , ieBlockQueue  :: !(TBQueue GenericBlock)
-      -- ^ Blocks received from the node, awaiting extraction
-  , ieLedgerQueue :: !(TBQueue GenericBlock)
-      -- ^ Blocks forwarded to the ledger state worker
-  , ieCopyWriter  :: !CopyWriter
-      -- ^ Multi-threaded COPY writer (per-table TBQueues + worker threads)
-  , ieDedupMaps   :: !DedupMaps
-      -- ^ Mutable deduplication maps (internally mutable hash tables)
-  , ieIdCounters  :: !(IORef IdCounters)
-      -- ^ Mutable ID counters (updated each block)
-  , ieEpochSignal :: !(TMVar EpochNo)
-      -- ^ Signal for epoch-boundary commits
+  { ieCore         :: !CoreEnv
+    -- ^ Shared core environment
+  , ieBlockQueue   :: !(TBQueue GenericBlock)
+    -- ^ Blocks received from the node, awaiting extraction
+  , ieCopyWriter   :: !CopyWriter
+    -- ^ Multi-threaded COPY writer (per-table TBQueues + worker threads)
+  , ieDedupMaps    :: !DedupMaps
+    -- ^ Mutable deduplication maps (internally mutable hash tables)
+  , ieIdCounters   :: !(IORef IdCounters)
+    -- ^ Mutable ID counters (updated each block)
+  , ieHasLedgerEnv :: !HasLedgerEnv
+    -- ^ Ledger subsystem — either enabled (carrying its own queues,
+    -- 'LedgerDB', and snapshot machinery) or disabled (minimal).
   }
 
 -- | Environment for the 'FollowingChainTip' phase.
@@ -108,9 +117,9 @@ data IngestEnv = IngestEnv
 -- Uses per-block INSERT with rollback support.
 data FollowEnv = FollowEnv
   { feCore        :: !CoreEnv
-      -- ^ Shared core environment
+    -- ^ Shared core environment
   , feLedgerState :: !(TVar LedgerState)
-      -- ^ Current ledger state (for epoch calculations, rewards, etc.)
+    -- ^ Current ledger state (placeholder until the inline-apply path lands).
   }
 
 -- ---------------------------------------------------------------------------

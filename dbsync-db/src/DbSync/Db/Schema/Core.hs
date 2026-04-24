@@ -5,14 +5,11 @@
 Module      : DbSync.Db.Schema.Core
 Description : Schema types for the Core extractor tables: block, tx, slot_leader.
 
-Ported from @Cardano.Db.Schema.Core.Base@ in the original cardano-db-sync.
-These are the __single canonical Haskell representation__ of each database
-table — used for COPY encoding during 'IngestChainHistory' and (later)
-for hasql INSERT\/SELECT during 'FollowingChainTip'.
-
-COPY encoding functions ('encodeBlockCopy', 'encodeTxCopy',
-'encodeSlotLeaderCopy') are new — the original project used UNNEST,
-which we replace entirely with the PostgreSQL COPY protocol.
+These are the __single canonical Haskell representation__ of each
+database table — used for COPY encoding during 'IngestChainHistory'
+and (later) for hasql INSERT\/SELECT during 'FollowingChainTip'.
+The COPY encoders ('encodeBlockCopy', 'encodeTxCopy',
+'encodeSlotLeaderCopy') emit PostgreSQL COPY text-format rows.
 -}
 module DbSync.Db.Schema.Core
   ( -- * Schema types
@@ -72,7 +69,6 @@ type instance Key SlotLeader = SlotLeaderId
 -- ---------------------------------------------------------------------------
 
 -- | The @block@ table.
--- Matches @Cardano.Db.Schema.Core.Base.Block@ from the original project.
 --
 -- Note: the @id@ column is NOT part of this record — it lives in
 -- @'Key' Block = 'BlockId'@, paired via 'Entity'.
@@ -96,7 +92,6 @@ data Block = Block
   deriving stock (Eq, Show)
 
 -- | The @tx@ table.
--- Matches @Cardano.Db.Schema.Core.Base.Tx@ from the original project.
 data Tx = Tx
   { txHash              :: !ByteString       -- ^ hash32type
   , txBlockId           :: !BlockId          -- ^ FK to block (noreference)
@@ -114,7 +109,6 @@ data Tx = Tx
   deriving stock (Eq, Show)
 
 -- | The @slot_leader@ table.
--- Matches @Cardano.Db.Schema.Core.Base.SlotLeader@ from the original project.
 data SlotLeader = SlotLeader
   { slotLeaderHash        :: !ByteString       -- ^ hash28type
   , slotLeaderPoolHashId  :: !(Maybe PoolHashId) -- ^ non-null when block mined by pool

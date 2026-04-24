@@ -1,0 +1,15 @@
+{
+  "database": {
+    "host": "localhost",
+    "port": 5432,
+    "name": "dbsync_test",
+    "user": "",
+    "password": ""
+  },
+  "ledger": {
+    "enabled": true,
+    "state_dir": "/data/ledger",
+    "snapshot_interval": 10,
+    "backend": "inmemory"
+  }
+}

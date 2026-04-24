@@ -22,7 +22,4 @@ log-dir/
 measurements/
 
 # Serena (MCP code-navigation server)
-# Keep project.yml (committed config); ignore runtime artefacts
-.serena/cache/
-.serena/logs/
-.serena/project.local.yml
+.serena/

@@ -6,9 +6,6 @@
 -- Reads the four era genesis files (Byron, Shelley, Alonzo, Conway),
 -- verifies their hashes, and builds the 'TopLevelConfig' needed for
 -- ChainSync codecs to deserialize blocks from the node.
---
--- Follows the patterns from the original cardano-db-sync genesis readers
--- but uses our 'NodeConfig' type and 'ConfigError' error type.
 module DbSync.Config.Genesis
   ( -- * Types
     GenesisConfig (..)

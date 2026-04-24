@@ -52,7 +52,7 @@ package blockio
 
 constraints:
   , text < 2.1.2
-  -- Pin hasql (matches upstream cardano-db-sync)
+  -- Pin hasql to the version the LSM/LedgerDB pipeline is tested against.
   , hasql ==1.9.3
 
 -- Allow-newer clauses needed by LSM/LedgerDB V2 transitive deps.

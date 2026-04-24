@@ -93,9 +93,18 @@ library
     DbSync.Checkpoint.Manager
     DbSync.Checkpoint.Types
     DbSync.Checkpoint.Serialise
+    DbSync.Era.Shelley.Generic
+    DbSync.Era.Shelley.Generic.EpochUpdate
+    DbSync.Era.Shelley.Generic.ProtoParams
+    DbSync.Era.Shelley.Generic.Rewards
+    DbSync.Era.Shelley.Generic.StakeDist
+    DbSync.Ledger.Event
+    DbSync.Ledger.Keys
     DbSync.Ledger.SyncState
+    DbSync.Ledger.Types
     DbSync.Ledger.Worker
     DbSync.Node.Connection
+    DbSync.Util
     DbSync.OffChain.Types
     DbSync.OffChain.Fetcher
     DbSync.OffChain.Pool
@@ -133,6 +142,8 @@ library
     , cardano-node
     , cardano-protocol-tpraos
     , cardano-slotting
+    , cardano-strict-containers
+    , io-classes:strict-stm
     , ouroboros-consensus
     , ouroboros-consensus:cardano
     , ouroboros-consensus:diffusion
@@ -141,6 +152,10 @@ library
     , ouroboros-network:api
     , ouroboros-network:framework
     , ouroboros-network:protocols
+    , small-steps
+    , sop-core
+    , sop-extras
+    , strict-sop-core
     , typed-protocols
 
     -- Database
@@ -162,6 +177,7 @@ library
     -- Concurrency
     , stm
     , async
+    , strict
 
     -- Tracing
     , contra-tracer
@@ -228,6 +244,7 @@ test-suite dbsync-test
     DbSync.Schema.InitSpec
     DbSync.Copy.WriterSpec
     DbSync.Ledger.SyncStateSpec
+    DbSync.Ledger.TypesSpec
     DbSync.Checkpoint.ManagerSpec
   build-depends:
       base
@@ -239,6 +256,7 @@ test-suite dbsync-test
     , hspec-hedgehog
     , cardano-prelude
     , cardano-slotting
+    , cardano-strict-containers
     , bytestring
     , containers
     , optparse-applicative
@@ -254,11 +272,10 @@ executable dbsync
   import:         warnings, defaults
   hs-source-dirs: app
   main-is:        Main.hs
-  -- RTS flags modelled on the original cardano-db-sync (-A16m -N3)
-  -- but with a larger nursery (-A64m) because COPY encoding creates
-  -- many short-lived ByteStrings that should die in the nursery.
+  -- RTS flags tuned for COPY-heavy encoding (many short-lived
+  -- ByteStrings that should die in the nursery).
   --   -A64m  : 64 MB nursery (vs default 4 MB) — minor GC 16x less often
-  --   -N3    : 3 capabilities — fewer caps to sync on GC pauses
+  --   -N6    : 6 capabilities
   --   -T     : enable GHC runtime statistics
   --   --disable-delayed-os-memory-return : return freed pages to OS immediately
   ghc-options:    -threaded -rtsopts "-with-rtsopts=-A64m -N6 -T --disable-delayed-os-memory-return"

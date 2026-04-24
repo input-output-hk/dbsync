@@ -44,7 +44,6 @@ type instance Key MaTxOut = MaTxOutId
 -- ---------------------------------------------------------------------------
 
 -- | The @multi_asset@ table.
--- Ported from @Cardano.Db.Schema.Core.MultiAsset@.
 -- One row per unique (policy, name) pair.
 data MultiAsset = MultiAsset
   { multiAssetPolicy      :: !ByteString  -- ^ Policy ID (28 bytes)

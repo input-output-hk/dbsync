@@ -1,8 +1,8 @@
 -- | Configuration file parsing.
 --
--- Reads and parses the db-sync YAML configuration file into 'SyncConfig'.
--- Following the original project's pattern: read file as ByteString,
--- YAML decode via FromJSON instances, return Either on failure.
+-- Reads and parses the db-sync YAML configuration file into 'SyncConfig':
+-- read file as ByteString, YAML decode via FromJSON instances, return
+-- 'Either' on failure.
 module DbSync.Config
   ( -- * Parsing
     parseConfig

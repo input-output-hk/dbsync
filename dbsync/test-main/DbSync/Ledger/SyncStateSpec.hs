@@ -3,8 +3,7 @@
 -- | Integration tests for 'DbSync.Ledger.SyncState'.
 --
 -- Exercises the full read\/write round-trip against a real PostgreSQL
--- database, including the edge cases that Phase 6's boot flow will
--- depend on:
+-- database, including the edge cases that the boot flow depends on:
 --
 --   * 'readSyncState' on an empty table returns 'Nothing'.
 --   * 'seedSyncState' is idempotent — second call is a no-op thanks

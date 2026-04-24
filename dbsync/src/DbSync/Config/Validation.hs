@@ -2,7 +2,6 @@
 --
 -- Validates a parsed 'SyncConfig' for internal consistency.
 -- Collects ALL errors (not just the first) so the user can fix them in one pass.
--- The original project had no validation here — this is new.
 module DbSync.Config.Validation
   ( validateConfig
   ) where

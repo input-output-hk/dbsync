@@ -7,7 +7,6 @@
 --
 -- Connects to a cardano-node via Unix socket, runs the ChainSync
 -- mini-protocol, and pushes received blocks to a 'TQueue'.
--- Adapted from the original cardano-db-sync Sync.hs.
 module DbSync.Node.Connection
   ( -- * Types
     CardanoBlock

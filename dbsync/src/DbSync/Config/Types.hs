@@ -4,8 +4,9 @@
 -- These are network-agnostic — the same config works for mainnet, preprod, etc.
 -- Network-specific details come from the node config (passed via CLI).
 --
--- Follows the original project's pattern: optional sections with defaults,
--- and a preset + override system for options.
+-- Each section is optional with sensible defaults, and per-option
+-- preset + override lets callers tweak individual flags without
+-- restating the whole block.
 module DbSync.Config.Types
   ( -- * Top-level config
     SyncConfig (..)
@@ -13,6 +14,7 @@ module DbSync.Config.Types
   , SyncSettings (..)
   , SyncMode (..)
   , LedgerConfig (..)
+  , LedgerBackend (..)
   , MetricsConfig (..)
   , LoggingConfig (..)
   , LogFormat (..)
@@ -27,6 +29,7 @@ module DbSync.Config.Types
     -- * Defaults
   , defaultSyncSettings
   , defaultLedgerConfig
+  , defaultLedgerBackend
   , defaultMetricsConfig
   , defaultLoggingConfig
   , defaultSyncOptions
@@ -46,7 +49,7 @@ import Cardano.Prelude
 
 import Data.Aeson (FromJSON (..), (.:), (.:?), (.!=))
 import qualified Data.Aeson as Aeson
-import qualified Data.Aeson.Types as Aeson (typeMismatch)
+import qualified Data.Aeson.Types as Aeson (parseFail, typeMismatch)
 
 -- ---------------------------------------------------------------------------
 -- * Top-level config
@@ -135,6 +138,7 @@ data LedgerConfig = LedgerConfig
   { lcEnabled          :: !Bool
   , lcStateDir         :: !FilePath
   , lcSnapshotInterval :: !Int
+  , lcBackend          :: !LedgerBackend
   }
   deriving stock (Eq, Show)
 
@@ -144,6 +148,7 @@ instance FromJSON LedgerConfig where
       <$> o .:? "enabled"           .!= True
       <*> o .:? "state_dir"         .!= "/data/ledger"
       <*> o .:? "snapshot_interval" .!= 10
+      <*> o .:? "backend"           .!= defaultLedgerBackend
 
 -- | Default ledger config used when the "ledger" section is omitted.
 defaultLedgerConfig :: LedgerConfig
@@ -151,7 +156,38 @@ defaultLedgerConfig = LedgerConfig
   { lcEnabled          = True
   , lcStateDir         = "/data/ledger"
   , lcSnapshotInterval = 10
+  , lcBackend          = defaultLedgerBackend
   }
+
+-- | Which backend stores the ledger-state UTxO tables.
+--
+-- Only the on-disk LSM backend is supported: RAM targets rely on the
+-- UTxO living on disk, and an in-memory backend would roughly double
+-- the testing matrix for no operational gain. The 'FromJSON' instance
+-- accepts only @\"lsm\"@ and returns a clear error for the historical
+-- @\"inmemory\"@ value.
+--
+-- The optional 'FilePath' override is not wired through yet;
+-- 'Nothing' means \"use @lcStateDir@\".
+data LedgerBackend
+  = LedgerBackendLSM !(Maybe FilePath)
+  deriving stock (Eq, Show)
+
+-- | Default ledger backend — LSM with no path override.
+defaultLedgerBackend :: LedgerBackend
+defaultLedgerBackend = LedgerBackendLSM Nothing
+
+instance FromJSON LedgerBackend where
+  parseJSON = Aeson.withText "LedgerBackend" $ \case
+    "lsm" -> pure (LedgerBackendLSM Nothing)
+    "inmemory" ->
+      Aeson.parseFail
+        "ledger.backend: \"inmemory\" is not supported. Use \"lsm\" — the \
+        \in-memory backend would roughly double RAM usage and the testing \
+        \matrix for no operational gain."
+    other ->
+      Aeson.parseFail $
+        "unexpected ledger.backend: " <> show other <> ". Expected \"lsm\"."
 
 -- | Prometheus metrics settings.
 data MetricsConfig = MetricsConfig
@@ -208,9 +244,8 @@ instance FromJSON LogFormat where
 -- ---------------------------------------------------------------------------
 
 -- | Per-option configuration.
--- Following the original project's pattern: each field is optional and defaults
--- to the value from 'defaultSyncOptions'. Unmentioned options keep
--- their defaults.
+-- Each field is optional and defaults to the value from
+-- 'defaultSyncOptions'. Unmentioned options keep their defaults.
 data SyncOptions = SyncOptions
   { pcCore            :: !SyncOption
   , pcUtxo            :: !SyncOption

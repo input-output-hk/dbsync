@@ -13,14 +13,11 @@ that the system can safely crash and resume at any time:
      advance.
   3. Reopen the COPY streams so the next epoch can start writing.
 
-The ordering matters: if step 2 fails after step 1 succeeds, we are
-left with “rows present past @last_committed_slot@”. Boot flow Path B
-(Phase 6) handles this by @DELETE …FROM block WHERE slot_no > s@ on
-restart, so the invariant “@last_committed_slot@ is never ahead of
-actual data” holds by construction.
-
-See @LEDGER-PLAN.md §6@ Invariant I1 for the full atomicity model,
-and §14.2 for how this fits into the Phase 1 deliverable.
+The ordering matters: if the sync-state write fails after the data
+flush succeeds, we are left with rows past @last_committed_slot@.
+The resume flow on restart issues @DELETE FROM block WHERE slot_no >
+s@, so the invariant \"@last_committed_slot@ is never ahead of actual
+data\" holds by construction.
 -}
 module DbSync.Checkpoint.Manager
   ( commitEpoch
@@ -46,12 +43,12 @@ import DbSync.Ledger.SyncState (ControlConnection, SyncStateRow, writeSyncState)
 --
 -- Failure semantics:
 --
---   * If step 1 throws, no sync-state update happens. On restart,
---     Path B reads the stale sync state and processing resumes from
---     the previous epoch (some rows may need deleting — Path B
+--   * If step 1 throws, no sync-state update happens. On restart the
+--     resume flow reads the stale sync state and processing resumes
+--     from the previous epoch (some rows may need deleting — resume
 --     handles it).
 --   * If step 2 throws, data is in PG past @last_committed_slot@.
---     Path B's @DELETE FROM block WHERE slot_no > s@ removes it on
+--     Resume's @DELETE FROM block WHERE slot_no > s@ removes it on
 --     restart. Safe but not free — re-extracts the affected epoch.
 --   * If step 3 throws, the sync state is already advanced; the
 --     COPY connections are in an unusable state. The caller should

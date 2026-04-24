@@ -13,7 +13,7 @@
 --   * On the failure path (sync-state write fails) the already-flushed
 --     COPY data remains in PG, while @last_committed_slot@ stays at
 --     the previous epoch — the exact “rows past last_committed_slot”
---     scenario that Phase 6's Path B will clean up.
+--     scenario that the resume flow cleans up on boot.
 --
 -- Requires a running PostgreSQL instance with a @dbsync_test@ database.
 module DbSync.Checkpoint.ManagerSpec (spec) where
@@ -240,7 +240,7 @@ spec = describe "DbSync.Checkpoint.Manager.commitEpoch" $
         blockCount <- T.strip <$> queryTestDb "SELECT count(*) FROM block;"
         blockCount `shouldBe` "2"
 
-    it "when sync-state write fails, data rows stay committed (Phase 6 cleans up)" $
+    it "when sync-state write fails, data rows stay committed (resume cleans up on boot)" $
       withControlConnection $ \ctrl -> do
         -- Deliberately do NOT seed the row. The UPDATE in
         -- writeSyncState will affect 0 rows and throw, but the COPY

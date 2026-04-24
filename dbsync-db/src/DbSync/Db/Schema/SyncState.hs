@@ -23,8 +23,6 @@ Unlike the extractor tables (@block@, @tx@, …) this table is:
   * __Constrained__ — @CHECK (id = 1)@ enforces the single-row invariant,
     a @PRIMARY KEY (id)@ with a @DEFAULT 1@ on the @id@ column gives us
     a trivially-atomic 'UPSERT' target.
-
-See @LEDGER-PLAN.md §11@ for the full rationale.
 -}
 module DbSync.Db.Schema.SyncState
   ( -- * Table metadata

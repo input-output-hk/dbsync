@@ -5,9 +5,6 @@
 -- Byron blocks have a completely different structure from Shelley+ blocks.
 -- They use a different crypto library, have no VRF\/OpCert, and include
 -- Epoch Boundary Blocks (EBBs) which have no slot number or transactions.
---
--- Ported from @Cardano.DbSync.Era.Byron.Util@ and @Byron.Insert@ in the
--- original cardano-db-sync.
 module DbSync.Block.Parser.Byron
   ( fromByronBlock
   ) where

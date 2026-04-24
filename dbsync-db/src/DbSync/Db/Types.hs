@@ -2,7 +2,6 @@
 
 -- | Domain-specific newtypes for database column types.
 --
--- Ported from @Cardano.Db.Types@ in the original cardano-db-sync.
 -- These newtypes ensure type safety for Lovelace values and large
 -- Word64 values that must be stored as PostgreSQL @numeric@.
 --

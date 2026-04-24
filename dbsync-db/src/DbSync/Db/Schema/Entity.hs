@@ -4,7 +4,6 @@
 
 -- | Entity wrapper pairing a primary key with its row data.
 --
--- Ported from @Cardano.Db.Statement.Types@ in the original cardano-db-sync.
 -- The 'Entity' type and 'Key' type family form the backbone of the
 -- schema type system: every table row is represented as @Entity T@ where
 -- @Key T@ is the corresponding newtype ID (e.g. @Key Block = BlockId@).

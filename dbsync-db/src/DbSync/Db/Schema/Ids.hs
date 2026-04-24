@@ -1,6 +1,5 @@
 -- | Newtype wrappers for database primary keys.
 --
--- Ported from @Cardano.Db.Schema.Ids@ in the original cardano-db-sync.
 -- Each table's primary key gets its own newtype around 'Int64', providing
 -- type safety so that a 'BlockId' cannot accidentally be used where a
 -- 'TxId' is expected.

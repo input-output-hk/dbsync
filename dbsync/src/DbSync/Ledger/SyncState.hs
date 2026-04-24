@@ -13,14 +13,14 @@ This module owns:
 
   * 'SyncStateRow' — a Haskell mirror of the table row.
   * 'ControlConnection' — a dedicated @libpq@ connection used for
-    non-COPY database work (sync-state read\/write and, from Phase 6
-    onwards, dedup-map rebuild queries).
+    non-COPY database work (sync-state read\/write, dedup-map rebuild
+    queries).
   * Three read\/write operations — 'readSyncState', 'writeSyncState',
     'seedSyncState'.
 
-See @LEDGER-PLAN.md §11@ for the schema, §6 (Invariant I1) for the
-atomicity model that 'DbSync.Checkpoint.Manager.commitEpoch' layers on
-top, and §7 Path B for how the row is consumed on boot.
+'DbSync.Checkpoint.Manager.commitEpoch' layers the per-epoch
+atomicity model on top of 'writeSyncState', and the resume flow
+consumes the row on boot.
 -}
 module DbSync.Ledger.SyncState
   ( -- * Types
@@ -36,7 +36,7 @@ module DbSync.Ledger.SyncState
   , writeSyncState
   , seedSyncState
 
-    -- * Dedup map rebuild (stub for Phase 1; real in Phase 6)
+    -- * Dedup map rebuild (currently a stub)
   , rebuildDedupMaps
 
     -- * Internals exposed for testing
@@ -115,9 +115,8 @@ data SyncStateRow = SyncStateRow
 -- sole route for:
 --
 --   1. Reading\/writing 'dbsync_sync_state'.
---   2. Dedup-map rebuild queries (Phase 6).
---   3. Path B's @DELETE FROM block WHERE slot_no > …@ cleanup
---      (Phase 6).
+--   2. Dedup-map rebuild queries.
+--   3. Resume-time @DELETE FROM block WHERE slot_no > …@ cleanup.
 newtype ControlConnection = ControlConnection
   { unControlConnection :: PQ.Connection
   }
@@ -325,19 +324,19 @@ seedSyncState (ControlConnection conn) schemaVersion ledgerEnabled = do
       <> maybe "(no error)" (TE.decodeUtf8 . BS.copy) errMsg
 
 -- ---------------------------------------------------------------------------
--- * Dedup-map rebuild (Phase 1 stub)
+-- * Dedup-map rebuild (stub)
 -- ---------------------------------------------------------------------------
 
 -- | Rebuild the dedup maps by streaming the relevant lookup tables
--- from PostgreSQL on boot. Phase 6 replaces this with real
+-- from PostgreSQL on boot. The eventual implementation will issue
 -- server-side cursor queries against @slot_leader@, @stake_address@,
 -- @pool_hash@, @multi_asset@, @script@, @drep_hash@, etc.
 --
--- For Phase 1 this is an explicit __stub__: returns empty maps.
--- Called only from Path B (resume), which Phase 1 does not yet wire
--- up — so calling this at runtime is a programmer error.
+-- This is currently an explicit __stub__: returns empty maps. It is
+-- only called from the resume path, which is not yet wired up — so
+-- calling it at runtime is a programmer error.
 rebuildDedupMaps :: HasCallStack => ControlConnection -> IO DedupMaps
-rebuildDedupMaps _conn = newMaps  -- TODO Phase 6: stream from PG cursors
+rebuildDedupMaps _conn = newMaps  -- TODO: stream from PG cursors
 
 -- ---------------------------------------------------------------------------
 -- * Internal: encode / decode

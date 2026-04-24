@@ -95,8 +95,7 @@ data GenericTx = GenericTx
   , txMetadata          :: Maybe ByteString
       -- ^ Raw CBOR metadata. Intentionally lazy — @serialize'@ is deferred
       -- until the Metadata extractor forces this field. If the extractor is
-      -- disabled, @serialize'@ never runs (zero cost). Matches the original
-      -- cardano-db-sync design.
+      -- disabled, @serialize'@ never runs (zero cost).
   , txMint              :: ![(ByteString, ByteString, Integer)]
       -- ^ [(policy_id, asset_name, quantity)]
   , txCborRaw           :: Maybe ByteString

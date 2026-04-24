@@ -8,9 +8,12 @@ module DbSync.Config.TypesSpec
 
 import Cardano.Prelude
 
+import qualified Data.Text as Text
+
 import DbSync.Config (parseConfig)
 import DbSync.Config.Types
   ( DatabaseConfig (..)
+  , LedgerBackend (..)
   , LedgerConfig (..)
   , LogFormat (..)
   , LoggingConfig (..)
@@ -20,6 +23,7 @@ import DbSync.Config.Types
   , SyncConfig (..)
   , SyncMode (..)
   , SyncSettings (..)
+  , defaultLedgerBackend
   )
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
@@ -126,3 +130,27 @@ spec = describe "DbSync.Config" $ do
         Right cfg -> do
           lgLevel (scLogging cfg) `shouldBe` "debug"
           lgFormat (scLogging cfg) `shouldBe` LogFormatJson
+
+  -- LSM is the only supported backend.
+  describe "ledger.backend parsing" $ do
+    it "defaults to LSM when backend is omitted (minimal-config.json)" $ do
+      result <- parseConfig "test-fixtures/minimal-config.json"
+      case result of
+        Left err -> panic $ "Parse failed: " <> show err
+        Right cfg ->
+          lcBackend (scLedger cfg) `shouldBe` defaultLedgerBackend
+
+    it "accepts \"lsm\" explicitly (ledger-backend-lsm.json)" $ do
+      result <- parseConfig "test-fixtures/ledger-backend-lsm.json"
+      case result of
+        Left err -> panic $ "Parse failed: " <> show err
+        Right cfg ->
+          lcBackend (scLedger cfg) `shouldBe` LedgerBackendLSM Nothing
+
+    it "rejects \"inmemory\" with a clear D1 error (ledger-backend-inmemory.json)" $ do
+      result <- parseConfig "test-fixtures/ledger-backend-inmemory.json"
+      case result of
+        Right _ ->
+          panic "Expected parse failure for ledger.backend = \"inmemory\""
+        Left err ->
+          Text.pack (show err) `shouldSatisfy` ("inmemory" `Text.isInfixOf`)

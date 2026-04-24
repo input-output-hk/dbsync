@@ -11,9 +11,6 @@
 -- into our era-independent 'GenericTx'. Helpers are shared across eras
 -- where possible; later eras add capabilities progressively.
 --
--- Import patterns follow the original cardano-db-sync closely to
--- ensure the right lenses and type families are in scope per era.
---
 -- __First pass:__ Redeemers, scripts, and governance fields are empty.
 module DbSync.Block.Parser.Tx
   ( -- * Era-specific converters
@@ -274,9 +271,8 @@ poolCertAction = \case
 -- In cardano-node 10.7.1 / cardano-ledger 1.13+ the @PoolParams@ type was
 -- renamed to @StakePoolParams@, accessors gained the @spp*@ prefix, and
 -- @ppRewardAccount@ was renamed to @sppAccountAddress@ alongside the
--- @RewardAccount → AccountAddress@ type rename.  @PoolP.PoolParams@ still
--- exists as a pattern synonym but is no longer a type.  See upstream
--- cardano-db-sync @Era/Universal/Insert/Pool.hs@.
+-- @RewardAccount → AccountAddress@ type rename. @PoolP.PoolParams@ still
+-- exists as a pattern synonym but is no longer a type.
 poolParamsToData :: PoolP.StakePoolParams -> PoolRegistrationData
 poolParamsToData pp = PoolRegistrationData
   { prdPoolHash    = keyHashToBytes (PoolP.sppId pp)
@@ -307,9 +303,9 @@ relayToData = \case
 
 -- | Convert pool metadata to (URL, hash).
 --
--- In cardano-node 10.7.1, @PoolP.pmHash@ now returns @ByteArray@ rather than
--- a bare @ByteString@ — mirrors upstream cardano-db-sync which wraps the
--- same conversion in a @byteArrayToSBS@ helper.
+-- In cardano-node 10.7.1, @PoolP.pmHash@ now returns @ByteArray@ rather
+-- than a bare @ByteString@, so we wrap the conversion in a local
+-- @byteArrayToSBS@ helper.
 poolMetadataToData :: PoolP.PoolMetadata -> (Text, ByteString)
 poolMetadataToData md =
   (urlToText (PoolP.pmUrl md), SBS.fromShort (byteArrayToSBS (PoolP.pmHash md)))

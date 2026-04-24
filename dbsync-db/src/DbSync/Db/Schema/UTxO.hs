@@ -51,7 +51,6 @@ type instance Key ReferenceTxIn = ReferenceTxInId
 -- ---------------------------------------------------------------------------
 
 -- | The @tx_out@ table.
--- Ported from @Cardano.Db.Schema.Variants.TxOutCore@ in the original.
 data TxOut = TxOut
   { txOutTxId              :: !TxId             -- ^ FK to tx
   , txOutIndex             :: !Word64           -- ^ Output index within the transaction

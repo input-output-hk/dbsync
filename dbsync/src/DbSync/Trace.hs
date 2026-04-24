@@ -20,10 +20,8 @@ module DbSync.Trace
 
 import Cardano.Prelude
 
-import Control.Monad.Reader (MonadReader, asks)
 import Control.Tracer (traceWith)
 import DbSync.Trace.Types
-import GHC.Stack (callStack)
 
 -- | Access the tracer from any environment. Implemented per-env.
 class HasTracer env where

@@ -73,9 +73,8 @@ import Cardano.Ledger.Keys (KeyRole (..))
 import qualified Cardano.Ledger.Shelley.LedgerState as Shelley
 import Cardano.Ledger.Shelley.LedgerState (NewEpochState)
 import Cardano.Slotting.Slot (EpochNo (..))
-import Control.Concurrent.Class.MonadSTM.Strict (StrictTVar, newTVarIO)
+import Control.Concurrent.Class.MonadSTM.Strict (StrictTMVar, StrictTVar, newTVarIO)
 import Control.Concurrent.STM.TBQueue (TBQueue)
-import Control.Concurrent.STM.TMVar (TMVar)
 import qualified Data.Map.Strict as Map
 import Data.SOP.Functors (Flip (..))
 import Data.SOP.Strict (NP (..), fn, hap, type (-.->))
@@ -185,9 +184,9 @@ data LedgerEnv = LedgerEnv
     -- * Inter-thread coordination queues and TMVars
   , leLedgerQueue          :: !(TBQueue GenericBlock)
     -- ^ @BlockReceiver → LedgerWorker@ — blocks to apply.
-  , leEpochReady           :: !(TMVar EpochNo)
+  , leEpochReady           :: !(StrictTMVar IO EpochNo)
     -- ^ @LedgerWorker → Main@ — \"epoch N's ledger data is ready\".
-  , leEpochWait            :: !(TMVar EpochNo)
+  , leEpochWait            :: !(StrictTMVar IO EpochNo)
     -- ^ @Main → LedgerWorker@ — only used at the Ingest→Follow
     -- transition: \"please reach epoch N so we can swap modes\".
     -- * Consensus snapshot machinery (async writer + manager).

@@ -56,7 +56,7 @@ syncStateTableName = "dbsync_sync_state"
 -- are populated on the first epoch 'commitEpoch'.
 --
 -- Column order here defines the golden ordering used by tests and by
--- the hand-written SELECT/UPDATE statements in 'DbSync.Ledger.SyncState';
+-- the hand-written SELECT/UPDATE statements in 'DbSync.Checkpoint.SyncState';
 -- changes must stay in sync across all three.
 syncStateTableDef :: TableDef
 syncStateTableDef = TableDef
@@ -105,7 +105,7 @@ syncStateTableDef = TableDef
 
 -- | All columns of the sync-state table, in golden order.
 --
--- Kept in sync with 'syncStateTableDef'. Used by 'DbSync.Ledger.SyncState'
+-- Kept in sync with 'syncStateTableDef'. Used by 'DbSync.Checkpoint.SyncState'
 -- to build SELECT and UPDATE statements without string-duplicating the
 -- column list.
 syncStateColumns :: [Text]

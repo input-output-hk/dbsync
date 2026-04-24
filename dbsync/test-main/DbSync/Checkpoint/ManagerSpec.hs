@@ -44,7 +44,7 @@ import DbSync.Db.Writer.Copy.Encoder
   , bWord16
   , bWord64
   )
-import DbSync.Ledger.SyncState
+import DbSync.Checkpoint.SyncState
   ( ControlConnection
   , SyncStateRow (..)
   , closeControlConnection

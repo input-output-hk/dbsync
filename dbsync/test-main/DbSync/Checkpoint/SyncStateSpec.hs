@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Integration tests for 'DbSync.Ledger.SyncState'.
+-- | Integration tests for 'DbSync.Checkpoint.SyncState'.
 --
 -- Exercises the full read\/write round-trip against a real PostgreSQL
 -- database, including the edge cases that the boot flow depends on:
@@ -14,7 +14,7 @@
 --
 -- Requires a running PostgreSQL instance and a @dbsync_test@ database
 -- the current user can create tables in.
-module DbSync.Ledger.SyncStateSpec (spec) where
+module DbSync.Checkpoint.SyncStateSpec (spec) where
 
 import Cardano.Prelude
 
@@ -25,9 +25,7 @@ import qualified System.Process
 
 import Test.Hspec (Spec, afterAll_, beforeAll_, before_, describe, it, shouldBe, shouldSatisfy)
 
-import DbSync.Db.Schema.Init (dropSchema, initSchema)
-import DbSync.Error (AppError (..))
-import DbSync.Ledger.SyncState
+import DbSync.Checkpoint.SyncState
   ( ControlConnection
   , SyncStateRow (..)
   , closeControlConnection
@@ -36,10 +34,12 @@ import DbSync.Ledger.SyncState
   , seedSyncState
   , writeSyncState
   )
+import DbSync.Db.Schema.Init (dropSchema, initSchema)
+import DbSync.Error (AppError (..))
 import DbSync.Test.Database (queryTestDb, testConnBs, testConnStr)
 
 spec :: Spec
-spec = describe "DbSync.Ledger.SyncState" $
+spec = describe "DbSync.Checkpoint.SyncState" $
   beforeAll_ (dropSchema [] [] testConnStr >> initSchema [] [] testConnStr) $
   afterAll_  (dropSchema [] [] testConnStr) $
   before_    resetSyncStateTable $ do

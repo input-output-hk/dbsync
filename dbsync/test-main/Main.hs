@@ -6,6 +6,7 @@ import Cardano.Prelude
 
 import qualified DbSync.AppSpec as AppSpec
 import qualified DbSync.Checkpoint.ManagerSpec as CheckpointManagerSpec
+import qualified DbSync.Checkpoint.SyncStateSpec as CheckpointSyncStateSpec
 import qualified DbSync.CliSpec as CliSpec
 import qualified DbSync.Config.GenesisSpec as ConfigGenesisSpec
 import qualified DbSync.Config.NodeSpec as ConfigNodeSpec
@@ -13,7 +14,6 @@ import qualified DbSync.Config.TypesSpec as ConfigTypesSpec
 import qualified DbSync.Config.ValidationSpec as ConfigValidationSpec
 import qualified DbSync.Extractor.CoreSpec as ExtractorCoreSpec
 import qualified DbSync.Ingest.PipelineSpec as IngestPipelineSpec
-import qualified DbSync.Ledger.SyncStateSpec as LedgerSyncStateSpec
 import qualified DbSync.Ledger.TypesSpec as LedgerTypesSpec
 import qualified DbSync.Schema.CoreSpec as SchemaCoreSpec
 import qualified DbSync.Schema.GenerateSpec as SchemaGenerateSpec
@@ -37,6 +37,6 @@ main = hspec $ do
   IngestPipelineSpec.spec
   SchemaInitSpec.spec
   CopyWriterSpec.spec
-  LedgerSyncStateSpec.spec
   LedgerTypesSpec.spec
   CheckpointManagerSpec.spec
+  CheckpointSyncStateSpec.spec

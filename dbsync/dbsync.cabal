@@ -91,6 +91,7 @@ library
     DbSync.Id.Counter
     DbSync.Id.DedupMap
     DbSync.Checkpoint.Manager
+    DbSync.Checkpoint.SyncState
     DbSync.Checkpoint.Types
     DbSync.Checkpoint.Serialise
     DbSync.Era.Shelley.Generic
@@ -101,7 +102,6 @@ library
     DbSync.Ledger.Event
     DbSync.Ledger.Keys
     DbSync.Ledger.State
-    DbSync.Ledger.SyncState
     DbSync.Ledger.Types
     DbSync.Ledger.Worker
     DbSync.Node.Connection
@@ -245,9 +245,9 @@ test-suite dbsync-test
     DbSync.Ingest.PipelineSpec
     DbSync.Schema.InitSpec
     DbSync.Copy.WriterSpec
-    DbSync.Ledger.SyncStateSpec
     DbSync.Ledger.TypesSpec
     DbSync.Checkpoint.ManagerSpec
+    DbSync.Checkpoint.SyncStateSpec
   build-depends:
       base
     , dbsync

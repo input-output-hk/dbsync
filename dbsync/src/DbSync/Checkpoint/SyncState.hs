@@ -1,13 +1,19 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 {- |
-Module      : DbSync.Ledger.SyncState
+Module      : DbSync.Checkpoint.SyncState
 Description : Read\/write the @dbsync_sync_state@ singleton PG table.
 
 The sync-state table holds the resume point that survives a crash or
 restart. Every epoch boundary commits a new row; boot reads the latest
 row and either resumes 'IngestChainHistory' past it, or jumps into
 'FollowingChainTip' if we are close enough to the node's tip.
+
+Note: this mechanism is independent of 'DbSync.Ledger.Snapshot' —
+sync-state is a PG row that always exists (ledger-on or ledger-off),
+whereas ledger snapshots are an optional on-disk artefact only
+written when the ledger feature is enabled. See LEDGER-PLAN.md §7
+for how the two fit together at boot.
 
 This module owns:
 
@@ -21,8 +27,14 @@ This module owns:
 'DbSync.Checkpoint.Manager.commitEpoch' layers the per-epoch
 atomicity model on top of 'writeSyncState', and the resume flow
 consumes the row on boot.
+
+'rebuildDedupMaps' is currently a stub that lives here for Phase 1
+convenience; it actually belongs under 'DbSync.Id.DedupMap' because
+it reads from @slot_leader@, @stake_address@, @multi_asset@ etc.
+rather than from @dbsync_sync_state@. When the boot flow fleshes it
+out, this note is the reminder to relocate it.
 -}
-module DbSync.Ledger.SyncState
+module DbSync.Checkpoint.SyncState
   ( -- * Types
     SyncStateRow (..)
   , ControlConnection

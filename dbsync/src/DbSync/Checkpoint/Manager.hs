@@ -26,7 +26,7 @@ module DbSync.Checkpoint.Manager
 import Cardano.Prelude
 
 import DbSync.Copy.Writer (CopyWriter (..))
-import DbSync.Ledger.SyncState (ControlConnection, SyncStateRow, writeSyncState)
+import DbSync.Checkpoint.SyncState (ControlConnection, SyncStateRow, writeSyncState)
 
 -- | Perform an atomic epoch-boundary commit.
 --

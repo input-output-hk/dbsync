@@ -62,7 +62,7 @@ data SchemaVersionRow = SchemaVersionRow
 -- 5. Records extractor versions in @schema_version@.
 --
 -- This is idempotent — calling it twice on the same database is safe
--- because it drops and recreates. 'DbSync.Ledger.SyncState.seedSyncState'
+-- because it drops and recreates. 'DbSync.Checkpoint.SyncState.seedSyncState'
 -- is __not__ called here; seeding is the caller's responsibility so that
 -- the @ledger_enabled@ flag comes from runtime configuration.
 initSchema :: [TableDef] -> [(Text, Int)] -> Text -> IO ()

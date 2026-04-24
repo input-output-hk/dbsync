@@ -34,11 +34,8 @@ import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Types
 import DbSync.Db.Types (DbLovelace (..))
-import qualified Data.ByteString.Char8 as BS8
-import qualified Data.Text.Encoding as TE
 
-import DbSync.Db.Schema.Core (encodeHex, encodeInt64, encodeWord64, encodeBool)
-import DbSync.Db.Writer.Copy.Encoder (encodeToCopyRow)
+import DbSync.Db.Writer.Copy.Encoder (buildCopyRow, bBool, bHex, bInt64, bText, bWord64)
 
 -- ---------------------------------------------------------------------------
 -- * Key type family instances
@@ -170,48 +167,48 @@ referenceTxInTableDef = TableDef
 
 encodeTxOutCopy :: TxOutId -> TxOut -> ByteString
 encodeTxOutCopy (TxOutId oid) txo =
-  encodeToCopyRow
-    [ Just $ encodeInt64 oid
-    , Just $ encodeInt64 (getTxId $ txOutTxId txo)
-    , Just $ encodeWord64 (txOutIndex txo)
-    , Just $ TE.encodeUtf8 (txOutAddress txo)
-    , Just $ encodeBool (txOutAddressHasScript txo)
-    , encodeHex <$> txOutPaymentCred txo
-    , encodeInt64 . getStakeAddressId <$> txOutStakeAddressId txo
-    , Just $ encodeWord64 (unDbLovelace $ txOutValue txo)
-    , encodeHex <$> txOutDataHash txo
-    , encodeInt64 . getDatumId <$> txOutInlineDatumId txo
-    , encodeInt64 . getScriptId <$> txOutReferenceScriptId txo
-    , encodeInt64 . getTxId <$> txOutConsumedByTxId txo
+  buildCopyRow
+    [ Just $ bInt64 oid
+    , Just $ bInt64 (getTxId $ txOutTxId txo)
+    , Just $ bWord64 (txOutIndex txo)
+    , Just $ bText (txOutAddress txo)
+    , Just $ bBool (txOutAddressHasScript txo)
+    , bHex <$> txOutPaymentCred txo
+    , bInt64 . getStakeAddressId <$> txOutStakeAddressId txo
+    , Just $ bWord64 (unDbLovelace $ txOutValue txo)
+    , bHex <$> txOutDataHash txo
+    , bInt64 . getDatumId <$> txOutInlineDatumId txo
+    , bInt64 . getScriptId <$> txOutReferenceScriptId txo
+    , bInt64 . getTxId <$> txOutConsumedByTxId txo
     ]
 
 encodeTxInCopy :: TxInId -> TxIn -> ByteString
 encodeTxInCopy (TxInId iid) ti =
-  encodeToCopyRow
-    [ Just $ encodeInt64 iid
-    , Just $ encodeInt64 (getTxId $ txInTxInId ti)
-    , encodeInt64 . getTxId <$> txInTxOutId ti
-    , Just $ encodeWord64 (txInTxOutIndex ti)
-    , Just $ encodeHex (txInTxOutHash ti)
-    , encodeInt64 . getRedeemerId <$> txInRedeemerId ti
+  buildCopyRow
+    [ Just $ bInt64 iid
+    , Just $ bInt64 (getTxId $ txInTxInId ti)
+    , bInt64 . getTxId <$> txInTxOutId ti
+    , Just $ bWord64 (txInTxOutIndex ti)
+    , Just $ bHex (txInTxOutHash ti)
+    , bInt64 . getRedeemerId <$> txInRedeemerId ti
     ]
 
 encodeCollateralTxInCopy :: CollateralTxInId -> CollateralTxIn -> ByteString
 encodeCollateralTxInCopy (CollateralTxInId iid) ci =
-  encodeToCopyRow
-    [ Just $ encodeInt64 iid
-    , Just $ encodeInt64 (getTxId $ collateralTxInTxInId ci)
-    , encodeInt64 . getTxId <$> collateralTxInTxOutId ci
-    , Just $ encodeWord64 (collateralTxInTxOutIndex ci)
-    , Just $ encodeHex (collateralTxInTxOutHash ci)
+  buildCopyRow
+    [ Just $ bInt64 iid
+    , Just $ bInt64 (getTxId $ collateralTxInTxInId ci)
+    , bInt64 . getTxId <$> collateralTxInTxOutId ci
+    , Just $ bWord64 (collateralTxInTxOutIndex ci)
+    , Just $ bHex (collateralTxInTxOutHash ci)
     ]
 
 encodeReferenceTxInCopy :: ReferenceTxInId -> ReferenceTxIn -> ByteString
 encodeReferenceTxInCopy (ReferenceTxInId iid) ri =
-  encodeToCopyRow
-    [ Just $ encodeInt64 iid
-    , Just $ encodeInt64 (getTxId $ referenceTxInTxInId ri)
-    , encodeInt64 . getTxId <$> referenceTxInTxOutId ri
-    , Just $ encodeWord64 (referenceTxInTxOutIndex ri)
-    , Just $ encodeHex (referenceTxInTxOutHash ri)
+  buildCopyRow
+    [ Just $ bInt64 iid
+    , Just $ bInt64 (getTxId $ referenceTxInTxInId ri)
+    , bInt64 . getTxId <$> referenceTxInTxOutId ri
+    , Just $ bWord64 (referenceTxInTxOutIndex ri)
+    , Just $ bHex (referenceTxInTxOutHash ri)
     ]

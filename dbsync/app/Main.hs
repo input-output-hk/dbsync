@@ -7,7 +7,7 @@ import Cardano.Prelude
 import System.Exit (exitFailure)
 
 import Control.Concurrent.Async (withAsync, wait)
-import Control.Concurrent.STM (newTQueueIO)
+import Control.Concurrent.STM (newTBQueueIO)
 import Control.Tracer (traceWith)
 import Data.IORef (newIORef)
 import System.FilePath (takeDirectory, (</>))
@@ -127,7 +127,7 @@ main = do
       writer   = mkCopyWriterAdapter copyWriter
 
   -- 13. Start block reception + consumer
-  blockQueue <- newTQueueIO
+  blockQueue <- newTBQueueIO 500
   logInfo "Starting block ingestion..."
 
   -- SystemStart needed by the state query interpreter

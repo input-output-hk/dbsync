@@ -44,7 +44,6 @@ import Data.Time.Clock (UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 
 import qualified Data.ByteString.Char8 as BS8
-import qualified Data.Text.Encoding as TE
 
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids (BlockId (..), PoolHashId (..), SlotLeaderId (..), TxId (..))
@@ -55,7 +54,10 @@ import DbSync.Db.Schema.Types
   , TableMode (..)
   )
 import DbSync.Db.Types (DbLovelace (..), DbWord64 (..))
-import DbSync.Db.Writer.Copy.Encoder (encodeToCopyRow)
+import DbSync.Db.Writer.Copy.Encoder
+  ( buildCopyRow
+  , bBool, bHex, bInt64, bText, bUTCTime, bWord16, bWord64
+  )
 
 -- ---------------------------------------------------------------------------
 -- * Key type family instances
@@ -193,52 +195,52 @@ slotLeaderTableDef = TableDef
 -- The ID is prepended as the first column.
 encodeBlockCopy :: BlockId -> Block -> ByteString
 encodeBlockCopy (BlockId bid) blk =
-  encodeToCopyRow
-    [ Just $ encodeInt64 bid
-    , Just $ encodeHex (blockHash blk)
-    , encodeWord64 <$> blockEpochNo blk
-    , encodeWord64 <$> blockSlotNo blk
-    , encodeWord64 <$> blockEpochSlotNo blk
-    , encodeWord64 <$> blockBlockNo blk
-    , encodeInt64 . getBlockId <$> blockPreviousId blk
-    , Just $ encodeInt64 (getSlotLeaderId $ blockSlotLeaderId blk)
-    , Just $ encodeWord64 (blockSize blk)
-    , Just $ encodeUTCTime (blockTime blk)
-    , Just $ encodeWord64 (blockTxCount blk)
-    , Just $ encodeWord16 (blockProtoMajor blk)
-    , Just $ encodeWord16 (blockProtoMinor blk)
-    , TE.encodeUtf8 <$> blockVrfKey blk
-    , encodeHex <$> blockOpCert blk
-    , encodeWord64 <$> blockOpCertCounter blk
+  buildCopyRow
+    [ Just $ bInt64 bid
+    , Just $ bHex (blockHash blk)
+    , bWord64 <$> blockEpochNo blk
+    , bWord64 <$> blockSlotNo blk
+    , bWord64 <$> blockEpochSlotNo blk
+    , bWord64 <$> blockBlockNo blk
+    , bInt64 . getBlockId <$> blockPreviousId blk
+    , Just $ bInt64 (getSlotLeaderId $ blockSlotLeaderId blk)
+    , Just $ bWord64 (blockSize blk)
+    , Just $ bUTCTime (blockTime blk)
+    , Just $ bWord64 (blockTxCount blk)
+    , Just $ bWord16 (blockProtoMajor blk)
+    , Just $ bWord16 (blockProtoMinor blk)
+    , bText <$> blockVrfKey blk
+    , bHex <$> blockOpCert blk
+    , bWord64 <$> blockOpCertCounter blk
     ]
 
 -- | Encode a 'Tx' with its 'TxId' into a COPY text row.
 encodeTxCopy :: TxId -> Tx -> ByteString
 encodeTxCopy (TxId tid) tx =
-  encodeToCopyRow
-    [ Just $ encodeInt64 tid
-    , Just $ encodeHex (txHash tx)
-    , Just $ encodeInt64 (getBlockId $ txBlockId tx)
-    , Just $ encodeWord64 (txBlockIndex tx)
-    , Just $ encodeWord64 (unDbLovelace $ txOutSum tx)
-    , Just $ encodeWord64 (unDbLovelace $ txFee tx)
-    , encodeInt64 <$> txDeposit tx
-    , Just $ encodeWord64 (txSize tx)
-    , encodeWord64 . unDbWord64 <$> txInvalidBefore tx
-    , encodeWord64 . unDbWord64 <$> txInvalidHereafter tx
-    , Just $ encodeBool (txValidContract tx)
-    , Just $ encodeWord64 (txScriptSize tx)
-    , Just $ encodeWord64 (unDbLovelace $ txTreasuryDonation tx)
+  buildCopyRow
+    [ Just $ bInt64 tid
+    , Just $ bHex (txHash tx)
+    , Just $ bInt64 (getBlockId $ txBlockId tx)
+    , Just $ bWord64 (txBlockIndex tx)
+    , Just $ bWord64 (unDbLovelace $ txOutSum tx)
+    , Just $ bWord64 (unDbLovelace $ txFee tx)
+    , bInt64 <$> txDeposit tx
+    , Just $ bWord64 (txSize tx)
+    , bWord64 . unDbWord64 <$> txInvalidBefore tx
+    , bWord64 . unDbWord64 <$> txInvalidHereafter tx
+    , Just $ bBool (txValidContract tx)
+    , Just $ bWord64 (txScriptSize tx)
+    , Just $ bWord64 (unDbLovelace $ txTreasuryDonation tx)
     ]
 
 -- | Encode a 'SlotLeader' with its 'SlotLeaderId' into a COPY text row.
 encodeSlotLeaderCopy :: SlotLeaderId -> SlotLeader -> ByteString
 encodeSlotLeaderCopy (SlotLeaderId slid) sl =
-  encodeToCopyRow
-    [ Just $ encodeInt64 slid
-    , Just $ encodeHex (slotLeaderHash sl)
-    , encodeInt64 . getPoolHashId <$> slotLeaderPoolHashId sl
-    , Just $ TE.encodeUtf8 (slotLeaderDescription sl)
+  buildCopyRow
+    [ Just $ bInt64 slid
+    , Just $ bHex (slotLeaderHash sl)
+    , bInt64 . getPoolHashId <$> slotLeaderPoolHashId sl
+    , Just $ bText (slotLeaderDescription sl)
     ]
 
 -- ---------------------------------------------------------------------------

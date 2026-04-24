@@ -31,16 +31,14 @@ module DbSync.Db.Schema.Pool
 
 import Cardano.Prelude
 
+import Data.ByteString.Builder (Builder, byteString)
 import qualified Data.ByteString.Char8 as BS8
 
-import qualified Data.Text.Encoding as TE
-
-import DbSync.Db.Schema.Core (encodeHex, encodeInt64, encodeWord64)
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Types
 import DbSync.Db.Types (DbLovelace (..))
-import DbSync.Db.Writer.Copy.Encoder (encodeToCopyRow)
+import DbSync.Db.Writer.Copy.Encoder (buildCopyRow, bHex, bInt64, bText, bWord64)
 
 -- ---------------------------------------------------------------------------
 -- * Key type family instances
@@ -210,73 +208,73 @@ poolRelayTableDef = TableDef
 
 encodePoolHashCopy :: PoolHashId -> PoolHash -> ByteString
 encodePoolHashCopy (PoolHashId pid) ph =
-  encodeToCopyRow
-    [ Just $ encodeInt64 pid
-    , Just $ encodeHex (poolHashHashRaw ph)
-    , Just $ TE.encodeUtf8 (poolHashView ph)
+  buildCopyRow
+    [ Just $ bInt64 pid
+    , Just $ bHex (poolHashHashRaw ph)
+    , Just $ bText (poolHashView ph)
     ]
 
 encodePoolUpdateCopy :: PoolUpdateId -> PoolUpdate -> ByteString
 encodePoolUpdateCopy (PoolUpdateId puid) pu =
-  encodeToCopyRow
-    [ Just $ encodeInt64 puid
-    , Just $ encodeInt64 (getPoolHashId $ poolUpdateHashId pu)
-    , Just $ encodeInt64 (fromIntegral $ poolUpdateCertIndex pu)
-    , Just $ encodeHex (poolUpdateVrfKeyHash pu)
-    , Just $ encodeWord64 (unDbLovelace $ poolUpdatePledge pu)
-    , Just $ encodeWord64 (poolUpdateActiveEpochNo pu)
-    , encodeInt64 . getPoolMetadataRefId <$> poolUpdateMetaId pu
-    , Just $ encodeDouble (poolUpdateMargin pu)
-    , Just $ encodeWord64 (unDbLovelace $ poolUpdateFixedCost pu)
-    , Just $ encodeInt64 (getTxId $ poolUpdateRegisteredTxId pu)
-    , Just $ encodeInt64 (getStakeAddressId $ poolUpdateRewardAddrId pu)
-    , encodeWord64 . unDbLovelace <$> poolUpdateDeposit pu
+  buildCopyRow
+    [ Just $ bInt64 puid
+    , Just $ bInt64 (getPoolHashId $ poolUpdateHashId pu)
+    , Just $ bInt64 (fromIntegral $ poolUpdateCertIndex pu)
+    , Just $ bHex (poolUpdateVrfKeyHash pu)
+    , Just $ bWord64 (unDbLovelace $ poolUpdatePledge pu)
+    , Just $ bWord64 (poolUpdateActiveEpochNo pu)
+    , bInt64 . getPoolMetadataRefId <$> poolUpdateMetaId pu
+    , Just $ bDouble (poolUpdateMargin pu)
+    , Just $ bWord64 (unDbLovelace $ poolUpdateFixedCost pu)
+    , Just $ bInt64 (getTxId $ poolUpdateRegisteredTxId pu)
+    , Just $ bInt64 (getStakeAddressId $ poolUpdateRewardAddrId pu)
+    , bWord64 . unDbLovelace <$> poolUpdateDeposit pu
     ]
 
 encodePoolMetadataRefCopy :: PoolMetadataRefId -> PoolMetadataRef -> ByteString
 encodePoolMetadataRefCopy (PoolMetadataRefId pmid) pm =
-  encodeToCopyRow
-    [ Just $ encodeInt64 pmid
-    , Just $ encodeInt64 (getPoolHashId $ poolMetadataRefPoolId pm)
-    , Just $ TE.encodeUtf8 (poolMetadataRefUrl pm)
-    , Just $ encodeHex (poolMetadataRefHash pm)
-    , Just $ encodeInt64 (getTxId $ poolMetadataRefRegisteredTxId pm)
+  buildCopyRow
+    [ Just $ bInt64 pmid
+    , Just $ bInt64 (getPoolHashId $ poolMetadataRefPoolId pm)
+    , Just $ bText (poolMetadataRefUrl pm)
+    , Just $ bHex (poolMetadataRefHash pm)
+    , Just $ bInt64 (getTxId $ poolMetadataRefRegisteredTxId pm)
     ]
 
 encodePoolOwnerCopy :: PoolOwnerId -> PoolOwner -> ByteString
 encodePoolOwnerCopy (PoolOwnerId poid) po =
-  encodeToCopyRow
-    [ Just $ encodeInt64 poid
-    , Just $ encodeInt64 (getStakeAddressId $ poolOwnerAddrId po)
-    , Just $ encodeInt64 (getPoolUpdateId $ poolOwnerPoolUpdateId po)
+  buildCopyRow
+    [ Just $ bInt64 poid
+    , Just $ bInt64 (getStakeAddressId $ poolOwnerAddrId po)
+    , Just $ bInt64 (getPoolUpdateId $ poolOwnerPoolUpdateId po)
     ]
 
 encodePoolRetireCopy :: PoolRetireId -> PoolRetire -> ByteString
 encodePoolRetireCopy (PoolRetireId prid) pr =
-  encodeToCopyRow
-    [ Just $ encodeInt64 prid
-    , Just $ encodeInt64 (getPoolHashId $ poolRetireHashId pr)
-    , Just $ encodeInt64 (fromIntegral $ poolRetireCertIndex pr)
-    , Just $ encodeInt64 (getTxId $ poolRetireAnnouncedTxId pr)
-    , Just $ encodeWord64 (poolRetireRetiringEpoch pr)
+  buildCopyRow
+    [ Just $ bInt64 prid
+    , Just $ bInt64 (getPoolHashId $ poolRetireHashId pr)
+    , Just $ bInt64 (fromIntegral $ poolRetireCertIndex pr)
+    , Just $ bInt64 (getTxId $ poolRetireAnnouncedTxId pr)
+    , Just $ bWord64 (poolRetireRetiringEpoch pr)
     ]
 
 encodePoolRelayCopy :: PoolRelayId -> PoolRelay -> ByteString
 encodePoolRelayCopy (PoolRelayId prid) pr =
-  encodeToCopyRow
-    [ Just $ encodeInt64 prid
-    , Just $ encodeInt64 (getPoolUpdateId $ poolRelayUpdateId pr)
-    , TE.encodeUtf8 <$> poolRelayIpv4 pr
-    , TE.encodeUtf8 <$> poolRelayIpv6 pr
-    , TE.encodeUtf8 <$> poolRelayDnsName pr
-    , TE.encodeUtf8 <$> poolRelayDnsSrvName pr
-    , encodeInt64 . fromIntegral <$> poolRelayPort pr
+  buildCopyRow
+    [ Just $ bInt64 prid
+    , Just $ bInt64 (getPoolUpdateId $ poolRelayUpdateId pr)
+    , bText <$> poolRelayIpv4 pr
+    , bText <$> poolRelayIpv6 pr
+    , bText <$> poolRelayDnsName pr
+    , bText <$> poolRelayDnsSrvName pr
+    , bInt64 . fromIntegral <$> poolRelayPort pr
     ]
 
 -- ---------------------------------------------------------------------------
 -- * Internal helpers
 -- ---------------------------------------------------------------------------
 
--- | Encode a 'Double' as a decimal ASCII ByteString.
-encodeDouble :: Double -> ByteString
-encodeDouble = BS8.pack . show
+-- | Encode a 'Double' as decimal ASCII into a 'Builder'.
+bDouble :: Double -> Builder
+bDouble = byteString . BS8.pack . show

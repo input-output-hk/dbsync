@@ -253,7 +253,7 @@ executable dbsync
   --   -N3    : 3 capabilities — fewer caps to sync on GC pauses
   --   -T     : enable GHC runtime statistics
   --   --disable-delayed-os-memory-return : return freed pages to OS immediately
-  ghc-options:    -threaded -rtsopts "-with-rtsopts=-N -T"
+  ghc-options:    -threaded -rtsopts "-with-rtsopts=-A64m -N6 -T --disable-delayed-os-memory-return"
   build-depends:
       base
     , dbsync

@@ -31,10 +31,11 @@ import Cardano.Prelude
 
 import Cardano.Slotting.Slot (EpochNo (..))
 
-import Control.Concurrent.STM (TQueue, readTQueue, tryReadTQueue)
+import Control.Concurrent.STM (TBQueue, readTBQueue, tryReadTBQueue)
 import Control.Tracer (traceWith)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime, NominalDiffTime)
+import System.Mem (performMajorGC)
 import Text.Printf (printf)
 
 import DbSync.Block.Parser (parseBlock)
@@ -132,7 +133,7 @@ runConsumer
   -> StateQueryVar
   -> SystemStart
   -> [ExtractorDef]
-  -> TQueue (CardanoBlock StandardCrypto)
+  -> TBQueue (CardanoBlock StandardCrypto)
   -> IdResolver IO
   -> Writer IO
   -> CopyWriter
@@ -170,80 +171,91 @@ runConsumer tracer sqv systemStart extractors queue resolver writer copyWriter _
         , psFullDrains   = psFullDrains ps + if drainSize >= batchSize then 1 else 0
         }
 
-      -- 2. Process each block (no per-block timing)
-      forM_ blocks $ \cardanoBlock -> do
-        let slot = blockSlot cardanoBlock
-        sd <- getSlotDetails sqv systemStart slot
-        let !genBlock = parseBlock sd cardanoBlock
-            blockEpoch = sdEpochNo sd
+      -- 2. Process batch recursively (releases each CardanoBlock after parsing)
+      let processBatch [] = pure ()
+          processBatch (cardanoBlock : rest) = do
+            let slot = blockSlot cardanoBlock
+            sd <- getSlotDetails sqv systemStart slot
+            let !genBlock = parseBlock sd cardanoBlock
+                !blockEpoch = sdEpochNo sd
+            -- cardanoBlock is now unreferenced (genBlock doesn't retain it)
 
-        -- Epoch boundary check
-        prevEpoch <- readIORef prevEpochRef
-        case prevEpoch of
-          Just prev | prev /= blockEpoch -> do
-            -- Wall-clock for the entire epoch (one syscall)
-            now <- getCurrentTime
-            epochStart <- readIORef epochStartRef
-            blockCount <- readIORef blockCountRef
-            let elapsed = diffUTCTime now epochStart
-                blocksPerSec :: Double
-                blocksPerSec = if elapsed > 0
-                  then fromIntegral blockCount / realToFrac elapsed
-                  else 0
-                elapsedSec :: Double
-                elapsedSec = realToFrac elapsed
+            -- Epoch boundary check
+            prevEpoch <- readIORef prevEpochRef
+            case prevEpoch of
+              Just prev | prev /= blockEpoch -> do
+                -- Wall-clock for the entire epoch (one syscall)
+                now <- getCurrentTime
+                epochStart <- readIORef epochStartRef
+                blockCount <- readIORef blockCountRef
+                let elapsed = diffUTCTime now epochStart
+                    blocksPerSec :: Double
+                    blocksPerSec = if elapsed > 0
+                      then fromIntegral blockCount / realToFrac elapsed
+                      else 0
+                    elapsedSec :: Double
+                    elapsedSec = realToFrac elapsed
 
-            -- Write epoch sync stats to DB (before commit)
-            essId <- assignEpochSyncStatsId resolver
-            let ess = EpochSyncStats
-                  { epochSyncStatsEpochNo        = unEpochNo prev
-                  , epochSyncStatsBlocksProcessed = blockCount
-                  , epochSyncStatsBlocksPerSec    = blocksPerSec
-                  , epochSyncStatsElapsedSec      = elapsedSec
-                  , epochSyncStatsSyncedAt        = now
-                  , epochSyncStatsPhase           = IngestChainHistory
-                  }
-            writeEpochSyncStats writer essId ess
+                -- Write epoch sync stats to DB (before commit)
+                essId <- assignEpochSyncStatsId resolver
+                let ess = EpochSyncStats
+                      { epochSyncStatsEpochNo        = unEpochNo prev
+                      , epochSyncStatsBlocksProcessed = blockCount
+                      , epochSyncStatsBlocksPerSec    = blocksPerSec
+                      , epochSyncStatsElapsedSec      = elapsedSec
+                      , epochSyncStatsSyncedAt        = now
+                      , epochSyncStatsPhase           = IngestChainHistory
+                      }
+                writeEpochSyncStats writer essId ess
 
-            -- Timed commit + reopen (one timing measurement per epoch)
-            commitStart <- getCurrentTime
-            cwCommit copyWriter
-            cwReopen copyWriter
-            commitEnd <- getCurrentTime
-            let commitSec :: NominalDiffTime
-                commitSec = diffUTCTime commitEnd commitStart
+                -- Timed commit + reopen (one timing measurement per epoch)
+                commitStart <- getCurrentTime
+                cwCommit copyWriter
+                cwReopen copyWriter
+                commitEnd <- getCurrentTime
+                let commitSec :: NominalDiffTime
+                    commitSec = diffUTCTime commitEnd commitStart
 
-            -- Log single consolidated line
-            ps <- readIORef statsRef
-            baseline <- readIORef baselineRef
+                -- Epoch boundary commit just completed. Run major GC if this was a heavy epoch.
+                -- Gated at >10s to avoid penalizing fast Byron epochs (2-3s each).
+                when (elapsedSec > 10.0) performMajorGC
 
-            let status = diagnose batchSize blocksPerSec ps baseline
+                -- Log single consolidated line
+                ps <- readIORef statsRef
+                baseline <- readIORef baselineRef
 
-            -- Capture baseline from first fast epoch
-            when (isNothing baseline && blocksPerSec > 500) $
-              writeIORef baselineRef (Just (BaselineRef blocksPerSec (unEpochNo prev)))
+                let status = diagnose batchSize blocksPerSec ps baseline
 
-            traceWith tracer $ LogMsg Info "Ingest"
-              ( "Epoch " <> show (unEpochNo prev)
-                <> " | " <> fmtInt blockCount <> " blk in " <> fmtDuration elapsedSec
-                <> " (" <> show (round blocksPerSec :: Int) <> " blk/s)"
-                <> " | drain " <> show (avgDrain ps) <> "/" <> show batchSize
-                <> " | commit " <> fmtF2 (realToFrac commitSec :: Double) <> "s"
-                <> " | " <> status
-              ) Nothing
+                -- Capture baseline from first fast epoch
+                when (isNothing baseline && blocksPerSec > 500) $
+                  writeIORef baselineRef (Just (BaselineRef blocksPerSec (unEpochNo prev)))
 
-            -- Reset for next epoch
-            writeIORef statsRef emptyPipelineStats
-            writeIORef blockCountRef 0
-            writeIORef epochStartRef commitEnd  -- start AFTER commit completes
-          _ -> pure ()
+                traceWith tracer $ LogMsg Info "Ingest"
+                  ( "Epoch " <> show (unEpochNo prev)
+                    <> " | " <> fmtInt blockCount <> " blk in " <> fmtDuration elapsedSec
+                    <> " (" <> show (round blocksPerSec :: Int) <> " blk/s)"
+                    <> " | drain " <> show (avgDrain ps) <> "/" <> show batchSize
+                    <> " | commit " <> fmtF2 (realToFrac commitSec :: Double) <> "s"
+                    <> " | " <> status
+                  ) Nothing
 
-        -- Run extractors + write to COPY queues
-        processBlock resolver writer extractors genBlock
+                -- Reset for next epoch
+                writeIORef statsRef emptyPipelineStats
+                writeIORef blockCountRef 0
+                writeIORef epochStartRef commitEnd  -- start AFTER commit completes
+              _ -> pure ()
 
-        -- Update counters
-        modifyIORef' blockCountRef (+ 1)
-        writeIORef prevEpochRef (Just blockEpoch)
+            -- Run extractors + write to COPY queues
+            processBlock resolver writer extractors genBlock
+
+            -- Update counters
+            modifyIORef' blockCountRef (+ 1)
+            writeIORef prevEpochRef (Just blockEpoch)
+
+            -- Recurse — previous cardanoBlock and genBlock now collectible
+            processBatch rest
+
+      processBatch blocks
 
       -- 3. Loop
       loop prevEpochRef blockCountRef epochStartRef statsRef baselineRef
@@ -304,16 +316,16 @@ diagnose batchSz bps ps mBaseline
 -- | Drain up to @maxN@ blocks from the queue.
 -- Blocks until at least one is available, then takes as many as
 -- are immediately available (up to @maxN@) without waiting.
-drainTBQueue :: forall a. TQueue a -> Int -> IO [a]
+drainTBQueue :: forall a. TBQueue a -> Int -> IO [a]
 drainTBQueue q maxN = atomically $ do
-  hd <- readTQueue q
+  hd <- readTBQueue q
   rest <- go (maxN - 1)
   pure (hd : rest)
   where
     go :: Int -> STM [a]
     go 0 = pure []
     go n = do
-      mVal <- tryReadTQueue q
+      mVal <- tryReadTBQueue q
       case mVal of
         Nothing  -> pure []
         Just val -> (val :) <$> go (n - 1)

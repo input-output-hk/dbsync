@@ -20,15 +20,14 @@ module DbSync.Db.Schema.EpochSyncStats
 
 import Cardano.Prelude
 
+import Data.ByteString.Builder (Builder, byteString)
 import qualified Data.ByteString.Char8 as BS8
 import Data.Time.Clock (UTCTime)
-import Data.Time.Format (defaultTimeLocale, formatTime)
 
-import DbSync.Db.Schema.Core (encodeInt64, encodeWord64)
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Types
-import DbSync.Db.Writer.Copy.Encoder (encodeToCopyRow)
+import DbSync.Db.Writer.Copy.Encoder (buildCopyRow, bInt64, bUTCTime, bWord64)
 
 -- ---------------------------------------------------------------------------
 -- * Key type family instances
@@ -83,26 +82,23 @@ epochSyncStatsTableDef = TableDef
 
 encodeEpochSyncStatsCopy :: EpochSyncStatsId -> EpochSyncStats -> ByteString
 encodeEpochSyncStatsCopy (EpochSyncStatsId essid) ess =
-  encodeToCopyRow
-    [ Just $ encodeInt64 essid
-    , Just $ encodeWord64 (epochSyncStatsEpochNo ess)
-    , Just $ encodeWord64 (epochSyncStatsBlocksProcessed ess)
-    , Just $ encodeDouble (epochSyncStatsBlocksPerSec ess)
-    , Just $ encodeDouble (epochSyncStatsElapsedSec ess)
-    , Just $ encodeTimestamp (epochSyncStatsSyncedAt ess)
-    , Just $ phaseToBytes (epochSyncStatsPhase ess)
+  buildCopyRow
+    [ Just $ bInt64 essid
+    , Just $ bWord64 (epochSyncStatsEpochNo ess)
+    , Just $ bWord64 (epochSyncStatsBlocksProcessed ess)
+    , Just $ bDouble (epochSyncStatsBlocksPerSec ess)
+    , Just $ bDouble (epochSyncStatsElapsedSec ess)
+    , Just $ bUTCTime (epochSyncStatsSyncedAt ess)
+    , Just $ bPhase (epochSyncStatsPhase ess)
     ]
 
 -- ---------------------------------------------------------------------------
 -- * Internal helpers
 -- ---------------------------------------------------------------------------
 
-encodeDouble :: Double -> ByteString
-encodeDouble = BS8.pack . show
+bDouble :: Double -> Builder
+bDouble = byteString . BS8.pack . show
 
-encodeTimestamp :: UTCTime -> ByteString
-encodeTimestamp = BS8.pack . formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S"
-
-phaseToBytes :: SyncPhase -> ByteString
-phaseToBytes IngestChainHistory = "IngestChainHistory"
-phaseToBytes FollowingChainTip  = "FollowingChainTip"
+bPhase :: SyncPhase -> Builder
+bPhase IngestChainHistory = byteString "IngestChainHistory"
+bPhase FollowingChainTip  = byteString "FollowingChainTip"

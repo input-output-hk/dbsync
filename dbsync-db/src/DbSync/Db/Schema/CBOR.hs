@@ -18,11 +18,10 @@ module DbSync.Db.Schema.CBOR
 
 import Cardano.Prelude
 
-import DbSync.Db.Schema.Core (encodeHex, encodeInt64)
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Types
-import DbSync.Db.Writer.Copy.Encoder (encodeToCopyRow)
+import DbSync.Db.Writer.Copy.Encoder (buildCopyRow, bHex, bInt64)
 
 -- ---------------------------------------------------------------------------
 -- * Key type family instances
@@ -63,8 +62,8 @@ txCborTableDef = TableDef
 
 encodeTxCborCopy :: TxCborId -> TxCbor -> ByteString
 encodeTxCborCopy (TxCborId tcid) tc =
-  encodeToCopyRow
-    [ Just $ encodeInt64 tcid
-    , Just $ encodeInt64 (getTxId $ txCborTxId tc)
-    , Just $ encodeHex (txCborBytes tc)
+  buildCopyRow
+    [ Just $ bInt64 tcid
+    , Just $ bInt64 (getTxId $ txCborTxId tc)
+    , Just $ bHex (txCborBytes tc)
     ]

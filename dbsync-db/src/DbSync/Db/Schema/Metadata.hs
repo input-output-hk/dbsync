@@ -15,15 +15,11 @@ module DbSync.Db.Schema.Metadata
 
 import Cardano.Prelude
 
-import qualified Data.ByteString.Char8 as BS8
-import qualified Data.Text.Encoding as TE
-
-import DbSync.Db.Schema.Core (encodeHex, encodeInt64, encodeWord64)
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids (TxId (..), TxMetadataId (..))
 import DbSync.Db.Schema.Types
 import DbSync.Db.Types (DbWord64 (..))
-import DbSync.Db.Writer.Copy.Encoder (encodeToCopyRow)
+import DbSync.Db.Writer.Copy.Encoder (buildCopyRow, bHex, bInt64, bText, bWord64)
 
 -- ---------------------------------------------------------------------------
 -- * Key type family instances
@@ -68,10 +64,10 @@ txMetadataTableDef = TableDef
 
 encodeTxMetadataCopy :: TxMetadataId -> TxMetadata -> ByteString
 encodeTxMetadataCopy (TxMetadataId mid) md =
-  encodeToCopyRow
-    [ Just $ encodeInt64 mid
-    , Just $ encodeWord64 (unDbWord64 $ txMetadataKey md)
-    , TE.encodeUtf8 <$> txMetadataJson md
-    , Just $ encodeHex (txMetadataBytes md)
-    , Just $ encodeInt64 (getTxId $ txMetadataTxId md)
+  buildCopyRow
+    [ Just $ bInt64 mid
+    , Just $ bWord64 (unDbWord64 $ txMetadataKey md)
+    , bText <$> txMetadataJson md
+    , Just $ bHex (txMetadataBytes md)
+    , Just $ bInt64 (getTxId $ txMetadataTxId md)
     ]

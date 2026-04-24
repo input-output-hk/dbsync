@@ -22,16 +22,14 @@ module DbSync.Db.Schema.MultiAsset
 
 import Cardano.Prelude
 
+import Data.ByteString.Builder (Builder, byteString)
 import qualified Data.ByteString.Char8 as BS8
 
-import qualified Data.Text.Encoding as TE
-
-import DbSync.Db.Schema.Core (encodeHex, encodeInt64, encodeWord64)
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Types
 import DbSync.Db.Types (DbWord64 (..))
-import DbSync.Db.Writer.Copy.Encoder (encodeToCopyRow)
+import DbSync.Db.Writer.Copy.Encoder (buildCopyRow, bHex, bInt64, bText, bWord64)
 
 -- ---------------------------------------------------------------------------
 -- * Key type family instances
@@ -119,35 +117,35 @@ maTxOutTableDef = TableDef
 
 encodeMultiAssetCopy :: MultiAssetId -> MultiAsset -> ByteString
 encodeMultiAssetCopy (MultiAssetId mid) ma =
-  encodeToCopyRow
-    [ Just $ encodeInt64 mid
-    , Just $ encodeHex (multiAssetPolicy ma)
-    , Just $ encodeHex (multiAssetName ma)
-    , Just $ TE.encodeUtf8 (multiAssetFingerprint ma)
+  buildCopyRow
+    [ Just $ bInt64 mid
+    , Just $ bHex (multiAssetPolicy ma)
+    , Just $ bHex (multiAssetName ma)
+    , Just $ bText (multiAssetFingerprint ma)
     ]
 
 encodeMaTxMintCopy :: MaTxMintId -> MaTxMint -> ByteString
 encodeMaTxMintCopy (MaTxMintId mid) m =
-  encodeToCopyRow
-    [ Just $ encodeInt64 mid
-    , Just $ encodeInteger (maTxMintQuantity m)
-    , Just $ encodeInt64 (getTxId $ maTxMintTxId m)
-    , Just $ encodeInt64 (getMultiAssetId $ maTxMintIdent m)
+  buildCopyRow
+    [ Just $ bInt64 mid
+    , Just $ bInteger (maTxMintQuantity m)
+    , Just $ bInt64 (getTxId $ maTxMintTxId m)
+    , Just $ bInt64 (getMultiAssetId $ maTxMintIdent m)
     ]
 
 encodeMaTxOutCopy :: MaTxOutId -> MaTxOut -> ByteString
 encodeMaTxOutCopy (MaTxOutId mid) m =
-  encodeToCopyRow
-    [ Just $ encodeInt64 mid
-    , Just $ encodeWord64 (unDbWord64 $ maTxOutQuantity m)
-    , Just $ encodeInt64 (getTxOutId $ maTxOutTxOutId m)
-    , Just $ encodeInt64 (getMultiAssetId $ maTxOutIdent m)
+  buildCopyRow
+    [ Just $ bInt64 mid
+    , Just $ bWord64 (unDbWord64 $ maTxOutQuantity m)
+    , Just $ bInt64 (getTxOutId $ maTxOutTxOutId m)
+    , Just $ bInt64 (getMultiAssetId $ maTxOutIdent m)
     ]
 
 -- ---------------------------------------------------------------------------
 -- * Internal helpers
 -- ---------------------------------------------------------------------------
 
--- | Encode a signed 'Integer' as a decimal ASCII ByteString.
-encodeInteger :: Integer -> ByteString
-encodeInteger = BS8.pack . show
+-- | Encode a signed 'Integer' as decimal ASCII into a 'Builder'.
+bInteger :: Integer -> Builder
+bInteger = byteString . BS8.pack . show

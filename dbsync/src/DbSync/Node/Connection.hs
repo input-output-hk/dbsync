@@ -29,7 +29,7 @@ import Cardano.Client.Subscription
   )
 import qualified Codec.CBOR.Term as CBOR
 import Control.Concurrent.Async (AsyncCancelled (..))
-import Control.Concurrent.STM (TQueue, writeTQueue)
+import Control.Concurrent.STM (TBQueue, writeTBQueue)
 import Control.Tracer (Tracer, contramap, nullTracer, traceWith)
 import qualified Data.ByteString.Lazy as BSL
 import qualified Network.Mux as Mux
@@ -131,7 +131,7 @@ connectToNode
   -> TopLevelConfig (CardanoBlock StandardCrypto)
   -> NetworkMagic
   -> FilePath                                    -- ^ Node socket path
-  -> TQueue (CardanoBlock StandardCrypto)         -- ^ Block queue
+  -> TBQueue (CardanoBlock StandardCrypto)        -- ^ Block queue (bounded)
   -> StateQueryVar                               -- ^ For LocalStateQuery (epoch interpreter)
   -> IO ()
 connectToNode tracer iomgr topLevelCfg networkMagic socketPath blockQueue stateQueryVar = do
@@ -193,7 +193,7 @@ formatSubscriptionTrace ev =
 nodeProtocols
   :: AppTracer
   -> CodecConfig (CardanoBlock StandardCrypto)
-  -> TQueue (CardanoBlock StandardCrypto)
+  -> TBQueue (CardanoBlock StandardCrypto)
   -> StateQueryVar
   -> Network.NodeToClientVersion
   -> BlockNodeToClientVersion (CardanoBlock StandardCrypto)
@@ -249,7 +249,7 @@ nodeProtocols appTracer codecConfig blockQueue stateQueryVar version blockVersio
 -- Starts from genesis (no intersection points) and pipelines aggressively.
 blockFetchClient
   :: AppTracer
-  -> TQueue (CardanoBlock StandardCrypto)
+  -> TBQueue (CardanoBlock StandardCrypto)
   -> ChainSyncClientPipelined
        (CardanoBlock StandardCrypto)
        (Point (CardanoBlock StandardCrypto))
@@ -314,7 +314,7 @@ blockFetchClient appTracer blockQueue =
             let bn = blockNo blk
             traceWith appTracer $ LogMsg Debug "ChainSync"
               ("Block " <> show bn) Nothing
-            atomically $ writeTQueue blockQueue blk
+            atomically $ writeTBQueue blockQueue blk
             pure $ goTip mkDecision n (At bn) tip
         , recvMsgRollBackward = \point tip -> do
             traceWith appTracer $ LogMsg Warning "ChainSync"

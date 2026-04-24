@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | CBOR extractor.
@@ -44,7 +45,7 @@ processCbor resolver writer ctx = do
 
     -- Only write if CBOR bytes are available (Nothing for Byron)
     case txCborRaw gtx of
-      Just cborBytes -> do
+      Just !cborBytes -> do
         tcId <- assignTxCborId resolver
         let txCbor = TxCbor
               { txCborTxId  = txId

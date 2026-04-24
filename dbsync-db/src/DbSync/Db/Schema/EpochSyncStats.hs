@@ -73,7 +73,10 @@ epochSyncStatsTableDef = TableDef
       , ColumnDef "synced_at"        PgTimestamp False
       , ColumnDef "phase"            PgText      False
       ]
-  , tdMode = TableUnlogged
+  , tdMode    = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 -- ---------------------------------------------------------------------------

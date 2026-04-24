@@ -85,6 +85,9 @@ multiAssetTableDef = TableDef
       , ColumnDef "fingerprint" PgText    False
       ]
   , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 maTxMintTableDef :: TableDef
@@ -97,6 +100,9 @@ maTxMintTableDef = TableDef
       , ColumnDef "ident"   PgBigInt   False
       ]
   , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 maTxOutTableDef :: TableDef
@@ -109,6 +115,9 @@ maTxOutTableDef = TableDef
       , ColumnDef "ident"     PgBigInt   False
       ]
   , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 -- ---------------------------------------------------------------------------

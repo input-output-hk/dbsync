@@ -53,7 +53,10 @@ txCborTableDef = TableDef
       , ColumnDef "tx_id" PgBigInt False
       , ColumnDef "bytes" PgBytea  False
       ]
-  , tdMode = TableUnlogged
+  , tdMode    = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 -- ---------------------------------------------------------------------------

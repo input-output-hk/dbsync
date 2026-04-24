@@ -48,6 +48,7 @@ library
     DbSync.Db.Schema.Pool
     DbSync.Db.Schema.CBOR
     DbSync.Db.Schema.EpochSyncStats
+    DbSync.Db.Schema.SyncState
     DbSync.Db.Schema.Generate
     DbSync.Db.Schema.Init
     DbSync.Db.Schema.Version

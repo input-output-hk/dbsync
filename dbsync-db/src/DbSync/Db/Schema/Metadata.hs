@@ -56,6 +56,9 @@ txMetadataTableDef = TableDef
       , ColumnDef "tx_id" PgBigInt  False
       ]
   , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 -- ---------------------------------------------------------------------------

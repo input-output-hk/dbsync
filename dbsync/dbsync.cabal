@@ -93,6 +93,7 @@ library
     DbSync.Checkpoint.Manager
     DbSync.Checkpoint.Types
     DbSync.Checkpoint.Serialise
+    DbSync.Ledger.SyncState
     DbSync.Ledger.Worker
     DbSync.Node.Connection
     DbSync.OffChain.Types
@@ -221,10 +222,13 @@ test-suite dbsync-test
     DbSync.Config.GenesisSpec
     DbSync.Schema.CoreSpec
     DbSync.Schema.GenerateSpec
+    DbSync.Schema.SyncStateSpec
     DbSync.Extractor.CoreSpec
     DbSync.Ingest.PipelineSpec
     DbSync.Schema.InitSpec
     DbSync.Copy.WriterSpec
+    DbSync.Ledger.SyncStateSpec
+    DbSync.Checkpoint.ManagerSpec
   build-depends:
       base
     , dbsync
@@ -238,6 +242,7 @@ test-suite dbsync-test
     , bytestring
     , containers
     , optparse-applicative
+    , process
     , text
     , time
     , yaml

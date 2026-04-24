@@ -150,6 +150,9 @@ blockTableDef = TableDef
       , ColumnDef "op_cert_counter" PgBigInt    True
       ]
   , tdMode    = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 -- | Table definition for the @tx@ table.
@@ -172,6 +175,9 @@ txTableDef = TableDef
       , ColumnDef "treasury_donation" PgNumeric   False
       ]
   , tdMode    = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 -- | Table definition for the @slot_leader@ table.
@@ -185,6 +191,9 @@ slotLeaderTableDef = TableDef
       , ColumnDef "description"  PgText    False
       ]
   , tdMode    = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 -- ---------------------------------------------------------------------------

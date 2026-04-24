@@ -113,6 +113,9 @@ stakeAddressTableDef = TableDef
       , ColumnDef "script_hash" PgBytea   True
       ]
   , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 stakeRegistrationTableDef :: TableDef
@@ -127,6 +130,9 @@ stakeRegistrationTableDef = TableDef
       , ColumnDef "deposit"    PgNumeric  True
       ]
   , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 stakeDeregistrationTableDef :: TableDef
@@ -141,6 +147,9 @@ stakeDeregistrationTableDef = TableDef
       , ColumnDef "redeemer_id" PgBigInt  True
       ]
   , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 delegationTableDef :: TableDef
@@ -157,6 +166,9 @@ delegationTableDef = TableDef
       , ColumnDef "redeemer_id"     PgBigInt  True
       ]
   , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 withdrawalTableDef :: TableDef
@@ -170,6 +182,9 @@ withdrawalTableDef = TableDef
       , ColumnDef "redeemer_id" PgBigInt   True
       ]
   , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 -- ---------------------------------------------------------------------------

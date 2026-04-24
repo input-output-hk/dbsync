@@ -91,11 +91,73 @@ spec = do
                 , ColumnDef "name" PgText    True
                 ]
             , tdMode = TableUnlogged
+            , tdPrimaryKey     = Nothing
+            , tdChecks         = []
+            , tdColumnDefaults = []
             }
           sql = generateCreateTable simpleDef
       sql `shouldBe` T.unlines
         [ "CREATE UNLOGGED TABLE \"test_table\" ("
         , "  \"id\" BIGINT NOT NULL,"
         , "  \"name\" TEXT"
+        , ");"
+        ]
+
+    it "emits inline DEFAULT expressions on columns" $ do
+      let defDef = TableDef
+            { tdName = "with_defaults"
+            , tdColumns =
+                [ ColumnDef "id"       PgSmallInt False
+                , ColumnDef "counter"  PgBigInt   False
+                ]
+            , tdMode = TableLogged
+            , tdPrimaryKey     = Nothing
+            , tdChecks         = []
+            , tdColumnDefaults =
+                [ ("id", "1")
+                , ("counter", "42")
+                ]
+            }
+          sql = generateCreateTable defDef
+      sql `shouldBe` T.unlines
+        [ "CREATE TABLE \"with_defaults\" ("
+        , "  \"id\" SMALLINT NOT NULL DEFAULT 1,"
+        , "  \"counter\" BIGINT NOT NULL DEFAULT 42"
+        , ");"
+        ]
+
+    it "emits PRIMARY KEY constraint at table level" $ do
+      let pkDef = TableDef
+            { tdName = "with_pk"
+            , tdColumns =
+                [ ColumnDef "id" PgSmallInt False ]
+            , tdMode = TableLogged
+            , tdPrimaryKey     = Just ["id"]
+            , tdChecks         = []
+            , tdColumnDefaults = []
+            }
+          sql = generateCreateTable pkDef
+      sql `shouldBe` T.unlines
+        [ "CREATE TABLE \"with_pk\" ("
+        , "  \"id\" SMALLINT NOT NULL,"
+        , "  PRIMARY KEY (\"id\")"
+        , ");"
+        ]
+
+    it "emits table-level CHECK constraints" $ do
+      let checkDef = TableDef
+            { tdName = "with_check"
+            , tdColumns =
+                [ ColumnDef "id" PgSmallInt False ]
+            , tdMode = TableLogged
+            , tdPrimaryKey     = Nothing
+            , tdChecks         = [ "\"id\" = 1" ]
+            , tdColumnDefaults = []
+            }
+          sql = generateCreateTable checkDef
+      sql `shouldBe` T.unlines
+        [ "CREATE TABLE \"with_check\" ("
+        , "  \"id\" SMALLINT NOT NULL,"
+        , "  CHECK (\"id\" = 1)"
         , ");"
         ]

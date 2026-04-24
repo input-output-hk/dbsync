@@ -33,6 +33,7 @@ import System.IO.Error (userError)
 import System.Process (readProcessWithExitCode)
 
 import DbSync.Db.Schema.Generate (generateCreateTable)
+import DbSync.Db.Schema.SyncState (syncStateTableDef, syncStateTableName)
 import DbSync.Db.Schema.Types (TableDef (..))
 
 -- ---------------------------------------------------------------------------
@@ -54,11 +55,16 @@ data SchemaVersionRow = SchemaVersionRow
 --
 -- 1. Creates the @schema_version@ table (if not exists)
 -- 2. Drops any existing tables owned by the given 'TableDef's
--- 3. Creates all tables from the 'TableDef's via 'generateCreateTable'
--- 4. Records extractor versions in @schema_version@
+--    (plus @dbsync_sync_state@).
+-- 3. Creates the @dbsync_sync_state@ singleton metadata table
+--    (LOGGED, constrained; see 'DbSync.Db.Schema.SyncState').
+-- 4. Creates all data tables from the 'TableDef's via 'generateCreateTable'.
+-- 5. Records extractor versions in @schema_version@.
 --
 -- This is idempotent — calling it twice on the same database is safe
--- because it drops and recreates.
+-- because it drops and recreates. 'DbSync.Ledger.SyncState.seedSyncState'
+-- is __not__ called here; seeding is the caller's responsibility so that
+-- the @ledger_enabled@ flag comes from runtime configuration.
 initSchema :: [TableDef] -> [(Text, Int)] -> Text -> IO ()
 initSchema tableDefs extractorVersions connStr = do
   -- Always drop first for idempotency
@@ -66,6 +72,12 @@ initSchema tableDefs extractorVersions connStr = do
 
   -- Create the version tracking table
   execPsql connStr createVersionTableSQL
+
+  -- Create the singleton sync-state table (LOGGED, constrained, with
+  -- defaults). Its DDL is generated from its 'TableDef' exactly like
+  -- the extractor tables, so it picks up the same column-ordering
+  -- golden as the rest of the schema.
+  execPsql connStr (generateCreateTable syncStateTableDef)
 
   -- Create all data tables
   let ddlStatements = map generateCreateTable tableDefs
@@ -76,8 +88,8 @@ initSchema tableDefs extractorVersions connStr = do
   forM_ extractorVersions $ \(name, ver) ->
     execPsql connStr $ insertVersionSQL name ver
 
--- | Drop all tables owned by the given 'TableDef's and their
--- @schema_version@ entries.
+-- | Drop all tables owned by the given 'TableDef's, the
+-- @dbsync_sync_state@ singleton, and their @schema_version@ entries.
 --
 -- Safe to call on an empty database (uses @IF EXISTS@).
 dropSchema :: [TableDef] -> [(Text, Int)] -> Text -> IO ()
@@ -85,6 +97,10 @@ dropSchema tableDefs extractorVersions connStr = do
   -- Drop data tables
   forM_ tableDefs $ \td ->
     execPsql connStr $ "DROP TABLE IF EXISTS " <> quote (tdName td) <> " CASCADE;"
+
+  -- Drop the sync-state table too so tests can start fresh
+  execPsql connStr $
+    "DROP TABLE IF EXISTS " <> quote syncStateTableName <> " CASCADE;"
 
   -- Clean up version entries (table may not exist yet)
   forM_ extractorVersions $ \(name, _) ->

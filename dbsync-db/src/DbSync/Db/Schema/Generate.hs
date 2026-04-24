@@ -12,6 +12,7 @@ module DbSync.Db.Schema.Generate
 
 import Cardano.Prelude
 
+import Data.List (lookup)
 import qualified Data.Text as T
 
 import DbSync.Db.Schema.Types
@@ -23,7 +24,8 @@ import DbSync.Db.Schema.Types
 
 -- | Generate a @CREATE TABLE@ DDL statement from a 'TableDef'.
 --
--- Produces SQL like:
+-- For an extractor data table (UNLOGGED, no constraints) the output
+-- is simple:
 --
 -- @
 -- CREATE UNLOGGED TABLE "block" (
@@ -33,13 +35,28 @@ import DbSync.Db.Schema.Types
 -- );
 -- @
 --
--- No indexes, constraints, or foreign keys are included — those are
--- added during 'PreparingForChainTip'.
+-- For a metadata table with a primary key, column defaults, and
+-- table-level checks (e.g. 'dbsync_sync_state'), the generator emits
+-- each in a stable order:
+--
+-- @
+-- CREATE TABLE "dbsync_sync_state" (
+--   "id" SMALLINT NOT NULL DEFAULT 1,
+--   "block_id_counter" BIGINT NOT NULL DEFAULT 1,
+--   …
+--   PRIMARY KEY ("id"),
+--   CHECK ("id" = 1)
+-- );
+-- @
+--
+-- Indexes and foreign keys are never emitted here — they are added
+-- during 'PreparingForChainTip'.
 generateCreateTable :: TableDef -> Text
 generateCreateTable td =
   T.unlines $
-    [ createLine
-    ] ++ columnLines ++ [ ");" ]
+    [ createLine ]
+    ++ bodyLines
+    ++ [ ");" ]
   where
     createLine :: Text
     createLine =
@@ -48,17 +65,33 @@ generateCreateTable td =
             TableLogged   -> "CREATE TABLE"
       in modeStr <> " " <> quote (tdName td) <> " ("
 
-    columnLines :: [Text]
-    columnLines =
-      let cols = tdColumns td
-          formatted = zipWith (formatColumn (length cols)) [1..] cols
-      in formatted
+    -- Each "body" line represents one comma-separated item of the
+    -- CREATE TABLE. We concatenate column lines, a primary-key line
+    -- (if any), and zero or more check lines, then append commas to
+    -- all but the last.
+    bodyLines :: [Text]
+    bodyLines =
+      let columnLines = map formatColumn (tdColumns td)
+          pkLine = case tdPrimaryKey td of
+            Nothing   -> []
+            Just cols -> [ "PRIMARY KEY (" <> T.intercalate ", " (map quote cols) <> ")" ]
+          checkLines = map (\expr -> "CHECK (" <> expr <> ")") (tdChecks td)
+          allItems = columnLines ++ pkLine ++ checkLines
+          total = length allItems
+      in zipWith (\idx item -> "  " <> item <> commaFor total idx) [1..] allItems
 
-    formatColumn :: Int -> Int -> ColumnDef -> Text
-    formatColumn total idx col =
-      let comma = if idx < total then "," else ""
-          nullability = if cdNullable col then "" else " NOT NULL"
-      in "  " <> quote (cdName col) <> " " <> pgTypeToSql (cdType col) <> nullability <> comma
+    commaFor :: Int -> Int -> Text
+    commaFor total idx
+      | idx < total = ","
+      | otherwise   = ""
+
+    formatColumn :: ColumnDef -> Text
+    formatColumn col =
+      let nullability = if cdNullable col then "" else " NOT NULL"
+          defaultClause = case lookup (cdName col) (tdColumnDefaults td) of
+            Nothing   -> ""
+            Just expr -> " DEFAULT " <> expr
+      in quote (cdName col) <> " " <> pgTypeToSql (cdType col) <> nullability <> defaultClause
 
 -- | Convert a 'PgType' to its SQL string representation.
 pgTypeToSql :: PgType -> Text

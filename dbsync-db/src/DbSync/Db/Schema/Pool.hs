@@ -128,6 +128,9 @@ poolHashTableDef = TableDef
       , ColumnDef "view"     PgText    False
       ]
   , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 poolUpdateTableDef :: TableDef
@@ -148,6 +151,9 @@ poolUpdateTableDef = TableDef
       , ColumnDef "deposit"          PgNumeric  True
       ]
   , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 poolMetadataRefTableDef :: TableDef
@@ -161,6 +167,9 @@ poolMetadataRefTableDef = TableDef
       , ColumnDef "registered_tx_id" PgBigInt  False
       ]
   , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 poolOwnerTableDef :: TableDef
@@ -172,6 +181,9 @@ poolOwnerTableDef = TableDef
       , ColumnDef "pool_update_id" PgBigInt  False
       ]
   , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 poolRetireTableDef :: TableDef
@@ -185,6 +197,9 @@ poolRetireTableDef = TableDef
       , ColumnDef "retiring_epoch"  PgBigInt  False
       ]
   , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 poolRelayTableDef :: TableDef
@@ -200,6 +215,9 @@ poolRelayTableDef = TableDef
       , ColumnDef "port"         PgBigInt  True
       ]
   , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 -- ---------------------------------------------------------------------------

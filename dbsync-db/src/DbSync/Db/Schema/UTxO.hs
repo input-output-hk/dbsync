@@ -119,6 +119,9 @@ txOutTableDef = TableDef
       , ColumnDef "consumed_by_tx_id"   PgBigInt   True
       ]
   , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 txInTableDef :: TableDef
@@ -133,6 +136,9 @@ txInTableDef = TableDef
       , ColumnDef "redeemer_id"   PgBigInt  True
       ]
   , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 collateralTxInTableDef :: TableDef
@@ -146,6 +152,9 @@ collateralTxInTableDef = TableDef
       , ColumnDef "tx_out_hash"   PgBytea   False
       ]
   , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 referenceTxInTableDef :: TableDef
@@ -159,6 +168,9 @@ referenceTxInTableDef = TableDef
       , ColumnDef "tx_out_hash"   PgBytea   False
       ]
   , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
   }
 
 -- ---------------------------------------------------------------------------

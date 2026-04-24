@@ -68,7 +68,7 @@ import Ouroboros.Network.Mux
   , RunMiniProtocolWithMinimalCtx
   )
 import qualified Ouroboros.Network.Mux as Mux
-import Ouroboros.Network.NodeToClient
+import Cardano.Network.NodeToClient
   ( ConnectionId
   , Handshake
   , IOManager
@@ -80,7 +80,7 @@ import Ouroboros.Network.NodeToClient
   , localTxSubmissionPeerNull
   )
 import Ouroboros.Network.Protocol.LocalStateQuery.Client (localStateQueryClientPeer)
-import qualified Ouroboros.Network.NodeToClient.Version as Network
+import qualified Cardano.Network.NodeToClient.Version as Network
 import Ouroboros.Network.Protocol.ChainSync.ClientPipelined
   ( ChainSyncClientPipelined (..)
   , ClientPipelinedStIdle (..)

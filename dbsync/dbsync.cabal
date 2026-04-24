@@ -109,11 +109,15 @@ library
     , dbsync-db
 
     -- Cardano ecosystem (from CHaP)
+    -- Pins removed: we rely on index-state + CHaP to resolve to the
+    -- cardano-node 10.7.1 / LedgerDB V2 ecosystem (see cabal.project).
     , cardano-binary
-    , cardano-client
     , cardano-crypto
     , cardano-crypto-wrapper
     , cardano-crypto-class
+    , cardano-diffusion
+    , cardano-diffusion:api
+    , cardano-diffusion:subscription
     , cardano-ledger-api
     , cardano-ledger-binary
     , cardano-ledger-core
@@ -128,15 +132,14 @@ library
     , cardano-node
     , cardano-protocol-tpraos
     , cardano-slotting
-    , ouroboros-consensus             ^>= 0.30.0.1
-    , ouroboros-consensus-cardano     ^>= 0.26.0.3
-    , ouroboros-consensus-diffusion
-    , ouroboros-consensus-protocol
+    , ouroboros-consensus
+    , ouroboros-consensus:cardano
+    , ouroboros-consensus:diffusion
+    , ouroboros-consensus:protocol
     , network-mux
-    , ouroboros-network               ^>= 0.22.6.0
-    , ouroboros-network-api           ^>= 0.16.0.0
-    , ouroboros-network-framework
-    , ouroboros-network-protocols
+    , ouroboros-network:api
+    , ouroboros-network:framework
+    , ouroboros-network:protocols
     , typed-protocols
 
     -- Database
@@ -261,10 +264,10 @@ executable dbsync
     , cardano-prelude
     , contra-tracer
     , filepath
+    , cardano-diffusion
     , ouroboros-consensus
-    , ouroboros-consensus-cardano
-    , ouroboros-network-api
-    , ouroboros-network
+    , ouroboros-consensus:cardano
+    , ouroboros-network:api
     , stm
     , async
     , text

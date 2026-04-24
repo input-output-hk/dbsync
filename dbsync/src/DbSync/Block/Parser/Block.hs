@@ -115,10 +115,14 @@ fromAlonzoBlock :: SlotDetails -> ShelleyBlock (TPraos StandardCrypto) AlonzoEra
 fromAlonzoBlock = mkShelleyBlockTPraos Alonzo fromAlonzoTx
 
 -- | Shared TPraos block converter — all pre-Babbage eras use the same pattern.
+--
+-- In cardano-node 10.7.1 'Ledger.Tx' (a.k.a. 'Core.Tx') gained a 'TxLevel'
+-- parameter.  Consensus blocks only contain top-level transactions, so we
+-- use 'Ledger.TopTx' here and in 'getTxs' below.
 mkShelleyBlockTPraos
   :: Ledger.EraBlockBody era
   => BlockEra
-  -> ((Word64, Ledger.Tx era) -> GenericTx)
+  -> ((Word64, Ledger.Tx Ledger.TopTx era) -> GenericTx)
   -> SlotDetails
   -> ShelleyBlock (TPraos StandardCrypto) era
   -> GenericBlock
@@ -161,7 +165,7 @@ fromDijkstraBlock = mkShelleyBlockPraos Dijkstra fromDijkstraTx
 mkShelleyBlockPraos
   :: Ledger.EraBlockBody era
   => BlockEra
-  -> ((Word64, Ledger.Tx era) -> GenericTx)
+  -> ((Word64, Ledger.Tx Ledger.TopTx era) -> GenericTx)
   -> SlotDetails
   -> ShelleyBlock (Praos StandardCrypto) era
   -> GenericBlock
@@ -229,7 +233,7 @@ blockSize = fromIntegral . pHeaderBlockSize . blockHeader
 
 -- | Extract indexed transactions from the block body.
 -- Returns @[(blockIndex, tx)]@ where @blockIndex@ is 0-based.
-getTxs :: forall p era. Ledger.EraBlockBody era => ShelleyBlock p era -> [(Word64, Ledger.Tx era)]
+getTxs :: forall p era. Ledger.EraBlockBody era => ShelleyBlock p era -> [(Word64, Ledger.Tx Ledger.TopTx era)]
 getTxs blk = zip [0 ..] $ toList (Ledger.bbody (Consensus.shelleyBlockRaw blk) ^. Ledger.txSeqBlockBodyL)
 
 -- ---------------------------------------------------------------------------

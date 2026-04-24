@@ -37,7 +37,7 @@ import DbSync.Writer.CopyAdapter (mkCopyWriterAdapter)
 
 import qualified Data.Text.Encoding as TE
 
-import Ouroboros.Network.NodeToClient (withIOManager)
+import Cardano.Network.NodeToClient (withIOManager)
 
 main :: IO ()
 main = do

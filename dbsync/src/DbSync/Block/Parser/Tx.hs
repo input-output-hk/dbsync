@@ -35,16 +35,13 @@ import qualified Cardano.Ledger.Core as Core
 
 -- Era-specific modules for things not in the re-export bundle
 import qualified Cardano.Ledger.Address as Ledger
-import Cardano.Ledger.Allegra.Core (invalidBefore, invalidHereafter, vldtTxBodyL)
 import qualified Cardano.Ledger.Alonzo.Tx as Alonzo
 import Cardano.Ledger.BaseTypes (TxIx (..), strictMaybeToMaybe, unboundRational, portToWord16, dnsToText, urlToText)
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway.TxBody (ctbTreasuryDonation)
 import Cardano.Ledger.Conway.TxCert
-import Cardano.Ledger.Credential (StakeCredential)
 import qualified Cardano.Ledger.Credential as Ledger
 import Cardano.Ledger.Dijkstra.TxBody (dtbTreasuryDonation)
-import Cardano.Ledger.Hashes (EraIndependentTxBody, SafeHash, extractHash)
 import qualified Cardano.Ledger.Keys as Ledger
 import Cardano.Ledger.Mary.Value (MaryValue (..), MultiAsset (..), PolicyID (..), AssetName (..))
 import Cardano.Ledger.Shelley.TxCert
@@ -118,10 +115,10 @@ mkTxIn txBody = map fromTxIn $ toList $ txBody ^. Core.inputsTxBodyL
 
 -- | Convert a single ledger TxIn.
 fromTxIn :: Ledger.TxIn -> GenericTxIn
-fromTxIn (Ledger.TxIn (Ledger.TxId txid) (TxIx w64)) =
+fromTxIn (Ledger.TxIn (Ledger.TxId txid) (TxIx ix)) =
   GenericTxIn
     { txInHash  = Crypto.hashToBytes (extractHash txid)
-    , txInIndex = fromIntegral w64
+    , txInIndex = ix
     }
 
 -- | Extract outputs from a Shelley/Allegra body (Coin-only, no multi-assets).
@@ -167,11 +164,15 @@ mkTxOutMaryValue txBody = zipWith fromMaryTxOut [0 ..] $ toList (txBody ^. Core.
         , txOutMultiAssets  = flattenMultiAsset multiAsset
         }
 
--- | Sum of all withdrawal amounts.
-calcWithdrawalSum :: Core.EraTxBody era => Core.TxBody l era -> Word64
-calcWithdrawalSum bd =
-  fromIntegral $ sum $ map unCoin $ Map.elems $
-    Ledger.unWithdrawals (bd ^. Core.withdrawalsTxBodyL)
+-- TODO: re-enable once a caller needs the per-tx withdrawal total.
+-- Kept here (commented) because the LEDGER-PLAN expects this helper to
+-- live alongside 'mkTxWithdrawals'.
+--
+-- -- | Sum of all withdrawal amounts.
+-- calcWithdrawalSum :: Core.EraTxBody era => Core.TxBody l era -> Word64
+-- calcWithdrawalSum bd =
+--   fromIntegral $ sum $ map unCoin $ Map.elems $
+--     Ledger.unWithdrawals (bd ^. Core.withdrawalsTxBodyL)
 
 -- | Extract withdrawals. Uses 'EraTxBody' constraint which works across all eras.
 mkTxWithdrawals :: Core.EraTxBody era => Core.TxBody l era -> [GenericTxWithdrawal]

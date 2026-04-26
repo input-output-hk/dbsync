@@ -25,7 +25,7 @@ import DbSync.Block.Types
   )
 import DbSync.Db.Schema.Core (Block (..))
 import qualified DbSync.Db.Schema.Core as SC
-import DbSync.Db.Schema.Ids (BlockId (..), SlotLeaderId (..), TxId (..))
+import DbSync.Db.Schema.Ids (BlockId (..), TxId (..))
 import DbSync.Extractor (ExtractState (..), ExtractorDef (..))
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Id.Counter (IdCounters (..), mkIdCounter)

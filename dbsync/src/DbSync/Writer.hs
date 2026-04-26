@@ -17,8 +17,6 @@ module DbSync.Writer
     Writer (..)
   ) where
 
-import Cardano.Prelude
-
 import DbSync.Db.Schema.CBOR (TxCbor)
 import DbSync.Db.Schema.Core (Block, SlotLeader, Tx)
 import DbSync.Db.Schema.EpochSyncStats (EpochSyncStats)

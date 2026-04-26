@@ -22,6 +22,7 @@ common warnings
     -Wpartial-fields
     -Widentities
     -Wunused-packages
+    -Werror
 
 common defaults
   default-language:   GHC2021
@@ -38,6 +39,4 @@ library
   exposed-modules:
     DbSync.SMASH.Server
   build-depends:
-      base                  >= 4.14 && < 5
-    , cardano-prelude
-    , dbsync-db
+      cardano-prelude

@@ -22,6 +22,7 @@ common warnings
     -Wpartial-fields
     -Widentities
     -Wunused-packages
+    -Werror
 
 common defaults
   default-language:   GHC2021
@@ -59,13 +60,8 @@ library
       base                  >= 4.14 && < 5
     , cardano-prelude
 
-    -- Database
-    , hasql
-    , postgresql-libpq
-
     -- Data
     , bytestring
-    , containers
     , text
     , time
 

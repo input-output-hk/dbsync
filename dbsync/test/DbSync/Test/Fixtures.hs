@@ -5,5 +5,3 @@
 module DbSync.Test.Fixtures
   ( -- TODO: sampleBlock, sampleTx, sampleConfig
   ) where
-
-import Cardano.Prelude

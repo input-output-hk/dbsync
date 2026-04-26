@@ -29,7 +29,6 @@ import Options.Applicative
   , metavar
   , progDesc
   , strOption
-  , (<**>)
   )
 
 -- * Types

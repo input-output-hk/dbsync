@@ -18,7 +18,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Short as SBS
 
 import DbSync.Block.Types (GenericTx (..), GenericTxOut (..))
-import DbSync.Db.Schema.Ids (MultiAssetId (..), TxOutId (..))
+import DbSync.Db.Schema.Ids (MultiAssetId (..))
 import DbSync.Db.Schema.MultiAsset
 import DbSync.Db.Types (DbWord64 (..))
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))

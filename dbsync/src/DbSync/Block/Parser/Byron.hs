@@ -14,13 +14,11 @@ import Cardano.Prelude
 import qualified Cardano.Chain.Block as Byron
 import qualified Cardano.Chain.Common as Byron
 import qualified Cardano.Chain.Genesis as Byron
-import qualified Cardano.Chain.Slotting as Byron
 import qualified Cardano.Chain.UTxO as Byron
 import qualified Cardano.Chain.Update as Byron
 import qualified Cardano.Crypto as Crypto
 import qualified Cardano.Crypto.Wallet as Crypto
 import Cardano.Slotting.Block (BlockNo (..))
-import Cardano.Slotting.Slot (SlotNo (..))
 import qualified Data.ByteString.Base16 as Base16
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy.Char8 as LBS
@@ -69,8 +67,8 @@ fromByronRegularBlock sd blk =
     , blkSize          = fromIntegral (Byron.blockLength blk)
     , blkTime          = sdSlotTime sd
     , blkSlotLeader    = byronSlotLeaderHash blk
-    , blkProtoMajor    = fromIntegral (Byron.pvMajor pv)
-    , blkProtoMinor    = fromIntegral (Byron.pvMinor pv)
+    , blkProtoMajor    = Byron.pvMajor pv
+    , blkProtoMinor    = Byron.pvMinor pv
     , blkVrfKey        = Nothing   -- Byron has no VRF
     , blkOpCert        = Nothing   -- Byron has no operational certificates
     , blkOpCertCounter = Nothing
@@ -146,7 +144,7 @@ fromByronTxIn :: Byron.TxIn -> GenericTxIn
 fromByronTxIn (Byron.TxInUtxo txId idx) =
   GenericTxIn
     { txInHash  = Crypto.abstractHashToBytes txId
-    , txInIndex = fromIntegral idx
+    , txInIndex = idx
     }
 
 fromByronTxOut :: Word16 -> Byron.TxOut -> GenericTxOut
@@ -172,8 +170,11 @@ byronRegularBlockHash = Crypto.abstractHashToBytes . Byron.blockHashAnnotated
 byronBlockNumber :: Byron.ABlock ByteString -> Word64
 byronBlockNumber = Byron.unChainDifficulty . Byron.headerDifficulty . Byron.blockHeader
 
-byronSlotNumber :: Byron.ABlock ByteString -> Word64
-byronSlotNumber = Byron.unSlotNumber . Byron.headerSlot . Byron.blockHeader
+-- TODO: re-enable when a caller needs to read the slot directly from a Byron
+-- header (currently we use 'sdSlotNo' from 'SlotDetails').
+--
+-- byronSlotNumber :: Byron.ABlock ByteString -> Word64
+-- byronSlotNumber = Byron.unSlotNumber . Byron.headerSlot . Byron.blockHeader
 
 byronPreviousHash :: Byron.ABlock a -> ByteString
 byronPreviousHash = Crypto.abstractHashToBytes . Byron.headerPrevHash . Byron.blockHeader

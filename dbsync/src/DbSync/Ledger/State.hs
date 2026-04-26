@@ -79,13 +79,10 @@ import Cardano.Prelude hiding (atomically)
 import qualified Cardano.Ledger.Alonzo.PParams as Alonzo
 import Cardano.Ledger.Alonzo.Scripts (Prices)
 import qualified Cardano.Ledger.BaseTypes as Ledger
-import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway.Core as Shelley
 import Cardano.Ledger.Conway.Governance
-import qualified Cardano.Ledger.Conway.Governance as Shelley
 import Cardano.Ledger.Shelley.AdaPots (AdaPots)
 import qualified Cardano.Ledger.Shelley.LedgerState as Shelley
-import Cardano.Slotting.Slot (EpochNo (..))
 import Control.Concurrent.Class.MonadSTM.Strict
   ( atomically
   , newEmptyTMVarIO

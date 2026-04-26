@@ -11,7 +11,7 @@ import qualified Data.Text as Text
 import DbSync.Config (parseConfig)
 import DbSync.Config.Types (ConfigError (..), SyncConfig)
 import DbSync.Config.Validation (validateConfig)
-import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, describe, it, shouldSatisfy)
 
 -- | Helper: parse then validate, returning all errors.
 parseAndValidate :: FilePath -> IO (Either [ConfigError] SyncConfig)

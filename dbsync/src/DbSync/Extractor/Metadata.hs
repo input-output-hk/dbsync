@@ -17,7 +17,6 @@ import Cardano.Prelude
 import qualified Data.ByteString as BS
 
 import DbSync.Block.Types (GenericTx (..))
-import DbSync.Db.Schema.Ids (TxId (..))
 import DbSync.Db.Schema.Metadata
 import DbSync.Db.Types (DbWord64 (..))
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))

@@ -10,7 +10,6 @@ import Cardano.Prelude
 
 import DbSync.Config.Genesis (readCardanoGenesisConfig, mkTopLevelConfig)
 import DbSync.Config.Node (parseNodeConfig)
-import DbSync.Config.Types (NodeConfig (..))
 import Test.Hspec (Spec, describe, it, shouldBe)
 
 -- | Directory containing the real mainnet genesis files.

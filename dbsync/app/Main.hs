@@ -4,15 +4,13 @@ module Main
 
 import Cardano.Prelude
 
-import System.Exit (exitFailure)
-
-import Control.Concurrent.Async (withAsync, wait)
 import Control.Concurrent.STM (newTBQueueIO)
 import Control.Tracer (traceWith)
 import Data.IORef (newIORef)
 import System.FilePath (takeDirectory, (</>))
 
 import DbSync.App (buildCoreEnv, runStartup)
+import DbSync.AppM (runAppM)
 import DbSync.Cli (parseCliArgs, CliArgs (..))
 import DbSync.Config (parseConfig)
 import DbSync.Config.Genesis (readCardanoGenesisConfig, mkTopLevelConfig, GenesisConfig (..), ShelleyConfig (..))
@@ -22,7 +20,7 @@ import DbSync.Config.Node (parseDbSyncNodeConfig, parseNodeConfig)
 import DbSync.Config.Types (DbSyncNodeConfig (..), DatabaseConfig (..), SyncConfig (..))
 import DbSync.Config.Validation (validateConfig)
 import DbSync.Copy.Writer (CopyWriter (..), mkCopyWriter, closeCopyWriter)
-import DbSync.Db.Schema.Init (initSchema, checkSchemaVersions)
+import DbSync.Db.Schema.Init (initSchema)
 import DbSync.Env (CoreEnv (..))
 import DbSync.Extractor (ExtractState (..), ExtractorDef (..))
 import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
@@ -86,7 +84,7 @@ main = do
   env <- buildCoreEnv tracer validProfile nodeCfg
 
   -- 7. Startup logging
-  runStartup env
+  runAppM env runStartup
 
   -- 8. Read genesis files → TopLevelConfig
   genesisResult <- readCardanoGenesisConfig nodeCfg configDir
@@ -134,7 +132,7 @@ main = do
   let systemStart = SystemStart (sgSystemStart $ scConfig $ gcShelley genesisCfg)
 
   withIOManager $ \iomgr ->
-    withAsync (connectToNode tracer iomgr topLevelCfg networkMagic (caSocketPath args) blockQueue stateQueryVar) $ \nodeThread -> do
+    withAsync (connectToNode tracer iomgr topLevelCfg networkMagic (caSocketPath args) blockQueue stateQueryVar) $ \_nodeThread -> do
       -- Consumer runs on the main thread; node receiver runs on async thread
       -- If either throws, the other is cancelled (withAsync guarantee)
       runConsumer tracer stateQueryVar systemStart extractors blockQueue resolver writer copyWriter stRef

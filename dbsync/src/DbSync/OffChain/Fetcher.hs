@@ -6,5 +6,3 @@
 module DbSync.OffChain.Fetcher
   ( -- TODO: startFetcher, FetcherHandle
   ) where
-
-import Cardano.Prelude

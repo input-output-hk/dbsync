@@ -26,9 +26,7 @@ import Cardano.Prelude
 
 import Data.List (lookup)
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
 
-import System.Exit (ExitCode (..))
 import System.IO.Error (userError)
 import System.Process (readProcessWithExitCode)
 
@@ -209,7 +207,7 @@ insertVersionSQL name ver =
 -- | Execute a SQL statement via @psql@. Throws on failure.
 execPsql :: Text -> Text -> IO ()
 execPsql connStr sql = do
-  (exitCode, _stdout, stderr) <- readProcessWithExitCode
+  (exitCode, _out, err) <- readProcessWithExitCode
     "psql"
     [T.unpack connStr, "-q", "-c", T.unpack sql]
     ""
@@ -218,11 +216,11 @@ execPsql connStr sql = do
     ExitFailure _ ->
       -- Silently ignore "table does not exist" errors from DROP IF EXISTS
       -- and "relation does not exist" from DELETE on missing table
-      if "does not exist" `isInfixOf` stderr
-         || "ERROR" `notInfixOf` stderr
+      if "does not exist" `isInfixOf` err
+         || "ERROR" `notInfixOf` err
         then pure ()
         else throwIO $ userError $
-          "psql failed: " <> stderr <> "\nSQL: " <> T.unpack sql
+          "psql failed: " <> err <> "\nSQL: " <> T.unpack sql
   where
     notInfixOf needle haystack = not (needle `isInfixOf` haystack)
 
@@ -232,15 +230,15 @@ execPsql connStr sql = do
 -- and @-F \"|\"@ (pipe field separator) for clean, parseable output.
 queryPsql :: Text -> Text -> IO Text
 queryPsql connStr sql = do
-  (exitCode, stdout, stderr) <- readProcessWithExitCode
+  (exitCode, out, err) <- readProcessWithExitCode
     "psql"
     [T.unpack connStr, "-t", "-A", "-F", "|", "-c", T.unpack sql]
     ""
   case exitCode of
-    ExitSuccess -> pure (T.pack stdout)
+    ExitSuccess -> pure (T.pack out)
     ExitFailure _ ->
       throwIO $ userError $
-        "psql query failed: " <> stderr <> "\nSQL: " <> T.unpack sql
+        "psql query failed: " <> err <> "\nSQL: " <> T.unpack sql
 
 -- ---------------------------------------------------------------------------
 -- * Internal helpers

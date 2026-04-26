@@ -20,7 +20,6 @@ module DbSync.Metrics
 import Cardano.Prelude
 
 import Cardano.Slotting.Slot (EpochNo (..))
-import Control.Monad.Reader (MonadReader, asks)
 
 -- | Access metrics from any environment. Implemented per-env.
 class HasMetrics env where
@@ -48,21 +47,25 @@ data Metrics = Metrics
 -- placeholder Int64/Double values to get the type signatures compiling.
 
 -- * Convenience functions
+--
+-- NOTE: 'MonadIO m' will be reinstated on these signatures once the real
+-- Prometheus Counter\/Gauge calls (which run in 'IO') are wired up. For now
+-- the bodies are pure stubs, so the constraint is redundant.
 
 -- | Increment the blocks processed counter.
-incBlocksProcessed :: (MonadReader env m, HasMetrics env, MonadIO m) => m ()
+incBlocksProcessed :: (MonadReader env m, HasMetrics env) => m ()
 incBlocksProcessed = do
   _metrics <- asks getMetrics
   pure () -- TODO: Prometheus.incCounter (mBlocksProcessed metrics)
 
 -- | Set the current epoch gauge.
-setCurrentEpoch :: (MonadReader env m, HasMetrics env, MonadIO m) => EpochNo -> m ()
+setCurrentEpoch :: (MonadReader env m, HasMetrics env) => EpochNo -> m ()
 setCurrentEpoch _epochNo = do
   _metrics <- asks getMetrics
   pure () -- TODO: Prometheus.setGauge (mCurrentEpoch metrics) (fromIntegral $ unEpochNo epochNo)
 
 -- | Add to the COPY rows written counter.
-addCopyRows :: (MonadReader env m, HasMetrics env, MonadIO m) => Int -> m ()
+addCopyRows :: (MonadReader env m, HasMetrics env) => Int -> m ()
 addCopyRows _n = do
   _metrics <- asks getMetrics
   pure () -- TODO: Prometheus.addCounter (mCopyRowsWritten metrics) (fromIntegral n)

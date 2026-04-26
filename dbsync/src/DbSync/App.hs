@@ -33,6 +33,7 @@ import DbSync.Extractor.Pool (poolExtractor)
 import DbSync.Extractor.Cbor (cborExtractor)
 import DbSync.Extractor.EpochSyncStats (epochSyncStatsExtractor)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
+import DbSync.AppM (CoreM)
 
 -- ---------------------------------------------------------------------------
 -- * Environment construction
@@ -116,14 +117,15 @@ placeholderMetrics = Metrics 0 0 0 0 0 0 0 0 0
 -- | Log startup information: version, enabled extractors, config summary.
 --
 -- Called once at the very start before phase detection.
-runStartup :: CoreEnv -> IO ()
-runStartup env = do
-  let tracer = ceTracer env
-      projNames = map pdName (ceExtractors env)
+runStartup :: CoreM ()
+runStartup = do
+  tracer     <- asks ceTracer
+  extractors <- asks ceExtractors
+  let projNames = map pdName extractors
       projCount = length projNames
 
-  traceWith tracer $ LogMsg Info "App" "cardano-db-sync starting" Nothing
-  traceWith tracer $ LogMsg Info "App"
+  liftIO $ traceWith tracer $ LogMsg Info "App" "cardano-db-sync starting" Nothing
+  liftIO $ traceWith tracer $ LogMsg Info "App"
     ( "Enabled extractors (" <> show projCount <> "): "
       <> showExtractorList projNames
     )

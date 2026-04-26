@@ -258,10 +258,6 @@ encodeInt64 = BS8.pack . show
 encodeWord64 :: Word64 -> ByteString
 encodeWord64 = BS8.pack . show
 
--- | Encode a 'Word16' as a decimal ASCII string.
-encodeWord16 :: Word16 -> ByteString
-encodeWord16 = BS8.pack . show
-
 -- | Encode a 'Bool' as @t@ or @f@ (PostgreSQL COPY boolean format).
 encodeBool :: Bool -> ByteString
 encodeBool True  = "t"

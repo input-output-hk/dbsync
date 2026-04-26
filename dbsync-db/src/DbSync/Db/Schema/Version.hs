@@ -6,5 +6,3 @@
 module DbSync.Db.Schema.Version
   ( -- TODO: getSchemaVersion, setSchemaVersion, SchemaVersion
   ) where
-
-import Cardano.Prelude

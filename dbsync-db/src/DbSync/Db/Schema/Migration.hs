@@ -6,5 +6,3 @@
 module DbSync.Db.Schema.Migration
   ( -- TODO: runMigrations, Migration
   ) where
-
-import Cardano.Prelude

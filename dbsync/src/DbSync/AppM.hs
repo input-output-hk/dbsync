@@ -5,14 +5,16 @@
 -- use sites where the concrete environment types are in scope.
 module DbSync.AppM
   ( AppM (..)
-    -- TODO: type IngestM = AppM IngestEnv  (defined at use sites)
-    -- TODO: type FollowM = AppM FollowEnv  (defined at use sites)
   , runAppM
+  , CoreM
+  , IngestM
+  , FollowM
+  -- , LedgerM
   ) where
 
 import Cardano.Prelude
 
-import Control.Monad.Reader (MonadReader, ReaderT (..), runReaderT)
+import DbSync.Env (CoreEnv, IngestEnv, FollowEnv)
 
 -- | The core application monad: @ReaderT env IO@.
 newtype AppM env a = AppM {unAppM :: ReaderT env IO a}
@@ -25,3 +27,8 @@ newtype AppM env a = AppM {unAppM :: ReaderT env IO a}
 -- | Run an 'AppM' action with the given environment.
 runAppM :: env -> AppM env a -> IO a
 runAppM env (AppM m) = runReaderT m env
+
+type CoreM = AppM CoreEnv
+type IngestM = AppM IngestEnv
+type FollowM = AppM FollowEnv
+-- type LedgerM = AppM LedgerEnv

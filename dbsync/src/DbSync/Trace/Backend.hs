@@ -18,7 +18,7 @@ import Data.IORef (IORef, modifyIORef')
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
-import System.IO (Handle, hPutStrLn, stderr)
+import System.IO (hPutStrLn)
 
 -- * Tracer constructors
 

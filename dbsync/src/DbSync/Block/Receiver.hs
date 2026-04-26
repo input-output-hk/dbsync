@@ -5,5 +5,3 @@
 module DbSync.Block.Receiver
   ( -- TODO: receiveBlocks, BlockCallback
   ) where
-
-import Cardano.Prelude

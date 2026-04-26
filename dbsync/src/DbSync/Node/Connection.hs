@@ -26,13 +26,12 @@ import Cardano.Client.Subscription
   , SubscriptionTracers (..)
   , subscribe
   )
-import qualified Codec.CBOR.Term as CBOR
 import Control.Concurrent.Async (AsyncCancelled (..))
 import Control.Concurrent.STM (TBQueue, writeTBQueue)
 import Control.Tracer (Tracer, contramap, nullTracer, traceWith)
 import qualified Data.ByteString.Lazy as BSL
 import qualified Network.Mux as Mux
-import Network.TypedProtocol.Peer (N (..), Nat (..))
+import Network.TypedProtocol.Peer (Nat (..))
 
 import Ouroboros.Consensus.Block.Abstract (CodecConfig)
 import Ouroboros.Consensus.Byron.Node ()
@@ -68,12 +67,9 @@ import Ouroboros.Network.Mux
   )
 import qualified Ouroboros.Network.Mux as Mux
 import Cardano.Network.NodeToClient
-  ( ConnectionId
-  , Handshake
-  , IOManager
+  ( IOManager
   , LocalAddress
   , NodeToClientProtocols (..)
-  , TraceSendRecv
   , localSnocket
   , localTxMonitorPeerNull
   , localTxSubmissionPeerNull
@@ -93,7 +89,6 @@ import Ouroboros.Network.Protocol.ChainSync.PipelineDecision
   , pipelineDecisionLowHighMark
   , runPipelineDecision
   )
-import Ouroboros.Network.Protocol.ChainSync.Type (ChainSync)
 import qualified Ouroboros.Network.Protocol.LocalStateQuery.Type as LocalStateQuery
 import qualified Ouroboros.Network.Snocket as Snocket
 

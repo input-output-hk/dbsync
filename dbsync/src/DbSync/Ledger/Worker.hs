@@ -6,5 +6,3 @@
 module DbSync.Ledger.Worker
   ( -- TODO: startLedgerWorker, LedgerWorkerHandle
   ) where
-
-import Cardano.Prelude

@@ -30,8 +30,7 @@ module DbSync.Copy.Writer
 
 import Cardano.Prelude
 
-import Control.Concurrent.Async (Async, async, cancel, link)
-import Control.Concurrent.STM (TBQueue, atomically, newTBQueueIO, readTBQueue, writeTBQueue)
+import Control.Concurrent.STM (TBQueue, newTBQueueIO, readTBQueue, writeTBQueue)
 
 import qualified Data.Map.Strict as Map
 

@@ -59,7 +59,6 @@ module DbSync.Checkpoint.SyncState
 
 import Cardano.Prelude
 
-import Data.Bits (shiftR, (.&.))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.Text.Encoding as TE
@@ -347,7 +346,7 @@ seedSyncState (ControlConnection conn) schemaVersion ledgerEnabled = do
 -- This is currently an explicit __stub__: returns empty maps. It is
 -- only called from the resume path, which is not yet wired up — so
 -- calling it at runtime is a programmer error.
-rebuildDedupMaps :: HasCallStack => ControlConnection -> IO DedupMaps
+rebuildDedupMaps :: ControlConnection -> IO DedupMaps
 rebuildDedupMaps _conn = newMaps  -- TODO: stream from PG cursors
 
 -- ---------------------------------------------------------------------------

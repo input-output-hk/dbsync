@@ -5,5 +5,3 @@
 module DbSync.OffChain.Vote
   ( -- TODO: fetchVoteMetadata, VoteMetadataResult
   ) where
-
-import Cardano.Prelude

@@ -11,6 +11,7 @@ import Data.IORef (newIORef, readIORef)
 import qualified Data.Text as Text
 
 import DbSync.App (buildCoreEnv, runStartup)
+import DbSync.AppM (runAppM)
 import DbSync.Config (parseConfig)
 import DbSync.Config.Node (parseNodeConfig)
 import DbSync.Config.Types (NodeConfig, SyncConfig (..))
@@ -69,7 +70,7 @@ spec = describe "DbSync.App" $ do
       logRef <- newIORef []
       let tracer = mkTestTracer logRef
       env <- buildCoreEnv tracer syncCfg nodeCfg
-      runStartup env
+      runAppM env runStartup
       msgs <- readIORef logRef
       let appInfoMsgs = [m | m <- msgs, lmComponent m == "App", lmSeverity m == Info]
       appInfoMsgs `shouldSatisfy` (not . null)
@@ -79,7 +80,7 @@ spec = describe "DbSync.App" $ do
       logRef <- newIORef []
       let tracer = mkTestTracer logRef
       env <- buildCoreEnv tracer syncCfg nodeCfg
-      runStartup env
+      runAppM env runStartup
       msgs <- readIORef logRef
       let allText = mconcat [lmMessage m | m <- msgs]
       -- Should mention "core" in the extractors output

@@ -5,5 +5,3 @@
 module DbSync.OffChain.Pool
   ( -- TODO: fetchPoolMetadata, PoolMetadataResult
   ) where
-
-import Cardano.Prelude

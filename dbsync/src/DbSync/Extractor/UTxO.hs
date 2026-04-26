@@ -18,7 +18,7 @@ import qualified Data.ByteString as BS
 
 import DbSync.Block.Types (GenericTx (..), GenericTxIn (..))
 import qualified DbSync.Block.Types as G
-import DbSync.Db.Schema.Ids (TxId (..), TxOutId (..))
+import DbSync.Db.Schema.Ids (TxId (..))
 import DbSync.Db.Schema.UTxO
 import DbSync.Db.Types (DbLovelace (..))
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))

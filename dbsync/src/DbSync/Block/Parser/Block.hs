@@ -52,7 +52,6 @@ import qualified Cardano.Ledger.Core as Ledger
 import Cardano.Protocol.Crypto (StandardCrypto, VRF)
 import qualified Cardano.Protocol.TPraos.BHeader as TPraos
 import qualified Cardano.Protocol.TPraos.OCert as TPraos
-import Cardano.Slotting.Slot (SlotNo)
 
 import Ouroboros.Consensus.Byron.Node ()
 import Ouroboros.Consensus.Cardano.Node ()
@@ -69,7 +68,6 @@ import Ouroboros.Consensus.Shelley.Protocol.Abstract
   , pHeaderBlockSize
   , pHeaderIssuer
   , pHeaderPrevHash
-  , pHeaderSlot
   )
 import Ouroboros.Consensus.Cardano.Block
   ( AllegraEra
@@ -197,7 +195,7 @@ mkShelleyBlockPraos era txConvert sd blk =
 
 -- | Extract the block header from a 'ShelleyBlock'.
 blockHeader :: ShelleyBlock p era -> ShelleyProtocolHeader p
-blockHeader = Ledger.bheader . Consensus.shelleyBlockRaw
+blockHeader = Ledger.blockHeader . Consensus.shelleyBlockRaw
 
 -- | Block header hash as raw bytes (32 bytes).
 blockHash :: ShelleyBlock p era -> ByteString
@@ -223,9 +221,12 @@ blockIssuerRaw = Crypto.hashToBytes . unKeyHash . hashKey . pHeaderIssuer . bloc
 blockNumber :: ShelleyProtocol p => ShelleyBlock p era -> BlockNo
 blockNumber = pHeaderBlock . blockHeader
 
--- | Slot number (from header).
-slotNumber :: ShelleyProtocol p => ShelleyBlock p era -> SlotNo
-slotNumber = pHeaderSlot . blockHeader
+-- TODO: re-enable when a caller needs the header slot directly (currently we
+-- read the slot from 'SlotDetails' provided by the state-query interpreter).
+--
+-- -- | Slot number (from header).
+-- slotNumber :: ShelleyProtocol p => ShelleyBlock p era -> SlotNo
+-- slotNumber = pHeaderSlot . blockHeader
 
 -- | Block size in bytes.
 blockSize :: ProtocolHeaderSupportsEnvelope p => ShelleyBlock p era -> Word64
@@ -234,7 +235,7 @@ blockSize = fromIntegral . pHeaderBlockSize . blockHeader
 -- | Extract indexed transactions from the block body.
 -- Returns @[(blockIndex, tx)]@ where @blockIndex@ is 0-based.
 getTxs :: forall p era. Ledger.EraBlockBody era => ShelleyBlock p era -> [(Word64, Ledger.Tx Ledger.TopTx era)]
-getTxs blk = zip [0 ..] $ toList (Ledger.bbody (Consensus.shelleyBlockRaw blk) ^. Ledger.txSeqBlockBodyL)
+getTxs blk = zip [0 ..] $ toList (Ledger.blockBody (Consensus.shelleyBlockRaw blk) ^. Ledger.txSeqBlockBodyL)
 
 -- ---------------------------------------------------------------------------
 -- * TPraos-specific helpers (Shelley, Allegra, Mary, Alonzo)
@@ -297,8 +298,8 @@ getHeaderBodyPraos (Praos.Header hdrBody _) = hdrBody
 -- | Split a 'ProtVer' into @(major, minor)@ as 'Word16' values.
 splitProtoVer :: Ledger.ProtVer -> (Word16, Word16)
 splitProtoVer pv =
-  ( fromIntegral (Ledger.getVersion (Ledger.pvMajor pv))
-  , fromIntegral (Ledger.pvMinor pv)
+  ( fromIntegral (Ledger.getVersion (Ledger.pvMajor pv) :: Word64)
+  , fromIntegral (Ledger.pvMinor pv :: Natural)
   )
 
 -- | Serialize a VRF verification key to text.

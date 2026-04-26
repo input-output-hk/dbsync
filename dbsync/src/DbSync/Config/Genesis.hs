@@ -32,19 +32,14 @@ import qualified Cardano.Ledger.Api.Transition as Ledger
 import Cardano.Ledger.Binary.Version (natVersion)
 import Cardano.Ledger.Conway.Genesis (ConwayGenesis)
 import Cardano.Node.Protocol.Dijkstra (emptyDijkstraGenesis)
-import Control.Monad.Trans.Except (ExceptT, runExceptT)
 import Control.Monad.Trans.Except.Extra
   ( firstExceptT
   , handleIOExceptT
   , hoistEither
-  , left
   )
 import Control.Tracer (Tracer, nullTracer)
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Char8 as BS
-import qualified Data.Text as Text
-import qualified Data.Text.Encoding as Text
-import qualified Data.ByteString.Base16 as Base16
 import Ouroboros.Consensus.Cardano (Nonce (..), ProtVer (ProtVer))
 import qualified Ouroboros.Consensus.Cardano as Consensus
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)

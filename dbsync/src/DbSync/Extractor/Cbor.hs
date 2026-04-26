@@ -15,7 +15,6 @@ import Cardano.Prelude
 
 import DbSync.Block.Types (GenericTx (..))
 import DbSync.Db.Schema.CBOR
-import DbSync.Db.Schema.Ids (TxCborId)
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
 import DbSync.Resolver (IdResolver (..))
 import DbSync.Writer (Writer (..))

@@ -29,7 +29,6 @@ import Cardano.Prelude hiding (handle)
 
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
-import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 
 import qualified Database.PostgreSQL.LibPQ as PQ

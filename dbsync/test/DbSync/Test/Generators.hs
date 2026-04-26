@@ -5,5 +5,3 @@
 module DbSync.Test.Generators
   ( -- TODO: Arbitrary instances and generators
   ) where
-
-import Cardano.Prelude

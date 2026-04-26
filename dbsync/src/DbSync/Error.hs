@@ -17,7 +17,6 @@ module DbSync.Error
 import Cardano.Prelude
 
 import DbSync.Trace.Types (SrcInfo (..))
-import GHC.Stack (CallStack, SrcLoc (..), getCallStack)
 
 -- * Types
 

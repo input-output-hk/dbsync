@@ -5,5 +5,3 @@
 module DbSync.Db.Writer.Insert
   ( -- TODO: insertRows, InsertBatch
   ) where
-
-import Cardano.Prelude

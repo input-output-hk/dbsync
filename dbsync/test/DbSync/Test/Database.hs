@@ -33,7 +33,6 @@ import Cardano.Prelude
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 
-import System.Exit (ExitCode (..))
 import System.IO.Error (userError)
 import System.Process (readProcessWithExitCode)
 
@@ -106,20 +105,20 @@ withTestDatabase action = do
 -- Uses @psql -t -A -F \"|\"@ for clean, parseable output.
 queryTestDb :: Text -> IO Text
 queryTestDb sql = do
-  (exitCode, stdout, stderr) <- readProcessWithExitCode
+  (exitCode, out, err) <- readProcessWithExitCode
     "psql"
     [T.unpack testConnStr, "-t", "-A", "-F", "|", "-c", T.unpack sql]
     ""
   case exitCode of
-    ExitSuccess -> pure (T.pack stdout)
+    ExitSuccess -> pure (T.pack out)
     ExitFailure _ ->
       throwIO $ userError $
-        "queryTestDb failed: " <> stderr <> "\nSQL: " <> T.unpack sql
+        "queryTestDb failed: " <> err <> "\nSQL: " <> T.unpack sql
 
 -- | Execute a SQL statement against the test database (no output expected).
 execTestDb :: Text -> IO ()
 execTestDb sql = do
-  (exitCode, _stdout, stderr) <- readProcessWithExitCode
+  (exitCode, _out, err) <- readProcessWithExitCode
     "psql"
     [T.unpack testConnStr, "-q", "-c", T.unpack sql]
     ""
@@ -127,7 +126,7 @@ execTestDb sql = do
     ExitSuccess -> pure ()
     ExitFailure _ ->
       throwIO $ userError $
-        "execTestDb failed: " <> stderr <> "\nSQL: " <> T.unpack sql
+        "execTestDb failed: " <> err <> "\nSQL: " <> T.unpack sql
 
 -- | Truncate all tables in the test database.
 -- Useful between tests when you don't want to drop/recreate the schema.
@@ -142,7 +141,7 @@ truncateAllTables tableNames =
 -- | Execute SQL against the maintenance database (@template1@).
 execMaintenance :: Text -> IO ()
 execMaintenance sql = do
-  (exitCode, _stdout, stderr) <- readProcessWithExitCode
+  (exitCode, _out, err) <- readProcessWithExitCode
     "psql"
     [T.unpack maintenanceDb, "-q", "-c", T.unpack sql]
     ""
@@ -150,7 +149,7 @@ execMaintenance sql = do
     ExitSuccess -> pure ()
     ExitFailure _ ->
       throwIO $ userError $
-        "execMaintenance failed: " <> stderr <> "\nSQL: " <> T.unpack sql
+        "execMaintenance failed: " <> err <> "\nSQL: " <> T.unpack sql
 
 -- | Execute SQL against the maintenance database, ignoring errors.
 -- Used for cleanup operations where the target may not exist.

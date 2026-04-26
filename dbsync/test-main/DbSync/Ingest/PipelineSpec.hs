@@ -11,7 +11,7 @@ import Cardano.Prelude
 
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
-import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 
@@ -32,7 +32,6 @@ import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
 import DbSync.Id.DedupMap (newMaps)
 import DbSync.Ingest.Pipeline (processBlock)
 import DbSync.Resolver.Ingest (mkIngestResolver)
-import DbSync.Writer (Writer (..))
 import DbSync.Writer.Testing (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 
 spec :: Spec

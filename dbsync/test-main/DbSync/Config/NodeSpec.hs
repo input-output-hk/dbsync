@@ -15,7 +15,7 @@ import DbSync.Config.Types
   , NetworkMagicConfig (..)
   , NodeConfig (..)
   )
-import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, describe, it, shouldBe)
 
 spec :: Spec
 spec = describe "DbSync.Config.Node" $ do

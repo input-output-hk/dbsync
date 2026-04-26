@@ -13,7 +13,7 @@ import Cardano.Prelude
 
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
-import Data.IORef (newIORef, readIORef)
+import Data.IORef (newIORef)
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 
@@ -30,7 +30,7 @@ import DbSync.Copy.Writer (CopyWriter (..), closeCopyWriter, mkCopyWriter)
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
 import DbSync.Db.Schema.Init (dropSchema, initSchema)
 import DbSync.Db.Schema.Types (TableDef)
-import DbSync.Extractor (ExtractState (..), ExtractorDef (..))
+import DbSync.Extractor (ExtractState (..))
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
 import DbSync.Id.DedupMap (newMaps)

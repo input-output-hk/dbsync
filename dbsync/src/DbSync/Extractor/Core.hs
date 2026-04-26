@@ -34,10 +34,9 @@ import DbSync.Db.Schema.Core
   , slotLeaderTableDef
   , txTableDef
   )
-import DbSync.Db.Schema.Ids (BlockId (..), SlotLeaderId, TxId)
+import DbSync.Db.Schema.Ids (BlockId (..), SlotLeaderId)
 import DbSync.Db.Types (DbLovelace (..), DbWord64 (..))
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
-import DbSync.Resolver (IdResolver (..))
 import DbSync.Writer (Writer (..))
 
 -- ---------------------------------------------------------------------------

@@ -38,7 +38,6 @@ import Control.Concurrent.STM
   , writeTVar
   )
 import Control.Concurrent.STM.TVar (TVar)
-import Control.Tracer (Tracer, traceWith)
 
 import Data.Time.Clock (UTCTime, addUTCTime, getCurrentTime)
 
@@ -77,7 +76,6 @@ import Ouroboros.Network.Protocol.LocalStateQuery.Client
 import Ouroboros.Network.Protocol.LocalStateQuery.Type (AcquireFailure, Target (..))
 
 import DbSync.Error (AppError (..), throwAppError)
-import DbSync.Trace.Types (LogMsg (..), Severity (..))
 
 -- ---------------------------------------------------------------------------
 -- * Types

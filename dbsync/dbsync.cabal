@@ -23,6 +23,7 @@ common warnings
     -Wpartial-fields
     -Widentities
     -Wunused-packages
+    -Werror
 
 common defaults
   default-language:   GHC2021
@@ -160,18 +161,14 @@ library
     , typed-protocols
 
     -- Database
-    , hasql
     , postgresql-libpq
 
     -- Data / serialisation
     , aeson
     , yaml
-    , unordered-containers
     , hashtables
     , bytestring
     , text
-    , serialise
-    , cborg
     , vector
     , vector-map
     , containers
@@ -184,22 +181,15 @@ library
     -- Tracing
     , contra-tracer
 
-    -- Monitoring
-    , prometheus
-
     -- CLI
     , optparse-applicative
 
     -- Other
     , base16-bytestring
-    , extra
     , microlens
-    , mtl
     , time
-    , transformers
     , transformers-except
     , filepath
-    , directory
 
 -- ---------------------------------------------------------------------------
 -- Test helper library
@@ -214,14 +204,9 @@ library dbsync-testlib
     DbSync.Test.Database
   build-depends:
       base
-    , dbsync
-    , hedgehog
-    , hspec
-    , bytestring
-    , text
-    , process
-    , unordered-containers
     , cardano-prelude
+    , process
+    , text
 
 -- ---------------------------------------------------------------------------
 -- Test runner
@@ -254,8 +239,6 @@ test-suite dbsync-test
     , dbsync-db
     , dbsync:dbsync-testlib
     , hspec
-    , hedgehog
-    , hspec-hedgehog
     , cardano-prelude
     , cardano-slotting
     , cardano-strict-containers
@@ -265,7 +248,6 @@ test-suite dbsync-test
     , process
     , text
     , time
-    , yaml
 
 -- ---------------------------------------------------------------------------
 -- Executable
@@ -291,7 +273,5 @@ executable dbsync
     , cardano-diffusion
     , ouroboros-consensus
     , ouroboros-consensus:cardano
-    , ouroboros-network:api
     , stm
-    , async
     , text

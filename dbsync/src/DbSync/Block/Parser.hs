@@ -13,8 +13,6 @@ module DbSync.Block.Parser
     parseBlock
   ) where
 
-import Cardano.Prelude
-
 import Ouroboros.Consensus.Cardano.Block
   ( CardanoBlock
   , HardForkBlock

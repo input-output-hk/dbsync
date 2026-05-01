@@ -82,6 +82,7 @@ import Ouroboros.Consensus.Storage.LedgerDB.Snapshots
 
 import Ouroboros.Network.Block (pattern BlockPoint, pattern GenesisPoint, pointSlot)
 
+import DbSync.AppM (LedgerM, runAppM)
 import DbSync.Ledger.Types
   ( CardanoLedgerState (..)
   , DbSyncStateRef (..)
@@ -102,8 +103,10 @@ import DbSync.Trace.Types (LogMsg (..), Severity (..))
 
 -- | All on-disk snapshots known to the configured backend.
 -- Newest-first by 'DiskSnapshot.dsNumber'.
-listDiskSnapshots :: LedgerEnv -> IO [DiskSnapshot]
-listDiskSnapshots env = listSnapshots (leSnapshotManager env)
+listDiskSnapshots :: LedgerM [DiskSnapshot]
+listDiskSnapshots = do
+  env <- ask
+  liftIO $ listSnapshots (leSnapshotManager env)
 
 -- | The points represented by the in-memory 'LedgerDB' checkpoint
 -- buffer. Genesis is filtered out because it isn't a useful rollback
@@ -112,13 +115,14 @@ listDiskSnapshots env = listSnapshots (leSnapshotManager env)
 -- Returns the \"edge\" points (newest + oldest of the buffer) rather
 -- than every checkpoint — those are the only ones a rollback caller
 -- can usefully target without first reaching deeper into the buffer.
-listMemorySnapshots :: LedgerEnv -> IO [CardanoPoint]
-listMemorySnapshots env = do
-  mLedger <- atomically $ readTVar (leStateVar env)
-  case mLedger of
-    Strict.Nothing -> pure []
+listMemorySnapshots :: LedgerM [CardanoPoint]
+listMemorySnapshots = do
+  env <- ask
+  mLedger <- liftIO $ atomically $ readTVar (leStateVar env)
+  pure $ case mLedger of
+    Strict.Nothing -> []
     Strict.Just (LedgerDB s) ->
-      pure $ filter notGenesis (edgePoints s)
+      filter notGenesis (edgePoints s)
   where
     edgePoints :: StrictSeq.StrictSeq DbSyncStateRef -> [CardanoPoint]
     edgePoints s =
@@ -140,10 +144,10 @@ listMemorySnapshots env = do
 -- first. Used by the boot flow to decide which snapshot to resume
 -- from and by the rollback path to decide whether the in-memory
 -- buffer can serve a target.
-listKnownSnapshots :: LedgerEnv -> IO [SnapshotPoint]
-listKnownSnapshots env = do
-  inMem  <- fmap InMemory <$> listMemorySnapshots env
-  onDisk <- fmap OnDisk   <$> listDiskSnapshots env
+listKnownSnapshots :: LedgerM [SnapshotPoint]
+listKnownSnapshots = do
+  inMem  <- fmap InMemory <$> listMemorySnapshots
+  onDisk <- fmap OnDisk   <$> listDiskSnapshots
   pure $ List.sortOn (Down . getSlotNoSnapshot) (inMem <> onDisk)
 
 -- | Slot of a 'SnapshotPoint'. 'OnDisk' snapshots carry their slot
@@ -162,10 +166,12 @@ getSlotNoSnapshot = \case
 -- persist to disk. Atomically flips @srCanClose@ to 'False' so the
 -- LedgerDB pruner can't close the handle out from under the writer
 -- — see invariant I3.
-saveCurrentLedgerState :: LedgerEnv -> DbSyncStateRef -> IO ()
-saveCurrentLedgerState env sref = atomically $ do
-  writeTVar (srCanClose sref) False
-  writeTBQueue (leSnapshotQueue env) sref
+saveCurrentLedgerState :: DbSyncStateRef -> LedgerM ()
+saveCurrentLedgerState sref = do
+  env <- ask
+  liftIO $ atomically $ do
+    writeTVar (srCanClose sref) False
+    writeTBQueue (leSnapshotQueue env) sref
 
 -- | Enqueue a snapshot write and trim older snapshots according to
 -- the retention policy. Trimming is currently a no-op stub —
@@ -173,9 +179,9 @@ saveCurrentLedgerState env sref = atomically $ do
 -- on the boot-flow-supplied snapshot manager rather than 'LedgerEnv',
 -- and the wiring will land alongside the boot flow that constructs
 -- both together.
-saveCleanupState :: LedgerEnv -> DbSyncStateRef -> IO ()
-saveCleanupState env sref = do
-  saveCurrentLedgerState env sref
+saveCleanupState :: DbSyncStateRef -> LedgerM ()
+saveCleanupState sref = do
+  saveCurrentLedgerState sref
   -- TODO: invoke 'trimSnapshots (leSnapshotManager env) policy' once
   -- 'SnapshotPolicy' is plumbed through to 'LedgerEnv'. Until then
   -- the snapshot manager retains every snapshot it writes; operators
@@ -190,9 +196,14 @@ saveCleanupState env sref = do
 -- ledger feature is disabled there's no queue to drain — we just
 -- block forever so the surrounding 'withAsync' wiring doesn't have
 -- to special-case the disabled arm.
+--
+-- Stays in 'IO' because 'HasLedgerEnv' is a sum and the disabled
+-- arm has no 'LedgerEnv' to run an 'AppM' against. The enabled arm
+-- pattern-matches and dispatches into 'snapshotWriteLoop' via
+-- 'runAppM'.
 runLedgerStateWriteThread :: HasLedgerEnv -> IO ()
 runLedgerStateWriteThread = \case
-  LedgerEnabled env  -> snapshotWriteLoop env
+  LedgerEnabled env  -> runAppM env snapshotWriteLoop
   LedgerDisabled _nle -> idleForever
   where
     -- 10-minute heartbeats, so a future maintainer who attaches a
@@ -211,30 +222,32 @@ runLedgerStateWriteThread = \case
 --
 -- Exceptions during 'takeSnapshot' are caught and traced: a single
 -- failed snapshot must not bring down the whole sync.
-snapshotWriteLoop :: LedgerEnv -> IO ()
-snapshotWriteLoop env = forever $ do
-  sref <- atomically $ readTBQueue (leSnapshotQueue env)
-  result <-
-    Exception.try @Exception.SomeException $
-      takeSnapshot
-        (leSnapshotManager env)
-        Nothing                             -- temporary snapshot, no suffix
-        (toConsensusStateRef sref)
-  case result of
-    Right (Just (ds, _rp)) ->
-      logMsg Info $
-        "Wrote snapshot at slot " <> show (dsNumber ds)
-    Right Nothing ->
-      logMsg Info "takeSnapshot returned Nothing — backend declined to write"
-    Left ex ->
-      logMsg Warning $
-        "Snapshot write failed: " <> Text.pack (Exception.displayException ex)
-  -- I3: writer is done with the handle, pruner is now free to close.
-  atomically $ writeTVar (srCanClose sref) True
+snapshotWriteLoop :: LedgerM ()
+snapshotWriteLoop = do
+  env <- ask
+  forever $ do
+    sref <- liftIO $ atomically $ readTBQueue (leSnapshotQueue env)
+    result <- liftIO $
+      Exception.try @Exception.SomeException $
+        takeSnapshot
+          (leSnapshotManager env)
+          Nothing                             -- temporary snapshot, no suffix
+          (toConsensusStateRef sref)
+    case result of
+      Right (Just (ds, _rp)) ->
+        logMsg env Info $
+          "Wrote snapshot at slot " <> show (dsNumber ds)
+      Right Nothing ->
+        logMsg env Info "takeSnapshot returned Nothing — backend declined to write"
+      Left ex ->
+        logMsg env Warning $
+          "Snapshot write failed: " <> Text.pack (Exception.displayException ex)
+    -- I3: writer is done with the handle, pruner is now free to close.
+    liftIO $ atomically $ writeTVar (srCanClose sref) True
   where
-    logMsg :: Severity -> Text -> IO ()
-    logMsg sev msg =
-      traceWith (leTracer env) (LogMsg sev "LedgerSnapshot" msg Nothing)
+    logMsg :: LedgerEnv -> Severity -> Text -> LedgerM ()
+    logMsg env sev msg =
+      liftIO $ traceWith (leTracer env) (LogMsg sev "LedgerSnapshot" msg Nothing)
 
 -- ---------------------------------------------------------------------------
 -- * Loading
@@ -250,14 +263,15 @@ snapshotWriteLoop env = forever $ do
 -- exposing a derive helper here would couple this module to the era
 -- dispatcher and is left to the boot flow.
 loadSnapshotFromDisk
-  :: LedgerEnv
-  -> DiskSnapshot
-  -> IO (Either Text DbSyncStateRef)
-loadSnapshotFromDisk env ds = do
-  result <- leLoadSnapshot env ds
-  case result of
-    Left err           -> pure (Left err)
-    Right consensusRef -> Right <$> fromConsensusStateRef ByronEpochBlockNo consensusRef
+  :: DiskSnapshot
+  -> LedgerM (Either Text DbSyncStateRef)
+loadSnapshotFromDisk ds = do
+  env <- ask
+  liftIO $ do
+    result <- leLoadSnapshot env ds
+    case result of
+      Left err           -> pure (Left err)
+      Right consensusRef -> Right <$> fromConsensusStateRef ByronEpochBlockNo consensusRef
 
 -- | Find a 'DiskSnapshot' at the given 'CardanoPoint' (or older) and
 -- load it. Returns 'Right' on success, or 'Left' with the list of
@@ -270,10 +284,9 @@ loadSnapshotFromDisk env ds = do
 -- candidate list; the boot flow uses 'listDiskSnapshots' +
 -- 'loadSnapshotFromDisk' + 'deleteNewerSnapshots' directly.
 findStateFromSnapshot
-  :: LedgerEnv
-  -> CardanoPoint
-  -> IO (Either [DiskSnapshot] DbSyncStateRef)
-findStateFromSnapshot _env _point =
+  :: CardanoPoint
+  -> LedgerM (Either [DiskSnapshot] DbSyncStateRef)
+findStateFromSnapshot _point =
   panic "DbSync.Ledger.Snapshot.findStateFromSnapshot: boot-flow ownership; wired alongside Path B"
 
 -- ---------------------------------------------------------------------------
@@ -287,26 +300,28 @@ findStateFromSnapshot _env _point =
 --
 -- Other exceptions propagate so the operator sees them — we only
 -- swallow the well-known LSM-orphan case.
-safeDeleteSnapshot :: LedgerEnv -> DiskSnapshot -> IO ()
-safeDeleteSnapshot env ds = do
-  result <-
-    Exception.try @LSMTree.SnapshotDoesNotExistError $
-      deleteSnapshotIfTemporary (leSnapshotManager env) ds
-  case result of
-    Right () ->
-      traceWith (leTracer env) $
-        LogMsg Debug "LedgerSnapshot"
-          ("Deleted temporary snapshot at slot " <> show (dsNumber ds))
-          Nothing
-    Left ex ->
-      traceWith (leTracer env) $
-        LogMsg Warning "LedgerSnapshot"
-          ( "safeDeleteSnapshot: LSM session unaware of snapshot at slot "
-              <> show (dsNumber ds)
-              <> " (probable orphan from a crashed write); ignoring — "
-              <> Text.pack (Exception.displayException ex)
-          )
-          Nothing
+safeDeleteSnapshot :: DiskSnapshot -> LedgerM ()
+safeDeleteSnapshot ds = do
+  env <- ask
+  liftIO $ do
+    result <-
+      Exception.try @LSMTree.SnapshotDoesNotExistError $
+        deleteSnapshotIfTemporary (leSnapshotManager env) ds
+    case result of
+      Right () ->
+        traceWith (leTracer env) $
+          LogMsg Debug "LedgerSnapshot"
+            ("Deleted temporary snapshot at slot " <> show (dsNumber ds))
+            Nothing
+      Left ex ->
+        traceWith (leTracer env) $
+          LogMsg Warning "LedgerSnapshot"
+            ( "safeDeleteSnapshot: LSM session unaware of snapshot at slot "
+                <> show (dsNumber ds)
+                <> " (probable orphan from a crashed write); ignoring — "
+                <> Text.pack (Exception.displayException ex)
+            )
+            Nothing
 
 -- | Delete every disk snapshot strictly newer than the given slot.
 -- Used by the rollback path and by the boot-flow resume-constraint
@@ -314,8 +329,8 @@ safeDeleteSnapshot env ds = do
 --
 -- Walks the snapshot list and applies 'safeDeleteSnapshot' to each
 -- candidate, so a single failed delete doesn't abort the rest.
-deleteNewerSnapshots :: LedgerEnv -> SlotNo -> IO ()
-deleteNewerSnapshots env (SlotNo s) = do
-  snaps <- listDiskSnapshots env
+deleteNewerSnapshots :: SlotNo -> LedgerM ()
+deleteNewerSnapshots (SlotNo s) = do
+  snaps <- listDiskSnapshots
   let newer = filter (\ds -> dsNumber ds > s) snaps
-  forM_ newer (safeDeleteSnapshot env)
+  forM_ newer safeDeleteSnapshot

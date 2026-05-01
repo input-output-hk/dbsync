@@ -208,7 +208,6 @@ runConsumer = do
     processBatch prevEpochRef blockCountRef epochStartRef statsRef baselineRef (cardanoBlock : rest) = do
       tracer        <- asks getTracer
       sqv           <- asks ieStateQueryVar
-      systemStart   <- asks ieSystemStart
       resolver      <- asks ieResolver
       writer        <- asks ieWriter
       copyWriter    <- asks ieCopyWriter
@@ -236,7 +235,7 @@ runConsumer = do
             ) Nothing
         Unchanged -> pure ()
 
-      sd <- liftIO $ getSlotDetails tracer sqv systemStart slot
+      sd <- getSlotDetails slot
       let !genBlock = parseBlock sd cardanoBlock
           !blockEpoch = sdEpochNo sd
       -- cardanoBlock is now unreferenced (genBlock doesn't retain it)

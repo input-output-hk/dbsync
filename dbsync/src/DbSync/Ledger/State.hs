@@ -140,6 +140,7 @@ import System.FS.IO (ioHasFS)
 import System.FilePath ((</>))
 import System.Random (genWord64, newStdGen)
 
+import DbSync.AppM (LedgerM)
 import DbSync.Config.Types (LedgerBackend (..))
 import qualified DbSync.Era.Shelley.Generic.EpochUpdate as Generic
 import qualified DbSync.Era.Shelley.Generic.ProtoParams as Generic
@@ -236,18 +237,20 @@ ledgerDbCurrent (LedgerDB s) =
 -- | Replace the shared 'LedgerDB' state in the 'leStateVar' TVar.
 -- @'Strict.Nothing'@ clears the buffer (used at rollback to free old
 -- references before loading a disk snapshot).
-writeLedgerState :: LedgerEnv -> Strict.Maybe LedgerDB -> IO ()
-writeLedgerState env mDb = atomically $ writeTVar (leStateVar env) mDb
+writeLedgerState :: Strict.Maybe LedgerDB -> LedgerM ()
+writeLedgerState mDb = do
+  env <- ask
+  liftIO $ atomically $ writeTVar (leStateVar env) mDb
 
 -- | Read the newest 'ExtLedgerState' out of the buffer. Throws via
 -- STM if the buffer hasn't been initialised yet (pre-boot); callers
 -- downstream of 'mkHasLedgerEnv' + genesis init should never see
 -- that, so we treat it as a programmer error.
 readCurrentStateUnsafe
-  :: LedgerEnv
-  -> IO (ExtLedgerState (CardanoBlock StandardCrypto) EmptyMK)
-readCurrentStateUnsafe env =
-  atomically (clsState . srState . ledgerDbCurrent <$> readStateUnsafe env)
+  :: LedgerM (ExtLedgerState (CardanoBlock StandardCrypto) EmptyMK)
+readCurrentStateUnsafe = do
+  env <- ask
+  liftIO $ atomically (clsState . srState . ledgerDbCurrent <$> readStateUnsafe env)
 
 -- | STM inner helper for 'readCurrentStateUnsafe'. Kept private — the
 -- 'Strict.Nothing' case throws a descriptive STM error rather than
@@ -402,84 +405,86 @@ mkHasLedgerEnv
 -- canonical signal that rollback bookkeeping has gone wrong, and the
 -- error text includes both hashes for diagnosis.
 --
--- Runs in 'IO' (rather than pure 'Either') because the LSM handle's
--- @read@ / @duplicateWithDiffs@ operations require it.
+-- Runs in 'LedgerM' (atop 'IO') because the LSM handle's @read@ /
+-- @duplicateWithDiffs@ operations require 'IO'.
 tickThenReapplyCheckHash
-  :: LedgerEnv
-  -> ExtLedgerCfg (CardanoBlock StandardCrypto)
+  :: ExtLedgerCfg (CardanoBlock StandardCrypto)
   -> CardanoBlock StandardCrypto
-  -> IO (Either Text
+  -> LedgerM
+       (Either Text
           ( DbSyncStateRef
           , LedgerResult (ExtLedgerState (CardanoBlock StandardCrypto)) CardanoLedgerState
           , [DbSyncStateRef]
           ))
-tickThenReapplyCheckHash env cfg block = do
-  -- Snapshot the current LedgerDB + tip atomically.
-  (ledgerDB, oldRef) <- atomically $ do
-    !db <- readStateUnsafe env
-    pure (db, ledgerDbCurrent db)
-  let !oldCls = srState oldRef
-      oldExt  = clsState oldCls
-  if blockPrevHash block == Consensus.ledgerTipHash (ledgerState oldExt)
-    then do
-      -- Read the keys this block touches from the backing LSM tables.
-      let keys = Consensus.getBlockKeySets block
-      restrictedTables <- Consensus.read (srTables oldRef) oldExt keys
-      let -- Attach the just-read values to the in-memory state, then tick + reapply.
-          ledgerStateWithTables = Consensus.withLedgerTables oldExt restrictedTables
-          newLedgerResult =
-            Consensus.tickThenReapplyLedgerResult
-              Consensus.ComputeLedgerEvents
-              cfg
-              block
-              ledgerStateWithTables
-          newLedgerStateEmpty = forgetLedgerTables (Consensus.lrResult newLedgerResult)
-          isNewEpoch =
-            case ( ledgerEpochNo env oldExt
-                 , ledgerEpochNo env newLedgerStateEmpty
-                 ) of
-              (Right oldE, Right newE) -> oldE /= newE
-              _                        -> False
-          isByron = case ledgerState newLedgerStateEmpty of
-                      LedgerStateByron _ -> True
-                      _                  -> False
-          !newEpochBlockNo =
-            applyToEpochBlockNo isByron isNewEpoch (clsEpochBlockNo oldCls)
-          newCls =
-            fmap
-              (\stt ->
-                 CardanoLedgerState
-                   { clsState        = forgetLedgerTables stt
-                   , clsEpochBlockNo = newEpochBlockNo
-                   })
-              newLedgerResult
-      -- Clone the LSM handle and apply the block-level diffs onto the clone.
-      newHandle <-
-        Consensus.duplicateWithDiffs
-          (srTables oldRef)
-          oldExt
-          (Consensus.lrResult newLedgerResult)
-      canClose <- newTVarIO True
-      let !newRef =
-            DbSyncStateRef
-              { srState    = Consensus.lrResult newCls
-              , srTables   = newHandle
-              , srCanClose = canClose
-              }
-          (!ledgerDB', !pruned) = pushLedgerDB ledgerDB newRef
-      atomically $ writeTVar (leStateVar env) (Strict.Just ledgerDB')
-      pure $ Right (oldRef, newCls, pruned)
-    else
-      pure $ Left $
-        mconcat
-          [ "Ledger state hash mismatch. Ledger head is slot "
-          , show (Consensus.ledgerTipSlot (ledgerState oldExt))
-          , "; block previous hash is "
-          , show (blockPrevHash block)
-          , "; block hash is "
-          , show (blockHash block)
-          , "."
-          ]
+tickThenReapplyCheckHash cfg block = do
+  env <- ask
+  liftIO $ do
+    -- Snapshot the current LedgerDB + tip atomically.
+    (ledgerDB, oldRef) <- atomically $ do
+      !db <- readStateUnsafe env
+      pure (db, ledgerDbCurrent db)
+    let !oldCls = srState oldRef
+        oldExt  = clsState oldCls
+    if blockPrevHash block == Consensus.ledgerTipHash (ledgerState oldExt)
+      then do
+        -- Read the keys this block touches from the backing LSM tables.
+        let keys = Consensus.getBlockKeySets block
+        restrictedTables <- Consensus.read (srTables oldRef) oldExt keys
+        let -- Attach the just-read values to the in-memory state, then tick + reapply.
+            ledgerStateWithTables = Consensus.withLedgerTables oldExt restrictedTables
+            newLedgerResult =
+              Consensus.tickThenReapplyLedgerResult
+                Consensus.ComputeLedgerEvents
+                cfg
+                block
+                ledgerStateWithTables
+            newLedgerStateEmpty = forgetLedgerTables (Consensus.lrResult newLedgerResult)
+            isNewEpoch =
+              case ( ledgerEpochNo env oldExt
+                   , ledgerEpochNo env newLedgerStateEmpty
+                   ) of
+                (Right oldE, Right newE) -> oldE /= newE
+                _                        -> False
+            isByron = case ledgerState newLedgerStateEmpty of
+                        LedgerStateByron _ -> True
+                        _                  -> False
+            !newEpochBlockNo =
+              applyToEpochBlockNo isByron isNewEpoch (clsEpochBlockNo oldCls)
+            newCls =
+              fmap
+                (\stt ->
+                   CardanoLedgerState
+                     { clsState        = forgetLedgerTables stt
+                     , clsEpochBlockNo = newEpochBlockNo
+                     })
+                newLedgerResult
+        -- Clone the LSM handle and apply the block-level diffs onto the clone.
+        newHandle <-
+          Consensus.duplicateWithDiffs
+            (srTables oldRef)
+            oldExt
+            (Consensus.lrResult newLedgerResult)
+        canClose <- newTVarIO True
+        let !newRef =
+              DbSyncStateRef
+                { srState    = Consensus.lrResult newCls
+                , srTables   = newHandle
+                , srCanClose = canClose
+                }
+            (!ledgerDB', !pruned) = pushLedgerDB ledgerDB newRef
+        atomically $ writeTVar (leStateVar env) (Strict.Just ledgerDB')
+        pure $ Right (oldRef, newCls, pruned)
+      else
+        pure $ Left $
+          mconcat
+            [ "Ledger state hash mismatch. Ledger head is slot "
+            , show (Consensus.ledgerTipSlot (ledgerState oldExt))
+            , "; block previous hash is "
+            , show (blockPrevHash block)
+            , "; block hash is "
+            , show (blockHash block)
+            , "."
+            ]
 
 -- | Apply a single block to the current ledger state, returning the
 -- /old/ state ref (for snapshot bookkeeping), the 'ApplyResult'
@@ -492,12 +497,12 @@ tickThenReapplyCheckHash env cfg block = do
 -- function) — block application itself does not query the slot
 -- machinery.
 applyBlock
-  :: LedgerEnv
-  -> CardanoBlock StandardCrypto
+  :: CardanoBlock StandardCrypto
   -> SlotDetails
-  -> IO (DbSyncStateRef, ApplyResult, [DbSyncStateRef])
-applyBlock env blk slotDetails = do
-  result <- tickThenReapplyCheckHash env (ExtLedgerCfg (getTopLevelConfig env)) blk
+  -> LedgerM (DbSyncStateRef, ApplyResult, [DbSyncStateRef])
+applyBlock blk slotDetails = do
+  env <- ask
+  result <- tickThenReapplyCheckHash (ExtLedgerCfg (getTopLevelConfig env)) blk
   case result of
     Left err -> panic err
     Right (oldRef, newResult, pruned) -> do
@@ -533,7 +538,7 @@ applyBlock env blk slotDetails = do
               , apGovActionState  = getGovState finalState
               , apDepositsMap     = DepositsMap deposits
               }
-      atomically $ writeTVar (leLatestApplyResult env) (Strict.Just appResult)
+      liftIO $ atomically $ writeTVar (leLatestApplyResult env) (Strict.Just appResult)
       pure (oldRef, appResult, pruned)
 
 -- | 'applyBlock' plus the snapshot-cadence decision and pruning of
@@ -548,23 +553,23 @@ applyBlock env blk slotDetails = do
 -- only after waiting on 'srCanClose' — invariant I3 in the
 -- ledger-state plan.
 applyBlockAndSnapshot
-  :: LedgerEnv
-  -> CardanoBlock StandardCrypto
+  :: CardanoBlock StandardCrypto
   -> SlotDetails
   -> Bool                                           -- ^ "consistent with chain tip"
-  -> IO (ApplyResult, Bool)
-applyBlockAndSnapshot env blk slotDetails consistent = do
-  (oldRef, appResult, pruned) <- applyBlock env blk slotDetails
+  -> LedgerM (ApplyResult, Bool)
+applyBlockAndSnapshot blk slotDetails consistent = do
+  env <- ask
+  (oldRef, appResult, pruned) <- applyBlock blk slotDetails
   let nearTip = isSyncedNearTip slotDetails
   tookSnapshot <-
     if shouldSnapshotAtEpoch appResult consistent nearTip (leSnapshotNearTipEpoch env)
       then do
-        DbSync.Ledger.Snapshot.saveCleanupState env oldRef
+        DbSync.Ledger.Snapshot.saveCleanupState oldRef
         pure True
       else pure False
   -- Close pruned handles, waiting for any in-flight snapshot write
   -- holding them (I3).
-  forM_ pruned $ \sr -> do
+  liftIO $ forM_ pruned $ \sr -> do
     atomically $ readTVar (srCanClose sr) >>= STM.check
     Consensus.close (srTables sr)
   pure (appResult, tookSnapshot)
@@ -731,11 +736,11 @@ trimmed 'LedgerDB' back into 'leStateVar' before returning; the ref
 we return is the new tip. Callers don't need to push or prune.
 -}
 loadLedgerAtPoint
-  :: LedgerEnv
-  -> CardanoPoint
-  -> IO (Either [DiskSnapshot] DbSyncStateRef)
-loadLedgerAtPoint env point = do
-  mLedger <- atomically $ readTVar (leStateVar env)
+  :: CardanoPoint
+  -> LedgerM (Either [DiskSnapshot] DbSyncStateRef)
+loadLedgerAtPoint point = do
+  env <- ask
+  mLedger <- liftIO $ atomically $ readTVar (leStateVar env)
   case mLedger of
     Strict.Nothing ->
       -- No buffer yet (pre-boot or post-rollback). Caller falls back
@@ -744,7 +749,7 @@ loadLedgerAtPoint env point = do
     Strict.Just ledger ->
       case rollbackBuffer point ledger of
         Just ledger' -> do
-          writeLedgerState env (Strict.Just ledger')
+          writeLedgerState (Strict.Just ledger')
           pure (Right (ledgerDbCurrent ledger'))
         Nothing ->
           pure (Left [])

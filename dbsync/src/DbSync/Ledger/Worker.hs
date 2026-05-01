@@ -51,10 +51,11 @@ import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
 import Ouroboros.Consensus.Shelley.HFEras ()                  -- per-era HFC instances
 import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol () -- LedgerSupportsProtocol orphans
 
+import DbSync.AppM (LedgerM, runAppM)
 import qualified DbSync.Era.Shelley.Generic.EpochUpdate as Generic
 import DbSync.Ledger.State (applyBlockAndSnapshot)
 import DbSync.Ledger.Types (ApplyResult (..), LedgerEnv (..))
-import DbSync.StateQuery (SlotDetails, StateQueryVar, getSlotDetails)
+import DbSync.StateQuery (SlotDetails, StateQueryVar, getSlotDetailsIO)
 
 -- ---------------------------------------------------------------------------
 -- * Hooks
@@ -80,9 +81,9 @@ realWorkerHooks :: LedgerEnv -> StateQueryVar -> WorkerHooks (CardanoBlock Stand
 realWorkerHooks env sqv =
   WorkerHooks
     { whGetSlotDetails = \blk ->
-        getSlotDetails (leTracer env) sqv (leSystemStart env) (blockSlot blk)
+        getSlotDetailsIO (leTracer env) sqv (leSystemStart env) (blockSlot blk)
     , whApplyAndSnapshot = \blk sd ->
-        applyBlockAndSnapshot env blk sd False
+        runAppM env (applyBlockAndSnapshot blk sd False)
     }
 
 -- ---------------------------------------------------------------------------
@@ -92,16 +93,24 @@ realWorkerHooks env sqv =
 -- | Production worker entry point — drains 'leLedgerQueue', applies
 -- each block to the LSM-backed ledger, and signals
 -- 'leEpochReady' on every epoch boundary.
+--
+-- Runs in 'LedgerM' so the 'LedgerEnv' is read from the
+-- 'MonadReader' context. The 'StateQueryVar' is supplied as an
+-- argument because it lives on 'IngestEnv' rather than 'LedgerEnv';
+-- the caller (Main) pattern-matches on 'HasLedgerEnv' and pairs the
+-- 'LedgerEnv' with the shared 'StateQueryVar' before invoking
+-- @runAppM env (runLedgerWorker sqv)@.
 runLedgerWorker
-  :: LedgerEnv
-  -> StateQueryVar
-  -> IO ()
-runLedgerWorker env sqv =
-  runLedgerWorkerWith
-    (realWorkerHooks env sqv)
-    (leLedgerQueue env)
-    (leEpochReady env)
-    (leEpochWait env)
+  :: StateQueryVar
+  -> LedgerM ()
+runLedgerWorker sqv = do
+  env <- ask
+  liftIO $
+    runLedgerWorkerWith
+      (realWorkerHooks env sqv)
+      (leLedgerQueue env)
+      (leEpochReady env)
+      (leEpochWait env)
 
 -- | Generic worker loop, parameterised by the per-block hooks. The
 -- production path uses 'realWorkerHooks'; tests inject a fake hook

@@ -42,10 +42,10 @@ import DbSync.Copy.Writer (CopyWriter)
 import DbSync.Extractor (ExtractState, ExtractorDef, HasExtractors (..))
 import DbSync.Id.DedupMap (DedupMaps)
 import DbSync.Ingest.ReceiverStats (ReceiverStats)
-import DbSync.Ledger.Types (HasLedgerEnv)
+import DbSync.Ledger.Types (HasLedgerEnv, LedgerEnv (..))
 import DbSync.Metrics (HasMetrics (..), Metrics)
 import DbSync.Resolver (HasResolver (..), IdResolver)
-import DbSync.StateQuery (StateQueryVar)
+import DbSync.StateQuery.Types (StateQueryVar)
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer)
 import DbSync.Writer (HasWriter (..), Writer)
@@ -165,6 +165,9 @@ instance HasTracer IngestEnv where
 
 instance HasTracer FollowEnv where
   getTracer = getTracer . feCore
+
+instance HasTracer LedgerEnv where
+  getTracer = leTracer
 
 -- ---------------------------------------------------------------------------
 -- * HasMetrics instances (orphan — class defined in DbSync.Metrics)

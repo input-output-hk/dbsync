@@ -88,6 +88,7 @@ library
     DbSync.Resolver.Ingest
     DbSync.StateQuery
     DbSync.StateQuery.ObservedSummary
+    DbSync.StateQuery.Types
     DbSync.Writer
     DbSync.Writer.CopyAdapter
     DbSync.Writer.Testing
@@ -185,6 +186,7 @@ library
     , stm
     , async
     , strict
+    , unliftio-core
 
     -- Tracing
     , contra-tracer

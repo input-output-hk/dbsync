@@ -34,7 +34,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Database.PostgreSQL.LibPQ as PQ
 
 import DbSync.Db.Schema.Types (ColumnDef (..), TableDef (..))
-import DbSync.Error (AppError (..), throwAppError)
+import DbSync.Error (throwDb)
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -62,7 +62,7 @@ openCopyConnection connStr tableDef = do
   connStatus <- PQ.status conn
   when (connStatus /= PQ.ConnectionOk) $ do
     errMsg <- PQ.errorMessage conn
-    throwAppError AppDatabaseError $
+    throwDb $
       "Failed to connect for COPY on table "
       <> tdName tableDef <> ": "
       <> maybe "(no error message)" (toS . BS8.unpack) errMsg
@@ -108,7 +108,7 @@ writeCopyData cc rowBytes = do
     PQ.CopyInOk -> pure ()
     PQ.CopyInError -> do
       errMsg <- PQ.errorMessage (ccConnection cc)
-      throwAppError AppDatabaseError $
+      throwDb $
         "putCopyData failed for table " <> ccTableName cc
         <> ": " <> maybe "(no error)" (toS . BS8.unpack) errMsg
     PQ.CopyInWouldBlock ->
@@ -129,7 +129,7 @@ endCopy cc = do
       pure ()
     PQ.CopyInError -> do
       errMsg <- PQ.errorMessage (ccConnection cc)
-      throwAppError AppDatabaseError $
+      throwDb $
         "putCopyEnd failed for table " <> ccTableName cc
         <> ": " <> maybe "(no error)" (toS . BS8.unpack) errMsg
     PQ.CopyInWouldBlock ->
@@ -167,7 +167,7 @@ checkResult :: HasCallStack => CopyConnection -> Text -> Maybe PQ.Result -> IO (
 checkResult cc operation mResult = case mResult of
   Nothing -> do
     errMsg <- PQ.errorMessage (ccConnection cc)
-    throwAppError AppDatabaseError $
+    throwDb $
       operation <> " failed for table " <> ccTableName cc
       <> ": " <> maybe "(no result)" (toS . BS8.unpack) errMsg
   Just result -> do
@@ -178,7 +178,7 @@ checkResult cc operation mResult = case mResult of
       PQ.TuplesOk  -> pure ()
       _other -> do
         errMsg <- PQ.resultErrorMessage result
-        throwAppError AppDatabaseError $
+        throwDb $
           operation <> " failed for table " <> ccTableName cc
           <> " (status: " <> show resultStatus <> "): "
           <> maybe "(no error)" (toS . BS8.unpack) errMsg

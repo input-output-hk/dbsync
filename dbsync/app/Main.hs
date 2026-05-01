@@ -234,7 +234,7 @@ main = do
           -- Spawn the LedgerWorker + snapshot writer alongside the consumer.
           -- 'withAsync' guarantees their cancellation on consumer exit (or
           -- exception); 'runIngestPipeline' calls 'leClose' in 'finally'.
-          withAsync (runLedgerWorker lenv stateQueryVar) $ \_workerThread ->
+          withAsync (runAppM lenv (runLedgerWorker stateQueryVar)) $ \_workerThread ->
             withAsync (runLedgerStateWriteThread hasLedgerEnv) $ \_snapWriter ->
               runIngestPipeline iomgr
         LedgerDisabled _ ->

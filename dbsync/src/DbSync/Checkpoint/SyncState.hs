@@ -65,7 +65,7 @@ import qualified Data.Text.Encoding as TE
 
 import qualified Database.PostgreSQL.LibPQ as PQ
 
-import DbSync.Error (AppError (..), throwAppError)
+import DbSync.Error (throwDb)
 import DbSync.Id.DedupMap (DedupMaps, newMaps)
 
 -- ---------------------------------------------------------------------------
@@ -144,7 +144,7 @@ openControlConnection connStr = do
   status <- PQ.status conn
   when (status /= PQ.ConnectionOk) $ do
     errMsg <- PQ.errorMessage conn
-    throwAppError AppDatabaseError $
+    throwDb $
       "Failed to open control connection: "
       <> maybe "(no error message)" (TE.decodeUtf8 . BS.copy) errMsg
   pure (ControlConnection conn)
@@ -267,7 +267,7 @@ readSyncState (ControlConnection conn) = do
   status  <- PQ.resultStatus result
   unless (status == PQ.TuplesOk) $ do
     errMsg <- PQ.resultErrorMessage result
-    throwAppError AppDatabaseError $
+    throwDb $
       "readSyncState: unexpected result status "
       <> show status <> ": "
       <> maybe "(no error)" (TE.decodeUtf8 . BS.copy) errMsg
@@ -294,7 +294,7 @@ writeSyncState (ControlConnection conn) row = do
   status  <- PQ.resultStatus result
   unless (status == PQ.CommandOk) $ do
     errMsg <- PQ.resultErrorMessage result
-    throwAppError AppDatabaseError $
+    throwDb $
       "writeSyncState: unexpected result status "
       <> show status <> ": "
       <> maybe "(no error)" (TE.decodeUtf8 . BS.copy) errMsg
@@ -302,11 +302,11 @@ writeSyncState (ControlConnection conn) row = do
   case mAffected >>= parseInt64 of
     Just 1 -> pure ()
     Just n ->
-      throwAppError AppDatabaseError $
+      throwDb $
         "writeSyncState: UPDATE affected " <> show n
         <> " rows, expected exactly 1. Did seedSyncState run?"
     Nothing ->
-      throwAppError AppDatabaseError
+      throwDb
         "writeSyncState: UPDATE returned no row count"
 
 -- | Insert the singleton row with sensible defaults. Idempotent
@@ -329,7 +329,7 @@ seedSyncState (ControlConnection conn) schemaVersion ledgerEnabled = do
   status  <- PQ.resultStatus result
   unless (status == PQ.CommandOk) $ do
     errMsg <- PQ.resultErrorMessage result
-    throwAppError AppDatabaseError $
+    throwDb $
       "seedSyncState: unexpected result status "
       <> show status <> ": "
       <> maybe "(no error)" (TE.decodeUtf8 . BS.copy) errMsg
@@ -434,7 +434,7 @@ parseSyncStateRow result row =
         Just bs -> case parser bs of
           Just v  -> pure (Just v)
           Nothing ->
-            throwAppError AppDatabaseError $
+            throwDb $
               "parseSyncStateRow: cannot parse optional column "
               <> name <> " value " <> show bs
 
@@ -443,12 +443,12 @@ parseSyncStateRow result row =
       mBs <- PQ.getvalue' result row col
       case mBs of
         Nothing ->
-          throwAppError AppDatabaseError $
+          throwDb $
             "parseSyncStateRow: unexpected NULL in required column " <> name
         Just bs -> case parser bs of
           Just v  -> pure v
           Nothing ->
-            throwAppError AppDatabaseError $
+            throwDb $
               "parseSyncStateRow: cannot parse required column "
               <> name <> " value " <> show bs
 
@@ -560,7 +560,7 @@ requireResult conn caller = \case
   Just r  -> pure r
   Nothing -> do
     errMsg <- PQ.errorMessage conn
-    throwAppError AppDatabaseError $
+    throwDb $
       caller <> ": libpq returned no result: "
       <> maybe "(no error message)" (TE.decodeUtf8 . BS.copy) errMsg
 

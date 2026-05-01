@@ -46,7 +46,7 @@ import DbSync.Copy.Connection
   , writeCopyData
   )
 import DbSync.Db.Schema.Types (TableDef (..))
-import DbSync.Error (AppError (..), throwAppError)
+import DbSync.Error (throwInternal)
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -106,7 +106,7 @@ mkCopyWriter connStr tableDefs = do
     { cwWriteRow = \tableName rowBytes ->
         case Map.lookup tableName channelMap of
           Nothing ->
-            throwAppError AppInternalError $
+            throwInternal $
               "CopyWriter: unknown table '" <> tableName <> "'"
           Just ch ->
             atomically $ writeTBQueue (chQueue ch) (Just rowBytes)

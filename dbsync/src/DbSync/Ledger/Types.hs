@@ -116,7 +116,7 @@ import Ouroboros.Consensus.Shelley.HFEras ()                -- per-era HFC insta
 import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()  -- 'LedgerSupportsProtocol' orphans
 
 import DbSync.Block.Types (CardanoPoint)
-import DbSync.StateQuery (CardanoInterpreter, SlotDetails)
+import DbSync.StateQuery.Types (CardanoInterpreter, SlotDetails)
 import DbSync.Trace.Types (AppTracer)
 
 -- ---------------------------------------------------------------------------

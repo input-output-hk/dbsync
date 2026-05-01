@@ -34,6 +34,9 @@ module DbSync.StateQuery
 
     -- * Querying
   , getSlotDetails
+  , getSlotDetailsIO
+  , getHistoryInterpreter
+  , getHistoryInterpreterIO
 
     -- * Local observation
   , observeBlockSTM
@@ -47,11 +50,10 @@ module DbSync.StateQuery
 
 import Cardano.Prelude hiding (atomically)
 
-import Cardano.Slotting.Slot (EpochNo, EpochSize, SlotNo (..))
+import Cardano.Slotting.Slot (SlotNo (..))
 
 import Control.Concurrent.STM
-  ( TMVar
-  , atomically
+  ( atomically
   , newEmptyTMVarIO
   , newTVarIO
   , putTMVar
@@ -59,7 +61,6 @@ import Control.Concurrent.STM
   , takeTMVar
   , writeTVar
   )
-import Control.Concurrent.STM.TVar (TVar)
 import Control.Tracer (traceWith)
 
 import Data.Time.Clock (UTCTime, addUTCTime, getCurrentTime)
@@ -71,7 +72,6 @@ import Ouroboros.Consensus.BlockchainTime.WallClock.Types
 import Ouroboros.Consensus.Cardano.Block
   ( BlockQuery (QueryHardFork)
   , CardanoBlock
-  , CardanoEras
   , StandardCrypto
   )
 import Ouroboros.Consensus.Cardano.Node ()
@@ -81,7 +81,6 @@ import Ouroboros.Consensus.HardFork.Combinator.Ledger.Query
   )
 import Ouroboros.Consensus.HardFork.History.Qry
   ( Expr (..)
-  , Interpreter
   , PastHorizonException
   , Qry
   , interpretQuery
@@ -99,57 +98,25 @@ import Ouroboros.Network.Protocol.LocalStateQuery.Client
   )
 import Ouroboros.Network.Protocol.LocalStateQuery.Type (AcquireFailure (..), Target (..))
 
-import DbSync.Error (AppError (..), throwAppError)
+import DbSync.AppM (IngestM)
+import DbSync.Env (IngestEnv (..))
+import DbSync.Error (throwBlock)
 import DbSync.StateQuery.ObservedSummary
   ( EraIdx (..)
   , ObservationResult (..)
-  , ObservedSummary
   , ObservedTransition (..)
   , currentInterpreter
   , initObservedSummary
   , isObservationBroken
   , observeBlock
   )
+import DbSync.StateQuery.Types
+  ( CardanoInterpreter
+  , SlotDetails (..)
+  , StateQueryVar (..)
+  )
+import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
-
--- ---------------------------------------------------------------------------
--- * Types
--- ---------------------------------------------------------------------------
-
--- | Slot details computed by the HardFork Interpreter.
--- Replaces the manual epoch\/slot math in 'EpochSlotInfo'.
-data SlotDetails = SlotDetails
-  { sdSlotTime    :: !UTCTime
-  , sdCurrentTime :: !UTCTime
-  , sdEpochNo     :: !EpochNo
-  , sdSlotNo      :: !SlotNo
-  , sdEpochSlot   :: !Word64
-  , sdEpochSize   :: !EpochSize
-  }
-  deriving stock (Eq, Show)
-
--- | The HardFork Interpreter, correctly handles all era transitions.
-type CardanoInterpreter = Interpreter (CardanoEras StandardCrypto)
-
--- | Channel for LocalStateQuery request\/response communication and a
--- locally-observed fallback summary.
---
--- Three slots:
---
--- * 'sqvRequestVar' — used by 'getHistoryInterpreter' (the slow,
---   blocking path) to request an interpreter from the node via
---   'localStateQueryHandler'.
--- * 'sqvInterpreterVar' — caches the node's authoritative interpreter
---   once acquired. 'Just' means we have it; 'Nothing' means we don't.
--- * 'sqvObservedVar' — locally-observed summary, updated by
---   'observeBlockSTM' as ChainSync delivers blocks.
-data StateQueryVar = StateQueryVar
-  { sqvRequestVar     :: !(TMVar ( Query (CardanoBlock StandardCrypto) CardanoInterpreter
-                                 , TMVar (Either AcquireFailure CardanoInterpreter)
-                                 ))
-  , sqvInterpreterVar :: !(TVar (Maybe CardanoInterpreter))
-  , sqvObservedVar    :: !(TVar ObservedSummary)
-  }
 
 -- ---------------------------------------------------------------------------
 -- * Construction
@@ -192,7 +159,26 @@ observeBlockSTM sqv blk = do
 -- * Querying
 -- ---------------------------------------------------------------------------
 
--- | Get 'SlotDetails' for a given 'SlotNo'.
+-- | Get 'SlotDetails' for a given 'SlotNo' inside 'IngestM'.
+--
+-- Reads the tracer, 'StateQueryVar' and 'SystemStart' from the
+-- 'IngestEnv'; otherwise behaves identically to 'getSlotDetailsIO'.
+-- Prefer this in 'IngestM' code paths so the env is not threaded
+-- through every helper signature.
+getSlotDetails :: HasCallStack => SlotNo -> IngestM SlotDetails
+getSlotDetails slot = do
+  tracer      <- asks getTracer
+  sqv         <- asks ieStateQueryVar
+  systemStart <- asks ieSystemStart
+  liftIO $ getSlotDetailsIO tracer sqv systemStart slot
+
+-- | Get 'SlotDetails' for a given 'SlotNo' (raw 'IO' bridge).
+--
+-- This is the implementation 'getSlotDetails' calls under the hood.
+-- Exposed so that callers without an 'IngestEnv' on hand (notably the
+-- 'DbSync.Ledger.Worker' hooks, which only have 'LedgerEnv' +
+-- 'StateQueryVar') can still reach it without spinning up an
+-- 'IngestM' action.
 --
 -- Resolution order:
 --
@@ -201,7 +187,7 @@ observeBlockSTM sqv blk = do
 -- 2. Otherwise, use the locally-observed summary
 --    ('sqvObservedVar') unless it's marked broken or returns
 --    'PastHorizonException' for the requested slot.
--- 3. As a last resort, fall back to 'getHistoryInterpreter' which
+-- 3. As a last resort, fall back to 'getHistoryInterpreterIO' which
 --    blocks until the node becomes ready (existing retry-with-backoff
 --    behaviour).
 --
@@ -209,14 +195,14 @@ observeBlockSTM sqv blk = do
 -- where the node is still replaying. The cached node path takes over
 -- as soon as the node is ready (typically within ~10–30 minutes for
 -- mainnet from genesis).
-getSlotDetails
+getSlotDetailsIO
   :: HasCallStack
   => AppTracer
   -> StateQueryVar
   -> SystemStart
   -> SlotNo
   -> IO SlotDetails
-getSlotDetails tracer sqv systemStart slot = do
+getSlotDetailsIO tracer sqv systemStart slot = do
   mInterp <- atomically $ readTVar (sqvInterpreterVar sqv)
   case mInterp of
     Just interp ->
@@ -241,9 +227,9 @@ getSlotDetails tracer sqv systemStart slot = do
 
     fetchAndEval :: IO SlotDetails
     fetchAndEval = do
-      interp <- getHistoryInterpreter tracer sqv
+      interp <- getHistoryInterpreterIO tracer sqv
       case evalSlotDetails interp of
-        Left err -> throwAppError AppBlockError $
+        Left err -> throwBlock $
           "getSlotDetails: " <> show err
         Right sd -> insertCurrentTime sd
 
@@ -252,10 +238,21 @@ getSlotDetails tracer sqv systemStart slot = do
       now <- getCurrentTime
       pure sd { sdCurrentTime = now }
 
--- | Query the node for a 'CardanoInterpreter', retrying with capped
--- exponential backoff if the node's LedgerDB is still replaying.
-getHistoryInterpreter :: HasCallStack => AppTracer -> StateQueryVar -> IO CardanoInterpreter
-getHistoryInterpreter tracer sqv = go (0 :: Int)
+-- | Query the node for a 'CardanoInterpreter' inside 'IngestM'.
+--
+-- Reads the tracer and 'StateQueryVar' from the 'IngestEnv'; defers
+-- to 'getHistoryInterpreterIO' for the actual retry loop.
+getHistoryInterpreter :: HasCallStack => IngestM CardanoInterpreter
+getHistoryInterpreter = do
+  tracer <- asks getTracer
+  sqv    <- asks ieStateQueryVar
+  liftIO $ getHistoryInterpreterIO tracer sqv
+
+-- | Query the node for a 'CardanoInterpreter' (raw 'IO' bridge),
+-- retrying with capped exponential backoff if the node's LedgerDB is
+-- still replaying.
+getHistoryInterpreterIO :: HasCallStack => AppTracer -> StateQueryVar -> IO CardanoInterpreter
+getHistoryInterpreterIO tracer sqv = go (0 :: Int)
   where
     go n = do
       when (n == 0) $
@@ -280,7 +277,7 @@ getHistoryInterpreter tracer sqv = go (0 :: Int)
               <> "); retrying in " <> show backoffSecs <> "s") Nothing
           threadDelay (backoffSecs * 1_000_000)
           go (n + 1)
-        Left err -> throwAppError AppBlockError $
+        Left err -> throwBlock $
           "getHistoryInterpreter: " <> show err
 
 -- ---------------------------------------------------------------------------

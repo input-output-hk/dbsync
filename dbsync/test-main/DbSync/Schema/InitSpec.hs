@@ -14,7 +14,17 @@ import Cardano.Prelude
 import qualified Data.Text as T
 import qualified Data.List.NonEmpty as NE
 
-import Test.Hspec (Spec, afterAll_, beforeAll_, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec
+  ( Spec
+  , afterAll_
+  , anyIOException
+  , beforeAll_
+  , describe
+  , it
+  , shouldBe
+  , shouldSatisfy
+  , shouldThrow
+  )
 
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
 import DbSync.Db.Schema.Init
@@ -192,31 +202,37 @@ spec = describe "DbSync.Db.Schema.Init" $ do
     beforeAll_ (dropSchema coreTables coreVersions testConnStr >> initSchema coreTables coreVersions testConnStr) $
     afterAll_  (dropSchema coreTables coreVersions testConnStr) $ do
 
-      it "returns Right when versions match" $ do
+      it "returns SchemaMatches when versions match" $ do
         result <- checkSchemaVersions coreVersions testConnStr
-        result `shouldBe` Right ()
+        result `shouldBe` SchemaMatches
 
-      it "returns Left when code version is ahead of DB" $ do
+      it "returns SchemaMismatched VersionAhead when code is ahead of DB" $ do
         let aheadVersions = [("core", 2)]
         result <- checkSchemaVersions aheadVersions testConnStr
-        result `shouldSatisfy` isLeft
+        result `shouldBe` SchemaMismatched (VersionAhead "core" 1 2 NE.:| [])
 
-      it "returns Left when extractor is missing from DB" $ do
+      it "returns SchemaMismatched MissingExtractor when extractor is absent" $ do
         let extraVersions = [("core", 1), ("utxo", 1)]
         result <- checkSchemaVersions extraVersions testConnStr
-        result `shouldSatisfy` isLeft
+        result `shouldBe` SchemaMismatched (MissingExtractor "utxo" 1 NE.:| [])
 
-      it "returns Right when DB has extra extractors not in code" $ do
+      it "returns SchemaMatches when DB has extra extractors not in code" $ do
         -- DB has "core" v1, code only checks [] — that's fine
         result <- checkSchemaVersions [] testConnStr
-        result `shouldBe` Right ()
+        result `shouldBe` SchemaMatches
 
-  describe "initSchema is idempotent" $
-    afterAll_ (dropSchema coreTables coreVersions testConnStr) $ do
+  describe "initSchema requires a fresh DB" $
+    beforeAll_ (dropSchema coreTables coreVersions testConnStr) $
+    afterAll_  (dropSchema coreTables coreVersions testConnStr) $ do
 
-      it "can be called twice without error (drops + recreates)" $ do
-        initSchema coreTables coreVersions testConnStr
+      it "creates the expected tables on a clean DB" $ do
         initSchema coreTables coreVersions testConnStr
         result <- queryPsql testConnStr
           "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('block', 'tx', 'slot_leader');"
         T.strip result `shouldBe` "3"
+
+      it "fails if called on a populated DB (no longer drops + recreates)" $ do
+        -- After the previous test the schema is in place; calling initSchema
+        -- again must throw because CREATE TABLE on existing tables fails.
+        initSchema coreTables coreVersions testConnStr
+          `shouldThrow` anyIOException

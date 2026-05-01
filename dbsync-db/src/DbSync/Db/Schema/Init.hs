@@ -104,25 +104,24 @@ data SchemaAction
 -- * Schema lifecycle
 -- ---------------------------------------------------------------------------
 
--- | Initialise the database schema.
+-- | Initialise the database schema on a __fresh__ database.
 --
--- 1. Creates the @schema_version@ table (if not exists)
--- 2. Drops any existing tables owned by the given 'TableDef's
---    (plus @dbsync_sync_state@).
--- 3. Creates the @dbsync_sync_state@ singleton metadata table
+-- 1. Creates the @schema_version@ table.
+-- 2. Creates the @dbsync_sync_state@ singleton metadata table
 --    (LOGGED, constrained; see 'DbSync.Db.Schema.SyncState').
--- 4. Creates all data tables from the 'TableDef's via 'generateCreateTable'.
--- 5. Records extractor versions in @schema_version@.
+-- 3. Creates all data tables from the 'TableDef's via 'generateCreateTable'.
+-- 4. Records extractor versions in @schema_version@.
 --
--- This is idempotent — calling it twice on the same database is safe
--- because it drops and recreates. 'DbSync.Checkpoint.SyncState.seedSyncState'
--- is __not__ called here; seeding is the caller's responsibility so that
--- the @ledger_enabled@ flag comes from runtime configuration.
+-- __Not idempotent__: this function expects the database to be empty (no
+-- @schema_version@ table). Callers that want to re-run on a populated DB
+-- must call 'dropSchema' first — the boot flow only does so when the
+-- operator explicitly passes @--force-resync@.
+--
+-- 'DbSync.Checkpoint.SyncState.seedSyncState' is __not__ called here;
+-- seeding is the caller's responsibility so that the @ledger_enabled@ flag
+-- comes from runtime configuration.
 initSchema :: [TableDef] -> [(Text, Int)] -> Text -> IO ()
 initSchema tableDefs extractorVersions connStr = do
-  -- Always drop first for idempotency
-  dropSchema tableDefs extractorVersions connStr
-
   -- Create the version tracking table
   execPsql connStr createVersionTableSQL
 
@@ -141,86 +140,55 @@ initSchema tableDefs extractorVersions connStr = do
   forM_ extractorVersions $ \(name, ver) ->
     execPsql connStr $ insertVersionSQL name ver
 
--- | Drop all tables owned by the given 'TableDef's, the
--- @dbsync_sync_state@ singleton, and their @schema_version@ entries.
+-- | Drop everything owned by this dbsync schema: the data tables, the
+-- @dbsync_sync_state@ singleton, and the @schema_version@ table itself.
 --
--- Safe to call on an empty database (uses @IF EXISTS@).
+-- This is the \"force re-sync\" / test-hygiene drop. The boot flow only
+-- calls it when the operator opts in via @--force-resync@; matched-version
+-- restarts must not invoke it (that would defeat the resume logic).
+--
+-- The @extractorVersions@ argument is currently unused but kept for symmetry
+-- with 'initSchema' and to make future per-extractor cleanup additive.
+--
+-- Safe to call on an empty database (every statement uses @IF EXISTS@).
 dropSchema :: [TableDef] -> [(Text, Int)] -> Text -> IO ()
-dropSchema tableDefs extractorVersions connStr = do
+dropSchema tableDefs _extractorVersions connStr = do
   -- Drop data tables
   forM_ tableDefs $ \td ->
     execPsql connStr $ "DROP TABLE IF EXISTS " <> quote (tdName td) <> " CASCADE;"
 
-  -- Drop the sync-state table too so tests can start fresh
+  -- Drop the sync-state table too so tests / force-resync start fresh
   execPsql connStr $
     "DROP TABLE IF EXISTS " <> quote syncStateTableName <> " CASCADE;"
 
-  -- Clean up version entries (table may not exist yet)
-  forM_ extractorVersions $ \(name, _) ->
-    execPsql connStr $
-      "DELETE FROM schema_version WHERE extractor_name = "
-      <> quoteLiteral name <> ";"
+  -- Drop the schema_version table itself (not just its rows). Dropping the
+  -- table is the only way to recover from a stale shape (e.g. left over from
+  -- an upstream cardano-db-sync install with different columns); any caller
+  -- that wants to preserve schema_version must not call dropSchema.
+  execPsql connStr "DROP TABLE IF EXISTS \"schema_version\" CASCADE;"
 
 -- ---------------------------------------------------------------------------
 -- * Version checking
 -- ---------------------------------------------------------------------------
 
--- | Check that all expected extractor versions match what is in the database.
+-- | Inspect the database and classify the schema state against the
+-- versions expected by the running code.
 --
--- Returns @Right ()@ if every entry in the expected list has a matching
--- row in @schema_version@. Returns @Left msg@ on any mismatch:
---
---   * Code version ahead of DB → needs migration or re-sync
---   * Extractor missing from DB → was never initialised
---   * DB version ahead of code → downgrade not supported
---
--- Extra extractors in the DB that are not in the expected list are
--- ignored (allows removing extractors from the profile without error).
-checkSchemaVersions :: [(Text, Int)] -> Text -> IO (Either Text ())
+-- Thin IO wrapper over 'analyzeSchemaState': queries @pg_tables@ to detect
+-- whether the @schema_version@ table exists, reads its rows if so, and
+-- delegates the comparison to the pure analyser.
+checkSchemaVersions :: [(Text, Int)] -> Text -> IO SchemaState
 checkSchemaVersions expectedVersions connStr = do
-  -- Check if schema_version table exists
   tableExists <- queryPsql connStr
     "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename = 'schema_version';"
-
   if T.strip tableExists /= "1"
-    then
-      if null expectedVersions
-        then pure (Right ())
-        else pure (Left "schema_version table does not exist but extractors are expected")
+    then pure (analyzeSchemaState expectedVersions Nothing)
     else do
-      -- Query all versions from DB
       dbVersionsRaw <- queryPsql connStr
         "SELECT extractor_name, version FROM schema_version ORDER BY extractor_name;"
-
-      let dbVersions = parseVersionRows dbVersionsRaw
-
-      -- Check each expected version
-      let mismatches = mapMaybe (checkOne dbVersions) expectedVersions
-      if null mismatches
-        then pure (Right ())
-        else pure (Left $ T.unlines mismatches)
+      pure (analyzeSchemaState expectedVersions (Just (parseVersionRows dbVersionsRaw)))
 
   where
-    checkOne
-      :: [(Text, Int)]  -- DB versions
-      -> (Text, Int)    -- Expected (name, version)
-      -> Maybe Text     -- Error message if mismatch
-    checkOne dbVersions (name, expectedVer) =
-      case Data.List.lookup name dbVersions of
-        Nothing ->
-          Just $ "Extractor '" <> name <> "' v" <> show expectedVer
-            <> " not found in database"
-        Just dbVer
-          | dbVer == expectedVer -> Nothing
-          | dbVer < expectedVer ->
-              Just $ "Extractor '" <> name <> "' version mismatch: DB has v"
-                <> show dbVer <> ", code expects v" <> show expectedVer
-                <> ". Re-sync required."
-          | otherwise ->
-              Just $ "Extractor '" <> name <> "' version mismatch: DB has v"
-                <> show dbVer <> " but code only supports v" <> show expectedVer
-                <> ". Downgrade not supported."
-
     parseVersionRows :: Text -> [(Text, Int)]
     parseVersionRows raw =
       let ls = filter (not . T.null) $ T.lines (T.strip raw)

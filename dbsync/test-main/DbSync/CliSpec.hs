@@ -28,6 +28,7 @@ spec = describe "DbSync.Cli" $ do
         , caSocketPath   = "/path/to/node.socket"
         , caStateDir     = "/data/dbsync"
         , caProfile      = "/path/to/dbsync-profile.json"
+        , caForceResync  = False
         }
 
     it "accepts arguments in any order" $ do
@@ -42,7 +43,27 @@ spec = describe "DbSync.Cli" $ do
         , caSocketPath   = "/run/node.socket"
         , caStateDir     = "/tmp/state"
         , caProfile      = "dbsync-profile.json"
+        , caForceResync  = False
         }
+
+    it "defaults --force-resync to False when omitted" $ do
+      let result = parseArgs
+            [ "--db-sync-config", "x"
+            , "--socket-path",    "y"
+            , "--state-dir",      "z"
+            , "--profile",        "w"
+            ]
+      fmap caForceResync result `shouldBe` Right False
+
+    it "sets --force-resync to True when supplied" $ do
+      let result = parseArgs
+            [ "--db-sync-config", "x"
+            , "--socket-path",    "y"
+            , "--state-dir",      "z"
+            , "--profile",        "w"
+            , "--force-resync"
+            ]
+      fmap caForceResync result `shouldBe` Right True
 
     it "fails when --db-sync-config is missing" $ do
       let result = parseArgs

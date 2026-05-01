@@ -29,6 +29,7 @@ import Options.Applicative
   , metavar
   , progDesc
   , strOption
+  , switch
   )
 
 -- * Types
@@ -39,6 +40,7 @@ data CliArgs = CliArgs
   , caSocketPath   :: !FilePath  -- ^ Path to the cardano-node Unix socket
   , caStateDir     :: !FilePath  -- ^ Directory for checkpoints + ledger state
   , caProfile      :: !FilePath  -- ^ Path to dbsync-profile.json (database, options, sync mode)
+  , caForceResync  :: !Bool      -- ^ If 'True', drop the existing schema and re-sync from genesis
   }
   deriving stock (Eq, Show)
 
@@ -77,6 +79,10 @@ cliArgsP =
       ( long "profile"
           <> metavar "FILEPATH"
           <> help "Path to profile.json (database, sync options, logging)"
+      )
+    <*> switch
+      ( long "force-resync"
+          <> help "Drop any existing schema and re-sync from genesis (destructive)"
       )
 
 -- | Parse CLI args from the process arguments. Exits on failure.

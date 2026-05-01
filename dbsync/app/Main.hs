@@ -20,7 +20,14 @@ import DbSync.Config.Node (parseDbSyncNodeConfig, parseNodeConfig)
 import DbSync.Config.Types (DbSyncNodeConfig (..), DatabaseConfig (..), SyncConfig (..))
 import DbSync.Config.Validation (validateConfig)
 import DbSync.Copy.Writer (CopyWriter (..), mkCopyWriter, closeCopyWriter)
-import DbSync.Db.Schema.Init (initSchema)
+import DbSync.Db.Schema.Init
+  ( SchemaAction (..)
+  , checkSchemaVersions
+  , decideSchemaAction
+  , dropSchema
+  , initSchema
+  , renderSchemaMismatch
+  )
 import DbSync.Env (CoreEnv (..), IngestEnv (..))
 import DbSync.Extractor (ExtractState (..), ExtractorDef (..))
 import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
@@ -114,13 +121,34 @@ main = do
   let dbCfg = scDatabase validProfile
       connStr = TE.encodeUtf8 $ "dbname=" <> dcName dbCfg
 
-  -- 11. Schema creation (idempotent)
+  -- 11. Schema check + (re)init
+  --
+  -- Decision matrix:
+  --   --force-resync → drop everything and re-init.
+  --   schema_version absent → fresh DB, run init.
+  --   schema_version matches → skip init, resume.
+  --   schema_version mismatched → abort with operator-facing diagnostics.
   let extractors = ceExtractors coreEnv
-      tableDefs = concatMap pdTables extractors
-      versions = map (\e -> (pdName e, pdVersion e)) extractors
-  logInfo "Creating schema..."
-  initSchema tableDefs versions (TE.decodeUtf8 connStr)
-  logInfo "Schema ready"
+      tableDefs  = concatMap pdTables extractors
+      versions   = map (\e -> (pdName e, pdVersion e)) extractors
+      connStrTxt = TE.decodeUtf8 connStr
+  schemaState <- checkSchemaVersions versions connStrTxt
+  case decideSchemaAction (caForceResync args) schemaState of
+    ActionSkipInit -> do
+      logInfo "Schema present and matches expected versions; skipping init"
+    ActionRunInit -> do
+      logInfo "Fresh database detected; creating schema"
+      initSchema tableDefs versions connStrTxt
+      logInfo "Schema ready"
+    ActionForceReinit -> do
+      logInfo "--force-resync: dropping existing schema and re-initialising"
+      dropSchema tableDefs versions connStrTxt
+      initSchema tableDefs versions connStrTxt
+      logInfo "Schema ready"
+    ActionAbort errs -> do
+      logError "Schema mismatch — refusing to start. Use --force-resync to wipe and re-sync."
+      for_ errs $ \err -> logError $ "  - " <> renderSchemaMismatch err
+      exitFailure
 
   -- 12. Build the ingest pipeline state
   stRef         <- newIORef mkInitState

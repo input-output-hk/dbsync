@@ -19,6 +19,7 @@ import qualified DbSync.Schema.CoreSpec as SchemaCoreSpec
 import qualified DbSync.Schema.GenerateSpec as SchemaGenerateSpec
 import qualified DbSync.Schema.InitSpec as SchemaInitSpec
 import qualified DbSync.Schema.SyncStateSpec as SchemaSyncStateSpec
+import qualified DbSync.StateQuery.ObservedSummarySpec as ObservedSummarySpec
 import qualified DbSync.Copy.WriterSpec as CopyWriterSpec
 import Test.Hspec (hspec)
 
@@ -40,3 +41,4 @@ main = hspec $ do
   LedgerTypesSpec.spec
   CheckpointManagerSpec.spec
   CheckpointSyncStateSpec.spec
+  ObservedSummarySpec.spec

@@ -49,7 +49,7 @@ import Ouroboros.Consensus.Ledger.Extended (ExtLedgerState (..))
 import Ouroboros.Consensus.Shelley.Ledger.Block (ShelleyBlock)
 import qualified Ouroboros.Consensus.Shelley.Ledger.Ledger as Consensus
 
-import DbSync.Node.Connection (CardanoBlock)
+import Ouroboros.Consensus.Cardano.Block (CardanoBlock)
 
 -- ---------------------------------------------------------------------------
 -- * Types

@@ -92,7 +92,7 @@ import DbSync.Ledger.Types
   , fromConsensusStateRef
   , toConsensusStateRef
   )
-import DbSync.Node.Connection (CardanoPoint)
+import DbSync.Block.Types (CardanoPoint)
 import DbSync.Trace.Types (LogMsg (..), Severity (..))
 
 -- ---------------------------------------------------------------------------

@@ -50,12 +50,17 @@ echo "Cleanup complete. Starting services..."
 #  ┌──────────────────┬──────────────────┐
 #  │   cardano-node   │  cardano-db-sync │
 #  └──────────────────┴──────────────────┘
+# cardano-node is launched with `+RTS -N -A64m -RTS`:
+#   -N      use all 10 cores (8 P + 2 E on this Apple Silicon Mac) for the GHC
+#           work-stealing runtime; parallelises sig-verification, Plutus eval, GC.
+#   -A64m   bump GC young-gen nursery from 4 MB to 64 MB; cuts minor-GC frequency
+#           by ~16x during the heavy-allocation ledger replay.
 zellij --layout <(cat <<EOF
 layout {
     pane split_direction="vertical" {
         pane name="cardano-node" focus=true {
             command "bash"
-            args "-c" "cd $CARDANO_NODE_DIR/ && cardano-node run --config $TESTNET_DIR/config.json --database-path $TESTNET_DIR/db/ --socket-path $TESTNET_DIR/db/node.socket --host-addr 0.0.0.0 --port 1337 --topology $TESTNET_DIR/topology.json"
+            args "-c" "cd $CARDANO_NODE_DIR/ && cardano-node run --config $TESTNET_DIR/config.json --database-path $TESTNET_DIR/db/ --socket-path $TESTNET_DIR/db/node.socket --host-addr 0.0.0.0 --port 1337 --topology $TESTNET_DIR/topology.json +RTS -N -A64m -RTS"
         }
         pane name="cardano-db-sync" {
             command "bash"

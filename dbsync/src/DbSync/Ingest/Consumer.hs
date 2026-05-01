@@ -4,8 +4,8 @@
 
 -- | Block consumer for 'IngestChainHistory'.
 --
--- Reads 'CardanoBlock' values from the 'TQueue', parses them into
--- 'GenericBlock', runs the enabled extractors, and writes rows to
+-- Reads 'CardanoBlock' values from the 'TBQueue' on the env, parses them
+-- into 'GenericBlock', runs the enabled extractors, and writes rows to
 -- PostgreSQL via the 'CopyWriter'. Detects epoch boundaries via
 -- 'sdEpochNo' comparison and triggers commit + reopen cycles.
 --
@@ -14,8 +14,21 @@
 -- At each epoch boundary, the consumer logs one consolidated line:
 --
 -- @
--- Epoch 265 | 21,427 blk in 41s (526 blk/s) | drain 85/100 | commit 0.45s | EXTRACT GROWING (55x vs e2)
+-- Epoch 265 | 21,427 blk in 41s (526 blk/s) | recv 526/s blocked=0 | drain 85/100 (full=180 single=2) | commit 0.45s | EXTRACT GROWING (55x vs e2)
 -- @
+--
+-- Reading the line:
+--
+-- * @recv X\/s blocked=N@ — receiver-side: blocks delivered by the node
+--   per second this epoch, plus how many times the receiver had to wait
+--   on a full block queue. @blocked=0@ with low @drain@ averages means
+--   the upstream node is the bottleneck. @blocked>0@ means the consumer
+--   side is occasionally the bottleneck.
+-- * @drain X\/100@ is the /average/ drain size; the @full=@ and
+--   @single=@ counts let you distinguish a steady mid-range average (low
+--   variance) from a bimodal pattern of bursty fills and starvations
+--   (high variance). When @single@ dominates, the queue is empty most
+--   of the time we look at it.
 --
 -- Diagnostics use only drain-size counters (zero per-block overhead)
 -- and epoch-level wall-clock timing. No per-block system calls.
@@ -29,7 +42,7 @@ module DbSync.Ingest.Consumer
 
 import Cardano.Prelude
 
-import Cardano.Slotting.Slot (EpochNo (..))
+import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 
 import Control.Concurrent.STM (TBQueue, readTBQueue, tryReadTBQueue)
 import Control.Tracer (traceWith)
@@ -38,21 +51,30 @@ import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime, NominalDiffTime)
 import System.Mem (performMajorGC)
 import Text.Printf (printf)
 
+import DbSync.AppM (IngestM)
 import DbSync.Block.Parser (parseBlock)
 import DbSync.Block.Types ()
 import DbSync.Copy.Writer (CopyWriter (..))
 import DbSync.Db.Schema.EpochSyncStats (EpochSyncStats (..), SyncPhase (..))
-import DbSync.Extractor (ExtractState, ExtractorDef)
+import DbSync.Env (IngestEnv (..))
 import DbSync.Ingest.Pipeline (processBlock)
-import DbSync.Node.Connection (CardanoBlock)
+import DbSync.Ingest.ReceiverStats (EpochSnapshot (..), readAndResetEpoch)
 import DbSync.Resolver (IdResolver (..))
-import DbSync.StateQuery (SlotDetails (..), StateQueryVar, getSlotDetails)
-import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
+import DbSync.StateQuery
+  ( ObservationResult (..)
+  , ObservedTransition (..)
+  , SlotDetails (..)
+  , getSlotDetails
+  , observeBlockSTM
+  )
+import DbSync.Trace (HasTracer (..))
+import DbSync.Trace.Types (LogMsg (..), Severity (..))
 import DbSync.Writer (Writer (..))
 
 import Ouroboros.Consensus.Block (blockSlot)
-import Ouroboros.Consensus.BlockchainTime.WallClock.Types (SystemStart)
-import Ouroboros.Consensus.Cardano.Block (StandardCrypto)
+import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
+import Ouroboros.Consensus.Shelley.HFEras ()                -- per-era HFC instances
+import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()  -- 'LedgerSupportsProtocol' orphans
 
 -- ---------------------------------------------------------------------------
 -- * Pipeline statistics (zero per-block overhead)
@@ -123,28 +145,23 @@ fmtDuration secs
 -- * Running
 -- ---------------------------------------------------------------------------
 
--- | Run the consumer loop.
+-- | Run the consumer loop in 'IngestM'.
 --
--- Zero per-block overhead: no system calls inside the block processing loop.
--- Timing is measured only at epoch boundaries via 'getCurrentTime'.
--- Drain sizes are tracked with simple integer increments.
-runConsumer
-  :: AppTracer
-  -> StateQueryVar
-  -> SystemStart
-  -> [ExtractorDef]
-  -> TBQueue (CardanoBlock StandardCrypto)
-  -> IdResolver IO
-  -> Writer IO
-  -> CopyWriter
-  -> IORef ExtractState
-  -> IO ()
-runConsumer tracer sqv systemStart extractors queue resolver writer copyWriter _stRef = do
-  prevEpochRef  <- newIORef (Nothing :: Maybe EpochNo)
-  blockCountRef <- newIORef (0 :: Word64)
-  epochStartRef <- newIORef =<< getCurrentTime
-  statsRef      <- newIORef emptyPipelineStats
-  baselineRef   <- newIORef (Nothing :: Maybe BaselineRef)
+-- Pulls everything it needs (tracer, queue, resolver, writer, copyWriter,
+-- state-query handle, system start) from the 'IngestEnv'. The hot inner
+-- loop runs in 'IngestM' itself rather than dropping back to raw 'IO' so
+-- the env-aware 'processBlock' call can stay polymorphic.
+--
+-- Zero per-block overhead beyond the existing IORef bookkeeping: timing
+-- still happens only at epoch boundaries via 'getCurrentTime', and drain
+-- sizes are tracked with simple integer increments.
+runConsumer :: IngestM ()
+runConsumer = do
+  prevEpochRef  <- liftIO $ newIORef (Nothing :: Maybe EpochNo)
+  blockCountRef <- liftIO $ newIORef (0 :: Word64)
+  epochStartRef <- liftIO $ getCurrentTime >>= newIORef
+  statsRef      <- liftIO $ newIORef emptyPipelineStats
+  baselineRef   <- liftIO $ newIORef (Nothing :: Maybe BaselineRef)
   loop prevEpochRef blockCountRef epochStartRef statsRef baselineRef
   where
     batchSize :: Int
@@ -156,14 +173,16 @@ runConsumer tracer sqv systemStart extractors queue resolver writer copyWriter _
       -> IORef UTCTime
       -> IORef PipelineStats
       -> IORef (Maybe BaselineRef)
-      -> IO ()
+      -> IngestM ()
     loop prevEpochRef blockCountRef epochStartRef statsRef baselineRef = do
+      queue <- asks ieBlockQueue
+
       -- 1. Drain a batch of blocks (no timing — just count)
-      blocks <- drainTBQueue queue batchSize
+      blocks <- liftIO $ drainTBQueue queue batchSize
       let !drainSize = length blocks
 
       -- Update drain stats (integer ops only, no syscalls)
-      modifyIORef' statsRef $ \ps -> ps
+      liftIO $ modifyIORef' statsRef $ \ps -> ps
         { psDrainTotal   = psDrainTotal ps + fromIntegral drainSize
         , psDrainCount   = psDrainCount ps + 1
         , psDrainMax     = max (psDrainMax ps) drainSize
@@ -171,94 +190,141 @@ runConsumer tracer sqv systemStart extractors queue resolver writer copyWriter _
         , psFullDrains   = psFullDrains ps + if drainSize >= batchSize then 1 else 0
         }
 
-      -- 2. Process batch recursively (releases each CardanoBlock after parsing)
-      let processBatch [] = pure ()
-          processBatch (cardanoBlock : rest) = do
-            let slot = blockSlot cardanoBlock
-            sd <- getSlotDetails sqv systemStart slot
-            let !genBlock = parseBlock sd cardanoBlock
-                !blockEpoch = sdEpochNo sd
-            -- cardanoBlock is now unreferenced (genBlock doesn't retain it)
-
-            -- Epoch boundary check
-            prevEpoch <- readIORef prevEpochRef
-            case prevEpoch of
-              Just prev | prev /= blockEpoch -> do
-                -- Wall-clock for the entire epoch (one syscall)
-                now <- getCurrentTime
-                epochStart <- readIORef epochStartRef
-                blockCount <- readIORef blockCountRef
-                let elapsed = diffUTCTime now epochStart
-                    blocksPerSec :: Double
-                    blocksPerSec = if elapsed > 0
-                      then fromIntegral blockCount / realToFrac elapsed
-                      else 0
-                    elapsedSec :: Double
-                    elapsedSec = realToFrac elapsed
-
-                -- Write epoch sync stats to DB (before commit)
-                essId <- assignEpochSyncStatsId resolver
-                let ess = EpochSyncStats
-                      { epochSyncStatsEpochNo        = unEpochNo prev
-                      , epochSyncStatsBlocksProcessed = blockCount
-                      , epochSyncStatsBlocksPerSec    = blocksPerSec
-                      , epochSyncStatsElapsedSec      = elapsedSec
-                      , epochSyncStatsSyncedAt        = now
-                      , epochSyncStatsPhase           = IngestChainHistory
-                      }
-                writeEpochSyncStats writer essId ess
-
-                -- Timed commit + reopen (one timing measurement per epoch)
-                commitStart <- getCurrentTime
-                cwCommit copyWriter
-                cwReopen copyWriter
-                commitEnd <- getCurrentTime
-                let commitSec :: NominalDiffTime
-                    commitSec = diffUTCTime commitEnd commitStart
-
-                -- Epoch boundary commit just completed. Run major GC if this was a heavy epoch.
-                -- Gated at >10s to avoid penalizing fast Byron epochs (2-3s each).
-                when (elapsedSec > 10.0) performMajorGC
-
-                -- Log single consolidated line
-                ps <- readIORef statsRef
-                baseline <- readIORef baselineRef
-
-                let status = diagnose batchSize blocksPerSec ps baseline
-
-                -- Capture baseline from first fast epoch
-                when (isNothing baseline && blocksPerSec > 500) $
-                  writeIORef baselineRef (Just (BaselineRef blocksPerSec (unEpochNo prev)))
-
-                traceWith tracer $ LogMsg Info "Ingest"
-                  ( "Epoch " <> show (unEpochNo prev)
-                    <> " | " <> fmtInt blockCount <> " blk in " <> fmtDuration elapsedSec
-                    <> " (" <> show (round blocksPerSec :: Int) <> " blk/s)"
-                    <> " | drain " <> show (avgDrain ps) <> "/" <> show batchSize
-                    <> " | commit " <> fmtF2 (realToFrac commitSec :: Double) <> "s"
-                    <> " | " <> status
-                  ) Nothing
-
-                -- Reset for next epoch
-                writeIORef statsRef emptyPipelineStats
-                writeIORef blockCountRef 0
-                writeIORef epochStartRef commitEnd  -- start AFTER commit completes
-              _ -> pure ()
-
-            -- Run extractors + write to COPY queues
-            processBlock resolver writer extractors genBlock
-
-            -- Update counters
-            modifyIORef' blockCountRef (+ 1)
-            writeIORef prevEpochRef (Just blockEpoch)
-
-            -- Recurse — previous cardanoBlock and genBlock now collectible
-            processBatch rest
-
-      processBatch blocks
+      -- 2. Process batch (releases each CardanoBlock after parsing)
+      processBatch prevEpochRef blockCountRef epochStartRef statsRef baselineRef blocks
 
       -- 3. Loop
       loop prevEpochRef blockCountRef epochStartRef statsRef baselineRef
+
+    processBatch
+      :: IORef (Maybe EpochNo)
+      -> IORef Word64
+      -> IORef UTCTime
+      -> IORef PipelineStats
+      -> IORef (Maybe BaselineRef)
+      -> [CardanoBlock StandardCrypto]
+      -> IngestM ()
+    processBatch _ _ _ _ _ [] = pure ()
+    processBatch prevEpochRef blockCountRef epochStartRef statsRef baselineRef (cardanoBlock : rest) = do
+      tracer        <- asks getTracer
+      sqv           <- asks ieStateQueryVar
+      systemStart   <- asks ieSystemStart
+      resolver      <- asks ieResolver
+      writer        <- asks ieWriter
+      copyWriter    <- asks ieCopyWriter
+      receiverStats <- asks ieReceiverStats
+
+      let slot = blockSlot cardanoBlock
+
+      -- Update the locally-observed summary BEFORE computing slot
+      -- details, so that any era-boundary transition is reflected in
+      -- the summary by the time it's queried.
+      obsResult <- liftIO $ atomically $ observeBlockSTM sqv cardanoBlock
+      case obsResult of
+        NewTransition t ->
+          liftIO $ traceWith tracer $ LogMsg Info "StateQuery"
+            ( "Observed era transition "
+                <> show (otFromEra t) <> " → " <> show (otToEra t)
+                <> " at slot " <> show (unSlotNo (otAtSlot t))
+                <> " (epoch " <> show (unEpochNo (otAtEpoch t)) <> ")"
+            ) Nothing
+        ObservationBroken fromEra toEra ->
+          liftIO $ traceWith tracer $ LogMsg Warning "StateQuery"
+            ( "Observed era jump too large ("
+                <> show fromEra <> " → " <> show toEra
+                <> "); falling back to node interpreter"
+            ) Nothing
+        Unchanged -> pure ()
+
+      sd <- liftIO $ getSlotDetails tracer sqv systemStart slot
+      let !genBlock = parseBlock sd cardanoBlock
+          !blockEpoch = sdEpochNo sd
+      -- cardanoBlock is now unreferenced (genBlock doesn't retain it)
+
+      -- Epoch boundary check
+      prevEpoch <- liftIO $ readIORef prevEpochRef
+      case prevEpoch of
+        Just prev | prev /= blockEpoch -> do
+          -- Wall-clock for the entire epoch (one syscall)
+          now        <- liftIO getCurrentTime
+          epochStart <- liftIO $ readIORef epochStartRef
+          blockCount <- liftIO $ readIORef blockCountRef
+          let elapsed = diffUTCTime now epochStart
+              blocksPerSec :: Double
+              blocksPerSec = if elapsed > 0
+                then fromIntegral blockCount / realToFrac elapsed
+                else 0
+              elapsedSec :: Double
+              elapsedSec = realToFrac elapsed
+
+          -- Write epoch sync stats to DB (before commit)
+          essId <- liftIO $ assignEpochSyncStatsId resolver
+          let ess = EpochSyncStats
+                { epochSyncStatsEpochNo        = unEpochNo prev
+                , epochSyncStatsBlocksProcessed = blockCount
+                , epochSyncStatsBlocksPerSec    = blocksPerSec
+                , epochSyncStatsElapsedSec      = elapsedSec
+                , epochSyncStatsSyncedAt        = now
+                , epochSyncStatsPhase           = IngestChainHistory
+                }
+          liftIO $ writeEpochSyncStats writer essId ess
+
+          -- Timed commit + reopen (one timing measurement per epoch)
+          commitStart <- liftIO getCurrentTime
+          liftIO $ cwCommit copyWriter
+          liftIO $ cwReopen copyWriter
+          commitEnd <- liftIO getCurrentTime
+          let commitSec :: NominalDiffTime
+              commitSec = diffUTCTime commitEnd commitStart
+
+          -- Epoch boundary commit just completed. Run major GC if this was a heavy epoch.
+          -- Gated at >10s to avoid penalizing fast Byron epochs (2-3s each).
+          when (elapsedSec > 10.0) $ liftIO performMajorGC
+
+          -- Log single consolidated line
+          ps       <- liftIO $ readIORef statsRef
+          baseline <- liftIO $ readIORef baselineRef
+          recvSnap <- liftIO $ readAndResetEpoch receiverStats
+
+          let status = diagnose batchSize blocksPerSec ps baseline
+              recvPerSec :: Int
+              recvPerSec
+                | elapsedSec > 0 =
+                    round (fromIntegral (esBlocksReceived recvSnap) / elapsedSec :: Double)
+                | otherwise = 0
+
+          -- Capture baseline from first fast epoch
+          when (isNothing baseline && blocksPerSec > 500) $
+            liftIO $ writeIORef baselineRef (Just (BaselineRef blocksPerSec (unEpochNo prev)))
+
+          liftIO $ traceWith tracer $ LogMsg Info "Ingest"
+            ( "Epoch " <> show (unEpochNo prev)
+              <> " | " <> fmtInt blockCount <> " blk in " <> fmtDuration elapsedSec
+              <> " (" <> show (round blocksPerSec :: Int) <> " blk/s)"
+              <> " | recv " <> show recvPerSec <> "/s blocked="
+              <> fmtInt (esWritesBlocked recvSnap)
+              <> " | drain " <> show (avgDrain ps) <> "/" <> show batchSize
+              <> " (full=" <> fmtInt (psFullDrains ps)
+              <> " single=" <> fmtInt (psSingleDrains ps) <> ")"
+              <> " | commit " <> fmtF2 (realToFrac commitSec :: Double) <> "s"
+              <> " | " <> status
+            ) Nothing
+
+          -- Reset for next epoch
+          liftIO $ writeIORef statsRef emptyPipelineStats
+          liftIO $ writeIORef blockCountRef 0
+          liftIO $ writeIORef epochStartRef commitEnd  -- start AFTER commit completes
+        _ -> pure ()
+
+      -- Run extractors + write to COPY queues
+      processBlock genBlock
+
+      -- Update counters
+      liftIO $ modifyIORef' blockCountRef (+ 1)
+      liftIO $ writeIORef prevEpochRef (Just blockEpoch)
+
+      -- Recurse — previous cardanoBlock and genBlock now collectible
+      processBatch prevEpochRef blockCountRef epochStartRef statsRef baselineRef rest
 
 -- ---------------------------------------------------------------------------
 -- * Diagnosis

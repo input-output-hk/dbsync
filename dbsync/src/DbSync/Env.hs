@@ -6,9 +6,10 @@ Description : Environment records for the three sync phases.
 
 Defines 'CoreEnv' (shared configuration), 'IngestEnv' (bulk COPY
 phase), and 'FollowEnv' (live chain-following phase). Orphan
-instances for 'HasTracer', 'HasMetrics', and 'HasConfig' are defined
-here to avoid circular imports between the class-defining modules
-and the concrete environment types.
+instances for 'HasTracer', 'HasMetrics', 'HasConfig', 'HasExtractors',
+'HasResolver', and 'HasWriter' are defined here to avoid circular
+imports between the class-defining modules and the concrete
+environment types.
 
 The ledger feature is represented as a sum type 'HasLedgerEnv'
 carried on 'IngestEnv' (see 'DbSync.Ledger.Types'); the block queue
@@ -33,16 +34,21 @@ import Cardano.Prelude
 import Control.Concurrent.STM (TBQueue, TVar)
 import Data.IORef (IORef)
 
-import DbSync.Block.Types (GenericBlock)
+import Ouroboros.Consensus.BlockchainTime.WallClock.Types (SystemStart)
+import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
+
 import DbSync.Config.Types (NodeConfig, SyncConfig)
 import DbSync.Copy.Writer (CopyWriter)
-import DbSync.Extractor (ExtractorDef)
-import DbSync.Id.Counter (IdCounters)
+import DbSync.Extractor (ExtractState, ExtractorDef, HasExtractors (..))
 import DbSync.Id.DedupMap (DedupMaps)
+import DbSync.Ingest.ReceiverStats (ReceiverStats)
 import DbSync.Ledger.Types (HasLedgerEnv)
 import DbSync.Metrics (HasMetrics (..), Metrics)
+import DbSync.Resolver (HasResolver (..), IdResolver)
+import DbSync.StateQuery (StateQueryVar)
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer)
+import DbSync.Writer (HasWriter (..), Writer)
 
 -- NOTE: DedupMaps is internally mutable (BasicHashTable + IORef counters).
 -- No IORef wrapper needed — the hash tables are mutated in-place.
@@ -89,26 +95,51 @@ data CoreEnv = CoreEnv
 
 -- | Environment for the 'IngestChainHistory' phase.
 --
--- Extends 'CoreEnv' with mutable state needed for bulk COPY
--- ingestion: block queue, COPY connections, ID counters, mutable
--- dedup hash tables, plus the ledger subsystem 'HasLedgerEnv'
--- which is either @LedgerEnabled !LedgerEnv@ (carrying its own
--- block queue + epoch-coordination 'TMVar's + snapshot queue) or
+-- Extends 'CoreEnv' with the runtime state needed for bulk COPY
+-- ingestion: the raw block queue, COPY connections, ID counters,
+-- mutable dedup hash tables, the resolver and writer adapters,
+-- the state-query interpreter handle, the system start, and the
+-- ledger subsystem 'HasLedgerEnv' which is either
+-- @LedgerEnabled !LedgerEnv@ (carrying its own block queue +
+-- epoch-coordination 'TMVar's + snapshot queue) or
 -- @LedgerDisabled !NoLedgerEnv@ (allocating nothing ledger-stateful).
+--
+-- The block queue carries raw 'CardanoBlock' values; parsing into
+-- 'DbSync.Block.Types.GenericBlock' happens inside the consumer so
+-- the receiver thread doesn't pay parsing cost on the hot path.
 data IngestEnv = IngestEnv
-  { ieCore         :: !CoreEnv
+  { ieCore          :: !CoreEnv
     -- ^ Shared core environment
-  , ieBlockQueue   :: !(TBQueue GenericBlock)
-    -- ^ Blocks received from the node, awaiting extraction
-  , ieCopyWriter   :: !CopyWriter
+  , ieBlockQueue    :: !(TBQueue (CardanoBlock StandardCrypto))
+    -- ^ Blocks received from the node, awaiting parse + extraction
+  , ieCopyWriter    :: !CopyWriter
     -- ^ Multi-threaded COPY writer (per-table TBQueues + worker threads)
-  , ieDedupMaps    :: !DedupMaps
+  , ieDedupMaps     :: !DedupMaps
     -- ^ Mutable deduplication maps (internally mutable hash tables)
-  , ieIdCounters   :: !(IORef IdCounters)
-    -- ^ Mutable ID counters (updated each block)
-  , ieHasLedgerEnv :: !HasLedgerEnv
+  , ieHasLedgerEnv  :: !HasLedgerEnv
     -- ^ Ledger subsystem — either enabled (carrying its own queues,
     -- 'LedgerDB', and snapshot machinery) or disabled (minimal).
+  , ieStateQueryVar :: !StateQueryVar
+    -- ^ Handle for the LocalStateQuery 'Interpreter' used to compute
+    -- 'SlotDetails' (epoch number, slot-within-epoch, slot time) on
+    -- the consumer thread.
+  , ieSystemStart   :: !SystemStart
+    -- ^ Network system-start time, sourced from the Shelley genesis.
+    -- Required by the state-query interpreter to compute slot times.
+  , ieResolver      :: !(IdResolver IO)
+    -- ^ Ingest-phase ID resolver (DedupMaps + IdCounters under the hood).
+    -- Built once from 'ieDedupMaps' and 'ieExtractState' at startup.
+  , ieWriter        :: !(Writer IO)
+    -- ^ Ingest-phase writer (the COPY adapter). Built once from
+    -- 'ieCopyWriter' at startup.
+  , ieExtractState  :: !(IORef ExtractState)
+    -- ^ Per-block extraction state — carries the 'IdCounters' through
+    -- 'atomicModifyIORef'' so the resolver can hand out fresh IDs.
+  , ieReceiverStats :: !ReceiverStats
+    -- ^ Receiver-thread statistics (blocks received, writes blocked).
+    -- Mutated by the chainsync receiver, read+reset per epoch by the
+    -- consumer for the @Ingest:@ log line. See
+    -- 'DbSync.Ingest.ReceiverStats' for rationale.
   }
 
 -- | Environment for the 'FollowingChainTip' phase.
@@ -160,3 +191,36 @@ instance HasConfig IngestEnv where
 
 instance HasConfig FollowEnv where
   getConfig = getConfig . feCore
+
+-- ---------------------------------------------------------------------------
+-- * HasExtractors instances (orphan — class defined in DbSync.Extractor)
+-- ---------------------------------------------------------------------------
+
+instance HasExtractors CoreEnv where
+  getExtractors = ceExtractors
+
+instance HasExtractors IngestEnv where
+  getExtractors = getExtractors . ieCore
+
+instance HasExtractors FollowEnv where
+  getExtractors = getExtractors . feCore
+
+-- ---------------------------------------------------------------------------
+-- * HasResolver instances (orphan — class defined in DbSync.Resolver)
+-- ---------------------------------------------------------------------------
+
+instance HasResolver IngestEnv where
+  getResolver = ieResolver
+
+-- NOTE: 'FollowEnv' will gain a 'HasResolver' instance once the
+-- 'FollowingChainTip' SELECT/INSERT resolver lands.
+
+-- ---------------------------------------------------------------------------
+-- * HasWriter instances (orphan — class defined in DbSync.Writer)
+-- ---------------------------------------------------------------------------
+
+instance HasWriter IngestEnv where
+  getWriter = ieWriter
+
+-- NOTE: 'FollowEnv' will gain a 'HasWriter' instance once the
+-- 'FollowingChainTip' INSERT writer lands.

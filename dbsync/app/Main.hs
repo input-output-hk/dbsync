@@ -13,7 +13,7 @@ import DbSync.App (buildCoreEnv, runStartup)
 import DbSync.AppM (runAppM)
 import DbSync.Cli (parseCliArgs, CliArgs (..))
 import DbSync.Config (parseConfig)
-import DbSync.Config.Genesis (readCardanoGenesisConfig, mkTopLevelConfig, GenesisConfig (..), ShelleyConfig (..))
+import DbSync.Config.Genesis (readCardanoGenesisConfig, mkProtocolInfoCardano, mkTopLevelConfig, GenesisConfig (..), ShelleyConfig (..))
 import Ouroboros.Consensus.BlockchainTime.WallClock.Types (SystemStart (..))
 import Ouroboros.Consensus.Shelley.Node (ShelleyGenesis (..))
 import DbSync.Config.Node (parseDbSyncNodeConfig, parseNodeConfig)
@@ -21,11 +21,13 @@ import DbSync.Config.Types (DbSyncNodeConfig (..), DatabaseConfig (..), SyncConf
 import DbSync.Config.Validation (validateConfig)
 import DbSync.Copy.Writer (CopyWriter (..), mkCopyWriter, closeCopyWriter)
 import DbSync.Db.Schema.Init (initSchema)
-import DbSync.Env (CoreEnv (..))
+import DbSync.Env (CoreEnv (..), IngestEnv (..))
 import DbSync.Extractor (ExtractState (..), ExtractorDef (..))
 import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
 import DbSync.Id.DedupMap (newMaps)
 import DbSync.Ingest.Consumer (runConsumer)
+import DbSync.Ingest.ReceiverStats (newReceiverStats)
+import DbSync.Ledger.Types (HasLedgerEnv (..), mkNoLedgerEnv)
 import DbSync.Node.Connection (connectToNode, getNetworkMagic)
 import DbSync.Resolver.Ingest (mkIngestResolver)
 import DbSync.StateQuery (newStateQueryVar)
@@ -80,11 +82,11 @@ main = do
       exitFailure
     Right cfg -> pure cfg
 
-  -- 6. Build environment
-  env <- buildCoreEnv tracer validProfile nodeCfg
+  -- 6. Build the shared core environment
+  coreEnv <- buildCoreEnv tracer validProfile nodeCfg
 
   -- 7. Startup logging
-  runAppM env runStartup
+  runAppM coreEnv runStartup
 
   -- 8. Read genesis files → TopLevelConfig
   genesisResult <- readCardanoGenesisConfig nodeCfg configDir
@@ -102,40 +104,63 @@ main = do
   logInfo $ "State dir: " <> toS (caStateDir args)
   logInfo $ "Socket: " <> toS (caSocketPath args)
 
-  -- 9. Build StateQueryVar for epoch/slot computation via HardFork Interpreter
-  stateQueryVar <- newStateQueryVar
+  -- 9. Build StateQueryVar for epoch/slot computation via HardFork Interpreter.
+  -- The TopLevelConfig is passed in so the locally-observed fallback
+  -- summary can extract per-era 'EraParams' from consensus rather than
+  -- shipping its own copy.
+  stateQueryVar <- newStateQueryVar topLevelCfg
 
   -- 10. Database connection string from profile
   let dbCfg = scDatabase validProfile
       connStr = TE.encodeUtf8 $ "dbname=" <> dcName dbCfg
 
   -- 11. Schema creation (idempotent)
-  let extractors = ceExtractors env
+  let extractors = ceExtractors coreEnv
       tableDefs = concatMap pdTables extractors
       versions = map (\e -> (pdName e, pdVersion e)) extractors
   logInfo "Creating schema..."
   initSchema tableDefs versions (TE.decodeUtf8 connStr)
   logInfo "Schema ready"
 
-  -- 12. Build the ingest pipeline
-  stRef <- newIORef mkInitState
-  dedupMaps <- newMaps
-  copyWriter <- mkCopyWriter connStr tableDefs
+  -- 12. Build the ingest pipeline state
+  stRef         <- newIORef mkInitState
+  dedupMaps     <- newMaps
+  copyWriter    <- mkCopyWriter connStr tableDefs
+  blockQueue    <- newTBQueueIO 500
+  receiverStats <- newReceiverStats
+
   let resolver = mkIngestResolver stRef dedupMaps
       writer   = mkCopyWriterAdapter copyWriter
 
-  -- 13. Start block reception + consumer
-  blockQueue <- newTBQueueIO 500
-  logInfo "Starting block ingestion..."
-
   -- SystemStart needed by the state query interpreter
   let systemStart = SystemStart (sgSystemStart $ scConfig $ gcShelley genesisCfg)
+      pinfo       = mkProtocolInfoCardano nodeCfg genesisCfg
+      network     = sgNetworkId (scConfig (gcShelley genesisCfg))
+
+  hasLedgerEnv <- LedgerDisabled <$> mkNoLedgerEnv tracer pinfo systemStart network
+
+  let ingestEnv = IngestEnv
+        { ieCore          = coreEnv
+        , ieBlockQueue    = blockQueue
+        , ieCopyWriter    = copyWriter
+        , ieDedupMaps     = dedupMaps
+        , ieHasLedgerEnv  = hasLedgerEnv
+        , ieStateQueryVar = stateQueryVar
+        , ieSystemStart   = systemStart
+        , ieResolver      = resolver
+        , ieWriter        = writer
+        , ieExtractState  = stRef
+        , ieReceiverStats = receiverStats
+        }
+
+  -- 13. Start block reception + consumer
+  logInfo "Starting block ingestion..."
 
   withIOManager $ \iomgr ->
-    withAsync (connectToNode tracer iomgr topLevelCfg networkMagic (caSocketPath args) blockQueue stateQueryVar) $ \_nodeThread -> do
+    withAsync (runAppM ingestEnv $ connectToNode iomgr topLevelCfg networkMagic (caSocketPath args)) $ \_nodeThread -> do
       -- Consumer runs on the main thread; node receiver runs on async thread
       -- If either throws, the other is cancelled (withAsync guarantee)
-      runConsumer tracer stateQueryVar systemStart extractors blockQueue resolver writer copyWriter stRef
+      runAppM ingestEnv runConsumer
         `finally` do
           logInfo "Shutting down COPY writer..."
           cwCommit copyWriter `catch` \(e :: SomeException) ->

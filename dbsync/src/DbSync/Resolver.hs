@@ -13,6 +13,9 @@
 module DbSync.Resolver
   ( -- * Types
     IdResolver (..)
+
+    -- * Accessor class
+  , HasResolver (..)
   ) where
 
 import Cardano.Prelude
@@ -147,3 +150,16 @@ data IdResolver m = IdResolver
     -- | Assign the next epoch_sync_stats ID.
   , assignEpochSyncStatsId :: !(m EpochSyncStatsId)
   }
+
+-- ---------------------------------------------------------------------------
+-- * Accessor class
+-- ---------------------------------------------------------------------------
+
+-- | Access the (IO-effecting) ID resolver from any environment.
+--
+-- The resolver is fixed to 'IO' here because the production resolvers
+-- ('mkIngestResolver', and the future 'FollowingChainTip' SELECT/INSERT
+-- resolver) both run in 'IO'. Test environments can store an 'IO'-backed
+-- mock; nothing in the codebase needs an arbitrary @m@ at the env layer.
+class HasResolver env where
+  getResolver :: env -> IdResolver IO

@@ -6,14 +6,11 @@
 -- | ChainSync node connection.
 --
 -- Connects to a cardano-node via Unix socket, runs the ChainSync
--- mini-protocol, and pushes received blocks to a 'TQueue'.
+-- mini-protocol, and pushes received blocks to the 'IngestEnv'\'s
+-- block queue.
 module DbSync.Node.Connection
-  ( -- * Types
-    CardanoBlock
-  , CardanoPoint
-
-    -- * Running
-  , connectToNode
+  ( -- * Running
+    connectToNode
   , getNetworkMagic
   ) where
 
@@ -28,8 +25,11 @@ import Cardano.Client.Subscription
   )
 import Control.Concurrent.Async (AsyncCancelled (..))
 import Control.Concurrent.STM (TBQueue, writeTBQueue)
-import Control.Tracer (Tracer, contramap, nullTracer, traceWith)
+import Control.Concurrent.STM.TBQueue (isFullTBQueue)
+import Control.Tracer (contramap, nullTracer, traceWith)
 import qualified Data.ByteString.Lazy as BSL
+import qualified Data.Text as Text
+import System.IO.Error (IOError, ioeGetErrorType, isDoesNotExistErrorType)
 import qualified Network.Mux as Mux
 import Network.TypedProtocol.Peer (Nat (..))
 
@@ -94,14 +94,14 @@ import qualified Ouroboros.Network.Snocket as Snocket
 
 import Cardano.Slotting.Slot (WithOrigin (..))
 
+import DbSync.AppM (IngestM)
+import DbSync.Block.Types (CardanoPoint)
 import DbSync.Config.Genesis (GenesisConfig (..), ShelleyConfig (..))
+import DbSync.Env (IngestEnv (..))
+import DbSync.Ingest.ReceiverStats (ReceiverStats, recordBlockReceived, recordWriteBlocked)
 import DbSync.StateQuery (StateQueryVar, localStateQueryHandler)
+import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
-
--- * Types
-
--- | A point on the Cardano blockchain.
-type CardanoPoint = Point (CardanoBlock StandardCrypto)
 
 -- ---------------------------------------------------------------------------
 -- * Network magic
@@ -117,27 +117,35 @@ getNetworkMagic gc = NetworkMagic $ sgNetworkMagic (scConfig $ gcShelley gc)
 -- ---------------------------------------------------------------------------
 
 -- | Connect to a cardano-node and run the ChainSync protocol.
--- Received blocks are written to the provided 'TQueue'.
--- This function blocks indefinitely (reconnects on failure).
+--
+-- Received blocks are written to the env's 'ieBlockQueue'. This function
+-- blocks indefinitely (reconnects on failure).
+--
+-- The arguments that aren't on 'IngestEnv' ('IOManager', the
+-- 'TopLevelConfig', the 'NetworkMagic', and the socket path) are
+-- network-wiring concerns supplied by 'Main' once 'withIOManager' has
+-- allocated the manager and the genesis config has been read.
 connectToNode
-  :: AppTracer
-  -> IOManager
+  :: IOManager
   -> TopLevelConfig (CardanoBlock StandardCrypto)
   -> NetworkMagic
   -> FilePath                                    -- ^ Node socket path
-  -> TBQueue (CardanoBlock StandardCrypto)        -- ^ Block queue (bounded)
-  -> StateQueryVar                               -- ^ For LocalStateQuery (epoch interpreter)
-  -> IO ()
-connectToNode tracer iomgr topLevelCfg networkMagic socketPath blockQueue stateQueryVar = do
-  traceWith tracer $ LogMsg Info "Connection" ("Connecting to node via " <> toS socketPath) Nothing
-  void $
-    subscribe
-      (localSnocket iomgr)
-      networkMagic
-      (supportedNodeToClientVersions (Proxy @(CardanoBlock StandardCrypto)))
-      subscriptionTracers
-      subscriptionParams
-      (nodeProtocols tracer codecConfig blockQueue stateQueryVar)
+  -> IngestM ()
+connectToNode iomgr topLevelCfg networkMagic socketPath = do
+  tracer         <- asks getTracer
+  blockQueue     <- asks ieBlockQueue
+  stateQueryVar  <- asks ieStateQueryVar
+  receiverStats  <- asks ieReceiverStats
+  liftIO $ do
+    traceWith tracer $ LogMsg Info "Connection" ("Connecting to node via " <> toS socketPath) Nothing
+    void $
+      subscribe
+        (localSnocket iomgr)
+        networkMagic
+        (supportedNodeToClientVersions (Proxy @(CardanoBlock StandardCrypto)))
+        (subscriptionTracers tracer)
+        subscriptionParams
+        (nodeProtocols tracer codecConfig blockQueue receiverStats stateQueryVar)
   where
     codecConfig :: CodecConfig (CardanoBlock StandardCrypto)
     codecConfig = configCodec topLevelCfg
@@ -157,30 +165,49 @@ connectToNode tracer iomgr topLevelCfg networkMagic socketPath blockQueue stateQ
 
     -- Wire up subscription tracer to see connection/disconnection events.
     -- The other tracers stay null (mux-level detail is too noisy).
-    subscriptionTracers :: SubscriptionTracers ()
-    subscriptionTracers =
+    subscriptionTracers :: AppTracer -> SubscriptionTracers ()
+    subscriptionTracers tracer =
       SubscriptionTracers
         { stMuxTracer = nullTracer
         , stHandshakeTracer = nullTracer
-        , stSubscriptionTracer = subscriptionTracer
+        , stSubscriptionTracer = contramap formatSubscriptionTrace tracer
         , stMuxChannelTracer = nullTracer
         , stMuxBearerTracer = nullTracer
         }
 
-    subscriptionTracer :: Tracer IO (SubscriptionTrace ())
-    subscriptionTracer = contramap formatSubscriptionTrace tracer
-
 -- | Map subscription events to appropriate log severity and message.
+--
+-- Two startup-time connect failures get distinguished from genuine errors
+-- so the operator can tell whether they're "still waiting for the node"
+-- (benign) vs. "something is actually wrong" (worth investigating):
+--
+-- * Socket file does not exist yet (cardano-node hasn't bound the socket).
+-- * Connection refused (socket exists but cardano-node isn't accepting).
+--
+-- Both demote to Info. The 'SubscriptionReconnect' event is also demoted
+-- to Debug because it fires after every failure and is redundant given
+-- the preceding error trace already explains what happened.
 formatSubscriptionTrace :: SubscriptionTrace () -> LogMsg
-formatSubscriptionTrace ev =
-  let msg = show ev
-  in case ev of
-       SubscriptionReconnect ->
-         LogMsg Warning "Connection" "Node disconnected. Reconnecting..." Nothing
-       SubscriptionError e ->
-         LogMsg Warning "Connection" ("Connection error: " <> show e) Nothing
-       _ ->
-         LogMsg Info "Connection" msg Nothing
+formatSubscriptionTrace ev = case ev of
+  SubscriptionReconnect ->
+    LogMsg Debug "Connection" "Will retry connection in 5s" Nothing
+  SubscriptionError e -> case classifyConnectError e of
+    Just reason ->
+      LogMsg Info "Connection" reason Nothing
+    Nothing ->
+      LogMsg Warning "Connection" ("Connection error: " <> show e) Nothing
+  _ ->
+    LogMsg Info "Connection" (show ev) Nothing
+
+-- | Recognise transient cardano-node-startup connect() failures.
+classifyConnectError :: SomeException -> Maybe Text
+classifyConnectError se = case fromException se :: Maybe IOError of
+  Just ioe
+    | isDoesNotExistErrorType (ioeGetErrorType ioe) ->
+        Just "Cardano-node socket file not yet present; retrying in 5s"
+    | "refused" `Text.isInfixOf` show ioe ->
+        Just "Cardano-node socket present but not accepting yet; retrying in 5s"
+  _ -> Nothing
 
 -- | Build the NodeToClient protocols bundle.
 -- Only ChainSync is active — tx submission, state query, and tx monitor are null.
@@ -188,11 +215,12 @@ nodeProtocols
   :: AppTracer
   -> CodecConfig (CardanoBlock StandardCrypto)
   -> TBQueue (CardanoBlock StandardCrypto)
+  -> ReceiverStats
   -> StateQueryVar
   -> Network.NodeToClientVersion
   -> BlockNodeToClientVersion (CardanoBlock StandardCrypto)
   -> NodeToClientProtocols 'Mux.InitiatorMode LocalAddress BSL.ByteString IO () Void
-nodeProtocols appTracer codecConfig blockQueue stateQueryVar version blockVersion =
+nodeProtocols appTracer codecConfig blockQueue receiverStats stateQueryVar version blockVersion =
   NodeToClientProtocols
     { localChainSyncProtocol = chainSyncProtocol
     , localTxSubmissionProtocol = dummyTxSubmit
@@ -211,7 +239,7 @@ nodeProtocols appTracer codecConfig blockQueue stateQueryVar version blockVersio
             (cChainSyncCodec codecs)
             channel
             ( chainSyncClientPeerPipelined $
-                blockFetchClient appTracer blockQueue
+                blockFetchClient appTracer blockQueue receiverStats
             )
         pure ((), Nothing)
 
@@ -244,13 +272,14 @@ nodeProtocols appTracer codecConfig blockQueue stateQueryVar version blockVersio
 blockFetchClient
   :: AppTracer
   -> TBQueue (CardanoBlock StandardCrypto)
+  -> ReceiverStats
   -> ChainSyncClientPipelined
        (CardanoBlock StandardCrypto)
        (Point (CardanoBlock StandardCrypto))
        (Tip (CardanoBlock StandardCrypto))
        IO
        ()
-blockFetchClient appTracer blockQueue =
+blockFetchClient appTracer blockQueue receiverStats =
   ChainSyncClientPipelined $ pure $
     -- Start from genesis
     SendMsgFindIntersect
@@ -305,10 +334,31 @@ blockFetchClient appTracer blockQueue =
     mkClientStNext mkDecision n =
       ClientStNext
         { recvMsgRollForward = \blk tip -> do
-            let bn = blockNo blk
+            let bn@(BlockNo bnRaw) = blockNo blk
+            -- Per-block trace at Debug; periodic Info at first block and
+            -- every 10000 thereafter so the operator can confirm blocks
+            -- are still arriving without flooding the log.
             traceWith appTracer $ LogMsg Debug "ChainSync"
               ("Block " <> show bn) Nothing
-            atomically $ writeTBQueue blockQueue blk
+            when (bnRaw == 1 || bnRaw `mod` 10000 == 0) $
+              traceWith appTracer $ LogMsg Info "ChainSync"
+                ("Received block #" <> show bnRaw) Nothing
+            recordBlockReceived receiverStats
+            -- Try a non-blocking write first so we can tell whether the
+            -- queue was full at the moment of arrival. A non-zero
+            -- 'rsWritesBlocked' means the consumer is the bottleneck;
+            -- a zero count with low drain averages means the upstream
+            -- node is. ('stm' has 'tryReadTBQueue' but no 'tryWriteTBQueue',
+            -- so we synthesise the same semantics from 'isFullTBQueue' +
+            -- 'writeTBQueue' inside a single STM transaction.)
+            ok <- atomically $ do
+              full <- isFullTBQueue blockQueue
+              if full
+                then pure False
+                else writeTBQueue blockQueue blk >> pure True
+            unless ok $ do
+              recordWriteBlocked receiverStats
+              atomically $ writeTBQueue blockQueue blk
             pure $ goTip mkDecision n (At bn) tip
         , recvMsgRollBackward = \point tip -> do
             traceWith appTracer $ LogMsg Warning "ChainSync"

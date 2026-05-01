@@ -26,12 +26,14 @@ import DbSync.Block.Types
 import DbSync.Db.Schema.Core (Block (..))
 import qualified DbSync.Db.Schema.Core as SC
 import DbSync.Db.Schema.Ids (BlockId (..), TxId (..))
-import DbSync.Extractor (ExtractState (..), ExtractorDef (..))
+import DbSync.Extractor (ExtractState (..), ExtractorDef (..), HasExtractors (..))
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
 import DbSync.Ingest.Pipeline (processBlock)
 import DbSync.Id.DedupMap (newMaps)
+import DbSync.Resolver (HasResolver (..), IdResolver)
 import DbSync.Resolver.Ingest (mkIngestResolver)
+import DbSync.Writer (HasWriter (..), Writer)
 import DbSync.Writer.Testing (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 
 import Data.Time.Calendar (fromGregorian)
@@ -124,15 +126,34 @@ spec = do
 -- Test helpers
 -- ---------------------------------------------------------------------------
 
+-- | The smallest env that satisfies 'processBlock''s constraints.
+data TestPipelineEnv = TestPipelineEnv
+  { tpeResolver   :: !(IdResolver IO)
+  , tpeWriter     :: !(Writer IO)
+  , tpeExtractors :: ![ExtractorDef]
+  }
+
+instance HasResolver TestPipelineEnv where
+  getResolver = tpeResolver
+
+instance HasWriter TestPipelineEnv where
+  getWriter = tpeWriter
+
+instance HasExtractors TestPipelineEnv where
+  getExtractors = tpeExtractors
+
 -- | Run the core extractor on a single block, return written records.
 runCore :: GenericBlock -> IO TestWriterState
 runCore block = do
   stRef <- newIORef mkInitState
   dedupMaps <- newMaps
   wrRef <- newIORef emptyTestWriterState
-  let resolver = mkIngestResolver stRef dedupMaps
-      writer   = mkTestWriter wrRef
-  processBlock resolver writer [coreExtractor] block
+  let env = TestPipelineEnv
+        { tpeResolver   = mkIngestResolver stRef dedupMaps
+        , tpeWriter     = mkTestWriter wrRef
+        , tpeExtractors = [coreExtractor]
+        }
+  runReaderT (processBlock block) env
   readIORef wrRef
 
 -- | Run the core extractor on two blocks sequentially, return separate results.
@@ -140,15 +161,18 @@ runCoreTwoBlocks :: GenericBlock -> GenericBlock -> IO (TestWriterState, TestWri
 runCoreTwoBlocks block1 block2 = do
   stRef <- newIORef mkInitState
   dedupMaps <- newMaps
-  wrRef1 <- newIORef emptyTestWriterState
   let resolver = mkIngestResolver stRef dedupMaps
-      writer1  = mkTestWriter wrRef1
-  processBlock resolver writer1 [coreExtractor] block1
+
+  wrRef1 <- newIORef emptyTestWriterState
+  let env1 = TestPipelineEnv resolver (mkTestWriter wrRef1) [coreExtractor]
+  runReaderT (processBlock block1) env1
   w1 <- readIORef wrRef1
+
   wrRef2 <- newIORef emptyTestWriterState
-  let writer2 = mkTestWriter wrRef2
-  processBlock resolver writer2 [coreExtractor] block2
+  let env2 = TestPipelineEnv resolver (mkTestWriter wrRef2) [coreExtractor]
+  runReaderT (processBlock block2) env2
   w2 <- readIORef wrRef2
+
   pure (w1, w2)
 
 -- ---------------------------------------------------------------------------

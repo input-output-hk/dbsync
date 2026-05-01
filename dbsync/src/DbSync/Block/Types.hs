@@ -10,7 +10,7 @@
 -- All fields match the original @cardano-db-sync@ Generic types, ensuring
 -- full schema parity with the existing database.
 module DbSync.Block.Types
-  ( -- * Types
+  ( -- * Generic block / tx types
     GenericBlock (..)
   , GenericTx (..)
   , GenericTxIn (..)
@@ -21,6 +21,9 @@ module DbSync.Block.Types
   , PoolRegistrationData (..)
   , PoolRelayData (..)
   , BlockEra (..)
+
+    -- * Cardano point alias
+  , CardanoPoint
   ) where
 
 import Cardano.Prelude
@@ -28,6 +31,21 @@ import Cardano.Prelude
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import Data.Time.Clock (UTCTime)
+
+import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
+import Ouroboros.Network.Block (Point)
+
+-- ---------------------------------------------------------------------------
+-- * Cardano point alias
+-- ---------------------------------------------------------------------------
+
+-- | A point on the Cardano blockchain.
+--
+-- Defined here (rather than in 'DbSync.Node.Connection') so that low-level
+-- types — 'DbSync.Ledger.Types', 'DbSync.Ledger.Snapshot', etc. — can refer
+-- to it without pulling in the entire ChainSync wiring (which itself
+-- depends on 'DbSync.Env').
+type CardanoPoint = Point (CardanoBlock StandardCrypto)
 
 -- * Types
 

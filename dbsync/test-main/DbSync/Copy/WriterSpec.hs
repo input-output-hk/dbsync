@@ -30,13 +30,15 @@ import DbSync.Copy.Writer (CopyWriter (..), closeCopyWriter, mkCopyWriter)
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
 import DbSync.Db.Schema.Init (dropSchema, initSchema)
 import DbSync.Db.Schema.Types (TableDef)
-import DbSync.Extractor (ExtractState (..))
+import DbSync.Extractor (ExtractState (..), ExtractorDef, HasExtractors (..))
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
 import DbSync.Id.DedupMap (newMaps)
 import DbSync.Ingest.Pipeline (processBlock)
+import DbSync.Resolver (HasResolver (..), IdResolver)
 import DbSync.Resolver.Ingest (mkIngestResolver)
 import DbSync.Test.Database (queryTestDb, testConnBs, testConnStr, truncateAllTables)
+import DbSync.Writer (HasWriter (..), Writer)
 import DbSync.Writer.CopyAdapter (mkCopyWriterAdapter)
 
 coreTables :: [TableDef]
@@ -123,15 +125,18 @@ spec = describe "DbSync.Copy.Writer (multi-threaded, full pipeline)" $
         stRef <- newIORef mkInitState
         dedupMaps <- newMaps
         cw <- mkCopyWriter testConnBs coreTables
-        let resolver = mkIngestResolver stRef dedupMaps
-            writer   = mkCopyWriterAdapter cw
+        let env = TestPipelineEnv
+              { tpeResolver   = mkIngestResolver stRef dedupMaps
+              , tpeWriter     = mkCopyWriterAdapter cw
+              , tpeExtractors = [coreExtractor]
+              }
 
         -- Epoch 1
-        processBlock resolver writer [coreExtractor] emptyBlock
+        runReaderT (processBlock emptyBlock) env
         cwCommit cw
         -- Epoch 2
         cwReopen cw
-        processBlock resolver writer [coreExtractor] emptyBlock2
+        runReaderT (processBlock emptyBlock2) env
         cwCommit cw
         closeCopyWriter cw
 
@@ -158,16 +163,35 @@ spec = describe "DbSync.Copy.Writer (multi-threaded, full pipeline)" $
 -- Test runner helpers
 -- ---------------------------------------------------------------------------
 
+-- | The smallest env that satisfies 'processBlock''s constraints.
+data TestPipelineEnv = TestPipelineEnv
+  { tpeResolver   :: !(IdResolver IO)
+  , tpeWriter     :: !(Writer IO)
+  , tpeExtractors :: ![ExtractorDef]
+  }
+
+instance HasResolver TestPipelineEnv where
+  getResolver = tpeResolver
+
+instance HasWriter TestPipelineEnv where
+  getWriter = tpeWriter
+
+instance HasExtractors TestPipelineEnv where
+  getExtractors = tpeExtractors
+
 -- | Run the full pipeline: extractor → resolver → CopyAdapter → PostgreSQL.
 runPipelineToDb :: [GenericBlock] -> IO ()
 runPipelineToDb blocks = do
   stRef <- newIORef mkInitState
   dedupMaps <- newMaps
   cw <- mkCopyWriter testConnBs coreTables
-  let resolver = mkIngestResolver stRef dedupMaps
-      writer   = mkCopyWriterAdapter cw
+  let env = TestPipelineEnv
+        { tpeResolver   = mkIngestResolver stRef dedupMaps
+        , tpeWriter     = mkCopyWriterAdapter cw
+        , tpeExtractors = [coreExtractor]
+        }
   forM_ blocks $ \blk ->
-    processBlock resolver writer [coreExtractor] blk
+    runReaderT (processBlock blk) env
   cwCommit cw
   closeCopyWriter cw
 

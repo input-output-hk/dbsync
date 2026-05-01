@@ -83,9 +83,11 @@ library
     DbSync.Copy.Writer
     DbSync.Ingest.Consumer
     DbSync.Ingest.Pipeline
+    DbSync.Ingest.ReceiverStats
     DbSync.Resolver
     DbSync.Resolver.Ingest
     DbSync.StateQuery
+    DbSync.StateQuery.ObservedSummary
     DbSync.Writer
     DbSync.Writer.CopyAdapter
     DbSync.Writer.Testing
@@ -233,18 +235,21 @@ test-suite dbsync-test
     DbSync.Ledger.TypesSpec
     DbSync.Checkpoint.ManagerSpec
     DbSync.Checkpoint.SyncStateSpec
+    DbSync.StateQuery.ObservedSummarySpec
   build-depends:
       base
     , dbsync
     , dbsync-db
     , dbsync:dbsync-testlib
     , hspec
+    , cardano-ledger-core
     , cardano-prelude
     , cardano-slotting
     , cardano-strict-containers
     , bytestring
     , containers
     , optparse-applicative
+    , ouroboros-consensus
     , process
     , text
     , time

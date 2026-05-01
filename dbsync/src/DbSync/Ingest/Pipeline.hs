@@ -1,11 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE FlexibleContexts #-}
 
 -- | Block processing pipeline for the unified extraction architecture.
 --
 -- Pre-assigns shared IDs (BlockId, TxId, TxOutId) centrally, builds
 -- a 'BlockContext', then runs all enabled extractors. Works identically
 -- in both 'IngestChainHistory' and 'FollowingChainTip' — only the
--- resolver and writer implementations differ.
+-- 'IdResolver' and 'Writer' implementations carried by the env differ.
 module DbSync.Ingest.Pipeline
   ( -- * Processing
     processBlock
@@ -14,10 +15,10 @@ module DbSync.Ingest.Pipeline
 import Cardano.Prelude
 
 import DbSync.Block.Types (GenericBlock (..), GenericTx (..))
-import DbSync.Extractor (ExtractorDef (..), BlockContext (..), TxContext (..))
+import DbSync.Extractor (ExtractorDef (..), BlockContext (..), HasExtractors (..), TxContext (..))
 import DbSync.Extractor.Core (mkSlotLeader)
-import DbSync.Resolver (IdResolver (..))
-import DbSync.Writer (Writer)
+import DbSync.Resolver (HasResolver (..), IdResolver (..))
+import DbSync.Writer (HasWriter (..), Writer)
 
 -- ---------------------------------------------------------------------------
 -- * Processing
@@ -32,13 +33,36 @@ import DbSync.Writer (Writer)
 --
 -- Extractors are independent — they consume the pre-assigned IDs
 -- without depending on each other's execution order.
+--
+-- Polymorphic over the env so it works in both 'IngestChainHistory' (where
+-- the env is 'DbSync.Env.IngestEnv') and 'FollowingChainTip' (where the
+-- env will be 'DbSync.Env.FollowEnv' once the SELECT/INSERT resolver +
+-- writer land).
 processBlock
+  :: ( MonadReader env m
+     , HasResolver env
+     , HasWriter env
+     , HasExtractors env
+     , MonadIO m
+     )
+  => GenericBlock
+  -> m ()
+processBlock block = do
+  resolver   <- asks getResolver
+  writer     <- asks getWriter
+  extractors <- asks getExtractors
+  liftIO $ runProcessBlock resolver writer extractors block
+
+-- | The pure-IO core of 'processBlock'. Kept separate so the env-pulling
+-- wrapper stays trivial and the extractor pipeline (which is hot-path code
+-- with mutable refs) doesn't pay any 'ReaderT' overhead.
+runProcessBlock
   :: IdResolver IO
   -> Writer IO
   -> [ExtractorDef]
   -> GenericBlock
   -> IO ()
-processBlock resolver writer extractors block = do
+runProcessBlock resolver writer extractors block = do
   -- 1. Resolve slot leader (dedup)
   let leader = mkSlotLeader block
   (slId, isNew) <- resolveSlotLeader resolver (blkSlotLeader block) leader

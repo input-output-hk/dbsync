@@ -15,7 +15,12 @@
 module DbSync.Writer
   ( -- * Types
     Writer (..)
+
+    -- * Accessor class
+  , HasWriter (..)
   ) where
+
+import Cardano.Prelude (IO)
 
 import DbSync.Db.Schema.CBOR (TxCbor)
 import DbSync.Db.Schema.Core (Block, SlotLeader, Tx)
@@ -97,3 +102,14 @@ data Writer m = Writer
     -- ---------------------------------------------------------------
   , commit :: !(m ())
   }
+
+-- ---------------------------------------------------------------------------
+-- * Accessor class
+-- ---------------------------------------------------------------------------
+
+-- | Access the (IO-effecting) writer from any environment.
+--
+-- See 'DbSync.Resolver.HasResolver' for the rationale on fixing the effect
+-- monad to 'IO' at the env layer.
+class HasWriter env where
+  getWriter :: env -> Writer IO

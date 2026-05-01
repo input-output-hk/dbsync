@@ -127,7 +127,11 @@ import DbSync.Ledger.Types
   , LedgerEnv (..)
   , updatedCommittee
   )
-import DbSync.Node.Connection (CardanoBlock, CardanoPoint)
+import Ouroboros.Consensus.Cardano.Block (CardanoBlock)
+import Ouroboros.Consensus.Shelley.HFEras ()                -- per-era HFC instances
+import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()  -- 'LedgerSupportsProtocol' orphans
+
+import DbSync.Block.Types (CardanoPoint)
 import DbSync.Trace.Types (AppTracer)
 
 -- ---------------------------------------------------------------------------

@@ -61,7 +61,7 @@ import Ouroboros.Consensus.Shelley.Ledger (ShelleyBlock)
 import qualified Ouroboros.Consensus.Shelley.Ledger.Ledger as Consensus
 
 import DbSync.Ledger.Keys (PoolKeyHash, StakeCred)
-import DbSync.Node.Connection (CardanoBlock)
+import Ouroboros.Consensus.Cardano.Block (CardanoBlock)
 
 -- ---------------------------------------------------------------------------
 -- * Types

@@ -8,6 +8,12 @@ module DbSync.Phase.FollowingChainTip
 
 import Cardano.Prelude
 
+import DbSync.AppM (FollowM)
+
 -- | Run the FollowingChainTip phase.
-run :: IO ()
+--
+-- TODO: drive the per-block INSERT pipeline against the env-level
+-- 'DbSync.Env.FollowEnv'; this is the steady-state phase that runs
+-- indefinitely once the immutable tip has been reached.
+run :: FollowM ()
 run = panic "TODO: not implemented"

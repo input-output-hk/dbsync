@@ -17,6 +17,9 @@ module DbSync.Extractor
   , BlockContext (..)
   , TxContext (..)
 
+    -- * Accessor class
+  , HasExtractors (..)
+
     -- * Re-exports (for ExtractState used by IngestResolver)
   , ExtractState (..)
   ) where
@@ -86,6 +89,18 @@ data TxContext = TxContext
       -- ^ Pre-assigned TxOutId for each output, in order.
       -- @length tcOutIds == length (txOutputs tcGenTx)@
   }
+
+-- ---------------------------------------------------------------------------
+-- * Accessor class
+-- ---------------------------------------------------------------------------
+
+-- | Access the active extractor list from any environment.
+--
+-- Extractors are decided once at startup (from the profile config) and never
+-- change for a run — so storing them on the env is just plumbing rather than
+-- reconfiguration.
+class HasExtractors env where
+  getExtractors :: env -> [ExtractorDef]
 
 -- ---------------------------------------------------------------------------
 -- * ExtractState (used by IngestResolver)

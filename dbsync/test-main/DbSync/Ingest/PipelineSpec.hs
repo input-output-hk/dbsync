@@ -26,12 +26,14 @@ import DbSync.Block.Types
   )
 import DbSync.Db.Schema.Core (Block (..))
 import DbSync.Db.Schema.Ids (BlockId (..), TxId (..))
-import DbSync.Extractor (ExtractState (..), ExtractorDef (..))
+import DbSync.Extractor (ExtractState (..), ExtractorDef (..), HasExtractors (..))
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
 import DbSync.Id.DedupMap (newMaps)
 import DbSync.Ingest.Pipeline (processBlock)
+import DbSync.Resolver (HasResolver (..), IdResolver)
 import DbSync.Resolver.Ingest (mkIngestResolver)
+import DbSync.Writer (HasWriter (..), Writer)
 import DbSync.Writer.Testing (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 
 spec :: Spec
@@ -103,6 +105,30 @@ mkMockExtractor countRef = ExtractorDef
   }
 
 -- ---------------------------------------------------------------------------
+-- Minimal test env
+-- ---------------------------------------------------------------------------
+
+-- | The smallest env that satisfies 'processBlock''s constraints.
+--
+-- Avoids constructing a full 'DbSync.Env.IngestEnv' (which would require
+-- a state-query handle, COPY writer, ledger sub-env, etc. — all unrelated
+-- to what 'processBlock' actually reads).
+data TestPipelineEnv = TestPipelineEnv
+  { tpeResolver   :: !(IdResolver IO)
+  , tpeWriter     :: !(Writer IO)
+  , tpeExtractors :: ![ExtractorDef]
+  }
+
+instance HasResolver TestPipelineEnv where
+  getResolver = tpeResolver
+
+instance HasWriter TestPipelineEnv where
+  getWriter = tpeWriter
+
+instance HasExtractors TestPipelineEnv where
+  getExtractors = tpeExtractors
+
+-- ---------------------------------------------------------------------------
 -- Test runners
 -- ---------------------------------------------------------------------------
 
@@ -111,9 +137,12 @@ runPipeline extractors block = do
   stRef <- newIORef mkInitState
   dedupMaps <- newMaps
   wrRef <- newIORef emptyTestWriterState
-  let resolver = mkIngestResolver stRef dedupMaps
-      writer   = mkTestWriter wrRef
-  processBlock resolver writer extractors block
+  let env = TestPipelineEnv
+        { tpeResolver   = mkIngestResolver stRef dedupMaps
+        , tpeWriter     = mkTestWriter wrRef
+        , tpeExtractors = extractors
+        }
+  runReaderT (processBlock block) env
   readIORef wrRef
 
 runPipelineTwoBlocks :: [ExtractorDef] -> GenericBlock -> GenericBlock -> IO (TestWriterState, TestWriterState)
@@ -121,12 +150,17 @@ runPipelineTwoBlocks extractors block1 block2 = do
   stRef <- newIORef mkInitState
   dedupMaps <- newMaps
   let resolver = mkIngestResolver stRef dedupMaps
+
   wrRef1 <- newIORef emptyTestWriterState
-  processBlock resolver (mkTestWriter wrRef1) extractors block1
+  let env1 = TestPipelineEnv resolver (mkTestWriter wrRef1) extractors
+  runReaderT (processBlock block1) env1
   w1 <- readIORef wrRef1
+
   wrRef2 <- newIORef emptyTestWriterState
-  processBlock resolver (mkTestWriter wrRef2) extractors block2
+  let env2 = TestPipelineEnv resolver (mkTestWriter wrRef2) extractors
+  runReaderT (processBlock block2) env2
   w2 <- readIORef wrRef2
+
   pure (w1, w2)
 
 -- ---------------------------------------------------------------------------

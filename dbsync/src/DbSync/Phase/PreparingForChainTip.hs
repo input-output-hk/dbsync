@@ -9,6 +9,13 @@ module DbSync.Phase.PreparingForChainTip
 
 import Cardano.Prelude
 
+import DbSync.AppM (CoreM)
+
 -- | Run the PreparingForChainTip phase.
-run :: IO ()
+--
+-- TODO: drive the DDL transition (LOGGED tables, index + constraint
+-- creation, @ANALYZE@) using the connection string from the env-level
+-- 'DbSync.Config.Types.SyncConfig', then return so the caller can
+-- transition to 'DbSync.Phase.FollowingChainTip'.
+run :: CoreM ()
 run = panic "TODO: not implemented"

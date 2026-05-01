@@ -41,7 +41,7 @@ import qualified Ouroboros.Consensus.Protocol.TPraos as Consensus
 
 import DbSync.Era.Shelley.Generic.ProtoParams (ProtoParams, epochProtoParams)
 import DbSync.Ledger.Keys (PoolKeyHash)
-import DbSync.Node.Connection (CardanoBlock)
+import Ouroboros.Consensus.Cardano.Block (CardanoBlock)
 import DbSync.Util (maybeToStrictMaybe)
 
 -- ---------------------------------------------------------------------------

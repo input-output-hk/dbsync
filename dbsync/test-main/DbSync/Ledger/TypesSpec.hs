@@ -18,6 +18,8 @@ module DbSync.Ledger.TypesSpec
 
 import Cardano.Prelude
 
+import Cardano.Ledger.Coin (Coin (..))
+
 import qualified Data.Map.Strict as Map
 import qualified Data.Sequence.Strict as Seq
 import Test.Hspec (Spec, describe, it, shouldBe)
@@ -43,11 +45,11 @@ spec = do
       lookupDepositsMap "any-hash" emptyDepositsMap `shouldBe` Nothing
 
     it "lookupDepositsMap round-trips a single entry" $ do
-      let m = DepositsMap (Map.fromList [("some-hash", 2_000_000)])
-      lookupDepositsMap "some-hash" m `shouldBe` Just 2_000_000
+      let m = DepositsMap (Map.fromList [("some-hash", Coin 2_000_000)])
+      lookupDepositsMap "some-hash" m `shouldBe` Just (Coin 2_000_000)
 
     it "lookupDepositsMap returns Nothing for a missing hash" $ do
-      let m = DepositsMap (Map.fromList [("a", 1), ("b", 2)])
+      let m = DepositsMap (Map.fromList [("a", Coin 1), ("b", Coin 2)])
       lookupDepositsMap "c" m `shouldBe` Nothing
 
   describe "EpochBlockNo" $ do

@@ -31,6 +31,7 @@ module DbSync.Copy.Writer
 import Cardano.Prelude
 
 import Control.Concurrent.STM (TBQueue, newTBQueueIO, readTBQueue, writeTBQueue)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 
 import qualified Data.Map.Strict as Map
 
@@ -72,7 +73,8 @@ data CopyChannel = CopyChannel
   { chConnection :: !CopyConnection
   , chQueue      :: !(TBQueue (Maybe ByteString))
       -- ^ 'Just row' = data row; 'Nothing' = sentinel (epoch boundary)
-  , chWorker     :: !(Async ())
+  , chWorker     :: !(IORef (Async ()))
+      -- ^ Mutable so 'cwReopen' can swap in the next epoch's worker.
   , chReady      :: !(MVar ())
       -- ^ Writer signals here after draining on sentinel
   }
@@ -95,7 +97,8 @@ mkCopyWriter connStr tableDefs = do
     ready <- newEmptyMVar
     worker <- async $ copyWorkerLoop cc queue ready
     link worker  -- propagate worker exceptions to parent
-    pure (tdName td, CopyChannel cc queue worker ready)
+    workerRef <- newIORef worker
+    pure (tdName td, CopyChannel cc queue workerRef ready)
 
   let channelMap = Map.fromList channels
 
@@ -129,11 +132,12 @@ mkCopyWriter connStr tableDefs = do
           worker' <- async $
             copyWorkerLoop (chConnection ch) (chQueue ch) (chReady ch)
           link worker'
+          writeIORef (chWorker ch) worker'
 
     , cwClose = do
         -- Cancel all workers and close connections
         forM_ channelMap $ \ch -> do
-          cancel (chWorker ch)
+          readIORef (chWorker ch) >>= cancel
           closeCopyConnection (chConnection ch)
     }
 

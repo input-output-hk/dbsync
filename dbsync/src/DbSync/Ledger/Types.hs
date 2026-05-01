@@ -112,7 +112,11 @@ import qualified DbSync.Era.Shelley.Generic.ProtoParams as Generic
 import qualified DbSync.Era.Shelley.Generic.StakeDist as Generic
 import DbSync.Ledger.Event (LedgerEvent)
 import DbSync.Ledger.Keys (PoolKeyHash)
-import DbSync.Node.Connection (CardanoBlock, CardanoPoint)
+import Ouroboros.Consensus.Cardano.Block (CardanoBlock)
+import Ouroboros.Consensus.Shelley.HFEras ()                -- per-era HFC instances
+import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()  -- 'LedgerSupportsProtocol' orphans
+
+import DbSync.Block.Types (CardanoPoint)
 import DbSync.StateQuery (CardanoInterpreter, SlotDetails)
 import DbSync.Trace.Types (AppTracer)
 

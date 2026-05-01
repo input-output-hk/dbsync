@@ -17,6 +17,14 @@ module DbSync.Db.Schema.Init
   , checkSchemaVersions
   , SchemaVersionRow (..)
 
+    -- * Schema-state analysis (pure)
+  , SchemaState (..)
+  , SchemaMismatch (..)
+  , SchemaAction (..)
+  , analyzeSchemaState
+  , decideSchemaAction
+  , renderSchemaMismatch
+
     -- * psql helpers (exported for tests)
   , execPsql
   , queryPsql
@@ -25,6 +33,7 @@ module DbSync.Db.Schema.Init
 import Cardano.Prelude
 
 import Data.List (lookup)
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Text as T
 
 import System.IO.Error (userError)
@@ -43,6 +52,52 @@ data SchemaVersionRow = SchemaVersionRow
   { svrExtractorName :: !Text
   , svrVersion       :: !Int
   }
+  deriving stock (Eq, Show)
+
+-- | Observed state of the database schema, relative to the extractor versions
+-- the running code expects.
+--
+-- Distinguishes the three boot-time scenarios:
+--
+--   * 'SchemaFresh' — no @schema_version@ table; this is a brand-new database
+--     and the boot flow should run 'initSchema'.
+--   * 'SchemaMatches' — every expected extractor is present at the expected
+--     version; the boot flow should skip 'initSchema' and resume.
+--   * 'SchemaMismatched' — at least one extractor disagrees; the boot flow
+--     should abort and surface the discrepancies to the operator (unless
+--     @--force-resync@ overrides).
+data SchemaState
+  = SchemaFresh
+  | SchemaMatches
+  | SchemaMismatched !(NonEmpty SchemaMismatch)
+  deriving stock (Eq, Show)
+
+-- | A single point of disagreement between expected (code) and observed (DB)
+-- extractor versions.
+data SchemaMismatch
+  = -- | Code expects this extractor but the DB has no row for it.
+    --   Fields: @(extractorName, expectedVersion)@.
+    MissingExtractor !Text !Int
+  | -- | DB is at a lower version than the code: re-sync is needed.
+    --   Fields: @(extractorName, dbVersion, expectedVersion)@.
+    VersionAhead !Text !Int !Int
+  | -- | DB is at a higher version than the code: downgrade is not supported.
+    --   Fields: @(extractorName, dbVersion, expectedVersion)@.
+    VersionBehind !Text !Int !Int
+  deriving stock (Eq, Show)
+
+-- | The action the boot flow should take, given the observed schema state and
+-- whether the operator passed @--force-resync@.
+data SchemaAction
+  = -- | Schema already matches; do not touch DDL.
+    ActionSkipInit
+  | -- | DB is empty; run 'initSchema' to create everything.
+    ActionRunInit
+  | -- | Operator forced a clean slate; drop everything (including
+    -- @schema_version@) and re-run 'initSchema'.
+    ActionForceReinit
+  | -- | Schema mismatch and no force flag; the operator must intervene.
+    ActionAbort !(NonEmpty SchemaMismatch)
   deriving stock (Eq, Show)
 
 -- ---------------------------------------------------------------------------
@@ -179,6 +234,66 @@ checkSchemaVersions expectedVersions connStr = do
             Just v  -> Just (T.strip name, v)
             Nothing -> Nothing
         _ -> Nothing
+
+-- ---------------------------------------------------------------------------
+-- * Schema-state analysis (pure)
+-- ---------------------------------------------------------------------------
+
+-- | Pure analysis of schema state given the extractors the code expects and
+-- the rows observed in the database.
+--
+-- @Nothing@ for the second argument means the @schema_version@ table itself
+-- does not exist (a fresh DB). @Just rows@ means the table is present and
+-- @rows@ are the @(name, version)@ pairs read from it.
+--
+-- Extra extractors in @rows@ that are not in the expected list are
+-- silently ignored — operators are allowed to remove an extractor from
+-- their profile without re-syncing the rest.
+analyzeSchemaState
+  :: [(Text, Int)]            -- ^ Expected: @(extractorName, expectedVersion)@
+  -> Maybe [(Text, Int)]      -- ^ Observed DB rows; 'Nothing' = table missing
+  -> SchemaState
+analyzeSchemaState _ Nothing = SchemaFresh
+analyzeSchemaState expected (Just dbRows) =
+  case mapMaybe (compareOne dbRows) expected of
+    []       -> SchemaMatches
+    (m : ms) -> SchemaMismatched (m NE.:| ms)
+  where
+    compareOne :: [(Text, Int)] -> (Text, Int) -> Maybe SchemaMismatch
+    compareOne dbVersions (name, expectedVer) =
+      case lookup name dbVersions of
+        Nothing -> Just (MissingExtractor name expectedVer)
+        Just dbVer
+          | dbVer == expectedVer -> Nothing
+          | dbVer <  expectedVer -> Just (VersionAhead  name dbVer expectedVer)
+          | otherwise            -> Just (VersionBehind name dbVer expectedVer)
+
+-- | Decide what the boot flow should do, given the observed schema state and
+-- the operator-supplied @--force-resync@ flag.
+--
+-- 'True' for @--force-resync@ short-circuits everything: the operator has
+-- explicitly asked for a clean slate.
+decideSchemaAction :: Bool -> SchemaState -> SchemaAction
+decideSchemaAction True  _                       = ActionForceReinit
+decideSchemaAction False SchemaMatches           = ActionSkipInit
+decideSchemaAction False SchemaFresh             = ActionRunInit
+decideSchemaAction False (SchemaMismatched errs) = ActionAbort errs
+
+-- | Render a single 'SchemaMismatch' as a human-readable line suitable for
+-- logging. Stable wording so operators can grep for it.
+renderSchemaMismatch :: SchemaMismatch -> Text
+renderSchemaMismatch = \case
+  MissingExtractor name ver ->
+    "Extractor '" <> name <> "' v" <> show ver
+      <> " is expected but not present in the database."
+  VersionAhead name dbVer codeVer ->
+    "Extractor '" <> name <> "': database has v" <> show dbVer
+      <> ", code expects v" <> show codeVer
+      <> ". Re-sync required."
+  VersionBehind name dbVer codeVer ->
+    "Extractor '" <> name <> "': database has v" <> show dbVer
+      <> " but code only supports v" <> show codeVer
+      <> ". Downgrade not supported."
 
 -- ---------------------------------------------------------------------------
 -- * SQL templates

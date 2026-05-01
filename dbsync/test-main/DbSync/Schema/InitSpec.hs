@@ -12,12 +12,18 @@ module DbSync.Schema.InitSpec (spec) where
 import Cardano.Prelude
 
 import qualified Data.Text as T
+import qualified Data.List.NonEmpty as NE
 
 import Test.Hspec (Spec, afterAll_, beforeAll_, describe, it, shouldBe, shouldSatisfy)
 
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
 import DbSync.Db.Schema.Init
-  ( checkSchemaVersions
+  ( SchemaAction (..)
+  , SchemaMismatch (..)
+  , SchemaState (..)
+  , analyzeSchemaState
+  , checkSchemaVersions
+  , decideSchemaAction
   , dropSchema
   , initSchema
   , queryPsql
@@ -38,6 +44,78 @@ coreVersions = [("core", 1)]
 
 spec :: Spec
 spec = describe "DbSync.Db.Schema.Init" $ do
+
+  -- ---------------------------------------------------------------------------
+  -- Pure tests (no PostgreSQL required)
+  -- ---------------------------------------------------------------------------
+
+  describe "decideSchemaAction (pure)" $ do
+    it "force-resync overrides everything: matches" $
+      decideSchemaAction True SchemaMatches `shouldBe` ActionForceReinit
+
+    it "force-resync overrides everything: fresh" $
+      decideSchemaAction True SchemaFresh `shouldBe` ActionForceReinit
+
+    it "force-resync overrides everything: mismatched" $
+      let errs = MissingExtractor "core" 1 NE.:| []
+      in decideSchemaAction True (SchemaMismatched errs) `shouldBe` ActionForceReinit
+
+    it "no force, schema matches → skip init" $
+      decideSchemaAction False SchemaMatches `shouldBe` ActionSkipInit
+
+    it "no force, fresh DB → run init" $
+      decideSchemaAction False SchemaFresh `shouldBe` ActionRunInit
+
+    it "no force, mismatched → abort with the same errors" $
+      let errs = VersionAhead "core" 1 2 NE.:| [MissingExtractor "utxo" 1]
+      in decideSchemaAction False (SchemaMismatched errs) `shouldBe` ActionAbort errs
+
+  describe "analyzeSchemaState (pure)" $ do
+    it "schema_version table missing → SchemaFresh (no expected extractors)" $
+      analyzeSchemaState [] Nothing `shouldBe` SchemaFresh
+
+    it "schema_version table missing → SchemaFresh (with expected extractors)" $
+      analyzeSchemaState [("core", 1), ("utxo", 1)] Nothing `shouldBe` SchemaFresh
+
+    it "all expected extractors present at expected versions → SchemaMatches" $
+      analyzeSchemaState
+        [("core", 1), ("utxo", 1)]
+        (Just [("core", 1), ("utxo", 1)])
+        `shouldBe` SchemaMatches
+
+    it "extra extractors in DB are silently ignored" $
+      analyzeSchemaState
+        [("core", 1)]
+        (Just [("core", 1), ("removed_feature", 1)])
+        `shouldBe` SchemaMatches
+
+    it "expected extractor missing from DB → MissingExtractor" $
+      analyzeSchemaState
+        [("core", 1), ("utxo", 1)]
+        (Just [("core", 1)])
+        `shouldBe` SchemaMismatched (MissingExtractor "utxo" 1 NE.:| [])
+
+    it "DB version older than code → VersionAhead" $
+      analyzeSchemaState
+        [("core", 2)]
+        (Just [("core", 1)])
+        `shouldBe` SchemaMismatched (VersionAhead "core" 1 2 NE.:| [])
+
+    it "DB version newer than code → VersionBehind" $
+      analyzeSchemaState
+        [("core", 1)]
+        (Just [("core", 2)])
+        `shouldBe` SchemaMismatched (VersionBehind "core" 2 1 NE.:| [])
+
+    it "multiple mismatches reported in expected order" $
+      analyzeSchemaState
+        [("core", 1), ("utxo", 2), ("metadata", 1)]
+        (Just [("core", 1), ("utxo", 1)])
+        `shouldBe` SchemaMismatched
+          (VersionAhead "utxo" 1 2 NE.:| [MissingExtractor "metadata" 1])
+
+    it "empty expected extractors with present table → SchemaMatches" $
+      analyzeSchemaState [] (Just [("core", 1)]) `shouldBe` SchemaMatches
 
   -- Each top-level group cleans up after itself
   describe "initSchema + dropSchema" $

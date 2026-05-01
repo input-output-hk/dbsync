@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
@@ -70,16 +71,16 @@ import qualified Data.List as List
 import qualified Data.Sequence.Strict as StrictSeq
 import qualified Data.Strict.Maybe as Strict
 import qualified Data.Text as Text
+import qualified Database.LSMTree as LSMTree
 
 import Ouroboros.Consensus.Block (castPoint)
 import qualified Ouroboros.Consensus.Ledger.Abstract as Consensus
-import Ouroboros.Consensus.Ledger.Extended (ExtLedgerState (..))
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots
   ( DiskSnapshot (..)
   , SnapshotManager (..)
   )
 
-import Ouroboros.Network.Block (Point (..), pointSlot)
+import Ouroboros.Network.Block (pattern BlockPoint, pattern GenesisPoint, pointSlot)
 
 import DbSync.Ledger.Types
   ( CardanoLedgerState (..)
@@ -150,7 +151,7 @@ listKnownSnapshots env = do
 -- 'InMemory' points carry it directly.
 getSlotNoSnapshot :: SnapshotPoint -> WithOrigin SlotNo
 getSlotNoSnapshot = \case
-  OnDisk ds   -> NotOrigin (SlotNo (dsNumber ds))
+  OnDisk ds   -> At (SlotNo (dsNumber ds))
   InMemory cp -> pointSlot cp
 
 -- ---------------------------------------------------------------------------
@@ -280,15 +281,16 @@ findStateFromSnapshot _env _point =
 -- ---------------------------------------------------------------------------
 
 -- | Delete a snapshot if it is temporary (no permanence suffix),
--- swallowing exceptions and tracing them. The consensus default
--- already catches 'SomeException' in
--- 'defaultDeleteSnapshotIfTemporary'; we add the trace so an LSM
--- orphan (snapshot directory present, LSM session unaware of it)
--- becomes visible in operator logs rather than silently disappearing.
+-- tolerating the @SnapshotDoesNotExistError@ that the LSM backend
+-- raises when its session has lost track of a snapshot directory
+-- that's still on disk (a known issue after a crash mid-write).
+--
+-- Other exceptions propagate so the operator sees them — we only
+-- swallow the well-known LSM-orphan case.
 safeDeleteSnapshot :: LedgerEnv -> DiskSnapshot -> IO ()
 safeDeleteSnapshot env ds = do
   result <-
-    Exception.try @Exception.SomeException $
+    Exception.try @LSMTree.SnapshotDoesNotExistError $
       deleteSnapshotIfTemporary (leSnapshotManager env) ds
   case result of
     Right () ->
@@ -299,9 +301,9 @@ safeDeleteSnapshot env ds = do
     Left ex ->
       traceWith (leTracer env) $
         LogMsg Warning "LedgerSnapshot"
-          ( "safeDeleteSnapshot: failed to delete snapshot at slot "
+          ( "safeDeleteSnapshot: LSM session unaware of snapshot at slot "
               <> show (dsNumber ds)
-              <> " — "
+              <> " (probable orphan from a crashed write); ignoring — "
               <> Text.pack (Exception.displayException ex)
           )
           Nothing

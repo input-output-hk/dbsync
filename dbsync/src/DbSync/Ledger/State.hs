@@ -3,6 +3,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
@@ -43,6 +44,7 @@ module DbSync.Ledger.State
   ( -- * LedgerDB management
     pushLedgerDB
   , pruneLedgerDb
+  , pruneStrictSeq
   , ledgerDbCheckpointBufferSize
   , ledgerDbCurrent
   , writeLedgerState
@@ -55,6 +57,9 @@ module DbSync.Ledger.State
   , applyBlock
   , applyBlockAndSnapshot
   , tickThenReapplyCheckHash
+  , applyToEpochBlockNo
+  , ledgerEpochNo
+  , shouldSnapshotAtEpoch
 
     -- * Rollback
   , loadLedgerAtPoint
@@ -72,6 +77,7 @@ module DbSync.Ledger.State
     -- * Miscellaneous helpers
   , getHeaderHash
   , findAdaPots
+  , getTopLevelConfig
   ) where
 
 import Cardano.Prelude hiding (atomically)
@@ -79,10 +85,13 @@ import Cardano.Prelude hiding (atomically)
 import qualified Cardano.Ledger.Alonzo.PParams as Alonzo
 import Cardano.Ledger.Alonzo.Scripts (Prices)
 import qualified Cardano.Ledger.BaseTypes as Ledger
+import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway.Core as Shelley
 import Cardano.Ledger.Conway.Governance
-import Cardano.Ledger.Shelley.AdaPots (AdaPots)
+import Cardano.Ledger.Shelley.AdaPots (AdaPots (..), sumAdaPots)
 import qualified Cardano.Ledger.Shelley.LedgerState as Shelley
+import Cardano.Slotting.EpochInfo (EpochInfo, epochInfoEpoch)
+import Cardano.Slotting.Slot (EpochNo (..), WithOrigin (..))
 import Control.Concurrent.Class.MonadSTM.Strict
   ( atomically
   , newEmptyTMVarIO
@@ -90,49 +99,79 @@ import Control.Concurrent.Class.MonadSTM.Strict
   , readTVar
   , writeTVar
   )
+import qualified Control.Concurrent.Class.MonadSTM.Strict as STM
 import Control.Concurrent.STM.TBQueue (newTBQueueIO)
 import qualified Data.ByteString.Short as SBS
 import qualified Data.Map.Strict as Map
 import qualified Data.Sequence.Strict as StrictSeq
 import qualified Data.Set as Set
 import qualified Data.Strict.Maybe as Strict
+import qualified Data.Time.Clock as Time
 import GHC.IO.Exception (userError)
-import Lens.Micro ((^.))
+import Lens.Micro ((%~), (^.), (^?))
+import Ouroboros.Consensus.Block (blockHash, blockIsEBB, blockPrevHash)
 import Ouroboros.Consensus.BlockchainTime.WallClock.Types (SystemStart)
 import Ouroboros.Consensus.Cardano.Block (ConwayEra, LedgerState (..), StandardCrypto)
-import Ouroboros.Consensus.Config (TopLevelConfig)
+import Ouroboros.Consensus.Config (TopLevelConfig, configCodec, configLedger)
 import qualified Ouroboros.Consensus.HardFork.Combinator as Consensus
+import Ouroboros.Consensus.HardFork.Combinator.State (epochInfoLedger)
+import Ouroboros.Consensus.Ledger.Abstract (LedgerResult)
 import qualified Ouroboros.Consensus.Ledger.Abstract as Consensus
-import Ouroboros.Consensus.Ledger.Extended (ExtLedgerState (..))
 import Ouroboros.Consensus.Ledger.Basics (EmptyMK)
+import Ouroboros.Consensus.Ledger.Extended (ExtLedgerCfg (..), ExtLedgerState (..))
+import Ouroboros.Consensus.Ledger.Tables.Utils (forgetLedgerTables)
 import qualified Ouroboros.Consensus.Node.ProtocolInfo as Consensus
 import Ouroboros.Consensus.Shelley.Ledger.Block (ShelleyBlock)
 import qualified Ouroboros.Consensus.Shelley.Ledger.Ledger as Consensus
-import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot, SnapshotManager)
+import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot)
+import Ouroboros.Consensus.Storage.LedgerDB.V2.Backend hiding (Trace)
+import qualified Ouroboros.Consensus.Storage.LedgerDB.V2.LSM as LSM
+import qualified Ouroboros.Consensus.Storage.LedgerDB.V2.LedgerSeq as Consensus
+  ( LedgerTablesHandle (..)
+  )
 
 import qualified Ouroboros.Network.Block as Network
 
-import DbSync.Config.Types (LedgerBackend)
+import Control.ResourceRegistry (runWithTempRegistry)
+import qualified Control.Tracer as Tracer
+import System.FS.API (SomeHasFS (..), mkFsPath)
+import System.FS.API.Types (MountPoint (..))
+import System.FS.IO (ioHasFS)
+import System.FilePath ((</>))
+import System.Random (genWord64, newStdGen)
+
+import DbSync.Config.Types (LedgerBackend (..))
+import qualified DbSync.Era.Shelley.Generic.EpochUpdate as Generic
+import qualified DbSync.Era.Shelley.Generic.ProtoParams as Generic
 import qualified DbSync.Era.Shelley.Generic.StakeDist as Generic
-import DbSync.Ledger.Event (LedgerEvent (..))
+import DbSync.Ledger.Event
+  ( LedgerEvent (..)
+  , convertAuxLedgerEvent
+  , splitDeposits
+  )
 import DbSync.Ledger.Keys (PoolKeyHash)
 import DbSync.Ledger.Types
-  ( ApplyResult
+  ( ApplyResult (..)
   , CardanoLedgerState (..)
   , ConsensusStateRef
   , DbSyncStateRef (..)
+  , DepositsMap (..)
   , EpochBlockNo (..)
   , HasLedgerEnv (..)
   , LedgerDB (..)
   , LedgerEnv (..)
+  , newEpochStateT
   , updatedCommittee
   )
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock)
 import Ouroboros.Consensus.Shelley.HFEras ()                -- per-era HFC instances
 import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()  -- 'LedgerSupportsProtocol' orphans
 
+import qualified DbSync.Ledger.Snapshot
 import DbSync.Block.Types (CardanoPoint)
+import DbSync.StateQuery (SlotDetails (..))
 import DbSync.Trace.Types (AppTracer)
+import DbSync.Util (maybeToStrictMaybe)
 
 -- ---------------------------------------------------------------------------
 -- * LedgerDB management
@@ -147,21 +186,39 @@ ledgerDbCheckpointBufferSize :: Int
 ledgerDbCheckpointBufferSize = 100
 
 -- | Push a new 'DbSyncStateRef' onto the newest end of the
--- 'LedgerDB', then prune the oldest entries back down to
--- 'ledgerDbCheckpointBufferSize'.
+-- 'LedgerDB', then prune any entries that fall outside the
+-- 'ledgerDbCheckpointBufferSize' window.
 --
--- Callers relying on the pruned refs being @close@d on their
--- 'LedgerTablesHandle' should do so separately — this function is
--- purely the sequence-level push\/prune logic.
-pushLedgerDB :: LedgerDB -> DbSyncStateRef -> LedgerDB
+-- Returns the new 'LedgerDB' along with any pruned refs whose
+-- 'LedgerTablesHandle' the caller is responsible for closing
+-- (subject to invariant I3 — the snapshot writer must release
+-- 'srCanClose' before the close is permitted).
+pushLedgerDB :: LedgerDB -> DbSyncStateRef -> (LedgerDB, [DbSyncStateRef])
 pushLedgerDB db sref =
   pruneLedgerDb ledgerDbCheckpointBufferSize $
     LedgerDB (sref StrictSeq.<| ledgerDbCheckpoints db)
 
--- | Keep at most @k@ newest entries; drop any older ones off the end.
-pruneLedgerDb :: Int -> LedgerDB -> LedgerDB
-pruneLedgerDb k (LedgerDB s) = LedgerDB (StrictSeq.take k s)
+-- | Split the buffer at @k@ entries, keeping the @k@ newest and
+-- returning the older ones for the caller to close.
+pruneLedgerDb :: Int -> LedgerDB -> (LedgerDB, [DbSyncStateRef])
+pruneLedgerDb k (LedgerDB s) =
+  let (kept, dropped) = pruneStrictSeq k s
+   in (LedgerDB kept, dropped)
 {-# INLINE pruneLedgerDb #-}
+
+-- | Polymorphic spine-only logic underlying 'pruneLedgerDb'. Split
+-- a 'StrictSeq' at index @k@; return the @k@ newest along with the
+-- older ones as a plain list.
+--
+-- Exported (above 'pruneLedgerDb') so tests can exercise the
+-- shape-only behaviour against simple element types — constructing
+-- a 'DbSyncStateRef' just to test sequence slicing would require an
+-- LSM session (Phase 6 fixture territory).
+pruneStrictSeq :: Int -> StrictSeq.StrictSeq a -> (StrictSeq.StrictSeq a, [a])
+pruneStrictSeq k s =
+  let (kept, dropped) = StrictSeq.splitAt k s
+   in (kept, toList dropped)
+{-# INLINE pruneStrictSeq #-}
 
 -- | Newest 'DbSyncStateRef' in the buffer.
 --
@@ -206,14 +263,16 @@ readStateUnsafe env = do
 -- * Environment construction
 -- ---------------------------------------------------------------------------
 
--- | Construct a 'LedgerEnv' (the \"enabled\" arm of 'HasLedgerEnv'),
--- allocating its 'StrictTVar's and bounded queues up front.
+-- | Construct a 'HasLedgerEnv' in the 'LedgerEnabled' arm: opens an
+-- LSM session under the configured state directory, builds the
+-- consensus 'SnapshotManager', wires up the genesis-init and
+-- snapshot-load callbacks, and allocates all the in-process
+-- coordination primitives.
 --
--- The 'SnapshotManager' and the genesis \/ snapshot-loading callbacks
--- are taken as parameters because their construction depends on the
--- 'LedgerBackend' (LSM) and the configured state directory — both
--- concerns that live closer to the boot flow. Callers wire them in
--- once the on-disk directories are initialised.
+-- Per decision D1 (LSM only) the 'LedgerBackend' is always
+-- 'LedgerBackendLSM'; the in-memory branch was rejected at config
+-- parse time. We still take the backend value as input so a future
+-- knob (\"use a different LSM directory\") can flow through.
 mkHasLedgerEnv
   :: AppTracer
   -> Consensus.ProtocolInfo (CardanoBlock StandardCrypto)
@@ -225,20 +284,75 @@ mkHasLedgerEnv
   -> Bool                                           -- ^ Capture rewards events in 'ApplyResult'
   -> Bool                                           -- ^ Abort on invalid ledger state
   -> LedgerBackend
-  -> SnapshotManager IO IO (CardanoBlock StandardCrypto) ConsensusStateRef
-  -> IO ConsensusStateRef                           -- ^ Build genesis state ref
-  -> (DiskSnapshot -> IO (Either Text ConsensusStateRef))
-                                                    -- ^ Load a disk snapshot
   -> IO HasLedgerEnv
 mkHasLedgerEnv
   tracer pinfo dir network maxSupply start snapEpoch
-  hasRewards abortOnPanic backend snapManager initGenesis loadSnap = do
-    interpreterVar <- newTVarIO Strict.Nothing
-    stateVar       <- newTVarIO Strict.Nothing
-    ledgerQueue    <- newTBQueueIO ledgerQueueBound
-    epochReady     <- newEmptyTMVarIO
-    epochWait      <- newEmptyTMVarIO
-    snapshotQueue  <- newTBQueueIO snapshotQueueBound
+  hasRewards abortOnPanic backend = do
+    interpreterVar  <- newTVarIO Strict.Nothing
+    stateVar        <- newTVarIO Strict.Nothing
+    latestApplyVar  <- newTVarIO Strict.Nothing
+    ledgerQueue     <- newTBQueueIO ledgerQueueBound
+    epochReady      <- newEmptyTMVarIO
+    epochWait       <- newEmptyTMVarIO
+    snapshotQueue   <- newTBQueueIO snapshotQueueBound
+
+    -- LSM session + consensus snapshot machinery.
+    let codecConfig = configCodec (Consensus.pInfoConfig pinfo)
+        someHasFS   = SomeHasFS (ioHasFS (MountPoint dir))
+        snapTracer  = Tracer.nullTracer
+        lsmPath     = case backend of
+                        LedgerBackendLSM (Just p) -> p
+                        LedgerBackendLSM Nothing  -> dir </> "lsm"
+
+    salt <- fst . genWord64 <$> newStdGen
+    -- The HasBlockIO is rooted at lsmPath, so the session's FsPath
+    -- inside it must be the empty path (matches upstream — using
+    -- the full lsmPath here puts the session at <lsmPath>/<lsmPath>
+    -- and breaks snapshot bundling).
+    let lsmArgs = LSM.LSMArgs (mkFsPath []) salt (LSM.stdMkBlockIOFS lsmPath)
+
+    res <-
+      runWithTempRegistry $
+        (,())
+          <$> mkResources
+                (Proxy @(CardanoBlock StandardCrypto))
+                Tracer.nullTracer
+                lsmArgs
+                someHasFS
+
+    let snapMgr =
+          snapshotManager
+            (Proxy @(CardanoBlock StandardCrypto))
+            res
+            codecConfig
+            snapTracer
+            someHasFS
+
+        initGenesis :: IO ConsensusStateRef
+        initGenesis =
+          createAndPopulateStateRefFromGenesis
+            Tracer.nullTracer
+            res
+            (Consensus.pInfoInitLedger pinfo)
+
+        loadSnap :: DiskSnapshot -> IO (Either Text ConsensusStateRef)
+        loadSnap ds = do
+          eResult <-
+            runExceptT $
+              openStateRefFromSnapshot
+                Tracer.nullTracer
+                codecConfig
+                someHasFS
+                res
+                ds
+          case eResult of
+            Left err          -> pure (Left (show err))
+            Right (cRef, _pt) -> pure (Right cRef)
+
+        closeBackend :: IO ()
+        closeBackend =
+          releaseResources (Proxy @(CardanoBlock StandardCrypto)) res
+
     pure $
       LedgerEnabled
         LedgerEnv
@@ -258,9 +372,11 @@ mkHasLedgerEnv
           , leEpochReady           = epochReady
           , leEpochWait            = epochWait
           , leSnapshotQueue        = snapshotQueue
-          , leSnapshotManager      = snapManager
+          , leSnapshotManager      = snapMgr
           , leInitGenesis          = initGenesis
           , leLoadSnapshot         = loadSnap
+          , leClose                = closeBackend
+          , leLatestApplyResult    = latestApplyVar
           }
   where
     -- Shallow — the worker is a single consumer and we want strong
@@ -277,60 +393,320 @@ mkHasLedgerEnv
 -- * Block application
 -- ---------------------------------------------------------------------------
 
--- | Apply a single block to the current ledger state, returning the
--- __old__ state ref (for 'apOldLedger' bookkeeping) and the
--- 'ApplyResult' carrying every derived value the extractors need.
+-- | Tick the chain to the block's slot, reapply the block against the
+-- backing LSM tables, and produce a fresh 'DbSyncStateRef' that takes
+-- the place of the previous tip in the 'LedgerDB' buffer.
 --
--- Per the project's ledger-state plan, this runs on the dedicated
--- 'DbSync.Ledger.Worker' thread during 'IngestChainHistory' and
--- inline during 'FollowingChainTip'. It is not yet wired up: the
--- read\/pushDiffs operations against the LSM
--- 'Ouroboros.Consensus.Storage.LedgerDB.V2.LedgerSeq.LedgerTablesHandle'
--- are implemented alongside the worker thread that drives this
--- function — doing so here standalone would mean writing dead code.
+-- Verifies that the block's 'blockPrevHash' matches the current
+-- ledger tip hash before doing any work — a hash mismatch is the
+-- canonical signal that rollback bookkeeping has gone wrong, and the
+-- error text includes both hashes for diagnosis.
+--
+-- Runs in 'IO' (rather than pure 'Either') because the LSM handle's
+-- @read@ / @duplicateWithDiffs@ operations require it.
+tickThenReapplyCheckHash
+  :: LedgerEnv
+  -> ExtLedgerCfg (CardanoBlock StandardCrypto)
+  -> CardanoBlock StandardCrypto
+  -> IO (Either Text
+          ( DbSyncStateRef
+          , LedgerResult (ExtLedgerState (CardanoBlock StandardCrypto)) CardanoLedgerState
+          , [DbSyncStateRef]
+          ))
+tickThenReapplyCheckHash env cfg block = do
+  -- Snapshot the current LedgerDB + tip atomically.
+  (ledgerDB, oldRef) <- atomically $ do
+    !db <- readStateUnsafe env
+    pure (db, ledgerDbCurrent db)
+  let !oldCls = srState oldRef
+      oldExt  = clsState oldCls
+  if blockPrevHash block == Consensus.ledgerTipHash (ledgerState oldExt)
+    then do
+      -- Read the keys this block touches from the backing LSM tables.
+      let keys = Consensus.getBlockKeySets block
+      restrictedTables <- Consensus.read (srTables oldRef) oldExt keys
+      let -- Attach the just-read values to the in-memory state, then tick + reapply.
+          ledgerStateWithTables = Consensus.withLedgerTables oldExt restrictedTables
+          newLedgerResult =
+            Consensus.tickThenReapplyLedgerResult
+              Consensus.ComputeLedgerEvents
+              cfg
+              block
+              ledgerStateWithTables
+          newLedgerStateEmpty = forgetLedgerTables (Consensus.lrResult newLedgerResult)
+          isNewEpoch =
+            case ( ledgerEpochNo env oldExt
+                 , ledgerEpochNo env newLedgerStateEmpty
+                 ) of
+              (Right oldE, Right newE) -> oldE /= newE
+              _                        -> False
+          isByron = case ledgerState newLedgerStateEmpty of
+                      LedgerStateByron _ -> True
+                      _                  -> False
+          !newEpochBlockNo =
+            applyToEpochBlockNo isByron isNewEpoch (clsEpochBlockNo oldCls)
+          newCls =
+            fmap
+              (\stt ->
+                 CardanoLedgerState
+                   { clsState        = forgetLedgerTables stt
+                   , clsEpochBlockNo = newEpochBlockNo
+                   })
+              newLedgerResult
+      -- Clone the LSM handle and apply the block-level diffs onto the clone.
+      newHandle <-
+        Consensus.duplicateWithDiffs
+          (srTables oldRef)
+          oldExt
+          (Consensus.lrResult newLedgerResult)
+      canClose <- newTVarIO True
+      let !newRef =
+            DbSyncStateRef
+              { srState    = Consensus.lrResult newCls
+              , srTables   = newHandle
+              , srCanClose = canClose
+              }
+          (!ledgerDB', !pruned) = pushLedgerDB ledgerDB newRef
+      atomically $ writeTVar (leStateVar env) (Strict.Just ledgerDB')
+      pure $ Right (oldRef, newCls, pruned)
+    else
+      pure $ Left $
+        mconcat
+          [ "Ledger state hash mismatch. Ledger head is slot "
+          , show (Consensus.ledgerTipSlot (ledgerState oldExt))
+          , "; block previous hash is "
+          , show (blockPrevHash block)
+          , "; block hash is "
+          , show (blockHash block)
+          , "."
+          ]
+
+-- | Apply a single block to the current ledger state, returning the
+-- /old/ state ref (for snapshot bookkeeping), the 'ApplyResult'
+-- carrying every derived value the downstream extractors need, and
+-- the list of pruned refs whose LSM handles must subsequently be
+-- closed.
+--
+-- 'SlotDetails' is supplied by the caller (the worker computes it
+-- via 'DbSync.StateQuery.getSlotDetails' before invoking this
+-- function) — block application itself does not query the slot
+-- machinery.
 applyBlock
   :: LedgerEnv
   -> CardanoBlock StandardCrypto
-  -> IO (DbSyncStateRef, ApplyResult)
-applyBlock _env _blk =
-  panic "DbSync.Ledger.State.applyBlock: LSM block-application path wired when the LedgerWorker lands"
+  -> SlotDetails
+  -> IO (DbSyncStateRef, ApplyResult, [DbSyncStateRef])
+applyBlock env blk slotDetails = do
+  result <- tickThenReapplyCheckHash env (ExtLedgerCfg (getTopLevelConfig env)) blk
+  case result of
+    Left err -> panic err
+    Right (oldRef, newResult, pruned) -> do
+      let !oldCls = srState oldRef
+          eventsFull =
+            mapMaybe
+              (convertAuxLedgerEvent (leHasRewards env))
+              (Consensus.lrEvents newResult)
+          (!events, !deposits) = splitDeposits eventsFull
+          !rawNewState         = clsState (Consensus.lrResult newResult)
+      newEpoch <-
+        case mkOnNewEpoch env blk (clsState oldCls) rawNewState (findAdaPots events) of
+          Left e   -> panic e
+          Right ne -> pure ne
+      let !finalState =
+            case newEpoch of
+              Just _  -> finaliseDrepDistr rawNewState
+              Nothing -> rawNewState
+          !newCls' =
+            (Consensus.lrResult newResult)
+              { clsState = finalState }
+          appResult =
+            ApplyResult
+              { apPrices          = getPrices newCls'
+              , apGovExpiresAfter = getGovExpiration newCls'
+              , apPoolsRegistered = getRegisteredPools oldCls
+              , apNewEpoch        = maybeToStrictMaybe newEpoch
+              , apOldLedger       = Strict.Just oldCls
+              , apDeposits        = maybeToStrictMaybe (Generic.getDeposits finalState)
+              , apSlotDetails     = slotDetails
+              , apStakeSlice      = getStakeSlice env newCls' False
+              , apEvents          = events
+              , apGovActionState  = getGovState finalState
+              , apDepositsMap     = DepositsMap deposits
+              }
+      atomically $ writeTVar (leLatestApplyResult env) (Strict.Just appResult)
+      pure (oldRef, appResult, pruned)
 
--- | 'applyBlock' plus an optional snapshot request on epoch
--- boundaries. Matches the consensus snapshot cadence described in the
--- ledger-state plan: every epoch near tip, every 10 epochs when
--- lagging, and always past @sicNearTipEpoch@ (default 580).
+-- | 'applyBlock' plus the snapshot-cadence decision and pruning of
+-- old-ref handles.
 --
--- Returns a 'Bool' indicating whether a snapshot request was enqueued
--- (the snapshot-writer drains the queue asynchronously; this call
--- returns as soon as the request is in the queue).
+-- Returns the 'ApplyResult' and a 'Bool' indicating whether a
+-- snapshot request was enqueued (the snapshot writer drains the
+-- queue asynchronously; this call returns as soon as the request is
+-- in the queue).
+--
+-- Pruned refs from 'applyBlock' have their handles closed here, but
+-- only after waiting on 'srCanClose' — invariant I3 in the
+-- ledger-state plan.
 applyBlockAndSnapshot
   :: LedgerEnv
   -> CardanoBlock StandardCrypto
-  -> Bool                                           -- ^ @True@ if we're near tip
+  -> SlotDetails
+  -> Bool                                           -- ^ "consistent with chain tip"
   -> IO (ApplyResult, Bool)
-applyBlockAndSnapshot _env _blk _isNearTip =
-  panic "DbSync.Ledger.State.applyBlockAndSnapshot: snapshot cadence wired when the SnapshotWriter lands"
+applyBlockAndSnapshot env blk slotDetails consistent = do
+  (oldRef, appResult, pruned) <- applyBlock env blk slotDetails
+  let nearTip = isSyncedNearTip slotDetails
+  tookSnapshot <-
+    if shouldSnapshotAtEpoch appResult consistent nearTip (leSnapshotNearTipEpoch env)
+      then do
+        DbSync.Ledger.Snapshot.saveCleanupState env oldRef
+        pure True
+      else pure False
+  -- Close pruned handles, waiting for any in-flight snapshot write
+  -- holding them (I3).
+  forM_ pruned $ \sr -> do
+    atomically $ readTVar (srCanClose sr) >>= STM.check
+    Consensus.close (srTables sr)
+  pure (appResult, tookSnapshot)
 
-{- |
-Like consensus's @tickThenReapply@ but also verifies that the block's
-@prevHash@ matches the current ledger tip hash. A mismatch is caught
-here and reported with both hashes in the error text, which is the
-single most common root-cause signal when rollback bookkeeping has
-gone wrong.
+-- ---------------------------------------------------------------------------
+-- * Helpers used by block application
+-- ---------------------------------------------------------------------------
 
-The signature intentionally runs in 'IO' because the LSM backend's
-@read@ \/ @pushDiffs@ operations are 'IO' — unlike the in-memory
-backend where the same logic is pure 'Either'. Wiring up the
-operations proper is deferred to the worker-thread commit where
-block-ingest actually calls this function.
--}
-tickThenReapplyCheckHash
-  :: TopLevelConfig (CardanoBlock StandardCrypto)
+-- | Bump the per-epoch block counter following a block application.
+--
+-- @applyToEpochBlockNo isByron isNewEpoch oldCounter@:
+--
+-- * Byron eras always read 'ByronEpochBlockNo' (we don't track
+--   stake-slice indices pre-Shelley).
+-- * A new-epoch boundary resets the counter to @0@.
+-- * Non-boundary blocks advance the counter by one (or seed it at
+--   @0@ if we just transitioned out of Byron).
+applyToEpochBlockNo :: Bool -> Bool -> EpochBlockNo -> EpochBlockNo
+applyToEpochBlockNo True  _    _              = ByronEpochBlockNo
+applyToEpochBlockNo _     True _              = EpochBlockNo 0
+applyToEpochBlockNo _     _    (EpochBlockNo n) = EpochBlockNo (n + 1)
+applyToEpochBlockNo _     _    ByronEpochBlockNo = EpochBlockNo 0
+
+-- | Project the current 'EpochNo' from a ledger state via the HFC
+-- interpreter built from the ledger's hard-fork summary. Returns
+-- @'Right' 'Nothing'@ at the genesis tip and @'Left' err@ if the
+-- requested slot falls outside the summary's horizon.
+ledgerEpochNo
+  :: LedgerEnv
+  -> ExtLedgerState (CardanoBlock StandardCrypto) mk
+  -> Either Text (Maybe EpochNo)
+ledgerEpochNo env st =
+  case Consensus.ledgerTipSlot (ledgerState st) of
+    Origin -> Right Nothing
+    At sl  ->
+      case runExcept (epochInfoEpoch epochInfo sl) of
+        Left err -> Left $ "ledgerEpochNo: " <> show err
+        Right en -> Right (Just en)
+  where
+    epochInfo :: EpochInfo (Except Consensus.PastHorizonException)
+    epochInfo =
+      epochInfoLedger
+        (configLedger (getTopLevelConfig env))
+        (Consensus.hardForkLedgerStatePerEra (ledgerState st))
+
+-- | Pure decision: should we save a snapshot at this epoch boundary?
+--
+-- Mirrors upstream's cadence:
+--
+--   * Only fires on epoch boundaries (when @apNewEpoch@ is 'Just').
+--   * Never fires at epoch @0@ (the boot epoch — there's nothing to
+--     snapshot yet).
+--   * Otherwise: every epoch when consistent + near tip; every 10
+--     epochs when lagging; every epoch unconditionally past the
+--     near-tip-epoch threshold.
+shouldSnapshotAtEpoch
+  :: ApplyResult
+  -> Bool         -- ^ consistent with chain tip
+  -> Bool         -- ^ near tip (e.g. within ~10 days of head)
+  -> Word64       -- ^ near-tip-epoch threshold (e.g. 580)
+  -> Bool
+shouldSnapshotAtEpoch result consistent nearTip thresholdEpoch =
+  case apNewEpoch result of
+    Strict.Nothing -> False
+    Strict.Just ne ->
+      let n = unEpochNo (Generic.neEpoch ne)
+       in n > 0
+            && ( (consistent && nearTip)
+                 || n `mod` 10 == 0
+                 || n >= thresholdEpoch
+               )
+
+-- | Approximate "is the chain tip near the current wall-clock time?"
+-- — used as the @near tip@ flag for the snapshot cadence decision.
+-- 60-second window; matches upstream's heuristic and is generous
+-- enough to absorb consumer-side latency.
+isSyncedNearTip :: SlotDetails -> Bool
+isSyncedNearTip sd =
+  let secsBehind =
+        ceiling
+          (realToFrac
+             (diffUTCTime' (sdCurrentTime sd) (sdSlotTime sd))
+             :: Double) :: Int
+   in abs secsBehind <= 60
+  where
+    diffUTCTime' a b = a `Time.diffUTCTime` b
+
+-- | Detect epoch boundary and build a 'Generic.NewEpoch' summary.
+mkOnNewEpoch
+  :: LedgerEnv
   -> CardanoBlock StandardCrypto
-  -> DbSyncStateRef
-  -> IO (Either Text DbSyncStateRef)
-tickThenReapplyCheckHash _cfg _blk _sref =
-  panic "DbSync.Ledger.State.tickThenReapplyCheckHash: LSM read/pushDiffs wiring lands with the LedgerWorker"
+  -> ExtLedgerState (CardanoBlock StandardCrypto) mk1
+  -> ExtLedgerState (CardanoBlock StandardCrypto) mk2
+  -> Maybe AdaPots
+  -> Either Text (Maybe Generic.NewEpoch)
+mkOnNewEpoch env blk oldState newState mPots =
+  case (ledgerEpochNo env oldState, ledgerEpochNo env newState) of
+    (Left e, _)      -> Left e
+    (_, Left e)      -> Left e
+    (Right Nothing, Right (Just (EpochNo 0))) ->
+      Right (Just (mkNewEpoch (EpochNo 0)))
+    (Right (Just prev), Right (Just curr))
+      | unEpochNo curr == 1 + unEpochNo prev ->
+          Right (Just (mkNewEpoch curr))
+    _ -> Right Nothing
+  where
+    mkNewEpoch :: EpochNo -> Generic.NewEpoch
+    mkNewEpoch curr =
+      Generic.NewEpoch
+        { Generic.neEpoch       = curr
+        , Generic.neIsEBB       = isJust (blockIsEBB blk)
+        , Generic.neAdaPots     = fixUTxOPots <$> maybeToStrictMaybe mPots
+        , Generic.neEpochUpdate = Generic.epochUpdate newState
+        , Generic.neDRepState   = maybeToStrictMaybe (getDrepState newState)
+        , Generic.neEnacted     = maybeToStrictMaybe (getGovState newState)
+        , Generic.nePoolDistr   = maybeToStrictMaybe (Generic.getPoolDistr newState)
+        }
+
+    fixUTxOPots :: AdaPots -> AdaPots
+    fixUTxOPots adaPots =
+      adaPots
+        { utxoAdaPot =
+            Coin $
+              fromIntegral (leMaxSupply env) - unCoin (sumAdaPots adaPots)
+        }
+
+-- | Pull the Conway-era DRep pulsing state out of a ledger state, if
+-- any. 'Nothing' for pre-Conway eras.
+getDrepState
+  :: ExtLedgerState (CardanoBlock StandardCrypto) mk
+  -> Maybe (DRepPulsingState ConwayEra)
+getDrepState ls =
+  ls ^? newEpochStateT . newEpochStateDRepPulsingStateL
+
+-- | Force the Conway DRep pulsing state to its non-pulsing
+-- representative. Called only at the epoch boundary, where the
+-- pulser is supposed to have completed.
+finaliseDrepDistr
+  :: ExtLedgerState (CardanoBlock StandardCrypto) mk
+  -> ExtLedgerState (CardanoBlock StandardCrypto) mk
+finaliseDrepDistr ledger =
+  ledger & newEpochStateT %~ forceDRepPulsingState @ConwayEra
 
 -- ---------------------------------------------------------------------------
 -- * Rollback
@@ -548,6 +924,12 @@ getRegisteredPoolShelley lState =
 -- ---------------------------------------------------------------------------
 -- * Miscellaneous helpers
 -- ---------------------------------------------------------------------------
+
+-- | The 'TopLevelConfig' embedded in the 'LedgerEnv'\'s
+-- 'ProtocolInfo'. Exposed so the worker can build an 'ExtLedgerCfg'
+-- to pass to 'tickThenReapplyCheckHash'.
+getTopLevelConfig :: LedgerEnv -> TopLevelConfig (CardanoBlock StandardCrypto)
+getTopLevelConfig = Consensus.pInfoConfig . leProtocolInfo
 
 -- | Serialise a Cardano header hash to its 32-byte raw form.
 -- Delegates to the consensus 'OneEraHash' encoding used everywhere

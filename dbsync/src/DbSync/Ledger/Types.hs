@@ -105,7 +105,6 @@ import qualified Ouroboros.Consensus.Storage.LedgerDB.V2.LedgerSeq as Consensus 
 
 import Prelude (id)
 
-import DbSync.Block.Types (GenericBlock)
 import DbSync.Config.Types (LedgerBackend)
 import qualified DbSync.Era.Shelley.Generic.EpochUpdate as Generic
 import qualified DbSync.Era.Shelley.Generic.ProtoParams as Generic
@@ -186,8 +185,12 @@ data LedgerEnv = LedgerEnv
   , leInterpreter          :: !(StrictTVar IO (Strict.Maybe CardanoInterpreter))
   , leStateVar             :: !(StrictTVar IO (Strict.Maybe LedgerDB))
     -- * Inter-thread coordination queues and TMVars
-  , leLedgerQueue          :: !(TBQueue GenericBlock)
-    -- ^ @BlockReceiver → LedgerWorker@ — blocks to apply.
+  , leLedgerQueue          :: !(TBQueue (CardanoBlock StandardCrypto))
+    -- ^ @BlockReceiver → LedgerWorker@ — raw blocks to apply
+    -- against the LSM-backed ledger. (Raw 'CardanoBlock' rather
+    -- than parsed 'GenericBlock' because 'applyBlock' calls
+    -- 'tickThenReapplyLedgerResult' which needs the consensus
+    -- block shape.)
   , leEpochReady           :: !(StrictTMVar IO EpochNo)
     -- ^ @LedgerWorker → Main@ — \"epoch N's ledger data is ready\".
   , leEpochWait            :: !(StrictTMVar IO EpochNo)
@@ -204,6 +207,17 @@ data LedgerEnv = LedgerEnv
   , leLoadSnapshot         :: !(DiskSnapshot -> IO (Either Text ConsensusStateRef))
     -- ^ Load a snapshot from disk via the configured backend (used
     -- when resuming from an existing snapshot).
+  , leClose                :: !(IO ())
+    -- ^ Release the LSM session\/file lock at shutdown. The
+    -- consensus 'mkResources' helper allocates the session via
+    -- 'allocateTemp' (impossible-to-not-transfer), so the temp
+    -- registry does NOT close it on scope exit — we have to call
+    -- this explicitly.
+  , leLatestApplyResult    :: !(StrictTVar IO (Strict.Maybe ApplyResult))
+    -- ^ The most recent 'ApplyResult' produced by the
+    -- 'LedgerWorker'. The consumer reads this at epoch boundaries
+    -- (Phase 7) to drive the EpochBoundary extractor; the worker
+    -- writes it on every successful 'applyBlock'.
   }
 
 -- | Constructor for 'NoLedgerEnv'. In 'IO' purely to keep the shape

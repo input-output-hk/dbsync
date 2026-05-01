@@ -99,6 +99,7 @@ import DbSync.Block.Types (CardanoPoint)
 import DbSync.Config.Genesis (GenesisConfig (..), ShelleyConfig (..))
 import DbSync.Env (IngestEnv (..))
 import DbSync.Ingest.ReceiverStats (ReceiverStats, recordBlockReceived, recordWriteBlocked)
+import DbSync.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..))
 import DbSync.StateQuery (StateQueryVar, localStateQueryHandler)
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
@@ -136,6 +137,14 @@ connectToNode iomgr topLevelCfg networkMagic socketPath = do
   blockQueue     <- asks ieBlockQueue
   stateQueryVar  <- asks ieStateQueryVar
   receiverStats  <- asks ieReceiverStats
+  hasLedgerEnv   <- asks ieHasLedgerEnv
+  -- The ledger queue only exists in the enabled arm; pattern-matching
+  -- it out here keeps blockFetchClient's optional second-target
+  -- contract crisp (no LedgerDisabled-shaped sentinel queue).
+  let mLedgerQueue =
+        case hasLedgerEnv of
+          LedgerEnabled lenv -> Just (leLedgerQueue lenv)
+          LedgerDisabled _   -> Nothing
   liftIO $ do
     traceWith tracer $ LogMsg Info "Connection" ("Connecting to node via " <> toS socketPath) Nothing
     void $
@@ -145,7 +154,7 @@ connectToNode iomgr topLevelCfg networkMagic socketPath = do
         (supportedNodeToClientVersions (Proxy @(CardanoBlock StandardCrypto)))
         (subscriptionTracers tracer)
         subscriptionParams
-        (nodeProtocols tracer codecConfig blockQueue receiverStats stateQueryVar)
+        (nodeProtocols tracer codecConfig blockQueue mLedgerQueue receiverStats stateQueryVar)
   where
     codecConfig :: CodecConfig (CardanoBlock StandardCrypto)
     codecConfig = configCodec topLevelCfg
@@ -215,12 +224,13 @@ nodeProtocols
   :: AppTracer
   -> CodecConfig (CardanoBlock StandardCrypto)
   -> TBQueue (CardanoBlock StandardCrypto)
+  -> Maybe (TBQueue (CardanoBlock StandardCrypto))
   -> ReceiverStats
   -> StateQueryVar
   -> Network.NodeToClientVersion
   -> BlockNodeToClientVersion (CardanoBlock StandardCrypto)
   -> NodeToClientProtocols 'Mux.InitiatorMode LocalAddress BSL.ByteString IO () Void
-nodeProtocols appTracer codecConfig blockQueue receiverStats stateQueryVar version blockVersion =
+nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats stateQueryVar version blockVersion =
   NodeToClientProtocols
     { localChainSyncProtocol = chainSyncProtocol
     , localTxSubmissionProtocol = dummyTxSubmit
@@ -239,7 +249,7 @@ nodeProtocols appTracer codecConfig blockQueue receiverStats stateQueryVar versi
             (cChainSyncCodec codecs)
             channel
             ( chainSyncClientPeerPipelined $
-                blockFetchClient appTracer blockQueue receiverStats
+                blockFetchClient appTracer blockQueue mLedgerQueue receiverStats
             )
         pure ((), Nothing)
 
@@ -269,9 +279,17 @@ nodeProtocols appTracer codecConfig blockQueue receiverStats stateQueryVar versi
 
 -- | Simple pipelined ChainSync client that writes blocks to a TQueue.
 -- Starts from genesis (no intersection points) and pipelines aggressively.
+--
+-- When @mLedgerQueue@ is 'Just', each block is also enqueued on it
+-- after the main queue write succeeds — this is the 'LedgerWorker'
+-- fan-out per LEDGER-PLAN §5. The ledger queue write blocks if full
+-- (matching the main queue's behaviour); the worker is intended to
+-- keep up but if it falls behind we'd rather slow the receiver than
+-- silently drop blocks.
 blockFetchClient
   :: AppTracer
-  -> TBQueue (CardanoBlock StandardCrypto)
+  -> TBQueue (CardanoBlock StandardCrypto)            -- ^ Main pipeline queue
+  -> Maybe (TBQueue (CardanoBlock StandardCrypto))    -- ^ Optional ledger worker queue
   -> ReceiverStats
   -> ChainSyncClientPipelined
        (CardanoBlock StandardCrypto)
@@ -279,7 +297,7 @@ blockFetchClient
        (Tip (CardanoBlock StandardCrypto))
        IO
        ()
-blockFetchClient appTracer blockQueue receiverStats =
+blockFetchClient appTracer blockQueue mLedgerQueue receiverStats =
   ChainSyncClientPipelined $ pure $
     -- Start from genesis
     SendMsgFindIntersect
@@ -359,6 +377,13 @@ blockFetchClient appTracer blockQueue receiverStats =
             unless ok $ do
               recordWriteBlocked receiverStats
               atomically $ writeTBQueue blockQueue blk
+            -- Fan-out to the ledger worker (when enabled). The
+            -- worker is a single consumer with a shallower queue, so
+            -- we accept that the receiver may block here if the
+            -- worker has fallen behind — preferable to dropping
+            -- blocks silently.
+            for_ mLedgerQueue $ \ledgerQueue ->
+              atomically $ writeTBQueue ledgerQueue blk
             pure $ goTip mkDecision n (At bn) tip
         , recvMsgRollBackward = \point tip -> do
             traceWith appTracer $ LogMsg Warning "ChainSync"

@@ -104,6 +104,7 @@ library
     DbSync.Era.Shelley.Generic.StakeDist
     DbSync.Ledger.Event
     DbSync.Ledger.Keys
+    DbSync.Ledger.Snapshot
     DbSync.Ledger.State
     DbSync.Ledger.Types
     DbSync.Ledger.Worker
@@ -147,15 +148,20 @@ library
     , cardano-protocol-tpraos
     , cardano-slotting
     , cardano-strict-containers
+    , fs-api
     , io-classes:strict-stm
+    , lsm-tree
     , ouroboros-consensus
     , ouroboros-consensus:cardano
     , ouroboros-consensus:diffusion
+    , ouroboros-consensus:lsm
     , ouroboros-consensus:protocol
     , network-mux
     , ouroboros-network:api
     , ouroboros-network:framework
     , ouroboros-network:protocols
+    , random
+    , resource-registry
     , small-steps
     , sop-core
     , sop-extras
@@ -232,7 +238,9 @@ test-suite dbsync-test
     DbSync.Ingest.PipelineSpec
     DbSync.Schema.InitSpec
     DbSync.Copy.WriterSpec
+    DbSync.Ledger.StateSpec
     DbSync.Ledger.TypesSpec
+    DbSync.Ledger.WorkerSpec
     DbSync.Checkpoint.ManagerSpec
     DbSync.Checkpoint.SyncStateSpec
     DbSync.StateQuery.ObservedSummarySpec
@@ -248,9 +256,12 @@ test-suite dbsync-test
     , cardano-strict-containers
     , bytestring
     , containers
+    , io-classes:strict-stm
     , optparse-applicative
     , ouroboros-consensus
     , process
+    , stm
+    , strict
     , text
     , time
 

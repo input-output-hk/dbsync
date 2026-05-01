@@ -14,7 +14,9 @@ import qualified DbSync.Config.TypesSpec as ConfigTypesSpec
 import qualified DbSync.Config.ValidationSpec as ConfigValidationSpec
 import qualified DbSync.Extractor.CoreSpec as ExtractorCoreSpec
 import qualified DbSync.Ingest.PipelineSpec as IngestPipelineSpec
+import qualified DbSync.Ledger.StateSpec as LedgerStateSpec
 import qualified DbSync.Ledger.TypesSpec as LedgerTypesSpec
+import qualified DbSync.Ledger.WorkerSpec as LedgerWorkerSpec
 import qualified DbSync.Schema.CoreSpec as SchemaCoreSpec
 import qualified DbSync.Schema.GenerateSpec as SchemaGenerateSpec
 import qualified DbSync.Schema.InitSpec as SchemaInitSpec
@@ -39,6 +41,8 @@ main = hspec $ do
   SchemaInitSpec.spec
   CopyWriterSpec.spec
   LedgerTypesSpec.spec
+  LedgerStateSpec.spec
+  LedgerWorkerSpec.spec
   CheckpointManagerSpec.spec
   CheckpointSyncStateSpec.spec
   ObservedSummarySpec.spec

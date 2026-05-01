@@ -17,7 +17,12 @@ import DbSync.Config.Genesis (readCardanoGenesisConfig, mkProtocolInfoCardano, m
 import Ouroboros.Consensus.BlockchainTime.WallClock.Types (SystemStart (..))
 import Ouroboros.Consensus.Shelley.Node (ShelleyGenesis (..))
 import DbSync.Config.Node (parseDbSyncNodeConfig, parseNodeConfig)
-import DbSync.Config.Types (DbSyncNodeConfig (..), DatabaseConfig (..), SyncConfig (..))
+import DbSync.Config.Types
+  ( DbSyncNodeConfig (..)
+  , DatabaseConfig (..)
+  , LedgerConfig (..)
+  , SyncConfig (..)
+  )
 import DbSync.Config.Validation (validateConfig)
 import DbSync.Copy.Writer (CopyWriter (..), mkCopyWriter, closeCopyWriter)
 import DbSync.Db.Schema.Init
@@ -34,7 +39,10 @@ import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
 import DbSync.Id.DedupMap (newMaps)
 import DbSync.Ingest.Consumer (runConsumer)
 import DbSync.Ingest.ReceiverStats (newReceiverStats)
-import DbSync.Ledger.Types (HasLedgerEnv (..), mkNoLedgerEnv)
+import DbSync.Ledger.Snapshot (runLedgerStateWriteThread)
+import DbSync.Ledger.State (mkHasLedgerEnv)
+import DbSync.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..), mkNoLedgerEnv)
+import DbSync.Ledger.Worker (runLedgerWorker)
 import DbSync.Node.Connection (connectToNode, getNetworkMagic)
 import DbSync.Resolver.Ingest (mkIngestResolver)
 import DbSync.StateQuery (newStateQueryVar)
@@ -165,7 +173,27 @@ main = do
       pinfo       = mkProtocolInfoCardano nodeCfg genesisCfg
       network     = sgNetworkId (scConfig (gcShelley genesisCfg))
 
-  hasLedgerEnv <- LedgerDisabled <$> mkNoLedgerEnv tracer pinfo systemStart network
+  let ledgerCfg = scLedger validProfile
+  hasLedgerEnv <-
+    if lcEnabled ledgerCfg
+      then do
+        logInfo $
+          "Ledger feature enabled; opening LSM session under "
+            <> toS (lcStateDir ledgerCfg)
+        mkHasLedgerEnv
+          tracer
+          pinfo
+          (lcStateDir ledgerCfg)
+          network
+          (sgMaxLovelaceSupply (scConfig (gcShelley genesisCfg)))
+          systemStart
+          580                                              -- TODO Phase 10: configurable
+          True                                             -- has rewards
+          False                                            -- abort on panic
+          (lcBackend ledgerCfg)
+      else do
+        logInfo "Ledger feature disabled; skipping LSM session"
+        LedgerDisabled <$> mkNoLedgerEnv tracer pinfo systemStart network
 
   let ingestEnv = IngestEnv
         { ieCore          = coreEnv
@@ -181,19 +209,36 @@ main = do
         , ieReceiverStats = receiverStats
         }
 
-  -- 13. Start block reception + consumer
+  -- 13. Start block reception + consumer (+ ledger worker if enabled)
   logInfo "Starting block ingestion..."
 
+  let runIngestPipeline iomgr =
+        runAppM ingestEnv runConsumer
+          `finally` do
+            logInfo "Shutting down COPY writer..."
+            cwCommit copyWriter `catch` \(e :: SomeException) ->
+              logError $ "Error during final commit: " <> show e
+            closeCopyWriter copyWriter
+            case hasLedgerEnv of
+              LedgerEnabled lenv -> do
+                logInfo "Closing LSM session..."
+                leClose lenv `catch` \(e :: SomeException) ->
+                  logError $ "Error closing LSM session: " <> show e
+              LedgerDisabled _ -> pure ()
+        where _ = iomgr  -- silence unused-binding (referenced via the closure of nodeThread)
+
   withIOManager $ \iomgr ->
-    withAsync (runAppM ingestEnv $ connectToNode iomgr topLevelCfg networkMagic (caSocketPath args)) $ \_nodeThread -> do
-      -- Consumer runs on the main thread; node receiver runs on async thread
-      -- If either throws, the other is cancelled (withAsync guarantee)
-      runAppM ingestEnv runConsumer
-        `finally` do
-          logInfo "Shutting down COPY writer..."
-          cwCommit copyWriter `catch` \(e :: SomeException) ->
-            logError $ "Error during final commit: " <> show e
-          closeCopyWriter copyWriter
+    withAsync (runAppM ingestEnv $ connectToNode iomgr topLevelCfg networkMagic (caSocketPath args)) $ \_nodeThread ->
+      case hasLedgerEnv of
+        LedgerEnabled lenv ->
+          -- Spawn the LedgerWorker + snapshot writer alongside the consumer.
+          -- 'withAsync' guarantees their cancellation on consumer exit (or
+          -- exception); 'runIngestPipeline' calls 'leClose' in 'finally'.
+          withAsync (runLedgerWorker lenv stateQueryVar) $ \_workerThread ->
+            withAsync (runLedgerStateWriteThread hasLedgerEnv) $ \_snapWriter ->
+              runIngestPipeline iomgr
+        LedgerDisabled _ ->
+          runIngestPipeline iomgr
 
 -- | Initial extraction state for IngestChainHistory.
 -- Dedup maps are created separately via 'newMaps' (mutable hash tables).

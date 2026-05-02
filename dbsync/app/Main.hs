@@ -7,6 +7,7 @@ import Cardano.Prelude
 import Control.Concurrent.STM (newTBQueueIO)
 import Control.Tracer (traceWith)
 import Data.IORef (newIORef)
+import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory, (</>))
 
 import DbSync.App (buildCoreEnv, runStartup)
@@ -116,7 +117,9 @@ main = do
   let topLevelCfg = mkTopLevelConfig nodeCfg genesisCfg
       networkMagic = getNetworkMagic genesisCfg
 
-  logInfo $ "State dir: " <> toS (caStateDir args)
+  -- LSM session lives in <--ledger-state-dir>/dbsync-ledger/.
+  let ledgerStateDir = caLedgerStateDir args </> "dbsync-ledger"
+  logInfo $ "Ledger state dir: " <> toS ledgerStateDir
   logInfo $ "Socket: " <> toS (caSocketPath args)
 
   -- 9. Build StateQueryVar for epoch/slot computation via HardFork Interpreter.
@@ -173,17 +176,19 @@ main = do
       pinfo       = mkProtocolInfoCardano nodeCfg genesisCfg
       network     = sgNetworkId (scConfig (gcShelley genesisCfg))
 
+  -- Ledger is opt-in via profile (ledger.enabled = true).
   let ledgerCfg = scLedger validProfile
   hasLedgerEnv <-
     if lcEnabled ledgerCfg
       then do
+        createDirectoryIfMissing True ledgerStateDir
         logInfo $
           "Ledger feature enabled; opening LSM session under "
-            <> toS (lcStateDir ledgerCfg)
+            <> toS ledgerStateDir
         mkHasLedgerEnv
           tracer
           pinfo
-          (lcStateDir ledgerCfg)
+          ledgerStateDir
           network
           (sgMaxLovelaceSupply (scConfig (gcShelley genesisCfg)))
           systemStart
@@ -192,7 +197,7 @@ main = do
           False                                            -- abort on panic
           (lcBackend ledgerCfg)
       else do
-        logInfo "Ledger feature disabled; skipping LSM session"
+        logInfo "Ledger feature disabled (set ledger.enabled = true in profile to opt in); skipping LSM session"
         LedgerDisabled <$> mkNoLedgerEnv tracer pinfo systemStart network
 
   let ingestEnv = IngestEnv
@@ -227,15 +232,19 @@ main = do
               LedgerDisabled _ -> pure ()
         where _ = iomgr  -- silence unused-binding (referenced via the closure of nodeThread)
 
+  -- Every spawned 'Async' is 'link'ed to the main thread: a child crash
+  -- propagates here and brings the app down with a visible stack trace,
+  -- instead of leaving us hung on a queue while the worker has died
+  -- silently.
   withIOManager $ \iomgr ->
-    withAsync (runAppM ingestEnv $ connectToNode iomgr topLevelCfg networkMagic (caSocketPath args)) $ \_nodeThread ->
+    withAsync (runAppM ingestEnv $ connectToNode iomgr topLevelCfg networkMagic (caSocketPath args)) $ \nodeThread -> do
+      link nodeThread
       case hasLedgerEnv of
         LedgerEnabled lenv ->
-          -- Spawn the LedgerWorker + snapshot writer alongside the consumer.
-          -- 'withAsync' guarantees their cancellation on consumer exit (or
-          -- exception); 'runIngestPipeline' calls 'leClose' in 'finally'.
-          withAsync (runAppM lenv (runLedgerWorker stateQueryVar)) $ \_workerThread ->
-            withAsync (runLedgerStateWriteThread hasLedgerEnv) $ \_snapWriter ->
+          withAsync (runAppM lenv (runLedgerWorker stateQueryVar)) $ \workerThread -> do
+            link workerThread
+            withAsync (runLedgerStateWriteThread hasLedgerEnv) $ \snapWriter -> do
+              link snapWriter
               runIngestPipeline iomgr
         LedgerDisabled _ ->
           runIngestPipeline iomgr

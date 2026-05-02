@@ -1,10 +1,12 @@
 -- | CLI argument parsing for cardano-db-sync.
 --
 -- Parses the four required arguments:
---   @--db-sync-config@ — path to db-sync-config.json (from the Cardano book)
---   @--socket-path@    — path to the cardano-node Unix socket
---   @--state-dir@      — directory for checkpoints and ledger state
---   @--profile@        — path to dbsync-profile.json (database, options, sync mode)
+--   @--db-sync-config@     — path to db-sync-config.json (from the Cardano book)
+--   @--socket-path@        — path to the cardano-node Unix socket
+--   @--ledger-state-dir@   — parent directory in which the @dbsync-ledger/@
+--                            sub-directory will be created and used for the
+--                            LSM session and consensus snapshots
+--   @--profile@            — path to dbsync-profile.json (database, options, sync mode)
 module DbSync.Cli
   ( -- * Types
     CliArgs (..)
@@ -36,11 +38,12 @@ import Options.Applicative
 
 -- | Parsed CLI arguments.
 data CliArgs = CliArgs
-  { caDbSyncConfig :: !FilePath  -- ^ Path to db-sync-config.json (from the Cardano book)
-  , caSocketPath   :: !FilePath  -- ^ Path to the cardano-node Unix socket
-  , caStateDir     :: !FilePath  -- ^ Directory for checkpoints + ledger state
-  , caProfile      :: !FilePath  -- ^ Path to dbsync-profile.json (database, options, sync mode)
-  , caForceResync  :: !Bool      -- ^ If 'True', drop the existing schema and re-sync from genesis
+  { caDbSyncConfig    :: !FilePath  -- ^ Path to db-sync-config.json (from the Cardano book)
+  , caSocketPath      :: !FilePath  -- ^ Path to the cardano-node Unix socket
+  , caLedgerStateDir  :: !FilePath  -- ^ Parent directory under which the @dbsync-ledger/@
+                                    --   sub-directory is created (LSM session + snapshots)
+  , caProfile         :: !FilePath  -- ^ Path to dbsync-profile.json (database, options, sync mode)
+  , caForceResync     :: !Bool      -- ^ If 'True', drop the existing schema and re-sync from genesis
   }
   deriving stock (Eq, Show)
 
@@ -71,9 +74,11 @@ cliArgsP =
           <> help "Path to the cardano-node Unix socket"
       )
     <*> strOption
-      ( long "state-dir"
+      ( long "ledger-state-dir"
           <> metavar "DIRPATH"
-          <> help "Directory for checkpoints and ledger state"
+          <> help
+              "Parent directory in which a 'dbsync-ledger/' sub-directory \
+              \will be created and used for the LSM session and consensus snapshots"
       )
     <*> strOption
       ( long "profile"

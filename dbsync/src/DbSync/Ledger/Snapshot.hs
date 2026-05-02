@@ -197,13 +197,17 @@ saveCleanupState sref = do
 -- block forever so the surrounding 'withAsync' wiring doesn't have
 -- to special-case the disabled arm.
 --
--- Stays in 'IO' because 'HasLedgerEnv' is a sum and the disabled
--- arm has no 'LedgerEnv' to run an 'AppM' against. The enabled arm
--- pattern-matches and dispatches into 'snapshotWriteLoop' via
--- 'runAppM'.
+-- Any exception escaping the enabled-arm loop is logged at 'Error'
+-- before being re-thrown, so a thread death is always visible in
+-- the operator log.
 runLedgerStateWriteThread :: HasLedgerEnv -> IO ()
 runLedgerStateWriteThread = \case
-  LedgerEnabled env  -> runAppM env snapshotWriteLoop
+  LedgerEnabled env  ->
+    runAppM env snapshotWriteLoop
+      `catch` \(e :: SomeException) -> do
+        traceWith (leTracer env) $ LogMsg Error "LedgerSnapshot"
+          ("snapshot-writer crashed: " <> show e) Nothing
+        throwIO e
   LedgerDisabled _nle -> idleForever
   where
     -- 10-minute heartbeats, so a future maintainer who attaches a
@@ -220,11 +224,15 @@ runLedgerStateWriteThread = \case
 -- so the pruner is free to close the handle once no other reference
 -- holds it.
 --
--- Exceptions during 'takeSnapshot' are caught and traced: a single
--- failed snapshot must not bring down the whole sync.
+-- Per-snapshot failures during 'takeSnapshot' are caught and traced
+-- (one bad snapshot must not bring the whole sync down). Failures
+-- elsewhere in the loop bubble up and are reported by the
+-- 'runLedgerStateWriteThread' wrapper.
 snapshotWriteLoop :: LedgerM ()
 snapshotWriteLoop = do
   env <- ask
+  liftIO $ traceWith (leTracer env) $ LogMsg Info "LedgerSnapshot"
+    "snapshot-writer starting (draining snapshot queue)" Nothing
   forever $ do
     sref <- liftIO $ atomically $ readTBQueue (leSnapshotQueue env)
     result <- liftIO $

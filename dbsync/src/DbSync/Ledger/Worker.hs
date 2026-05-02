@@ -46,6 +46,7 @@ import Control.Concurrent.STM (TBQueue, readTBQueue)
 import qualified Data.Strict.Maybe as SMaybe
 
 import Cardano.Slotting.Slot (EpochNo (..))
+import Control.Tracer (traceWith)
 import Ouroboros.Consensus.Block (blockSlot)
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
 import Ouroboros.Consensus.Shelley.HFEras ()                  -- per-era HFC instances
@@ -56,6 +57,7 @@ import qualified DbSync.Era.Shelley.Generic.EpochUpdate as Generic
 import DbSync.Ledger.State (applyBlockAndSnapshot)
 import DbSync.Ledger.Types (ApplyResult (..), LedgerEnv (..))
 import DbSync.StateQuery (SlotDetails, StateQueryVar, getSlotDetailsIO)
+import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 
 -- ---------------------------------------------------------------------------
 -- * Hooks
@@ -105,8 +107,11 @@ runLedgerWorker
   -> LedgerM ()
 runLedgerWorker sqv = do
   env <- ask
-  liftIO $
+  liftIO $ do
+    traceWith (leTracer env) $ LogMsg Info "LedgerWorker"
+      "starting (draining ledger queue)" Nothing
     runLedgerWorkerWith
+      (Just (leTracer env))
       (realWorkerHooks env sqv)
       (leLedgerQueue env)
       (leEpochReady env)
@@ -116,28 +121,41 @@ runLedgerWorker sqv = do
 -- production path uses 'realWorkerHooks'; tests inject a fake hook
 -- to verify the coordination shape without spinning up an LSM
 -- session.
+--
+-- Any exception thrown by the loop is logged (when a tracer is
+-- supplied) at 'Error' severity and re-thrown so the supervising
+-- 'Async' propagates the failure. Tests pass 'Nothing' to keep the
+-- output quiet.
 runLedgerWorkerWith
-  :: WorkerHooks blk
+  :: Maybe AppTracer
+  -> WorkerHooks blk
   -> TBQueue blk
   -> Strict.StrictTMVar IO EpochNo                   -- ^ epochReady (out)
   -> Strict.StrictTMVar IO EpochNo                   -- ^ epochWait  (in)
   -> IO ()
-runLedgerWorkerWith hooks queue epochReady epochWait = forever $ do
-  blk <- atomically $ readTBQueue queue
-  sd  <- whGetSlotDetails hooks blk
-  (result, _tookSnap) <- whApplyAndSnapshot hooks blk sd
+runLedgerWorkerWith mTracer hooks queue epochReady epochWait =
+  loop `catch` \(e :: SomeException) -> do
+    for_ mTracer $ \tracer ->
+      traceWith tracer $ LogMsg Error "LedgerWorker"
+        ("crashed: " <> show e) Nothing
+    throwIO e
+  where
+    loop = forever $ do
+      blk <- atomically $ readTBQueue queue
+      sd  <- whGetSlotDetails hooks blk
+      (result, _tookSnap) <- whApplyAndSnapshot hooks blk sd
 
-  -- Signal epoch boundary if the apply call detected one.
-  case apNewEpoch result of
-    SMaybe.Just ne -> do
-      -- 'tryPutTMVar': non-blocking, so the worker doesn't stall
-      -- when the main thread hasn't drained a previous signal yet.
-      _ <- atomically $ Strict.tryPutTMVar epochReady (Generic.neEpoch ne)
+      -- Signal epoch boundary if the apply call detected one.
+      case apNewEpoch result of
+        SMaybe.Just ne -> do
+          -- 'tryPutTMVar': non-blocking, so the worker doesn't stall
+          -- when the main thread hasn't drained a previous signal yet.
+          _ <- atomically $ Strict.tryPutTMVar epochReady (Generic.neEpoch ne)
+          pure ()
+        SMaybe.Nothing -> pure ()
+
+      -- 'epochWait' is the Phase 7 transition signal — non-blocking
+      -- here. When set, Phase 7 logic will arrange the actual handoff.
+      _ <- atomically $ Strict.tryReadTMVar epochWait
       pure ()
-    SMaybe.Nothing -> pure ()
-
-  -- 'epochWait' is the Phase 7 transition signal — non-blocking
-  -- here. When set, Phase 7 logic will arrange the actual handoff.
-  _ <- atomically $ Strict.tryReadTMVar epochWait
-  pure ()
 {-# SCC runLedgerWorkerWith #-}

@@ -133,7 +133,9 @@ instance FromJSON SyncMode where
       "follow" -> pure SyncModeFollow
       _        -> Aeson.typeMismatch "SyncMode (auto|ingest|follow)" (Aeson.String t)
 
--- | Ledger state settings.
+-- | Ledger state settings. Opt-in: @enabled@ defaults to 'False'.
+-- 'lcStateDir' is informational; the runtime path comes from the
+-- @--ledger-state-dir@ CLI flag.
 data LedgerConfig = LedgerConfig
   { lcEnabled          :: !Bool
   , lcStateDir         :: !FilePath
@@ -145,15 +147,15 @@ data LedgerConfig = LedgerConfig
 instance FromJSON LedgerConfig where
   parseJSON = Aeson.withObject "LedgerConfig" $ \o ->
     LedgerConfig
-      <$> o .:? "enabled"           .!= True
+      <$> o .:? "enabled"           .!= False
       <*> o .:? "state_dir"         .!= "/data/ledger"
       <*> o .:? "snapshot_interval" .!= 10
       <*> o .:? "backend"           .!= defaultLedgerBackend
 
--- | Default ledger config used when the "ledger" section is omitted.
+-- | Default ledger config used when the @"ledger"@ section is omitted.
 defaultLedgerConfig :: LedgerConfig
 defaultLedgerConfig = LedgerConfig
-  { lcEnabled          = True
+  { lcEnabled          = False
   , lcStateDir         = "/data/ledger"
   , lcSnapshotInterval = 10
   , lcBackend          = defaultLedgerBackend
@@ -275,14 +277,15 @@ instance FromJSON SyncOptions where
       <*> o .:? "governance"       .!= enabled
       <*> o .:? "cbor"             .!= disabled  -- off by default (large)
       <*> o .:? "epoch_sync_stats" .!= enabled
-      <*> o .:? "epoch_boundary"   .!= enabled
+      <*> o .:? "epoch_boundary"   .!= disabled  -- off by default (needs ledger)
       <*> o .:? "current_state"    .!= disabled  -- off by default (needs ledger)
     where
       enabled  = SyncOption True
       disabled = SyncOption False
 
--- | Default option config: standard options enabled,
--- cbor and current_state disabled.
+-- | Default option config. cbor / epoch_boundary / current_state are
+-- off by default (cbor is large; the others require ledger, which is
+-- itself opt-in).
 defaultSyncOptions :: SyncOptions
 defaultSyncOptions = SyncOptions
   { pcCore            = SyncOption True
@@ -295,7 +298,7 @@ defaultSyncOptions = SyncOptions
   , pcGovernance      = SyncOption True
   , pcCbor            = SyncOption False
   , pcEpochSyncStats  = SyncOption True
-  , pcEpochBoundary   = SyncOption True
+  , pcEpochBoundary   = SyncOption False
   , pcCurrentState    = SyncOption False
   }
 

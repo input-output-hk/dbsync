@@ -75,8 +75,8 @@ spec = describe "DbSync.Config" $ do
           ssMode (scSync cfg) `shouldBe` SyncModeAuto
           ssCopyConnections (scSync cfg) `shouldBe` 12
 
-          -- Ledger defaults
-          lcEnabled (scLedger cfg) `shouldBe` True
+          -- Ledger defaults — opt-in, off when omitted
+          lcEnabled (scLedger cfg) `shouldBe` False
           lcSnapshotInterval (scLedger cfg) `shouldBe` 10
 
           -- Metrics defaults

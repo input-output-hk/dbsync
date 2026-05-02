@@ -64,7 +64,7 @@ layout {
         }
         pane name="cardano-db-sync" {
             command "bash"
-            args "-c" "cd $PROJECT_DIR/ && echo 'Waiting for node socket...' && sleep 5 && $dbsync --db-sync-config $TESTNET_DIR/db-sync-config.json --socket-path $TESTNET_DIR/db/node.socket --state-dir $TESTNET_DIR/ledger-state --profile $PROFILE"
+            args "-c" "cd $PROJECT_DIR/ && echo 'Starting DbSync...' && sleep 5 && $dbsync --db-sync-config $TESTNET_DIR/db-sync-config.json --socket-path $TESTNET_DIR/db/node.socket --ledger-state-dir $TESTNET_DIR --profile $PROFILE"
         }
     }
 }

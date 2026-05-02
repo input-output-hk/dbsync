@@ -287,6 +287,7 @@ executable dbsync
     , dbsync-db
     , cardano-prelude
     , contra-tracer
+    , directory
     , filepath
     , cardano-diffusion
     , ouroboros-consensus

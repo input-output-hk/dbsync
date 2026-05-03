@@ -1,6 +1,6 @@
--- | Tests for YAML config parsing.
+-- | Tests for profile JSON parsing.
 --
--- Tests read from actual YAML files in @test-fixtures/@, so the fixtures
+-- Tests read from actual JSON files in @test-fixtures/@, so the fixtures
 -- double as documentation and examples of valid configs.
 module DbSync.Config.TypesSpec
   ( spec
@@ -49,14 +49,12 @@ spec = describe "DbSync.Config" $ do
 
           -- Ledger
           lcEnabled (scLedger cfg) `shouldBe` True
-          lcStateDir (scLedger cfg) `shouldBe` "/data/ledger"
-          lcSnapshotInterval (scLedger cfg) `shouldBe` 10
 
-          -- Options
-          prEnabled (pcCore (scOptions cfg)) `shouldBe` True
-          prEnabled (pcUtxo (scOptions cfg)) `shouldBe` True
-          prEnabled (pcCbor (scOptions cfg)) `shouldBe` False
-          prEnabled (pcCurrentState (scOptions cfg)) `shouldBe` False
+          -- db_options: every key listed in the fixture is on, the rest are off.
+          prEnabled (pcUtxo (scOptions cfg))            `shouldBe` True
+          prEnabled (pcEpochBoundary (scOptions cfg))   `shouldBe` True
+          prEnabled (pcCbor (scOptions cfg))            `shouldBe` False  -- omitted
+          prEnabled (pcCurrentState (scOptions cfg))    `shouldBe` False  -- omitted
 
           -- Metrics
           mcPrometheusPort (scMetrics cfg) `shouldBe` 8080
@@ -77,7 +75,6 @@ spec = describe "DbSync.Config" $ do
 
           -- Ledger defaults — opt-in, off when omitted
           lcEnabled (scLedger cfg) `shouldBe` False
-          lcSnapshotInterval (scLedger cfg) `shouldBe` 10
 
           -- Metrics defaults
           mcPrometheusPort (scMetrics cfg) `shouldBe` 8080
@@ -86,14 +83,20 @@ spec = describe "DbSync.Config" $ do
           lgLevel (scLogging cfg) `shouldBe` "info"
           lgFormat (scLogging cfg) `shouldBe` LogFormatText
 
-          -- Standard extractors enabled by default
-          prEnabled (pcCore (scOptions cfg)) `shouldBe` True
-          prEnabled (pcUtxo (scOptions cfg)) `shouldBe` True
-          prEnabled (pcMultiAsset (scOptions cfg)) `shouldBe` True
-          prEnabled (pcPool (scOptions cfg)) `shouldBe` True
-          -- cbor and current_state disabled by default
-          prEnabled (pcCbor (scOptions cfg)) `shouldBe` False
-          prEnabled (pcCurrentState (scOptions cfg)) `shouldBe` False
+          -- All optional extractors default to OFF (opt-in semantics).
+          -- The unconditional 'core' extractor isn't represented in
+          -- SyncOptions — it's added by buildExtractors regardless.
+          prEnabled (pcUtxo (scOptions cfg))            `shouldBe` False
+          prEnabled (pcMultiAsset (scOptions cfg))      `shouldBe` False
+          prEnabled (pcMetadata (scOptions cfg))        `shouldBe` False
+          prEnabled (pcStakeDelegation (scOptions cfg)) `shouldBe` False
+          prEnabled (pcPool (scOptions cfg))            `shouldBe` False
+          prEnabled (pcScriptsDatums (scOptions cfg))   `shouldBe` False
+          prEnabled (pcGovernance (scOptions cfg))      `shouldBe` False
+          prEnabled (pcCbor (scOptions cfg))            `shouldBe` False
+          prEnabled (pcEpochSyncStats (scOptions cfg))  `shouldBe` False
+          prEnabled (pcEpochBoundary (scOptions cfg))   `shouldBe` False
+          prEnabled (pcCurrentState (scOptions cfg))    `shouldBe` False
 
   describe "parseConfig (no-database.json)" $ do
     it "fails with a config error" $ do
@@ -101,18 +104,18 @@ spec = describe "DbSync.Config" $ do
       result `shouldSatisfy` isLeft
 
   describe "parseConfig (override-options.json)" $ do
-    it "overrides only the specified options" $ do
+    it "enables only the listed options; everything else stays off" $ do
       result <- parseConfig "test-fixtures/override-options.json"
       case result of
         Left err -> panic $ "Parse failed: " <> show err
         Right cfg -> do
-          -- Overridden to false
-          prEnabled (pcUtxo (scOptions cfg)) `shouldBe` False
-          prEnabled (pcGovernance (scOptions cfg)) `shouldBe` False
-          -- Others stay at defaults
-          prEnabled (pcCore (scOptions cfg)) `shouldBe` True
-          prEnabled (pcMetadata (scOptions cfg)) `shouldBe` True
+          -- Listed in fixture
+          prEnabled (pcMetadata (scOptions cfg))        `shouldBe` True
           prEnabled (pcStakeDelegation (scOptions cfg)) `shouldBe` True
+          -- Not listed → off (opt-in)
+          prEnabled (pcUtxo (scOptions cfg))            `shouldBe` False
+          prEnabled (pcGovernance (scOptions cfg))      `shouldBe` False
+          prEnabled (pcPool (scOptions cfg))            `shouldBe` False
 
   describe "parseConfig (ingest-mode.json)" $ do
     it "parses ingest sync mode" $ do

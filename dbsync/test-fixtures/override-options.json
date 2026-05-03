@@ -6,8 +6,8 @@
     "user": "",
     "password": ""
   },
-  "options": {
-    "utxo":       { "enabled": false },
-    "governance": { "enabled": false }
+  "db_options": {
+    "metadata": true,
+    "stake_delegation": true
   }
 }

@@ -8,9 +8,5 @@
   },
   "ledger": {
     "enabled": false
-  },
-  "options": {
-    "epoch_boundary": { "enabled": false },
-    "current_state":  { "enabled": false }
   }
 }

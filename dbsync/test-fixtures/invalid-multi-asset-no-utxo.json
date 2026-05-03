@@ -6,8 +6,7 @@
     "user": "",
     "password": ""
   },
-  "options": {
-    "utxo":        { "enabled": false },
-    "multi_asset": { "enabled": true }
+  "db_options": {
+    "multi_asset": true
   }
 }

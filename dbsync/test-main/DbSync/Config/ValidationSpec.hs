@@ -58,9 +58,9 @@ spec = describe "DbSync.Config.Validation" $ do
         Right _ -> panic "Expected validation error"
 
     it "collects multiple errors at once" $ do
-      -- invalid-multi-asset-no-utxo also has scripts_datums enabled (default)
-      -- while utxo is disabled — but that's not a rule we enforce yet.
-      -- This test just verifies the error collection mechanism works.
+      -- Verifies the error-accumulation mechanism. We currently only
+      -- have one fixture that triggers multiple errors at once; if
+      -- more rules land, extend or add a fixture and assert >= 2.
       result <- parseAndValidate "test-fixtures/invalid-epoch-no-ledger.json"
       case result of
         Left errs -> length errs `shouldSatisfy` (>= 1)

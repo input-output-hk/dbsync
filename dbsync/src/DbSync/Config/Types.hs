@@ -1,12 +1,15 @@
 -- | Configuration types with FromJSON instances.
 --
--- All configuration types for the db-sync YAML config file.
+-- All configuration types for the db-sync profile JSON file.
 -- These are network-agnostic — the same config works for mainnet, preprod, etc.
 -- Network-specific details come from the node config (passed via CLI).
+-- Operational paths (sockets, ledger state dir) live on the CLI rather
+-- than in the profile so the profile can travel across environments.
 --
--- Each section is optional with sensible defaults, and per-option
--- preset + override lets callers tweak individual flags without
--- restating the whole block.
+-- The @db_options@ block is opt-in: every extractor defaults to
+-- disabled and must be enabled explicitly. The @core@ extractor is
+-- the sole exception — it is unconditional and not represented in
+-- 'SyncOptions' at all.
 module DbSync.Config.Types
   ( -- * Top-level config
     SyncConfig (..)
@@ -55,14 +58,14 @@ import qualified Data.Aeson.Types as Aeson (parseFail, typeMismatch)
 -- * Top-level config
 -- ---------------------------------------------------------------------------
 
--- | Top-level sync configuration, parsed from db-sync.yaml.
+-- | Top-level sync configuration, parsed from the profile JSON file.
 data SyncConfig = SyncConfig
-  { scDatabase    :: !DatabaseConfig
-  , scSync        :: !SyncSettings
-  , scLedger      :: !LedgerConfig
-  , scOptions :: !SyncOptions
-  , scMetrics     :: !MetricsConfig
-  , scLogging     :: !LoggingConfig
+  { scDatabase :: !DatabaseConfig
+  , scSync     :: !SyncSettings
+  , scLedger   :: !LedgerConfig
+  , scOptions  :: !SyncOptions
+  , scMetrics  :: !MetricsConfig
+  , scLogging  :: !LoggingConfig
   }
   deriving stock (Eq, Show)
 
@@ -70,11 +73,11 @@ instance FromJSON SyncConfig where
   parseJSON = Aeson.withObject "SyncConfig" $ \o ->
     SyncConfig
       <$> o .:  "database"
-      <*> o .:? "sync"        .!= defaultSyncSettings
-      <*> o .:? "ledger"      .!= defaultLedgerConfig
-      <*> o .:? "options" .!= defaultSyncOptions
-      <*> o .:? "metrics"     .!= defaultMetricsConfig
-      <*> o .:? "logging"     .!= defaultLoggingConfig
+      <*> o .:? "sync"       .!= defaultSyncSettings
+      <*> o .:? "ledger"     .!= defaultLedgerConfig
+      <*> o .:? "db_options" .!= defaultSyncOptions
+      <*> o .:? "metrics"    .!= defaultMetricsConfig
+      <*> o .:? "logging"    .!= defaultLoggingConfig
 
 -- | PostgreSQL connection configuration.
 data DatabaseConfig = DatabaseConfig
@@ -134,31 +137,29 @@ instance FromJSON SyncMode where
       _        -> Aeson.typeMismatch "SyncMode (auto|ingest|follow)" (Aeson.String t)
 
 -- | Ledger state settings. Opt-in: @enabled@ defaults to 'False'.
--- 'lcStateDir' is informational; the runtime path comes from the
--- @--ledger-state-dir@ CLI flag.
+--
+-- The runtime ledger-state path comes from the @--ledger-state-dir@
+-- CLI flag (operational paths live on the CLI; profile is per-DB
+-- shape config and travels across environments). The snapshot
+-- near-tip-epoch threshold is currently hardcoded in @Main.hs@; if
+-- it ever becomes configurable, it belongs here.
 data LedgerConfig = LedgerConfig
-  { lcEnabled          :: !Bool
-  , lcStateDir         :: !FilePath
-  , lcSnapshotInterval :: !Int
-  , lcBackend          :: !LedgerBackend
+  { lcEnabled :: !Bool
+  , lcBackend :: !LedgerBackend
   }
   deriving stock (Eq, Show)
 
 instance FromJSON LedgerConfig where
   parseJSON = Aeson.withObject "LedgerConfig" $ \o ->
     LedgerConfig
-      <$> o .:? "enabled"           .!= False
-      <*> o .:? "state_dir"         .!= "/data/ledger"
-      <*> o .:? "snapshot_interval" .!= 10
-      <*> o .:? "backend"           .!= defaultLedgerBackend
+      <$> o .:? "enabled" .!= False
+      <*> o .:? "backend" .!= defaultLedgerBackend
 
 -- | Default ledger config used when the @"ledger"@ section is omitted.
 defaultLedgerConfig :: LedgerConfig
 defaultLedgerConfig = LedgerConfig
-  { lcEnabled          = False
-  , lcStateDir         = "/data/ledger"
-  , lcSnapshotInterval = 10
-  , lcBackend          = defaultLedgerBackend
+  { lcEnabled = False
+  , lcBackend = defaultLedgerBackend
   }
 
 -- | Which backend stores the ledger-state UTxO tables.
@@ -170,7 +171,8 @@ defaultLedgerConfig = LedgerConfig
 -- @\"inmemory\"@ value.
 --
 -- The optional 'FilePath' override is not wired through yet;
--- 'Nothing' means \"use @lcStateDir@\".
+-- 'Nothing' means \"use the directory passed to 'mkHasLedgerEnv'\"
+-- (which is derived from the @--ledger-state-dir@ CLI flag).
 data LedgerBackend
   = LedgerBackendLSM !(Maybe FilePath)
   deriving stock (Eq, Show)
@@ -246,11 +248,20 @@ instance FromJSON LogFormat where
 -- ---------------------------------------------------------------------------
 
 -- | Per-option configuration.
--- Each field is optional and defaults to the value from
--- 'defaultSyncOptions'. Unmentioned options keep their defaults.
+--
+-- Opt-in: every option defaults to disabled. Omit a key to disable;
+-- set @"key": true@ to enable. The @core@ extractor is unconditional
+-- and is therefore not represented here at all — its tables
+-- (block, tx, slot_leader) are referenced by every other extractor's
+-- foreign keys, so toggling it makes no sense. It is added
+-- unconditionally by @DbSync.App.buildExtractors@.
+--
+-- The single-field 'SyncOption' wrapper is preserved so individual
+-- options can grow richer variants (allowlists, formats — see
+-- 'UTxOVariant', 'MetadataFormat', 'GovernanceVariant') without
+-- churning every call site.
 data SyncOptions = SyncOptions
-  { pcCore            :: !SyncOption
-  , pcUtxo            :: !SyncOption
+  { pcUtxo            :: !SyncOption
   , pcMultiAsset      :: !SyncOption
   , pcMetadata        :: !SyncOption
   , pcStakeDelegation :: !SyncOption
@@ -267,51 +278,52 @@ data SyncOptions = SyncOptions
 instance FromJSON SyncOptions where
   parseJSON = Aeson.withObject "SyncOptions" $ \o ->
     SyncOptions
-      <$> o .:? "core"             .!= enabled
-      <*> o .:? "utxo"             .!= enabled
-      <*> o .:? "multi_asset"      .!= enabled
-      <*> o .:? "metadata"         .!= enabled
-      <*> o .:? "stake_delegation" .!= enabled
-      <*> o .:? "pool"             .!= enabled
-      <*> o .:? "scripts_datums"   .!= enabled
-      <*> o .:? "governance"       .!= enabled
-      <*> o .:? "cbor"             .!= disabled  -- off by default (large)
-      <*> o .:? "epoch_sync_stats" .!= enabled
-      <*> o .:? "epoch_boundary"   .!= disabled  -- off by default (needs ledger)
-      <*> o .:? "current_state"    .!= disabled  -- off by default (needs ledger)
+      <$> o .:? "utxo"             .!= disabled
+      <*> o .:? "multi_asset"      .!= disabled
+      <*> o .:? "metadata"         .!= disabled
+      <*> o .:? "stake_delegation" .!= disabled
+      <*> o .:? "pool"             .!= disabled
+      <*> o .:? "scripts_datums"   .!= disabled
+      <*> o .:? "governance"       .!= disabled
+      <*> o .:? "cbor"             .!= disabled
+      <*> o .:? "epoch_sync_stats" .!= disabled
+      <*> o .:? "epoch_boundary"   .!= disabled
+      <*> o .:? "current_state"    .!= disabled
     where
-      enabled  = SyncOption True
       disabled = SyncOption False
 
--- | Default option config. cbor / epoch_boundary / current_state are
--- off by default (cbor is large; the others require ledger, which is
--- itself opt-in).
+-- | Default option config used when the @"db_options"@ section is
+-- omitted: every optional extractor off. The unconditional @core@
+-- extractor is added by @buildExtractors@ and is not represented here.
 defaultSyncOptions :: SyncOptions
 defaultSyncOptions = SyncOptions
-  { pcCore            = SyncOption True
-  , pcUtxo            = SyncOption True
-  , pcMultiAsset      = SyncOption True
-  , pcMetadata        = SyncOption True
-  , pcStakeDelegation = SyncOption True
-  , pcPool            = SyncOption True
-  , pcScriptsDatums   = SyncOption True
-  , pcGovernance      = SyncOption True
+  { pcUtxo            = SyncOption False
+  , pcMultiAsset      = SyncOption False
+  , pcMetadata        = SyncOption False
+  , pcStakeDelegation = SyncOption False
+  , pcPool            = SyncOption False
+  , pcScriptsDatums   = SyncOption False
+  , pcGovernance      = SyncOption False
   , pcCbor            = SyncOption False
-  , pcEpochSyncStats  = SyncOption True
+  , pcEpochSyncStats  = SyncOption False
   , pcEpochBoundary   = SyncOption False
   , pcCurrentState    = SyncOption False
   }
 
 -- | Configuration for a single option.
+--
+-- Today this just wraps a 'Bool'; the wrapper is intentional so that
+-- options needing variants (e.g. multi-asset policy allowlists,
+-- metadata key filters, governance subsets) can grow without
+-- breaking the @SyncOptions@ record.
 data SyncOption = SyncOption
   { prEnabled :: !Bool
   }
   deriving stock (Eq, Show)
 
+-- | Parse a sync option from a plain JSON boolean (e.g. @"utxo": true@).
 instance FromJSON SyncOption where
-  parseJSON = Aeson.withObject "SyncOption" $ \o ->
-    SyncOption
-      <$> o .:? "enabled" .!= True
+  parseJSON = Aeson.withBool "SyncOption" (pure . SyncOption)
 
 -- | UTxO storage variants.
 data UTxOVariant

@@ -9,7 +9,7 @@
   "ledger": {
     "enabled": false
   },
-  "options": {
-    "epoch_boundary": { "enabled": true }
+  "db_options": {
+    "epoch_boundary": true
   }
 }

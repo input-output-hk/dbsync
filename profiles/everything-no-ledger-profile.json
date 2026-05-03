@@ -14,19 +14,16 @@
   "ledger": {
     "enabled": false
   },
-  "options": {
-    "core":             { "enabled": true },
-    "utxo":             { "enabled": true },
-    "multi_asset":      { "enabled": true },
-    "metadata":         { "enabled": true },
-    "stake_delegation": { "enabled": true },
-    "pool":             { "enabled": true },
-    "scripts_datums":   { "enabled": true },
-    "governance":       { "enabled": true },
-    "cbor":             { "enabled": true },
-    "epoch_sync_stats": { "enabled": true },
-    "epoch_boundary":   { "enabled": false },
-    "current_state":    { "enabled": false }
+  "db_options": {
+    "utxo": true,
+    "multi_asset": true,
+    "metadata": true,
+    "stake_delegation": true,
+    "pool": true,
+    "scripts_datums": true,
+    "governance": true,
+    "cbor": true,
+    "epoch_sync_stats": true
   },
   "metrics": {
     "prometheus_port": 8080

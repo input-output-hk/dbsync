@@ -8,8 +8,6 @@
   },
   "ledger": {
     "enabled": true,
-    "state_dir": "/data/ledger",
-    "snapshot_interval": 10,
     "backend": "inmemory"
   }
 }

@@ -14,19 +14,9 @@
   "ledger": {
     "enabled": false
   },
-  "options": {
-    "core":             { "enabled": true },
-    "utxo":             { "enabled": true },
-    "multi_asset":      { "enabled": false },
-    "metadata":         { "enabled": false },
-    "stake_delegation": { "enabled": false },
-    "pool":             { "enabled": false },
-    "scripts_datums":   { "enabled": false },
-    "governance":       { "enabled": false },
-    "cbor":             { "enabled": false },
-    "epoch_sync_stats": { "enabled": true },
-    "epoch_boundary":   { "enabled": false },
-    "current_state":    { "enabled": false }
+  "db_options": {
+    "utxo": true,
+    "epoch_sync_stats": true
   },
   "metrics": {
     "prometheus_port": 8080

@@ -58,10 +58,13 @@ buildCoreEnv tracer syncCfg nodeCfg = do
 
 -- | Build the list of enabled extractors from config.
 --
--- Uses the real 'coreExtractor' for "core"; all other extractors
--- are stubs until they are implemented.
+-- 'coreExtractor' is unconditional and always first — every other
+-- extractor's tables reference its block/tx/slot_leader rows via
+-- foreign keys, so it has no off switch and no entry in 'SyncOptions'.
+-- The remaining extractors are opt-in via @db_options@; stubs stand in
+-- for those not yet implemented.
 buildExtractors :: SyncOptions -> [ExtractorDef]
-buildExtractors pc = mapMaybe mkProj allOptions
+buildExtractors pc = coreExtractor : mapMaybe mkProj optionalExtractors
   where
     mkProj :: (Text, SyncOption) -> Maybe ExtractorDef
     mkProj (name, cfg)
@@ -71,9 +74,8 @@ buildExtractors pc = mapMaybe mkProj allOptions
     -- | Resolve a named extractor to its real implementation (if available)
     -- or a stub (if not yet implemented).
     resolveExtractor :: Text -> ExtractorDef
-    resolveExtractor "core"        = coreExtractor
-    resolveExtractor "utxo"        = utxoExtractor
-    resolveExtractor "metadata"    = metadataExtractor
+    resolveExtractor "utxo"             = utxoExtractor
+    resolveExtractor "metadata"         = metadataExtractor
     resolveExtractor "multi_asset"      = multiAssetExtractor
     resolveExtractor "stake_delegation" = stakeDelegationExtractor
     resolveExtractor "pool"             = poolExtractor
@@ -82,10 +84,9 @@ buildExtractors pc = mapMaybe mkProj allOptions
     resolveExtractor "epoch_boundary"   = epochBoundaryExtractor
     resolveExtractor name               = stubExtractor name
 
-    allOptions :: [(Text, SyncOption)]
-    allOptions =
-      [ ("core",             pcCore pc)
-      , ("utxo",             pcUtxo pc)
+    optionalExtractors :: [(Text, SyncOption)]
+    optionalExtractors =
+      [ ("utxo",             pcUtxo pc)
       , ("multi_asset",      pcMultiAsset pc)
       , ("metadata",         pcMetadata pc)
       , ("stake_delegation", pcStakeDelegation pc)

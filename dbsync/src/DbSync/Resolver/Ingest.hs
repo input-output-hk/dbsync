@@ -177,4 +177,10 @@ mkIngestResolver stRef dedupMaps = IdResolver
       let (i, ctr') = nextId (icEpochSyncStatsId $ esIdCounters st)
           st' = st { esIdCounters = (esIdCounters st) { icEpochSyncStatsId = ctr' } }
       in (st', EpochSyncStatsId i)
+
+    -- EpochBoundary IDs
+  , assignAdaPotsId = atomicModifyIORef' stRef $ \st ->
+      let (i, ctr') = nextId (icAdaPotsId $ esIdCounters st)
+          st' = st { esIdCounters = (esIdCounters st) { icAdaPotsId = ctr' } }
+      in (st', AdaPotsId i)
   }

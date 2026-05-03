@@ -80,8 +80,8 @@ spec = describe "DbSync.Db.Schema.SyncState" $ do
     it "matches the table's column order" $
       syncStateColumns `shouldBe` map cdName (tdColumns syncStateTableDef)
 
-    it "contains 32 columns (id + 3 last_committed + 25 counters + 3 metadata)" $
-      length syncStateColumns `shouldBe` 32
+    it "contains 33 columns (id + 3 last_committed + 26 counters + 3 metadata)" $
+      length syncStateColumns `shouldBe` 33
 
     it "starts with id" $
       head syncStateColumns `shouldBe` Just "id"
@@ -90,8 +90,8 @@ spec = describe "DbSync.Db.Schema.SyncState" $ do
       last syncStateColumns `shouldBe` "updated_at"
 
   describe "syncStateCounterColumns" $ do
-    it "lists 25 counters — one per current IdCounters field" $
-      length syncStateCounterColumns `shouldBe` 25
+    it "lists 26 counters — one per current IdCounters field" $
+      length syncStateCounterColumns `shouldBe` 26
 
     it "is a subset of syncStateColumns" $
       all (`elem` syncStateColumns) syncStateCounterColumns `shouldBe` True
@@ -165,6 +165,7 @@ goldenDdl = T.unlines
   , "  \"pool_relay_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"tx_cbor_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"epoch_sync_stats_id_counter\" BIGINT NOT NULL DEFAULT 1,"
+  , "  \"ada_pots_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"schema_version_applied\" INTEGER NOT NULL,"
   , "  \"ledger_enabled\" BOOLEAN NOT NULL,"
   , "  \"updated_at\" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),"

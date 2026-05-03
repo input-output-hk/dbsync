@@ -112,6 +112,7 @@ data SyncStateRow = SyncStateRow
   , ssrPoolRelayIdCounter            :: !Int64
   , ssrTxCborIdCounter               :: !Int64
   , ssrEpochSyncStatsIdCounter       :: !Int64
+  , ssrAdaPotsIdCounter              :: !Int64
   , ssrSchemaVersionApplied          :: !Int
   , ssrLedgerEnabled                 :: !Bool
   }
@@ -194,6 +195,7 @@ selectSyncStateSql = BS8.concat
       , "pool_relay_id_counter"
       , "tx_cbor_id_counter"
       , "epoch_sync_stats_id_counter"
+      , "ada_pots_id_counter"
       , "schema_version_applied"
       , "ledger_enabled"
       ]
@@ -237,8 +239,9 @@ updateSyncStateSql = BS8.concat
       , "pool_relay_id_counter           = $26"
       , "tx_cbor_id_counter              = $27"
       , "epoch_sync_stats_id_counter     = $28"
-      , "schema_version_applied          = $29"
-      , "ledger_enabled                  = $30"
+      , "ada_pots_id_counter             = $29"
+      , "schema_version_applied          = $30"
+      , "ledger_enabled                  = $31"
       , "updated_at                      = now()"
       ]
   , " WHERE id = 1;"
@@ -354,7 +357,7 @@ rebuildDedupMaps _conn = newMaps  -- TODO: stream from PG cursors
 -- ---------------------------------------------------------------------------
 
 -- | Encode a 'SyncStateRow' as a positional parameter list for
--- 'updateSyncStateSql'. The order matches the @$1 … $30@ placeholders
+-- 'updateSyncStateSql'. The order matches the @$1 … $31@ placeholders
 -- in that statement byte-for-byte.
 encodeSyncStateRow :: SyncStateRow -> [Maybe (PQ.Oid, ByteString, PQ.Format)]
 encodeSyncStateRow r =
@@ -386,6 +389,7 @@ encodeSyncStateRow r =
   , txtParam (txtInt (ssrPoolRelayIdCounter r))
   , txtParam (txtInt (ssrTxCborIdCounter r))
   , txtParam (txtInt (ssrEpochSyncStatsIdCounter r))
+  , txtParam (txtInt (ssrAdaPotsIdCounter r))
   , txtParam (txtInt (fromIntegral (ssrSchemaVersionApplied r)))
   , txtParam (txtBool (ssrLedgerEnabled r))
   ]
@@ -423,8 +427,9 @@ parseSyncStateRow result row =
     <*> getReqCol "pool_relay_id_counter"            25 parseInt64
     <*> getReqCol "tx_cbor_id_counter"               26 parseInt64
     <*> getReqCol "epoch_sync_stats_id_counter"      27 parseInt64
-    <*> getReqCol "schema_version_applied"           28 parseInt
-    <*> getReqCol "ledger_enabled"                   29 parseBool
+    <*> getReqCol "ada_pots_id_counter"              28 parseInt64
+    <*> getReqCol "schema_version_applied"           29 parseInt
+    <*> getReqCol "ledger_enabled"                   30 parseBool
   where
     getOptCol :: Text -> PQ.Column -> (ByteString -> Maybe a) -> IO (Maybe a)
     getOptCol name col parser = do

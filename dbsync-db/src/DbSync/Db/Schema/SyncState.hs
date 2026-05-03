@@ -91,6 +91,7 @@ syncStateTableDef = TableDef
       , ColumnDef "pool_relay_id_counter"           PgBigInt      False
       , ColumnDef "tx_cbor_id_counter"              PgBigInt      False
       , ColumnDef "epoch_sync_stats_id_counter"     PgBigInt      False
+      , ColumnDef "ada_pots_id_counter"             PgBigInt      False
       , ColumnDef "schema_version_applied"          PgInteger     False
       , ColumnDef "ledger_enabled"                  PgBoolean     False
       , ColumnDef "updated_at"                      PgTimestampTz False
@@ -141,4 +142,5 @@ syncStateCounterColumns =
   , "pool_relay_id_counter"
   , "tx_cbor_id_counter"
   , "epoch_sync_stats_id_counter"
+  , "ada_pots_id_counter"
   ]

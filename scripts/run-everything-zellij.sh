@@ -36,7 +36,7 @@ fi
 echo "Using dbsync binary: $dbsync"
 
 # Default profile (uses the full-config test fixture)
-PROFILE="${PROFILE:-$PROJECT_DIR/profiles/everything-profile.json}"
+PROFILE="${PROFILE:-$PROJECT_DIR/profiles/everything-no-ledger-profile.json}"
 
 # Kill any previous instances
 echo "Cleaning up previous instances..."
@@ -64,7 +64,7 @@ layout {
         }
         pane name="cardano-db-sync" {
             command "bash"
-            args "-c" "cd $PROJECT_DIR/ && echo 'Starting DbSync...' && sleep 5 && $dbsync --db-sync-config $TESTNET_DIR/db-sync-config.json --socket-path $TESTNET_DIR/db/node.socket --ledger-state-dir $TESTNET_DIR --profile $PROFILE"
+            args "-c" "cd $PROJECT_DIR/ && echo 'Starting DbSync...' && $dbsync --db-sync-config $TESTNET_DIR/db-sync-config.json --socket-path $TESTNET_DIR/db/node.socket --ledger-state-dir $TESTNET_DIR --profile $PROFILE"
         }
     }
 }

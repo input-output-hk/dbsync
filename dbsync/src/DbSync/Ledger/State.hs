@@ -52,6 +52,7 @@ module DbSync.Ledger.State
 
     -- * Environment construction
   , mkHasLedgerEnv
+  , initLedgerDbFromGenesis
 
     -- * Block application
   , applyBlock
@@ -161,6 +162,7 @@ import DbSync.Ledger.Types
   , HasLedgerEnv (..)
   , LedgerDB (..)
   , LedgerEnv (..)
+  , initCardanoLedgerState
   , newEpochStateT
   , updatedCommittee
   )
@@ -391,6 +393,23 @@ mkHasLedgerEnv
     -- a little slack so a mid-write snapshot doesn't block the worker.
     snapshotQueueBound :: Natural
     snapshotQueueBound = 4
+
+-- | Seed the in-memory 'LedgerDB' buffer with the genesis state.
+--
+-- Call this once at boot, on a fresh database, after 'mkHasLedgerEnv'
+-- has constructed the 'LedgerEnv'. Without it the buffer stays empty
+-- and the first 'applyBlock' crashes in 'readStateUnsafe' with
+-- @\"LedgerDB not initialised\"@.
+--
+-- For a resume from an existing populated database the buffer should
+-- be seeded from a matching disk snapshot instead; that path is not
+-- implemented yet, so resuming a ledger-enabled database without
+-- @--force-resync@ is currently unsupported.
+initLedgerDbFromGenesis :: LedgerEnv -> IO ()
+initLedgerDbFromGenesis env = do
+  sref <- initCardanoLedgerState env
+  atomically $ writeTVar (leStateVar env)
+    (Strict.Just (LedgerDB (StrictSeq.singleton sref)))
 
 -- ---------------------------------------------------------------------------
 -- * Block application

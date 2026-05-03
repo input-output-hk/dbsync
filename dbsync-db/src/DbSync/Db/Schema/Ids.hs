@@ -42,6 +42,9 @@ module DbSync.Db.Schema.Ids
     -- * EpochSyncStats table IDs
   , EpochSyncStatsId (..)
 
+    -- * EpochBoundary table IDs
+  , AdaPotsId (..)
+
     -- * Referenced by other tables
   , PoolHashId (..)
   , StakeAddressId (..)
@@ -161,6 +164,15 @@ newtype TxCborId = TxCborId { getTxCborId :: Int64 }
 
 -- | Primary key for the @epoch_sync_stats@ table.
 newtype EpochSyncStatsId = EpochSyncStatsId { getEpochSyncStatsId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- ---------------------------------------------------------------------------
+-- * EpochBoundary table IDs
+-- ---------------------------------------------------------------------------
+
+-- | Primary key for the @ada_pots@ table.
+-- One row per epoch boundary; written by the EpochBoundary extractor.
+newtype AdaPotsId = AdaPotsId { getAdaPotsId :: Int64 }
   deriving stock (Eq, Ord, Show)
 
 -- ---------------------------------------------------------------------------

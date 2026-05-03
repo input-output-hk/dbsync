@@ -225,6 +225,7 @@ sampleRow = SyncStateRow
   , ssrPoolRelayIdCounter            = 40
   , ssrTxCborIdCounter               = 1500
   , ssrEpochSyncStatsIdCounter       = 5
+  , ssrAdaPotsIdCounter              = 5
   , ssrSchemaVersionApplied          = 1
   , ssrLedgerEnabled                 = True
   }

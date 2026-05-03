@@ -233,10 +233,12 @@ test-suite dbsync-test
     DbSync.Config.ValidationSpec
     DbSync.Config.NodeSpec
     DbSync.Config.GenesisSpec
+    DbSync.Schema.AdaPotsSpec
     DbSync.Schema.CoreSpec
     DbSync.Schema.GenerateSpec
     DbSync.Schema.SyncStateSpec
     DbSync.Extractor.CoreSpec
+    DbSync.Extractor.EpochBoundarySpec
     DbSync.Ingest.PipelineSpec
     DbSync.Schema.InitSpec
     DbSync.Copy.WriterSpec

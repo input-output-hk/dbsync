@@ -44,9 +44,11 @@ import Cardano.Prelude
 
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 
+import qualified Control.Concurrent.Class.MonadSTM.Strict as Strict
 import Control.Concurrent.STM (TBQueue, readTBQueue, tryReadTBQueue)
 import Control.Tracer (traceWith)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
+import qualified Data.Strict.Maybe as SMaybe
 import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime, NominalDiffTime)
 import System.Mem (performMajorGC)
 import Text.Printf (printf)
@@ -56,9 +58,17 @@ import DbSync.Block.Parser (parseBlock)
 import DbSync.Block.Types ()
 import DbSync.Copy.Writer (CopyWriter (..))
 import DbSync.Db.Schema.EpochSyncStats (EpochSyncStats (..), SyncPhase (..))
+import DbSync.Db.Schema.Ids (BlockId (..))
 import DbSync.Env (IngestEnv (..))
+import DbSync.Extractor (ExtractState (..))
+import DbSync.Extractor.EpochBoundary (runEpochBoundary)
 import DbSync.Ingest.Pipeline (processBlock)
 import DbSync.Ingest.ReceiverStats (EpochSnapshot (..), readAndResetEpoch)
+import DbSync.Ledger.Types
+  ( ApplyResult (..)
+  , HasLedgerEnv (..)
+  , LedgerEnv (..)
+  )
 import DbSync.Resolver (IdResolver (..))
 import DbSync.StateQuery
   ( ObservationResult (..)
@@ -212,6 +222,8 @@ runConsumer = do
       writer        <- asks ieWriter
       copyWriter    <- asks ieCopyWriter
       receiverStats <- asks ieReceiverStats
+      hasLedger     <- asks ieHasLedgerEnv
+      extractStRef  <- asks ieExtractState
 
       let slot = blockSlot cardanoBlock
 
@@ -318,6 +330,34 @@ runConsumer = do
       -- Run extractors + write to COPY queues
       processBlock genBlock
 
+      -- After processBlock, if this was an epoch-boundary block, run the
+      -- EpochBoundary extractor.  The boundary block's row has now been
+      -- written to the new-epoch COPY transaction; its 'BlockId' lives in
+      -- 'esLastBlockId' and is the FK target for the boundary tables
+      -- (currently @ada_pots@; LEDGER-PLAN.md §15.5 lists the rest).
+      --
+      -- We wait synchronously for the LedgerWorker's
+      -- 'leLatestApplyResult' to be at-or-past the boundary block's
+      -- slot. The worker is generally not lock-stepped with the consumer
+      -- (LEDGER-PLAN.md §5), but at boundary blocks the boundary-table
+      -- writes need 'apNewEpoch' which only exists after the worker has
+      -- applied the boundary block. The wait is bounded by the worker's
+      -- single-block apply latency (sub-second on mainnet).
+      case prevEpoch of
+        Just prev | prev /= blockEpoch ->
+          case hasLedger of
+            LedgerEnabled lenv -> do
+              applyResult <- liftIO $ waitForApplyResultAt lenv slot
+              mLastBlockId <- liftIO $ esLastBlockId <$> readIORef extractStRef
+              case mLastBlockId of
+                Just lastBid ->
+                  liftIO $ runEpochBoundary applyResult (BlockId lastBid) resolver writer
+                Nothing -> pure ()  -- Should not happen: processBlock just assigned a BlockId
+            LedgerDisabled _ ->
+              -- Ledger feature off; boundary tables are not populated.
+              pure ()
+        _ -> pure ()
+
       -- Update counters
       liftIO $ modifyIORef' blockCountRef (+ 1)
       liftIO $ writeIORef prevEpochRef (Just blockEpoch)
@@ -373,6 +413,28 @@ diagnose batchSz bps ps mBaseline
   where
     avg = avgDrain ps
     highDrain = (batchSz * 4) `div` 5  -- 80% of batchSize
+
+-- ---------------------------------------------------------------------------
+-- * LedgerWorker coordination
+-- ---------------------------------------------------------------------------
+
+-- | Block until the 'LedgerWorker' has produced an 'ApplyResult' whose
+-- slot is at-or-past @targetSlot@, then return it.
+--
+-- Used at epoch boundaries to fetch the @apNewEpoch@ payload from
+-- 'leLatestApplyResult'. STM 'retry' suspends the consumer thread
+-- until the worker writes a fresh 'ApplyResult'.
+--
+-- The worker writes 'leLatestApplyResult' on every successful
+-- 'applyBlock' (DbSync.Ledger.State), so the wait progresses
+-- deterministically — no polling, no sleep loops.
+waitForApplyResultAt :: LedgerEnv -> SlotNo -> IO ApplyResult
+waitForApplyResultAt lenv targetSlot = Strict.atomically $ do
+  mAR <- Strict.readTVar (leLatestApplyResult lenv)
+  case mAR of
+    SMaybe.Just ar
+      | sdSlotNo (apSlotDetails ar) >= targetSlot -> pure ar
+    _ -> retry
 
 -- ---------------------------------------------------------------------------
 -- * Queue utilities

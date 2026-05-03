@@ -149,6 +149,13 @@ data IdResolver m = IdResolver
 
     -- | Assign the next epoch_sync_stats ID.
   , assignEpochSyncStatsId :: !(m EpochSyncStatsId)
+
+    -- ---------------------------------------------------------------
+    -- EpochBoundary IDs
+    -- ---------------------------------------------------------------
+
+    -- | Assign the next ada_pots ID.
+  , assignAdaPotsId :: !(m AdaPotsId)
   }
 
 -- ---------------------------------------------------------------------------

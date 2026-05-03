@@ -99,6 +99,7 @@ epoch5Row = SyncStateRow
   , ssrPoolRelayIdCounter            = 25
   , ssrTxCborIdCounter               = 5000
   , ssrEpochSyncStatsIdCounter       = 6
+  , ssrAdaPotsIdCounter              = 6
   , ssrSchemaVersionApplied          = 1
   , ssrLedgerEnabled                 = False
   }

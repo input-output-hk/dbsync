@@ -13,6 +13,7 @@ module DbSync.Writer.CopyAdapter
 import Cardano.Prelude
 
 import DbSync.Copy.Writer (CopyWriter (..))
+import DbSync.Db.Schema.AdaPots (encodeAdaPotsCopy)
 import DbSync.Db.Schema.CBOR (encodeTxCborCopy)
 import DbSync.Db.Schema.Core
   ( encodeBlockCopy
@@ -120,6 +121,10 @@ mkCopyWriterAdapter cw = Writer
     -- EpochSyncStats
   , writeEpochSyncStats = \essid ess ->
       cwWriteRow cw "epoch_sync_stats" (encodeEpochSyncStatsCopy essid ess)
+
+    -- EpochBoundary
+  , writeAdaPots = \apid pots ->
+      cwWriteRow cw "ada_pots" (encodeAdaPotsCopy apid pots)
 
     -- Transaction control
   , commit = cwCommit cw

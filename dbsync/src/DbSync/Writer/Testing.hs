@@ -91,6 +91,9 @@ mkTestWriter ref = Writer
     -- EpochSyncStats (no-op)
   , writeEpochSyncStats = \_ _ -> pure ()
 
+    -- EpochBoundary (no-op)
+  , writeAdaPots = \_ _ -> pure ()
+
     -- Transaction control
   , commit =
       atomicModifyIORef' ref $ \s ->

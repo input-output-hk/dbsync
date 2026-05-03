@@ -41,7 +41,7 @@ import DbSync.Id.DedupMap (newMaps)
 import DbSync.Ingest.Consumer (runConsumer)
 import DbSync.Ingest.ReceiverStats (newReceiverStats)
 import DbSync.Ledger.Snapshot (runLedgerStateWriteThread)
-import DbSync.Ledger.State (mkHasLedgerEnv)
+import DbSync.Ledger.State (initLedgerDbFromGenesis, mkHasLedgerEnv)
 import DbSync.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..), mkNoLedgerEnv)
 import DbSync.Ledger.Worker (runLedgerWorker)
 import DbSync.Node.Connection (connectToNode, getNetworkMagic)
@@ -185,17 +185,23 @@ main = do
         logInfo $
           "Ledger feature enabled; opening LSM session under "
             <> toS ledgerStateDir
-        mkHasLedgerEnv
+        env <- mkHasLedgerEnv
           tracer
           pinfo
           ledgerStateDir
           network
           (sgMaxLovelaceSupply (scConfig (gcShelley genesisCfg)))
           systemStart
-          580                                              -- TODO Phase 10: configurable
+          580                                              -- snapshot near-tip-epoch threshold
           True                                             -- has rewards
           False                                            -- abort on panic
           (lcBackend ledgerCfg)
+        case env of
+          LedgerEnabled lenv -> do
+            logInfo "Seeding ledger DB from genesis"
+            initLedgerDbFromGenesis lenv
+          LedgerDisabled _ -> pure ()  -- mkHasLedgerEnv only ever returns LedgerEnabled
+        pure env
       else do
         logInfo "Ledger feature disabled (set ledger.enabled = true in profile to opt in); skipping LSM session"
         LedgerDisabled <$> mkNoLedgerEnv tracer pinfo systemStart network
@@ -279,6 +285,7 @@ mkInitState = ExtractState
       , icPoolRelayId           = mkIdCounter 1
       , icTxCborId              = mkIdCounter 1
       , icEpochSyncStatsId      = mkIdCounter 1
+      , icAdaPotsId             = mkIdCounter 1
       }
   , esLastBlockId = Nothing
   }

@@ -207,6 +207,7 @@ mkInitState = ExtractState
       , icPoolRelayId           = mkIdCounter 1
       , icTxCborId              = mkIdCounter 1
       , icEpochSyncStatsId      = mkIdCounter 1
+      , icAdaPotsId             = mkIdCounter 1
       }
   , esLastBlockId = Nothing
   }

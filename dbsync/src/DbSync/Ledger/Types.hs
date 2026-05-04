@@ -116,6 +116,7 @@ import Ouroboros.Consensus.Shelley.HFEras ()                -- per-era HFC insta
 import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()  -- 'LedgerSupportsProtocol' orphans
 
 import DbSync.Block.Types (CardanoPoint)
+import DbSync.Checkpoint.SyncState (ControlConnection)
 import DbSync.StateQuery.Types (CardanoInterpreter, SlotDetails)
 import DbSync.Trace.Types (AppTracer)
 
@@ -218,6 +219,10 @@ data LedgerEnv = LedgerEnv
     -- 'LedgerWorker'. The consumer reads this at epoch boundaries
     -- (Phase 7) to drive the EpochBoundary extractor; the worker
     -- writes it on every successful 'applyBlock'.
+  , leControlConnection    :: !ControlConnection
+    -- ^ PG connection used by the snapshot-writer thread to record
+    -- successful snapshot completions in
+    -- @dbsync_sync_state.last_snapshot_slot@.
   }
 
 -- | Constructor for 'NoLedgerEnv'. In 'IO' purely to keep the shape

@@ -34,9 +34,11 @@ import Cardano.Prelude
 import Control.Concurrent.STM (TBQueue, TVar)
 import Data.IORef (IORef)
 
+import Cardano.Slotting.Slot (SlotNo)
 import Ouroboros.Consensus.BlockchainTime.WallClock.Types (SystemStart)
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
 
+import DbSync.Checkpoint.SyncState (ControlConnection)
 import DbSync.Config.Types (NodeConfig, SyncConfig)
 import DbSync.Copy.Writer (CopyWriter)
 import DbSync.Extractor (ExtractState, ExtractorDef, HasExtractors (..))
@@ -140,6 +142,17 @@ data IngestEnv = IngestEnv
     -- Mutated by the chainsync receiver, read+reset per epoch by the
     -- consumer for the @Ingest:@ log line. See
     -- 'DbSync.Ingest.ReceiverStats' for rationale.
+  , ieControlConnection :: !ControlConnection
+    -- ^ PG connection used by the consumer to advance
+    -- @dbsync_sync_state@ at each epoch boundary via 'commitEpoch'.
+  , ieLastCommittedSlotAtBoot :: !(Maybe SlotNo)
+    -- ^ Upper edge of the replay window for a ledger-enabled
+    -- resume: the consumer skips 'processBlock' for any block at
+    -- or before this slot (already in PG). 'Nothing' otherwise.
+  , ieReplayStartSlot         :: !(Maybe SlotNo)
+    -- ^ Lower edge of the replay window (the chosen snapshot's
+    -- slot). Drives the percentage in the consumer\'s replay
+    -- progress log. 'Nothing' otherwise.
   }
 
 -- | Environment for the 'FollowingChainTip' phase.

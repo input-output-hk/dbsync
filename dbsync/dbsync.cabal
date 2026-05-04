@@ -56,6 +56,7 @@ library
     DbSync.Trace.Types
     DbSync.Trace.Backend
     DbSync.Phase
+    DbSync.Phase.Boot
     DbSync.Phase.IngestChainHistory
     DbSync.Phase.PreparingForChainTip
     DbSync.Phase.FollowingChainTip
@@ -95,6 +96,7 @@ library
     DbSync.Id.Counter
     DbSync.Id.DedupMap
     DbSync.Checkpoint.Manager
+    DbSync.Checkpoint.Resume
     DbSync.Checkpoint.SyncState
     DbSync.Checkpoint.Types
     DbSync.Checkpoint.Serialise
@@ -171,6 +173,7 @@ library
 
     -- Database
     , postgresql-libpq
+    , hasql                           >= 1.9 && < 2
 
     -- Data / serialisation
     , aeson
@@ -196,6 +199,7 @@ library
 
     -- Other
     , base16-bytestring
+    , directory
     , microlens
     , time
     , transformers-except
@@ -215,6 +219,7 @@ library dbsync-testlib
   build-depends:
       base
     , cardano-prelude
+    , hasql                           >= 1.9 && < 2
     , process
     , text
 
@@ -239,6 +244,7 @@ test-suite dbsync-test
     DbSync.Schema.SyncStateSpec
     DbSync.Extractor.CoreSpec
     DbSync.Extractor.EpochBoundarySpec
+    DbSync.Ingest.ConsumerSpec
     DbSync.Ingest.PipelineSpec
     DbSync.Schema.InitSpec
     DbSync.Copy.WriterSpec
@@ -246,7 +252,9 @@ test-suite dbsync-test
     DbSync.Ledger.TypesSpec
     DbSync.Ledger.WorkerSpec
     DbSync.Checkpoint.ManagerSpec
+    DbSync.Checkpoint.ResumeSpec
     DbSync.Checkpoint.SyncStateSpec
+    DbSync.Phase.BootSpec
     DbSync.StateQuery.ObservedSummarySpec
   build-depends:
       base
@@ -288,10 +296,12 @@ executable dbsync
     , dbsync
     , dbsync-db
     , cardano-prelude
+    , cardano-slotting
     , contra-tracer
     , directory
     , filepath
     , cardano-diffusion
+    , hasql
     , ouroboros-consensus
     , ouroboros-consensus:cardano
     , stm

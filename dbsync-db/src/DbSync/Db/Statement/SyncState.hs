@@ -1,0 +1,120 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+-- | Hasql 'Statement' bindings for the @dbsync_sync_state@ singleton row.
+--
+-- The schema type 'SyncStateRow' and its encoder\/decoder live in
+-- 'DbSync.Db.Schema.SyncState'. This module pairs them with the
+-- hand-written SQL templates and exposes them as
+-- 'Stmt.Statement' values.
+module DbSync.Db.Statement.SyncState
+  ( seedSyncStateStmt
+  , readSyncStateStmt
+  , writeSyncStateStmt
+  , markSnapshotCompleteStmt
+  , markSyncCompleteStmt
+  ) where
+
+import Cardano.Prelude
+
+import Data.Functor.Contravariant ((>$<))
+import qualified Hasql.Decoders as D
+import qualified Hasql.Encoders as E
+import qualified Hasql.Statement as Stmt
+
+import DbSync.Db.Schema.SyncState
+  ( SyncStateRow
+  , syncStateRowDecoder
+  , syncStateRowEncoder
+  )
+
+-- | Idempotent seed @INSERT@. Only @schema_version_applied@ and
+-- @ledger_enabled@ come from the caller; all other columns pick up
+-- their @DEFAULT@ values.
+seedSyncStateStmt :: Stmt.Statement (Int32, Bool) ()
+seedSyncStateStmt =
+  Stmt.preparable sql encoder D.noResult
+  where
+    sql =
+      "INSERT INTO dbsync_sync_state (schema_version_applied, ledger_enabled) \
+      \VALUES ($1, $2) ON CONFLICT (id) DO NOTHING"
+    encoder =
+         (fst >$< E.param (E.nonNullable E.int4))
+      <> (snd >$< E.param (E.nonNullable E.bool))
+
+-- | Read the singleton row, or 'Nothing' if it has never been seeded.
+-- 'syncStateRowDecoder' consumes every column in table order, so a
+-- plain @SELECT *@ suffices.
+readSyncStateStmt :: Stmt.Statement () (Maybe SyncStateRow)
+readSyncStateStmt =
+  Stmt.preparable
+    "SELECT * FROM dbsync_sync_state WHERE id = 1"
+    E.noParams
+    (D.rowMaybe syncStateRowDecoder)
+
+-- | Write the consumer-owned columns of the singleton row. Returns
+-- the affected row count so callers can verify the row exists.
+--
+-- Placeholder order matches 'syncStateRowEncoder'. Does __not__
+-- touch @last_snapshot_slot@ or @sync_complete@ — those columns are
+-- owned by 'markSnapshotCompleteStmt' and 'markSyncCompleteStmt'.
+writeSyncStateStmt :: Stmt.Statement SyncStateRow Int64
+writeSyncStateStmt =
+  Stmt.preparable sql syncStateRowEncoder D.rowsAffected
+  where
+    sql =
+      "UPDATE dbsync_sync_state SET \
+      \  last_committed_slot             = $1 \
+      \, last_committed_block_no         = $2 \
+      \, last_committed_block_hash       = $3 \
+      \, block_id_counter                = $4 \
+      \, tx_id_counter                   = $5 \
+      \, tx_out_id_counter               = $6 \
+      \, tx_in_id_counter                = $7 \
+      \, collateral_tx_in_id_counter     = $8 \
+      \, reference_tx_in_id_counter      = $9 \
+      \, tx_metadata_id_counter          = $10 \
+      \, ma_tx_mint_id_counter           = $11 \
+      \, ma_tx_out_id_counter            = $12 \
+      \, slot_leader_id_counter          = $13 \
+      \, stake_address_id_counter        = $14 \
+      \, pool_hash_id_counter            = $15 \
+      \, multi_asset_id_counter          = $16 \
+      \, script_id_counter               = $17 \
+      \, stake_registration_id_counter   = $18 \
+      \, stake_deregistration_id_counter = $19 \
+      \, delegation_id_counter           = $20 \
+      \, withdrawal_id_counter           = $21 \
+      \, pool_update_id_counter          = $22 \
+      \, pool_metadata_ref_id_counter    = $23 \
+      \, pool_owner_id_counter           = $24 \
+      \, pool_retire_id_counter          = $25 \
+      \, pool_relay_id_counter           = $26 \
+      \, tx_cbor_id_counter              = $27 \
+      \, epoch_sync_stats_id_counter     = $28 \
+      \, ada_pots_id_counter             = $29 \
+      \, schema_version_applied          = $30 \
+      \, ledger_enabled                  = $31 \
+      \, updated_at                      = now() \
+      \WHERE id = 1"
+
+-- | Record a successful ledger-snapshot write at the given slot.
+-- Owned exclusively by the snapshot-writer thread.
+markSnapshotCompleteStmt :: Stmt.Statement Word64 Int64
+markSnapshotCompleteStmt =
+  Stmt.preparable sql encoder D.rowsAffected
+  where
+    sql =
+      "UPDATE dbsync_sync_state \
+      \SET last_snapshot_slot = $1, updated_at = now() WHERE id = 1"
+    encoder = fromIntegral >$< E.param (E.nonNullable E.int8)
+
+-- | Flip @sync_complete@ to true. Called once at the
+-- 'IngestChainHistory' → 'FollowingChainTip' transition; subsequent
+-- boots take the fast path.
+markSyncCompleteStmt :: Stmt.Statement () Int64
+markSyncCompleteStmt =
+  Stmt.preparable sql E.noParams D.rowsAffected
+  where
+    sql =
+      "UPDATE dbsync_sync_state \
+      \SET sync_complete = true, updated_at = now() WHERE id = 1"

@@ -53,6 +53,8 @@ module DbSync.Ledger.State
     -- * Environment construction
   , mkHasLedgerEnv
   , initLedgerDbFromGenesis
+  , initLedgerDbFromSnapshot
+  , dropLedgerStateDir
 
     -- * Block application
   , applyBlock
@@ -92,7 +94,7 @@ import Cardano.Ledger.Conway.Governance
 import Cardano.Ledger.Shelley.AdaPots (AdaPots (..), sumAdaPots)
 import qualified Cardano.Ledger.Shelley.LedgerState as Shelley
 import Cardano.Slotting.EpochInfo (EpochInfo, epochInfoEpoch)
-import Cardano.Slotting.Slot (EpochNo (..), WithOrigin (..))
+import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..), WithOrigin (..))
 import Control.Concurrent.Class.MonadSTM.Strict
   ( atomically
   , newEmptyTMVarIO
@@ -110,7 +112,7 @@ import qualified Data.Strict.Maybe as Strict
 import qualified Data.Time.Clock as Time
 import GHC.IO.Exception (userError)
 import Lens.Micro ((%~), (^.), (^?))
-import Ouroboros.Consensus.Block (blockHash, blockIsEBB, blockPrevHash)
+import Ouroboros.Consensus.Block (blockHash, blockIsEBB, blockPrevHash, blockSlot)
 import Ouroboros.Consensus.BlockchainTime.WallClock.Types (SystemStart)
 import Ouroboros.Consensus.Cardano.Block (ConwayEra, LedgerState (..), StandardCrypto)
 import Ouroboros.Consensus.Config (TopLevelConfig, configCodec, configLedger)
@@ -138,10 +140,12 @@ import qualified Control.Tracer as Tracer
 import System.FS.API (SomeHasFS (..), mkFsPath)
 import System.FS.API.Types (MountPoint (..))
 import System.FS.IO (ioHasFS)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, removePathForcibly)
 import System.FilePath ((</>))
 import System.Random (genWord64, newStdGen)
 
-import DbSync.AppM (LedgerM)
+import DbSync.AppM (LedgerM, runAppM)
+import DbSync.Checkpoint.SyncState (ControlConnection)
 import DbSync.Config.Types (LedgerBackend (..))
 import qualified DbSync.Era.Shelley.Generic.EpochUpdate as Generic
 import qualified DbSync.Era.Shelley.Generic.ProtoParams as Generic
@@ -171,6 +175,7 @@ import Ouroboros.Consensus.Shelley.HFEras ()                -- per-era HFC insta
 import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()  -- 'LedgerSupportsProtocol' orphans
 
 import qualified DbSync.Ledger.Snapshot
+import DbSync.Ledger.Snapshot (loadSnapshotFromDisk)
 import DbSync.Block.Types (CardanoPoint)
 import DbSync.StateQuery (SlotDetails (..))
 import DbSync.Trace.Types (AppTracer)
@@ -289,10 +294,11 @@ mkHasLedgerEnv
   -> Bool                                           -- ^ Capture rewards events in 'ApplyResult'
   -> Bool                                           -- ^ Abort on invalid ledger state
   -> LedgerBackend
+  -> ControlConnection                              -- ^ For 'markSnapshotComplete' from the writer thread
   -> IO HasLedgerEnv
 mkHasLedgerEnv
   tracer pinfo dir network maxSupply start snapEpoch
-  hasRewards abortOnPanic backend = do
+  hasRewards abortOnPanic backend ctrlConn = do
     interpreterVar  <- newTVarIO Strict.Nothing
     stateVar        <- newTVarIO Strict.Nothing
     latestApplyVar  <- newTVarIO Strict.Nothing
@@ -301,9 +307,14 @@ mkHasLedgerEnv
     epochWait       <- newEmptyTMVarIO
     snapshotQueue   <- newTBQueueIO snapshotQueueBound
 
-    -- LSM session + consensus snapshot machinery.
+    -- Layout under the ledger state directory:
+    --   <dir>/lsm/                  — LSM tables session
+    --   <dir>/consensus-snapshots/  — consensus disk snapshots
+    let snapshotsDir = dir </> "consensus-snapshots"
+    createDirectoryIfMissing True snapshotsDir
+
     let codecConfig = configCodec (Consensus.pInfoConfig pinfo)
-        someHasFS   = SomeHasFS (ioHasFS (MountPoint dir))
+        someHasFS   = SomeHasFS (ioHasFS (MountPoint snapshotsDir))
         snapTracer  = Tracer.nullTracer
         lsmPath     = case backend of
                         LedgerBackendLSM (Just p) -> p
@@ -382,6 +393,7 @@ mkHasLedgerEnv
           , leLoadSnapshot         = loadSnap
           , leClose                = closeBackend
           , leLatestApplyResult    = latestApplyVar
+          , leControlConnection    = ctrlConn
           }
   where
     -- Shallow — the worker is a single consumer and we want strong
@@ -404,12 +416,36 @@ mkHasLedgerEnv
 -- For a resume from an existing populated database the buffer should
 -- be seeded from a matching disk snapshot instead; that path is not
 -- implemented yet, so resuming a ledger-enabled database without
--- @--force-resync@ is currently unsupported.
+-- @--resync-from-genesis@ is currently unsupported.
 initLedgerDbFromGenesis :: LedgerEnv -> IO ()
 initLedgerDbFromGenesis env = do
   sref <- initCardanoLedgerState env
   atomically $ writeTVar (leStateVar env)
     (Strict.Just (LedgerDB (StrictSeq.singleton sref)))
+
+-- | Restore the in-memory 'LedgerDB' from an on-disk snapshot.
+-- Returns 'Left' with the backend's error text on failure; the
+-- caller decides how to escalate.
+initLedgerDbFromSnapshot :: LedgerEnv -> DiskSnapshot -> IO (Either Text ())
+initLedgerDbFromSnapshot env snap = do
+  eRef <- runAppM env (loadSnapshotFromDisk snap)
+  case eRef of
+    Left err -> pure (Left err)
+    Right sref -> do
+      atomically $ writeTVar (leStateVar env)
+        (Strict.Just (LedgerDB (StrictSeq.singleton sref)))
+      pure (Right ())
+
+-- | Recursively wipe the ledger state directory (LSM session +
+-- consensus snapshots). Companion to @dropSchema@: invoked when
+-- @--resync-from-genesis@ is in effect so the next boot starts from
+-- genesis with a clean slate.
+--
+-- A no-op when the directory doesn't exist.
+dropLedgerStateDir :: FilePath -> IO ()
+dropLedgerStateDir dir = do
+  exists <- doesDirectoryExist dir
+  when exists $ removePathForcibly dir
 
 -- ---------------------------------------------------------------------------
 -- * Block application
@@ -561,33 +597,36 @@ applyBlock blk slotDetails = do
       pure (oldRef, appResult, pruned)
 
 -- | 'applyBlock' plus the snapshot-cadence decision and pruning of
--- old-ref handles.
+-- old-ref handles. Returns the 'ApplyResult' and whether a snapshot
+-- write was enqueued (drained asynchronously by the snapshot writer).
 --
--- Returns the 'ApplyResult' and a 'Bool' indicating whether a
--- snapshot request was enqueued (the snapshot writer drains the
--- queue asynchronously; this call returns as soon as the request is
--- in the queue).
+-- Pruned refs are closed only after their 'srCanClose' flag clears,
+-- so an in-flight snapshot write can't lose its handle (I3 in the
+-- ledger-state plan).
 --
--- Pruned refs from 'applyBlock' have their handles closed here, but
--- only after waiting on 'srCanClose' — invariant I3 in the
--- ledger-state plan.
+-- The optional @replayBoundary@ suppresses snapshot writes inside
+-- the @[snapshotSlot+1, last_committed_slot]@ resume catch-up
+-- window; the consensus V2 backend would reject those attempts as
+-- redundant anyway (its tip overlaps the just-loaded snapshot),
+-- producing a confusing @takeSnapshot returned Nothing@ trace.
 applyBlockAndSnapshot
   :: CardanoBlock StandardCrypto
   -> SlotDetails
-  -> Bool                                           -- ^ "consistent with chain tip"
+  -> Bool                                           -- ^ \"consistent with chain tip\"
+  -> Maybe SlotNo                                   -- ^ replay boundary
   -> LedgerM (ApplyResult, Bool)
-applyBlockAndSnapshot blk slotDetails consistent = do
+applyBlockAndSnapshot blk slotDetails consistent mReplayBoundary = do
   env <- ask
   (oldRef, appResult, pruned) <- applyBlock blk slotDetails
-  let nearTip = isSyncedNearTip slotDetails
+  let nearTip        = isSyncedNearTip slotDetails
+      inReplayWindow = maybe False (blockSlot blk <=) mReplayBoundary
   tookSnapshot <-
-    if shouldSnapshotAtEpoch appResult consistent nearTip (leSnapshotNearTipEpoch env)
+    if not inReplayWindow
+       && shouldSnapshotAtEpoch appResult consistent nearTip (leSnapshotNearTipEpoch env)
       then do
         DbSync.Ledger.Snapshot.saveCleanupState oldRef
         pure True
       else pure False
-  -- Close pruned handles, waiting for any in-flight snapshot write
-  -- holding them (I3).
   liftIO $ forM_ pruned $ \sr -> do
     atomically $ readTVar (srCanClose sr) >>= STM.check
     Consensus.close (srTables sr)

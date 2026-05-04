@@ -42,6 +42,7 @@ import System.Process (readProcessWithExitCode)
 import DbSync.Db.Schema.Generate (generateCreateTable)
 import DbSync.Db.Schema.SyncState (syncStateTableDef, syncStateTableName)
 import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Sql (quoteIdent, quoteLiteral)
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -65,7 +66,7 @@ data SchemaVersionRow = SchemaVersionRow
 --     version; the boot flow should skip 'initSchema' and resume.
 --   * 'SchemaMismatched' — at least one extractor disagrees; the boot flow
 --     should abort and surface the discrepancies to the operator (unless
---     @--force-resync@ overrides).
+--     @--resync-from-genesis@ overrides).
 data SchemaState
   = SchemaFresh
   | SchemaMatches
@@ -87,7 +88,7 @@ data SchemaMismatch
   deriving stock (Eq, Show)
 
 -- | The action the boot flow should take, given the observed schema state and
--- whether the operator passed @--force-resync@.
+-- whether the operator passed @--resync-from-genesis@.
 data SchemaAction
   = -- | Schema already matches; do not touch DDL.
     ActionSkipInit
@@ -115,7 +116,7 @@ data SchemaAction
 -- __Not idempotent__: this function expects the database to be empty (no
 -- @schema_version@ table). Callers that want to re-run on a populated DB
 -- must call 'dropSchema' first — the boot flow only does so when the
--- operator explicitly passes @--force-resync@.
+-- operator explicitly passes @--resync-from-genesis@.
 --
 -- 'DbSync.Checkpoint.SyncState.seedSyncState' is __not__ called here;
 -- seeding is the caller's responsibility so that the @ledger_enabled@ flag
@@ -144,7 +145,7 @@ initSchema tableDefs extractorVersions connStr = do
 -- @dbsync_sync_state@ singleton, and the @schema_version@ table itself.
 --
 -- This is the \"force re-sync\" / test-hygiene drop. The boot flow only
--- calls it when the operator opts in via @--force-resync@; matched-version
+-- calls it when the operator opts in via @--resync-from-genesis@; matched-version
 -- restarts must not invoke it (that would defeat the resume logic).
 --
 -- The @extractorVersions@ argument is currently unused but kept for symmetry
@@ -155,11 +156,11 @@ dropSchema :: [TableDef] -> [(Text, Int)] -> Text -> IO ()
 dropSchema tableDefs _extractorVersions connStr = do
   -- Drop data tables
   forM_ tableDefs $ \td ->
-    execPsql connStr $ "DROP TABLE IF EXISTS " <> quote (tdName td) <> " CASCADE;"
+    execPsql connStr $ "DROP TABLE IF EXISTS " <> quoteIdent (tdName td) <> " CASCADE;"
 
-  -- Drop the sync-state table too so tests / force-resync start fresh
+  -- Drop the sync-state table too so tests / resync-from-genesis start fresh
   execPsql connStr $
-    "DROP TABLE IF EXISTS " <> quote syncStateTableName <> " CASCADE;"
+    "DROP TABLE IF EXISTS " <> quoteIdent syncStateTableName <> " CASCADE;"
 
   -- Drop the schema_version table itself (not just its rows). Dropping the
   -- table is the only way to recover from a stale shape (e.g. left over from
@@ -237,9 +238,9 @@ analyzeSchemaState expected (Just dbRows) =
           | otherwise            -> Just (VersionBehind name dbVer expectedVer)
 
 -- | Decide what the boot flow should do, given the observed schema state and
--- the operator-supplied @--force-resync@ flag.
+-- the operator-supplied @--resync-from-genesis@ flag.
 --
--- 'True' for @--force-resync@ short-circuits everything: the operator has
+-- 'True' for @--resync-from-genesis@ short-circuits everything: the operator has
 -- explicitly asked for a clean slate.
 decideSchemaAction :: Bool -> SchemaState -> SchemaAction
 decideSchemaAction True  _                       = ActionForceReinit
@@ -322,15 +323,3 @@ queryPsql connStr sql = do
     ExitFailure _ ->
       throwIO $ userError $
         "psql query failed: " <> err <> "\nSQL: " <> T.unpack sql
-
--- ---------------------------------------------------------------------------
--- * Internal helpers
--- ---------------------------------------------------------------------------
-
--- | Quote a SQL identifier with double quotes.
-quote :: Text -> Text
-quote name = "\"" <> name <> "\""
-
--- | Quote a SQL string literal with single quotes (escaping internal quotes).
-quoteLiteral :: Text -> Text
-quoteLiteral val = "'" <> T.replace "'" "''" val <> "'"

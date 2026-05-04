@@ -9,8 +9,11 @@
 -- mini-protocol, and pushes received blocks to the 'IngestEnv'\'s
 -- block queue.
 module DbSync.Node.Connection
-  ( -- * Running
-    connectToNode
+  ( -- * Types
+    IntersectionRequirement (..)
+
+    -- * Running
+  , connectToNode
   , getNetworkMagic
   ) where
 
@@ -98,11 +101,32 @@ import DbSync.AppM (IngestM)
 import DbSync.Block.Types (CardanoPoint)
 import DbSync.Config.Genesis (GenesisConfig (..), ShelleyConfig (..))
 import DbSync.Env (IngestEnv (..))
+import DbSync.Error (throwNetwork)
 import DbSync.Ingest.ReceiverStats (ReceiverStats, recordBlockReceived, recordWriteBlocked)
 import DbSync.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..))
 import DbSync.StateQuery (StateQueryVar, localStateQueryHandler)
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
+
+-- ---------------------------------------------------------------------------
+-- * Types
+-- ---------------------------------------------------------------------------
+
+-- | What the chainsync receiver should do at startup.
+data IntersectionRequirement
+  = IntersectGenesis
+    -- ^ Fresh start. The receiver requests intersection at genesis;
+    -- if the node also has nothing, it follows from origin.
+  | IntersectAt ![CardanoPoint]
+    -- ^ Resume past a previous run. The receiver offers a list of
+    -- candidate points (newest-first) to the node, which picks
+    -- whichever is on its chain. The list is non-empty by
+    -- construction; an empty list would degenerate to genesis-only,
+    -- which the boot flow signals via 'IntersectGenesis' instead.
+    --
+    -- If the node can't intersect at /any/ candidate, the connection
+    -- fails fatally — the node's chain has diverged from every
+    -- snapshot we know about.
 
 -- ---------------------------------------------------------------------------
 -- * Network magic
@@ -131,8 +155,9 @@ connectToNode
   -> TopLevelConfig (CardanoBlock StandardCrypto)
   -> NetworkMagic
   -> FilePath                                    -- ^ Node socket path
+  -> IntersectionRequirement
   -> IngestM ()
-connectToNode iomgr topLevelCfg networkMagic socketPath = do
+connectToNode iomgr topLevelCfg networkMagic socketPath intersect = do
   tracer         <- asks getTracer
   blockQueue     <- asks ieBlockQueue
   stateQueryVar  <- asks ieStateQueryVar
@@ -154,7 +179,7 @@ connectToNode iomgr topLevelCfg networkMagic socketPath = do
         (supportedNodeToClientVersions (Proxy @(CardanoBlock StandardCrypto)))
         (subscriptionTracers tracer)
         subscriptionParams
-        (nodeProtocols tracer codecConfig blockQueue mLedgerQueue receiverStats stateQueryVar)
+        (nodeProtocols tracer codecConfig blockQueue mLedgerQueue receiverStats stateQueryVar intersect)
   where
     codecConfig :: CodecConfig (CardanoBlock StandardCrypto)
     codecConfig = configCodec topLevelCfg
@@ -227,10 +252,11 @@ nodeProtocols
   -> Maybe (TBQueue (CardanoBlock StandardCrypto))
   -> ReceiverStats
   -> StateQueryVar
+  -> IntersectionRequirement
   -> Network.NodeToClientVersion
   -> BlockNodeToClientVersion (CardanoBlock StandardCrypto)
   -> NodeToClientProtocols 'Mux.InitiatorMode LocalAddress BSL.ByteString IO () Void
-nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats stateQueryVar version blockVersion =
+nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats stateQueryVar intersect version blockVersion =
   NodeToClientProtocols
     { localChainSyncProtocol = chainSyncProtocol
     , localTxSubmissionProtocol = dummyTxSubmit
@@ -249,7 +275,7 @@ nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats stateQ
             (cChainSyncCodec codecs)
             channel
             ( chainSyncClientPeerPipelined $
-                blockFetchClient appTracer blockQueue mLedgerQueue receiverStats
+                blockFetchClient appTracer blockQueue mLedgerQueue receiverStats intersect
             )
         pure ((), Nothing)
 
@@ -277,36 +303,61 @@ nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats stateQ
 -- * ChainSync pipelined client
 -- ---------------------------------------------------------------------------
 
--- | Simple pipelined ChainSync client that writes blocks to a TQueue.
--- Starts from genesis (no intersection points) and pipelines aggressively.
+-- | Pipelined ChainSync client that writes blocks to a TQueue.
+--
+-- 'IntersectGenesis' tolerates a not-found response (used on a fresh
+-- start when the node also has no chain yet). 'IntersectAt' treats
+-- not-found as fatal: the node's chain has diverged from every
+-- candidate point we offered.
 --
 -- When @mLedgerQueue@ is 'Just', each block is also enqueued on it
--- after the main queue write succeeds — this is the 'LedgerWorker'
--- fan-out per LEDGER-PLAN §5. The ledger queue write blocks if full
--- (matching the main queue's behaviour); the worker is intended to
--- keep up but if it falls behind we'd rather slow the receiver than
--- silently drop blocks.
+-- after the main queue write succeeds.
 blockFetchClient
   :: AppTracer
   -> TBQueue (CardanoBlock StandardCrypto)            -- ^ Main pipeline queue
   -> Maybe (TBQueue (CardanoBlock StandardCrypto))    -- ^ Optional ledger worker queue
   -> ReceiverStats
+  -> IntersectionRequirement
   -> ChainSyncClientPipelined
        (CardanoBlock StandardCrypto)
        (Point (CardanoBlock StandardCrypto))
        (Tip (CardanoBlock StandardCrypto))
        IO
        ()
-blockFetchClient appTracer blockQueue mLedgerQueue receiverStats =
+blockFetchClient appTracer blockQueue mLedgerQueue receiverStats intersect =
   ChainSyncClientPipelined $ pure $
-    -- Start from genesis
     SendMsgFindIntersect
-      [genesisPoint]
+      intersectPoints
       ClientPipelinedStIntersect
-        { recvMsgIntersectFound    = \_hdr tip -> pure $ goTip policy Zero Origin tip
-        , recvMsgIntersectNotFound = \tip      -> pure $ goTip policy Zero Origin tip
+        { recvMsgIntersectFound    = onIntersectFound
+        , recvMsgIntersectNotFound = onIntersectNotFound
         }
   where
+    intersectPoints = case intersect of
+      IntersectGenesis -> [genesisPoint]
+      IntersectAt ps   -> ps
+
+    -- Log the chosen candidate so the operator can see which
+    -- snapshot point the node selected — useful when the candidate
+    -- list contains fallbacks beyond the newest snapshot.
+    onIntersectFound chosen tip = do
+      traceWith appTracer $ LogMsg Info "ChainSync"
+        ("Intersected at " <> show chosen <> " (server tip " <> show tip <> ")") Nothing
+      pure $ goTip policy Zero Origin tip
+
+    onIntersectNotFound tip = case intersect of
+      IntersectGenesis -> do
+        traceWith appTracer $ LogMsg Info "ChainSync"
+          "Node also has no chain yet; following from origin" Nothing
+        pure $ goTip policy Zero Origin tip
+      IntersectAt ps ->
+        throwNetwork $
+          "ChainSync intersection not found on node at any of "
+            <> show (length ps) <> " candidate points: " <> show ps
+            <> " — node DB may be older than dbsync's resume point, or its "
+            <> "chain has diverged from every known snapshot. "
+            <> "Server tip: " <> show tip
+
     -- Pipeline depth limits: start requesting at 10 in-flight,
     -- cap at 50 in-flight. Balances throughput with memory/backpressure.
     -- Unlimited (0/maxBound) causes memory growth and TCP backpressure.
@@ -358,9 +409,8 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats =
             -- are still arriving without flooding the log.
             traceWith appTracer $ LogMsg Debug "ChainSync"
               ("Block " <> show bn) Nothing
-            when (bnRaw == 1 || bnRaw `mod` 10000 == 0) $
-              traceWith appTracer $ LogMsg Info "ChainSync"
-                ("Received block #" <> show bnRaw) Nothing
+            when (bnRaw == 1) $
+              traceWith appTracer $ LogMsg Info "ChainSync" "Receiving blocks" Nothing
             recordBlockReceived receiverStats
             -- Try a non-blocking write first so we can tell whether the
             -- queue was full at the moment of arrival. A non-zero

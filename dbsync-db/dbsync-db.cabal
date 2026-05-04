@@ -55,6 +55,9 @@ library
     DbSync.Db.Schema.Init
     DbSync.Db.Schema.Version
     DbSync.Db.Schema.Migration
+    DbSync.Db.Sql
+    DbSync.Db.Statement.Resume
+    DbSync.Db.Statement.SyncState
     DbSync.Db.Writer.Copy.Encoder
     DbSync.Db.Writer.Insert
   build-depends:
@@ -65,6 +68,10 @@ library
     , bytestring
     , text
     , time
+
+    -- Database (control-plane queries via hasql; the COPY-streaming
+    -- path lives in `dbsync` and uses postgresql-libpq directly).
+    , hasql                 >= 1.9 && < 2
 
     -- System
     , process

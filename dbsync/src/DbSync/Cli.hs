@@ -43,7 +43,7 @@ data CliArgs = CliArgs
   , caLedgerStateDir  :: !FilePath  -- ^ Parent directory under which the @dbsync-ledger/@
                                     --   sub-directory is created (LSM session + snapshots)
   , caProfile         :: !FilePath  -- ^ Path to dbsync-profile.json (database, options, sync mode)
-  , caForceResync     :: !Bool      -- ^ If 'True', drop the existing schema and re-sync from genesis
+  , caResyncFromGenesis :: !Bool    -- ^ If 'True', wipe the schema + ledger state and re-sync from genesis
   }
   deriving stock (Eq, Show)
 
@@ -86,8 +86,8 @@ cliArgsP =
           <> help "Path to profile.json (database, sync options, logging)"
       )
     <*> switch
-      ( long "force-resync"
-          <> help "Drop any existing schema and re-sync from genesis (destructive)"
+      ( long "resync-from-genesis"
+          <> help "Wipe the database schema and ledger state, then re-sync from genesis (destructive)"
       )
 
 -- | Parse CLI args from the process arguments. Exits on failure.

@@ -24,11 +24,11 @@ spec = describe "DbSync.Cli" $ do
             , "--profile", "/path/to/dbsync-profile.json"
             ]
       result `shouldBe` Right CliArgs
-        { caDbSyncConfig    = "/path/to/db-sync-config.json"
-        , caSocketPath      = "/path/to/node.socket"
-        , caLedgerStateDir  = "/data/dbsync"
-        , caProfile         = "/path/to/dbsync-profile.json"
-        , caForceResync     = False
+        { caDbSyncConfig      = "/path/to/db-sync-config.json"
+        , caSocketPath        = "/path/to/node.socket"
+        , caLedgerStateDir    = "/data/dbsync"
+        , caProfile           = "/path/to/dbsync-profile.json"
+        , caResyncFromGenesis = False
         }
 
     it "accepts arguments in any order" $ do
@@ -39,31 +39,31 @@ spec = describe "DbSync.Cli" $ do
             , "--db-sync-config", "db-sync-config.json"
             ]
       result `shouldBe` Right CliArgs
-        { caDbSyncConfig    = "db-sync-config.json"
-        , caSocketPath      = "/run/node.socket"
-        , caLedgerStateDir  = "/tmp/state"
-        , caProfile         = "dbsync-profile.json"
-        , caForceResync     = False
+        { caDbSyncConfig      = "db-sync-config.json"
+        , caSocketPath        = "/run/node.socket"
+        , caLedgerStateDir    = "/tmp/state"
+        , caProfile           = "dbsync-profile.json"
+        , caResyncFromGenesis = False
         }
 
-    it "defaults --force-resync to False when omitted" $ do
+    it "defaults --resync-from-genesis to False when omitted" $ do
       let result = parseArgs
             [ "--db-sync-config",   "x"
             , "--socket-path",      "y"
             , "--ledger-state-dir", "z"
             , "--profile",          "w"
             ]
-      fmap caForceResync result `shouldBe` Right False
+      fmap caResyncFromGenesis result `shouldBe` Right False
 
-    it "sets --force-resync to True when supplied" $ do
+    it "sets --resync-from-genesis to True when supplied" $ do
       let result = parseArgs
             [ "--db-sync-config",   "x"
             , "--socket-path",      "y"
             , "--ledger-state-dir", "z"
             , "--profile",          "w"
-            , "--force-resync"
+            , "--resync-from-genesis"
             ]
-      fmap caForceResync result `shouldBe` Right True
+      fmap caResyncFromGenesis result `shouldBe` Right True
 
     it "fails when --db-sync-config is missing" $ do
       let result = parseArgs

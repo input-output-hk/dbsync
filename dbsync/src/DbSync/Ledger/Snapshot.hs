@@ -83,6 +83,7 @@ import Ouroboros.Consensus.Storage.LedgerDB.Snapshots
 import Ouroboros.Network.Block (pattern BlockPoint, pattern GenesisPoint, pointSlot)
 
 import DbSync.AppM (LedgerM, runAppM)
+import DbSync.Checkpoint.SyncState (markSnapshotComplete)
 import DbSync.Ledger.Types
   ( CardanoLedgerState (..)
   , DbSyncStateRef (..)
@@ -242,9 +243,23 @@ snapshotWriteLoop = do
           Nothing                             -- temporary snapshot, no suffix
           (toConsensusStateRef sref)
     case result of
-      Right (Just (ds, _rp)) ->
-        logMsg env Info $
-          "Wrote snapshot at slot " <> show (dsNumber ds)
+      Right (Just (ds, _rp)) -> do
+        -- Record the completion in PG so a subsequent boot has a
+        -- deterministic anchor. If this UPDATE fails (DB hiccup,
+        -- connection lost), the snapshot file is still on disk and
+        -- a re-scan via 'listSnapshots' will discover it.
+        markResult <- liftIO $
+          Exception.try @Exception.SomeException $
+            markSnapshotComplete (leControlConnection env) (dsNumber ds)
+        case markResult of
+          Right () ->
+            logMsg env Info $
+              "Wrote snapshot at slot " <> show (dsNumber ds)
+          Left ex ->
+            logMsg env Warning $
+              "Snapshot at slot " <> show (dsNumber ds)
+                <> " written but markSnapshotComplete failed: "
+                <> Text.pack (Exception.displayException ex)
       Right Nothing ->
         logMsg env Info "takeSnapshot returned Nothing — backend declined to write"
       Left ex ->

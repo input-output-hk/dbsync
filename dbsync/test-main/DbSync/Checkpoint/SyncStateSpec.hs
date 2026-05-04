@@ -29,6 +29,7 @@ import DbSync.Checkpoint.SyncState
   ( ControlConnection
   , SyncStateRow (..)
   , closeControlConnection
+  , markSnapshotComplete
   , openControlConnection
   , readSyncState
   , seedSyncState
@@ -36,7 +37,7 @@ import DbSync.Checkpoint.SyncState
   )
 import DbSync.Db.Schema.Init (dropSchema, initSchema)
 import DbSync.Error (AppError (..))
-import DbSync.Test.Database (queryTestDb, testConnBs, testConnStr)
+import DbSync.Test.Database (queryTestDb, testConnStr, testHasqlSettings)
 
 spec :: Spec
 spec = describe "DbSync.Checkpoint.SyncState" $
@@ -150,12 +151,59 @@ spec = describe "DbSync.Checkpoint.SyncState" $
             Just readBack -> ssrLastCommittedBlockHash readBack `shouldBe` Just bigHash
             Nothing       -> panic "row vanished after write"
 
+    describe "markSnapshotComplete" $ do
+      it "writes last_snapshot_slot without touching other fields" $
+        withControlConnection $ \conn -> do
+          seedSyncState conn 1 True
+          writeSyncState conn sampleRow
+          markSnapshotComplete conn 7777
+          mReadBack <- readSyncState conn
+          case mReadBack of
+            Just row -> do
+              ssrLastSnapshotSlot row       `shouldBe` Just 7777
+              -- Consumer-owned fields untouched.
+              ssrLastCommittedSlot row      `shouldBe` ssrLastCommittedSlot sampleRow
+              ssrLastCommittedBlockNo row   `shouldBe` ssrLastCommittedBlockNo sampleRow
+              ssrLastCommittedBlockHash row `shouldBe` ssrLastCommittedBlockHash sampleRow
+              ssrBlockIdCounter row         `shouldBe` ssrBlockIdCounter sampleRow
+              ssrTxIdCounter row            `shouldBe` ssrTxIdCounter sampleRow
+            Nothing  -> panic "row vanished after markSnapshotComplete"
+
+      it "is idempotent on the same slot" $
+        withControlConnection $ \conn -> do
+          seedSyncState conn 1 True
+          markSnapshotComplete conn 1234
+          markSnapshotComplete conn 1234
+          mReadBack <- readSyncState conn
+          case mReadBack of
+            Just row -> ssrLastSnapshotSlot row `shouldBe` Just 1234
+            Nothing  -> panic "row vanished"
+
+      it "writeSyncState does not overwrite a previously recorded snapshot slot" $
+        withControlConnection $ \conn -> do
+          seedSyncState conn 1 True
+          markSnapshotComplete conn 999
+          writeSyncState conn sampleRow { ssrLastSnapshotSlot = Just 0 }
+          mReadBack <- readSyncState conn
+          case mReadBack of
+            Just row -> ssrLastSnapshotSlot row `shouldBe` Just 999
+            Nothing  -> panic "row vanished"
+
+      it "throws AppDatabaseError when the row was never seeded" $
+        withControlConnection $ \conn -> do
+          result <- try (markSnapshotComplete conn 42)
+          case result of
+            Left (AppDatabaseError _ _) -> pure ()
+            Left other                  -> panic $ "Wrong exception type: " <> show other
+            Right ()                    -> panic "markSnapshotComplete should have thrown"
+
 -- ---------------------------------------------------------------------------
 -- Helpers
 -- ---------------------------------------------------------------------------
 
 withControlConnection :: (ControlConnection -> IO a) -> IO a
-withControlConnection = bracket (openControlConnection testConnBs) closeControlConnection
+withControlConnection =
+  bracket (openControlConnection testHasqlSettings) closeControlConnection
 
 -- | Empty the sync-state table between tests. Avoids re-creating the
 -- schema on every test (which is slow) but still gives each @it@
@@ -200,6 +248,7 @@ sampleRow = SyncStateRow
   { ssrLastCommittedSlot             = Just 1000
   , ssrLastCommittedBlockNo          = Just 500
   , ssrLastCommittedBlockHash        = Just (BS.pack [0xde, 0xad, 0xbe, 0xef])
+  , ssrLastSnapshotSlot              = Nothing
   , ssrBlockIdCounter                = 501
   , ssrTxIdCounter                   = 1500
   , ssrTxOutIdCounter                = 3000
@@ -228,4 +277,5 @@ sampleRow = SyncStateRow
   , ssrAdaPotsIdCounter              = 5
   , ssrSchemaVersionApplied          = 1
   , ssrLedgerEnabled                 = True
+  , ssrSyncComplete                  = False
   }

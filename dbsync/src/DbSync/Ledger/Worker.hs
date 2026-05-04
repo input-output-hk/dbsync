@@ -45,7 +45,7 @@ import qualified Control.Concurrent.Class.MonadSTM.Strict as Strict
 import Control.Concurrent.STM (TBQueue, readTBQueue)
 import qualified Data.Strict.Maybe as SMaybe
 
-import Cardano.Slotting.Slot (EpochNo (..))
+import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import Control.Tracer (traceWith)
 import Ouroboros.Consensus.Block (blockSlot)
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
@@ -74,18 +74,24 @@ data WorkerHooks blk = WorkerHooks
   , whApplyAndSnapshot :: !(blk -> SlotDetails -> IO (ApplyResult, Bool))
   }
 
--- | Build the production hook set from a 'LedgerEnv' and a
--- 'StateQueryVar'. The 'consistent' flag passed to
--- 'applyBlockAndSnapshot' is conservatively 'False' during Ingest
--- (we treat the chain tip as far away); Phase 7 will set it 'True'
--- once the receiver knows we're inside @k=2160@ of the node tip.
-realWorkerHooks :: LedgerEnv -> StateQueryVar -> WorkerHooks (CardanoBlock StandardCrypto)
-realWorkerHooks env sqv =
+-- | Build the production hook set from a 'LedgerEnv', a
+-- 'StateQueryVar', and the optional resume replay boundary.
+--
+-- The 'consistent' flag passed to 'applyBlockAndSnapshot' is
+-- conservatively 'False' during Ingest (we treat the chain tip as
+-- far away); Phase 7 will set it 'True' once the receiver knows
+-- we're inside @k=2160@ of the node tip.
+realWorkerHooks
+  :: LedgerEnv
+  -> StateQueryVar
+  -> Maybe SlotNo
+  -> WorkerHooks (CardanoBlock StandardCrypto)
+realWorkerHooks env sqv mReplayBoundary =
   WorkerHooks
     { whGetSlotDetails = \blk ->
         getSlotDetailsIO (leTracer env) sqv (leSystemStart env) (blockSlot blk)
     , whApplyAndSnapshot = \blk sd ->
-        runAppM env (applyBlockAndSnapshot blk sd False)
+        runAppM env (applyBlockAndSnapshot blk sd False mReplayBoundary)
     }
 
 -- ---------------------------------------------------------------------------
@@ -93,26 +99,26 @@ realWorkerHooks env sqv =
 -- ---------------------------------------------------------------------------
 
 -- | Production worker entry point — drains 'leLedgerQueue', applies
--- each block to the LSM-backed ledger, and signals
--- 'leEpochReady' on every epoch boundary.
+-- each block to the LSM-backed ledger, and signals 'leEpochReady'
+-- on every epoch boundary.
 --
--- Runs in 'LedgerM' so the 'LedgerEnv' is read from the
--- 'MonadReader' context. The 'StateQueryVar' is supplied as an
--- argument because it lives on 'IngestEnv' rather than 'LedgerEnv';
--- the caller (Main) pattern-matches on 'HasLedgerEnv' and pairs the
--- 'LedgerEnv' with the shared 'StateQueryVar' before invoking
--- @runAppM env (runLedgerWorker sqv)@.
+-- Runs in 'LedgerM' so the 'LedgerEnv' comes from the 'MonadReader'
+-- context. 'StateQueryVar' lives on 'IngestEnv' rather than
+-- 'LedgerEnv', so the caller pairs them up and invokes
+-- @runAppM env (runLedgerWorker mReplayBoundary sqv)@. The
+-- replay boundary is forwarded to 'applyBlockAndSnapshot'.
 runLedgerWorker
-  :: StateQueryVar
+  :: Maybe SlotNo
+  -> StateQueryVar
   -> LedgerM ()
-runLedgerWorker sqv = do
+runLedgerWorker mReplayBoundary sqv = do
   env <- ask
   liftIO $ do
     traceWith (leTracer env) $ LogMsg Info "LedgerWorker"
       "starting (draining ledger queue)" Nothing
     runLedgerWorkerWith
       (Just (leTracer env))
-      (realWorkerHooks env sqv)
+      (realWorkerHooks env sqv mReplayBoundary)
       (leLedgerQueue env)
       (leEpochReady env)
       (leEpochWait env)

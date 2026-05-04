@@ -21,6 +21,7 @@ module DbSync.Test.Database
   , testDbName
   , testConnStr
   , testConnBs
+  , testHasqlSettings
 
     -- * Utilities
   , queryTestDb
@@ -32,6 +33,7 @@ import Cardano.Prelude
 
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import qualified Hasql.Connection.Settings as Settings
 
 import System.IO.Error (userError)
 import System.Process (readProcessWithExitCode)
@@ -51,6 +53,12 @@ testConnStr = "dbname=" <> testDbName
 -- | ByteString version of 'testConnStr' (for @libpq@).
 testConnBs :: ByteString
 testConnBs = TE.encodeUtf8 testConnStr
+
+-- | Hasql connection settings for the test database. Relies on
+-- libpq defaults for host\/port\/user, matching the 'testConnStr'
+-- "dbname=…" format.
+testHasqlSettings :: Settings.Settings
+testHasqlSettings = Settings.dbname testDbName
 
 -- | The maintenance database used for CREATE/DROP DATABASE commands.
 -- @template1@ is guaranteed to exist in all PostgreSQL installations.

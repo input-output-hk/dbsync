@@ -30,6 +30,7 @@ module DbSync.Id.DedupMap
     -- * Operations
   , lookupOrInsert
   , DbSync.Id.DedupMap.lookup
+  , insertExisting
   , size
 
     -- * Introspection (for future checkpoint serialisation)
@@ -102,6 +103,18 @@ lookupOrInsert key dm = do
 -- | Look up without inserting. Returns 'Nothing' if not seen before.
 lookup :: ShortByteString -> DedupMap -> IO (Maybe Int64)
 lookup key dm = HT.lookup (dmTable dm) key
+
+-- | Insert a (key, id) pair retaining the supplied id, and bump the
+-- counter to @max(currentCounter, id + 1)@ so that subsequent
+-- 'lookupOrInsert' allocations don't collide with rebuilt entries.
+--
+-- Used at boot to repopulate dedup maps from rows already in PG.
+insertExisting :: ShortByteString -> Int64 -> DedupMap -> IO ()
+insertExisting key existingId dm = do
+  HT.insert (dmTable dm) key existingId
+  cur <- readIORef (dmCounter dm)
+  when (existingId >= cur) $
+    writeIORef (dmCounter dm) $! existingId + 1
 
 -- | Number of unique entries in the map.
 size :: DedupMap -> IO Int

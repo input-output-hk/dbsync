@@ -60,7 +60,7 @@ spec = describe "DbSync.Db.Schema.SyncState" $ do
     it "updated_at defaults to now()" $
       lookup "updated_at" (tdColumnDefaults syncStateTableDef) `shouldBe` Just "now()"
 
-    it "last_committed_* columns are nullable" $ do
+    it "last_committed_* and last_snapshot_slot columns are nullable" $ do
       let nullableByName =
             [ (cdName col, cdNullable col)
             | col <- tdColumns syncStateTableDef
@@ -68,20 +68,22 @@ spec = describe "DbSync.Db.Schema.SyncState" $ do
                 [ "last_committed_slot"
                 , "last_committed_block_no"
                 , "last_committed_block_hash"
+                , "last_snapshot_slot"
                 ]
             ]
       nullableByName `shouldBe`
         [ ("last_committed_slot", True)
         , ("last_committed_block_no", True)
         , ("last_committed_block_hash", True)
+        , ("last_snapshot_slot", True)
         ]
 
   describe "syncStateColumns" $ do
     it "matches the table's column order" $
       syncStateColumns `shouldBe` map cdName (tdColumns syncStateTableDef)
 
-    it "contains 33 columns (id + 3 last_committed + 26 counters + 3 metadata)" $
-      length syncStateColumns `shouldBe` 33
+    it "contains 35 columns (id + 3 last_committed + last_snapshot_slot + 26 counters + 4 metadata)" $
+      length syncStateColumns `shouldBe` 35
 
     it "starts with id" $
       head syncStateColumns `shouldBe` Just "id"
@@ -140,6 +142,7 @@ goldenDdl = T.unlines
   , "  \"last_committed_slot\" BIGINT,"
   , "  \"last_committed_block_no\" BIGINT,"
   , "  \"last_committed_block_hash\" BYTEA,"
+  , "  \"last_snapshot_slot\" BIGINT,"
   , "  \"block_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"tx_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"tx_out_id_counter\" BIGINT NOT NULL DEFAULT 1,"
@@ -168,6 +171,7 @@ goldenDdl = T.unlines
   , "  \"ada_pots_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"schema_version_applied\" INTEGER NOT NULL,"
   , "  \"ledger_enabled\" BOOLEAN NOT NULL,"
+  , "  \"sync_complete\" BOOLEAN NOT NULL DEFAULT false,"
   , "  \"updated_at\" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),"
   , "  PRIMARY KEY (\"id\"),"
   , "  CHECK (\"id\" = 1)"

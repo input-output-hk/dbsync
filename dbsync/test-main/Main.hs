@@ -6,6 +6,7 @@ import Cardano.Prelude
 
 import qualified DbSync.AppSpec as AppSpec
 import qualified DbSync.Checkpoint.ManagerSpec as CheckpointManagerSpec
+import qualified DbSync.Checkpoint.ResumeSpec as CheckpointResumeSpec
 import qualified DbSync.Checkpoint.SyncStateSpec as CheckpointSyncStateSpec
 import qualified DbSync.CliSpec as CliSpec
 import qualified DbSync.Config.GenesisSpec as ConfigGenesisSpec
@@ -14,10 +15,12 @@ import qualified DbSync.Config.TypesSpec as ConfigTypesSpec
 import qualified DbSync.Config.ValidationSpec as ConfigValidationSpec
 import qualified DbSync.Extractor.CoreSpec as ExtractorCoreSpec
 import qualified DbSync.Extractor.EpochBoundarySpec as ExtractorEpochBoundarySpec
+import qualified DbSync.Ingest.ConsumerSpec as IngestConsumerSpec
 import qualified DbSync.Ingest.PipelineSpec as IngestPipelineSpec
 import qualified DbSync.Ledger.StateSpec as LedgerStateSpec
 import qualified DbSync.Ledger.TypesSpec as LedgerTypesSpec
 import qualified DbSync.Ledger.WorkerSpec as LedgerWorkerSpec
+import qualified DbSync.Phase.BootSpec as PhaseBootSpec
 import qualified DbSync.Schema.AdaPotsSpec as SchemaAdaPotsSpec
 import qualified DbSync.Schema.CoreSpec as SchemaCoreSpec
 import qualified DbSync.Schema.GenerateSpec as SchemaGenerateSpec
@@ -41,6 +44,7 @@ main = hspec $ do
   SchemaAdaPotsSpec.spec
   ExtractorCoreSpec.spec
   ExtractorEpochBoundarySpec.spec
+  IngestConsumerSpec.spec
   IngestPipelineSpec.spec
   SchemaInitSpec.spec
   CopyWriterSpec.spec
@@ -48,5 +52,7 @@ main = hspec $ do
   LedgerStateSpec.spec
   LedgerWorkerSpec.spec
   CheckpointManagerSpec.spec
+  CheckpointResumeSpec.spec
   CheckpointSyncStateSpec.spec
+  PhaseBootSpec.spec
   ObservedSummarySpec.spec

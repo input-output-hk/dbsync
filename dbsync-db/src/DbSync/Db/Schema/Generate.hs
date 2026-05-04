@@ -21,6 +21,7 @@ import DbSync.Db.Schema.Types
   , TableDef (..)
   , TableMode (..)
   )
+import DbSync.Db.Sql (quoteIdent)
 
 -- | Generate a @CREATE TABLE@ DDL statement from a 'TableDef'.
 --
@@ -63,7 +64,7 @@ generateCreateTable td =
       let modeStr = case tdMode td of
             TableUnlogged -> "CREATE UNLOGGED TABLE"
             TableLogged   -> "CREATE TABLE"
-      in modeStr <> " " <> quote (tdName td) <> " ("
+      in modeStr <> " " <> quoteIdent (tdName td) <> " ("
 
     -- Each "body" line represents one comma-separated item of the
     -- CREATE TABLE. We concatenate column lines, a primary-key line
@@ -74,7 +75,7 @@ generateCreateTable td =
       let columnLines = map formatColumn (tdColumns td)
           pkLine = case tdPrimaryKey td of
             Nothing   -> []
-            Just cols -> [ "PRIMARY KEY (" <> T.intercalate ", " (map quote cols) <> ")" ]
+            Just cols -> [ "PRIMARY KEY (" <> T.intercalate ", " (map quoteIdent cols) <> ")" ]
           checkLines = map (\expr -> "CHECK (" <> expr <> ")") (tdChecks td)
           allItems = columnLines ++ pkLine ++ checkLines
           total = length allItems
@@ -91,7 +92,7 @@ generateCreateTable td =
           defaultClause = case lookup (cdName col) (tdColumnDefaults td) of
             Nothing   -> ""
             Just expr -> " DEFAULT " <> expr
-      in quote (cdName col) <> " " <> pgTypeToSql (cdType col) <> nullability <> defaultClause
+      in quoteIdent (cdName col) <> " " <> pgTypeToSql (cdType col) <> nullability <> defaultClause
 
 -- | Convert a 'PgType' to its SQL string representation.
 pgTypeToSql :: PgType -> Text
@@ -108,7 +109,3 @@ pgTypeToSql = \case
   PgTimestampTz -> "TIMESTAMP WITH TIME ZONE"
   PgEnum name   -> name
   PgGenerated e -> "GENERATED ALWAYS AS (" <> e <> ") STORED"
-
--- | Quote a SQL identifier with double quotes.
-quote :: Text -> Text
-quote name = "\"" <> name <> "\""

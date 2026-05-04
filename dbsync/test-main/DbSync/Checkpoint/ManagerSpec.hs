@@ -52,7 +52,7 @@ import DbSync.Checkpoint.SyncState
   , readSyncState
   , seedSyncState
   )
-import DbSync.Test.Database (queryTestDb, testConnBs, testConnStr, truncateAllTables)
+import DbSync.Test.Database (queryTestDb, testConnBs, testConnStr, testHasqlSettings, truncateAllTables)
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -74,6 +74,7 @@ epoch5Row = SyncStateRow
   { ssrLastCommittedSlot             = Just 20000
   , ssrLastCommittedBlockNo          = Just 999
   , ssrLastCommittedBlockHash        = Just (BS.pack [0xaa, 0xbb, 0xcc, 0xdd])
+  , ssrLastSnapshotSlot              = Nothing
   , ssrBlockIdCounter                = 1000
   , ssrTxIdCounter                   = 5000
   , ssrTxOutIdCounter                = 15000
@@ -102,6 +103,7 @@ epoch5Row = SyncStateRow
   , ssrAdaPotsIdCounter              = 6
   , ssrSchemaVersionApplied          = 1
   , ssrLedgerEnabled                 = False
+  , ssrSyncComplete                  = False
   }
 
 -- | A follow-up SyncStateRow for epoch 6, advancing slot, block_no,
@@ -121,7 +123,8 @@ epoch6Row = epoch5Row
 -- ---------------------------------------------------------------------------
 
 withControlConnection :: (ControlConnection -> IO a) -> IO a
-withControlConnection = bracket (openControlConnection testConnBs) closeControlConnection
+withControlConnection =
+  bracket (openControlConnection testHasqlSettings) closeControlConnection
 
 -- | Write one synthetic row into each of @block@, @tx@, @slot_leader@.
 -- Uses the real 'buildCopyRow' encoders from @dbsync-db@ — hand-rolled

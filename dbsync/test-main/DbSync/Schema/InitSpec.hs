@@ -60,13 +60,13 @@ spec = describe "DbSync.Db.Schema.Init" $ do
   -- ---------------------------------------------------------------------------
 
   describe "decideSchemaAction (pure)" $ do
-    it "force-resync overrides everything: matches" $
+    it "resync-from-genesis overrides everything: matches" $
       decideSchemaAction True SchemaMatches `shouldBe` ActionForceReinit
 
-    it "force-resync overrides everything: fresh" $
+    it "resync-from-genesis overrides everything: fresh" $
       decideSchemaAction True SchemaFresh `shouldBe` ActionForceReinit
 
-    it "force-resync overrides everything: mismatched" $
+    it "resync-from-genesis overrides everything: mismatched" $
       let errs = MissingExtractor "core" 1 NE.:| []
       in decideSchemaAction True (SchemaMismatched errs) `shouldBe` ActionForceReinit
 

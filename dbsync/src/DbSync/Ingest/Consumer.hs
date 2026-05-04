@@ -38,16 +38,25 @@ module DbSync.Ingest.Consumer
 
     -- * Queue utilities
   , drainTBQueue
+
+    -- * Replay-progress logging (exported for tests)
+  , ReplayLogState (..)
+  , ReplayProgress (..)
+  , ReplayAdvance (..)
+  , ReplayLog (..)
+  , advanceReplay
+  , progressLogInterval
   ) where
 
 import Cardano.Prelude
 
+import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 
 import qualified Control.Concurrent.Class.MonadSTM.Strict as Strict
 import Control.Concurrent.STM (TBQueue, readTBQueue, tryReadTBQueue)
 import Control.Tracer (traceWith)
-import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import qualified Data.Strict.Maybe as SMaybe
 import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime, NominalDiffTime)
 import System.Mem (performMajorGC)
@@ -55,11 +64,13 @@ import Text.Printf (printf)
 
 import DbSync.AppM (IngestM)
 import DbSync.Block.Parser (parseBlock)
-import DbSync.Block.Types ()
+import DbSync.Block.Types (GenericBlock (..))
+import DbSync.Checkpoint.Manager (commitEpoch, mkBoundarySyncStateRow)
+import DbSync.Config.Types (LedgerConfig (..), SyncConfig (..))
 import DbSync.Copy.Writer (CopyWriter (..))
 import DbSync.Db.Schema.EpochSyncStats (EpochSyncStats (..), SyncPhase (..))
 import DbSync.Db.Schema.Ids (BlockId (..))
-import DbSync.Env (IngestEnv (..))
+import DbSync.Env (HasConfig (..), IngestEnv (..))
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Extractor.EpochBoundary (runEpochBoundary)
 import DbSync.Ingest.Pipeline (processBlock)
@@ -75,6 +86,7 @@ import DbSync.StateQuery
   , ObservedTransition (..)
   , SlotDetails (..)
   , getSlotDetails
+  , isInterpreterCached
   , observeBlockSTM
   )
 import DbSync.Trace (HasTracer (..))
@@ -109,6 +121,113 @@ data BaselineRef = BaselineRef
   { brBlocksPerSec :: !Double  -- ^ Baseline throughput
   , brEpoch        :: !Word64  -- ^ Which epoch the baseline was captured from
   }
+
+-- ---------------------------------------------------------------------------
+-- * Replay-progress logging
+-- ---------------------------------------------------------------------------
+
+-- | State machine driving the @LedgerReplay@ log channel during a
+-- ledger-enabled resume\'s replay window. Without it the consumer
+-- emits no progress for the duration of the window (it skips
+-- 'processBlock' for replayed slots) and the operator can\'t tell
+-- a slow replay from a hang.
+data ReplayLogState
+  = NoReplay
+    -- ^ No replay configured, or the window has been exited.
+  | ReplayPending
+    -- ^ Replay configured; no block observed yet.
+  | InReplay !ReplayProgress
+    -- ^ Inside the replay window; counters drive log cadence.
+  deriving stock (Eq, Show)
+
+-- | Block counter and log-cadence timestamps carried inside 'InReplay'.
+data ReplayProgress = ReplayProgress
+  { rpStartTime     :: !UTCTime
+  , rpBlocksApplied :: !Word64
+  , rpLastLogTime   :: !UTCTime
+  }
+  deriving stock (Eq, Show)
+
+-- | Result of advancing 'ReplayLogState' for one received block.
+data ReplayAdvance = ReplayAdvance
+  { raNewState :: !ReplayLogState
+  , raLog      :: !ReplayLog
+  }
+  deriving stock (Eq, Show)
+
+-- | Log directive produced by 'advanceReplay'. The caller emits the
+-- trace; keeping the decision pure makes it trivial to unit-test.
+data ReplayLog
+  = ReplayLogNothing
+  | ReplayLogProgress !Word64
+    -- ^ Emit a progress line — \"applied @N@ blocks so far\".
+  | ReplayLogComplete !Word64 !NominalDiffTime
+    -- ^ Emit a completion line — \"@N@ blocks replayed in @T@s\".
+  deriving stock (Eq, Show)
+
+-- | Wall-clock cadence between progress lines. Five seconds keeps
+-- short replays silent while still flagging liveness on long ones.
+progressLogInterval :: NominalDiffTime
+progressLogInterval = 5
+
+-- | Render a slot-progress percentage of the form @\" (~37%)\"@.
+-- Empty string when bounds are missing or the window has zero
+-- width. Uses /slot/ progress, not /block/ progress, since Cardano
+-- slots can be empty so the total block count is unknown up front.
+renderReplayPercent :: Maybe SlotNo -> Maybe SlotNo -> SlotNo -> Text
+renderReplayPercent (Just (SlotNo start)) (Just (SlotNo endBound)) (SlotNo cur)
+  | endBound > start =
+      let span'   = endBound - start
+          done    = if cur > endBound then span'
+                    else if cur > start then cur - start
+                                        else 0
+          pct     = (done * 100) `div` span'
+      in " (~" <> show pct <> "%)"
+renderReplayPercent _ _ _ = ""
+
+-- | Advance the replay-log state machine given the just-arrived
+-- block\'s slot, the resume boundary (@'Nothing'@ = no replay) and
+-- the current wall-clock time. Pure; the caller mutates the IORef
+-- and emits any indicated trace.
+advanceReplay
+  :: SlotNo
+  -> Maybe SlotNo
+  -> UTCTime
+  -> ReplayLogState
+  -> ReplayAdvance
+advanceReplay _    Nothing  _   s =
+  ReplayAdvance s ReplayLogNothing
+advanceReplay slot (Just bs) now s =
+  let inReplay = slot <= bs
+  in case s of
+       NoReplay ->
+         ReplayAdvance NoReplay ReplayLogNothing
+       ReplayPending
+         | inReplay  ->
+             let p = ReplayProgress
+                       { rpStartTime     = now
+                       , rpBlocksApplied = 1
+                       , rpLastLogTime   = now
+                       }
+             in ReplayAdvance (InReplay p) ReplayLogNothing
+         | otherwise ->
+             -- First block already past the boundary — degenerate
+             -- replay window of zero blocks. Skip straight to
+             -- 'NoReplay' without firing any log.
+             ReplayAdvance NoReplay ReplayLogNothing
+       InReplay p
+         | inReplay ->
+             let p' = p { rpBlocksApplied = rpBlocksApplied p + 1 }
+                 elapsedSinceLog = diffUTCTime now (rpLastLogTime p)
+             in if elapsedSinceLog >= progressLogInterval
+                  then ReplayAdvance
+                         (InReplay p' { rpLastLogTime = now })
+                         (ReplayLogProgress (rpBlocksApplied p'))
+                  else ReplayAdvance (InReplay p') ReplayLogNothing
+         | otherwise ->
+             let totalElapsed = diffUTCTime now (rpStartTime p)
+             in ReplayAdvance NoReplay
+                  (ReplayLogComplete (rpBlocksApplied p) totalElapsed)
 
 -- ---------------------------------------------------------------------------
 -- * Number formatting
@@ -172,7 +291,16 @@ runConsumer = do
   epochStartRef <- liftIO $ getCurrentTime >>= newIORef
   statsRef      <- liftIO $ newIORef emptyPipelineStats
   baselineRef   <- liftIO $ newIORef (Nothing :: Maybe BaselineRef)
-  loop prevEpochRef blockCountRef epochStartRef statsRef baselineRef
+  -- (slot, blockNo, hash) of the most recently processed block;
+  -- the resume point captured by 'commitEpoch' at each boundary.
+  lastBlockRef  <- liftIO $ newIORef (Nothing :: Maybe (Word64, Word64, ByteString))
+  -- Replay-progress state machine. Seeded as 'ReplayPending' iff a
+  -- replay boundary was supplied at boot; otherwise 'NoReplay'.
+  bootSlot      <- asks ieLastCommittedSlotAtBoot
+  replayRef     <- liftIO $ newIORef $ case bootSlot of
+                     Just _  -> ReplayPending
+                     Nothing -> NoReplay
+  loop prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef
   where
     batchSize :: Int
     batchSize = 100
@@ -183,8 +311,10 @@ runConsumer = do
       -> IORef UTCTime
       -> IORef PipelineStats
       -> IORef (Maybe BaselineRef)
+      -> IORef (Maybe (Word64, Word64, ByteString))
+      -> IORef ReplayLogState
       -> IngestM ()
-    loop prevEpochRef blockCountRef epochStartRef statsRef baselineRef = do
+    loop prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef = do
       queue <- asks ieBlockQueue
 
       -- 1. Drain a batch of blocks (no timing — just count)
@@ -201,10 +331,10 @@ runConsumer = do
         }
 
       -- 2. Process batch (releases each CardanoBlock after parsing)
-      processBatch prevEpochRef blockCountRef epochStartRef statsRef baselineRef blocks
+      processBatch prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef blocks
 
       -- 3. Loop
-      loop prevEpochRef blockCountRef epochStartRef statsRef baselineRef
+      loop prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef
 
     processBatch
       :: IORef (Maybe EpochNo)
@@ -212,10 +342,12 @@ runConsumer = do
       -> IORef UTCTime
       -> IORef PipelineStats
       -> IORef (Maybe BaselineRef)
+      -> IORef (Maybe (Word64, Word64, ByteString))
+      -> IORef ReplayLogState
       -> [CardanoBlock StandardCrypto]
       -> IngestM ()
-    processBatch _ _ _ _ _ [] = pure ()
-    processBatch prevEpochRef blockCountRef epochStartRef statsRef baselineRef (cardanoBlock : rest) = do
+    processBatch _ _ _ _ _ _ _ [] = pure ()
+    processBatch prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef (cardanoBlock : rest) = do
       tracer        <- asks getTracer
       sqv           <- asks ieStateQueryVar
       resolver      <- asks ieResolver
@@ -224,146 +356,194 @@ runConsumer = do
       receiverStats <- asks ieReceiverStats
       hasLedger     <- asks ieHasLedgerEnv
       extractStRef  <- asks ieExtractState
+      ctrlConn      <- asks ieControlConnection
+      bootSlot      <- asks ieLastCommittedSlotAtBoot
+      replayStart   <- asks ieReplayStartSlot
+      cfg           <- asks getConfig
+      let ledgerEnabledCfg = lcEnabled (scLedger cfg)
+          schemaVersion    = 1 :: Int
+          slot             = blockSlot cardanoBlock
+          isReplay         = case bootSlot of
+            Just bs -> slot <= bs
+            Nothing -> False
 
-      let slot = blockSlot cardanoBlock
+      -- Advance the replay-log state machine before the 'unless
+      -- isReplay' branch so 'ReplayLogComplete' fires on the first
+      -- /non/-replay block, just before normal processing resumes.
+      nowForReplay <- liftIO getCurrentTime
+      logEvent <- liftIO $ atomicModifyIORef' replayRef $ \prev ->
+        let advance = advanceReplay slot bootSlot nowForReplay prev
+        in (raNewState advance, raLog advance)
+      let traceReplay msg =
+            liftIO $ traceWith tracer $ LogMsg Info "LedgerReplay" msg Nothing
+      case logEvent of
+        ReplayLogNothing -> pure ()
+        ReplayLogProgress n ->
+          traceReplay $
+            "applied " <> fmtInt n <> " blocks; current slot "
+              <> show (unSlotNo slot)
+              <> renderReplayPercent replayStart bootSlot slot
+        ReplayLogComplete n elapsed ->
+          traceReplay $
+            "replay complete; applied " <> fmtInt n
+              <> " blocks in " <> fmtF2 (realToFrac elapsed :: Double)
+              <> "s, resuming COPY at slot " <> show (unSlotNo slot)
 
-      -- Update the locally-observed summary BEFORE computing slot
-      -- details, so that any era-boundary transition is reflected in
-      -- the summary by the time it's queried.
-      obsResult <- liftIO $ atomically $ observeBlockSTM sqv cardanoBlock
-      case obsResult of
-        NewTransition t ->
-          liftIO $ traceWith tracer $ LogMsg Info "StateQuery"
-            ( "Observed era transition "
-                <> show (otFromEra t) <> " → " <> show (otToEra t)
-                <> " at slot " <> show (unSlotNo (otAtSlot t))
-                <> " (epoch " <> show (unEpochNo (otAtEpoch t)) <> ")"
-            ) Nothing
-        ObservationBroken fromEra toEra ->
-          liftIO $ traceWith tracer $ LogMsg Warning "StateQuery"
-            ( "Observed era jump too large ("
-                <> show fromEra <> " → " <> show toEra
-                <> "); falling back to node interpreter"
-            ) Nothing
-        Unchanged -> pure ()
+      -- Replay-window skip: blocks at slot ≤ bootSlot are already
+      -- in PG (the ledger worker still receives them via the
+      -- separately-fed ledger queue, so the in-RAM ledger catches
+      -- up).
+      unless isReplay $ do
+        -- Update the observed summary before 'getSlotDetails' so
+        -- any era-boundary transition is in scope when the slot
+        -- details are computed.
+        obsResult <- liftIO $ atomically $ observeBlockSTM sqv cardanoBlock
+        case obsResult of
+          NewTransition t ->
+            liftIO $ traceWith tracer $ LogMsg Info "StateQuery"
+              ( "Observed era transition "
+                  <> show (otFromEra t) <> " → " <> show (otToEra t)
+                  <> " at slot " <> show (unSlotNo (otAtSlot t))
+                  <> " (epoch " <> show (unEpochNo (otAtEpoch t)) <> ")"
+              ) Nothing
+          ObservationBroken fromEra toEra -> do
+            -- Suppress the misleading "falling back to node" warning
+            -- when 'sqvInterpreterVar' is already seeded — the
+            -- observed-summary path isn't actually used in that case.
+            cached <- liftIO $ isInterpreterCached sqv
+            unless cached $
+              liftIO $ traceWith tracer $ LogMsg Warning "StateQuery"
+                ( "Observed era jump too large ("
+                    <> show fromEra <> " → " <> show toEra
+                    <> "); falling back to node interpreter"
+                ) Nothing
+          Unchanged -> pure ()
 
-      sd <- getSlotDetails slot
-      let !genBlock = parseBlock sd cardanoBlock
-          !blockEpoch = sdEpochNo sd
-      -- cardanoBlock is now unreferenced (genBlock doesn't retain it)
+        sd <- getSlotDetails slot
+        let !genBlock = parseBlock sd cardanoBlock
+            !blockEpoch = sdEpochNo sd
 
-      -- Epoch boundary check
-      prevEpoch <- liftIO $ readIORef prevEpochRef
-      case prevEpoch of
-        Just prev | prev /= blockEpoch -> do
-          -- Wall-clock for the entire epoch (one syscall)
-          now        <- liftIO getCurrentTime
-          epochStart <- liftIO $ readIORef epochStartRef
-          blockCount <- liftIO $ readIORef blockCountRef
-          let elapsed = diffUTCTime now epochStart
-              blocksPerSec :: Double
-              blocksPerSec = if elapsed > 0
-                then fromIntegral blockCount / realToFrac elapsed
-                else 0
-              elapsedSec :: Double
-              elapsedSec = realToFrac elapsed
+        -- Epoch boundary check
+        prevEpoch <- liftIO $ readIORef prevEpochRef
+        case prevEpoch of
+          Just prev | prev /= blockEpoch -> do
+            -- Wall-clock for the entire epoch (one syscall)
+            now        <- liftIO getCurrentTime
+            epochStart <- liftIO $ readIORef epochStartRef
+            blockCount <- liftIO $ readIORef blockCountRef
+            let elapsed = diffUTCTime now epochStart
+                blocksPerSec :: Double
+                blocksPerSec = if elapsed > 0
+                  then fromIntegral blockCount / realToFrac elapsed
+                  else 0
+                elapsedSec :: Double
+                elapsedSec = realToFrac elapsed
 
-          -- Write epoch sync stats to DB (before commit)
-          essId <- liftIO $ assignEpochSyncStatsId resolver
-          let ess = EpochSyncStats
-                { epochSyncStatsEpochNo        = unEpochNo prev
-                , epochSyncStatsBlocksProcessed = blockCount
-                , epochSyncStatsBlocksPerSec    = blocksPerSec
-                , epochSyncStatsElapsedSec      = elapsedSec
-                , epochSyncStatsSyncedAt        = now
-                , epochSyncStatsPhase           = IngestChainHistory
-                }
-          liftIO $ writeEpochSyncStats writer essId ess
+            -- Write epoch sync stats to DB (before commit)
+            essId <- liftIO $ assignEpochSyncStatsId resolver
+            let ess = EpochSyncStats
+                  { epochSyncStatsEpochNo        = unEpochNo prev
+                  , epochSyncStatsBlocksProcessed = blockCount
+                  , epochSyncStatsBlocksPerSec    = blocksPerSec
+                  , epochSyncStatsElapsedSec      = elapsedSec
+                  , epochSyncStatsSyncedAt        = now
+                  , epochSyncStatsPhase           = IngestChainHistory
+                  }
+            liftIO $ writeEpochSyncStats writer essId ess
 
-          -- Timed commit + reopen (one timing measurement per epoch)
-          commitStart <- liftIO getCurrentTime
-          liftIO $ cwCommit copyWriter
-          liftIO $ cwReopen copyWriter
-          commitEnd <- liftIO getCurrentTime
-          let commitSec :: NominalDiffTime
-              commitSec = diffUTCTime commitEnd commitStart
+            -- Build the resume row from the last fully-extracted
+            -- block of this epoch and the current ID counters.
+            mLastBlock      <- liftIO $ readIORef lastBlockRef
+            extractState    <- liftIO $ readIORef extractStRef
+            let counters    = esIdCounters extractState
 
-          -- Epoch boundary commit just completed. Run major GC if this was a heavy epoch.
-          -- Gated at >10s to avoid penalizing fast Byron epochs (2-3s each).
-          when (elapsedSec > 10.0) $ liftIO performMajorGC
+            -- 'commitEpoch' drains COPY queues, advances
+            -- dbsync_sync_state, and reopens streams for the next
+            -- epoch.
+            commitStart <- liftIO getCurrentTime
+            liftIO $ case mLastBlock of
+              Just (lastSlot, lastBlockNo, lastHash) -> do
+                let row = mkBoundarySyncStateRow
+                            lastSlot lastBlockNo lastHash
+                            counters schemaVersion ledgerEnabledCfg
+                commitEpoch copyWriter ctrlConn row
+              Nothing -> do
+                cwCommit copyWriter
+                cwReopen copyWriter
+            commitEnd <- liftIO getCurrentTime
+            let commitSec :: NominalDiffTime
+                commitSec = diffUTCTime commitEnd commitStart
 
-          -- Log single consolidated line
-          ps       <- liftIO $ readIORef statsRef
-          baseline <- liftIO $ readIORef baselineRef
-          recvSnap <- liftIO $ readAndResetEpoch receiverStats
+            -- Epoch boundary commit just completed. Run major GC if this was a heavy epoch.
+            -- Gated at >10s to avoid penalizing fast Byron epochs (2-3s each).
+            when (elapsedSec > 10.0) $ liftIO performMajorGC
 
-          let status = diagnose batchSize blocksPerSec ps baseline
-              recvPerSec :: Int
-              recvPerSec
-                | elapsedSec > 0 =
-                    round (fromIntegral (esBlocksReceived recvSnap) / elapsedSec :: Double)
-                | otherwise = 0
+            -- Log single consolidated line
+            ps       <- liftIO $ readIORef statsRef
+            baseline <- liftIO $ readIORef baselineRef
+            recvSnap <- liftIO $ readAndResetEpoch receiverStats
 
-          -- Capture baseline from first fast epoch
-          when (isNothing baseline && blocksPerSec > 500) $
-            liftIO $ writeIORef baselineRef (Just (BaselineRef blocksPerSec (unEpochNo prev)))
+            let status = diagnose batchSize blocksPerSec ps baseline
+                recvPerSec :: Int
+                recvPerSec
+                  | elapsedSec > 0 =
+                      round (fromIntegral (esBlocksReceived recvSnap) / elapsedSec :: Double)
+                  | otherwise = 0
 
-          liftIO $ traceWith tracer $ LogMsg Info "Ingest"
-            ( "Epoch " <> show (unEpochNo prev)
-              <> " | " <> fmtInt blockCount <> " blk in " <> fmtDuration elapsedSec
-              <> " (" <> show (round blocksPerSec :: Int) <> " blk/s)"
-              <> " | recv " <> show recvPerSec <> "/s blocked="
-              <> fmtInt (esWritesBlocked recvSnap)
-              <> " | drain " <> show (avgDrain ps) <> "/" <> show batchSize
-              <> " (full=" <> fmtInt (psFullDrains ps)
-              <> " single=" <> fmtInt (psSingleDrains ps) <> ")"
-              <> " | commit " <> fmtF2 (realToFrac commitSec :: Double) <> "s"
-              <> " | " <> status
-            ) Nothing
+            -- Capture baseline from first fast epoch
+            when (isNothing baseline && blocksPerSec > 500) $
+              liftIO $ writeIORef baselineRef (Just (BaselineRef blocksPerSec (unEpochNo prev)))
 
-          -- Reset for next epoch
-          liftIO $ writeIORef statsRef emptyPipelineStats
-          liftIO $ writeIORef blockCountRef 0
-          liftIO $ writeIORef epochStartRef commitEnd  -- start AFTER commit completes
-        _ -> pure ()
+            liftIO $ traceWith tracer $ LogMsg Info "Ingest"
+              ( "Epoch " <> show (unEpochNo prev)
+                <> " | " <> fmtInt blockCount <> " blk in " <> fmtDuration elapsedSec
+                <> " (" <> show (round blocksPerSec :: Int) <> " blk/s)"
+                <> " | recv " <> show recvPerSec <> "/s blocked="
+                <> fmtInt (esWritesBlocked recvSnap)
+                <> " | drain " <> show (avgDrain ps) <> "/" <> show batchSize
+                <> " (full=" <> fmtInt (psFullDrains ps)
+                <> " single=" <> fmtInt (psSingleDrains ps) <> ")"
+                <> " | commit " <> fmtF2 (realToFrac commitSec :: Double) <> "s"
+                <> " | " <> status
+              ) Nothing
 
-      -- Run extractors + write to COPY queues
-      processBlock genBlock
+            -- Reset for next epoch
+            liftIO $ writeIORef statsRef emptyPipelineStats
+            liftIO $ writeIORef blockCountRef 0
+            liftIO $ writeIORef epochStartRef commitEnd  -- start AFTER commit completes
+          _ -> pure ()
 
-      -- After processBlock, if this was an epoch-boundary block, run the
-      -- EpochBoundary extractor.  The boundary block's row has now been
-      -- written to the new-epoch COPY transaction; its 'BlockId' lives in
-      -- 'esLastBlockId' and is the FK target for the boundary tables
-      -- (currently @ada_pots@; LEDGER-PLAN.md §15.5 lists the rest).
-      --
-      -- We wait synchronously for the LedgerWorker's
-      -- 'leLatestApplyResult' to be at-or-past the boundary block's
-      -- slot. The worker is generally not lock-stepped with the consumer
-      -- (LEDGER-PLAN.md §5), but at boundary blocks the boundary-table
-      -- writes need 'apNewEpoch' which only exists after the worker has
-      -- applied the boundary block. The wait is bounded by the worker's
-      -- single-block apply latency (sub-second on mainnet).
-      case prevEpoch of
-        Just prev | prev /= blockEpoch ->
-          case hasLedger of
-            LedgerEnabled lenv -> do
-              applyResult <- liftIO $ waitForApplyResultAt lenv slot
-              mLastBlockId <- liftIO $ esLastBlockId <$> readIORef extractStRef
-              case mLastBlockId of
-                Just lastBid ->
-                  liftIO $ runEpochBoundary applyResult (BlockId lastBid) resolver writer
-                Nothing -> pure ()  -- Should not happen: processBlock just assigned a BlockId
-            LedgerDisabled _ ->
-              -- Ledger feature off; boundary tables are not populated.
-              pure ()
-        _ -> pure ()
+        -- Run extractors + write to COPY queues
+        processBlock genBlock
 
-      -- Update counters
-      liftIO $ modifyIORef' blockCountRef (+ 1)
-      liftIO $ writeIORef prevEpochRef (Just blockEpoch)
+        -- Boundary-block extractor (epoch-table writes that depend
+        -- on the ledger worker's apNewEpoch).
+        case prevEpoch of
+          Just prev | prev /= blockEpoch ->
+            case hasLedger of
+              LedgerEnabled lenv -> do
+                applyResult <- liftIO $ waitForApplyResultAt lenv slot
+                mLastBlockId <- liftIO $ esLastBlockId <$> readIORef extractStRef
+                case mLastBlockId of
+                  Just lastBid ->
+                    liftIO $ runEpochBoundary applyResult (BlockId lastBid) resolver writer
+                  Nothing -> pure ()
+              LedgerDisabled _ ->
+                pure ()
+          _ -> pure ()
 
-      -- Recurse — previous cardanoBlock and genBlock now collectible
-      processBatch prevEpochRef blockCountRef epochStartRef statsRef baselineRef rest
+        -- Update counters
+        liftIO $ modifyIORef' blockCountRef (+ 1)
+        liftIO $ writeIORef prevEpochRef (Just blockEpoch)
+        -- Record this block's identity for the next boundary commit.
+        liftIO $ writeIORef lastBlockRef $ Just
+          ( unSlotNo (blkSlotNo genBlock)
+          , unBlockNo (blkBlockNo genBlock)
+          , blkHash genBlock
+          )
+
+      -- Recurse, whether the block was processed or skipped.
+      processBatch prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef rest
 
 -- ---------------------------------------------------------------------------
 -- * Diagnosis

@@ -41,10 +41,28 @@ package snap-server
 package cardano-node
   flags: -systemd
 
-package blockio
-  -- Use serial block IO to avoid requiring liburing (not available in devx CI).
-  -- TODO: revert when CI provides liburing or switch to io_uring for better LSM perf.
-  flags: +serialblockio
+-- 'blockio' wraps the system-level block I/O primitives used by the
+-- LSM-tree backend. It has two implementations:
+--
+--   * Default (no flag): uses 'io_uring' on Linux for batched,
+--     asynchronous I/O. Faster — see LEDGER-PERF.md §3.2 / §4.2 for
+--     why this matters: the 'lsmRead' + 'lsmDuplicate' calls in
+--     'tickThenReapplyCheckHash' are on the critical path of every
+--     ledger apply, and Mary/Alonzo apply times scale with their
+--     latency.
+--   * '+serialblockio': falls back to a synchronous, syscall-per-op
+--     implementation. Portable; the only choice on macOS / Windows /
+--     other non-Linux targets where 'io_uring' is unavailable.
+--
+-- Linux operators need 'liburing-dev' (Ubuntu) / 'liburing-devel'
+-- (Fedora) installed before building. Available on any kernel
+-- ≥ 5.1, which is every distro currently in support.
+--
+-- macOS / other developers: nothing to do — the conditional below
+-- picks the serial fallback automatically.
+if !os(linux)
+  package blockio
+    flags: +serialblockio
 
 -- ---------------------------------------------------------------------------
 -- Constraints
@@ -52,8 +70,6 @@ package blockio
 
 constraints:
   , text < 2.1.2
-  -- Pin hasql to the version the LSM/LedgerDB pipeline is tested against.
-  , hasql ==1.9.3
 
 -- Allow-newer clauses needed by LSM/LedgerDB V2 transitive deps.
 allow-newer:

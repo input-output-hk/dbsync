@@ -37,12 +37,16 @@ module DbSync.StateQuery
   , getSlotDetailsIO
   , getHistoryInterpreter
   , getHistoryInterpreterIO
+  , isInterpreterCached
 
     -- * Local observation
   , observeBlockSTM
   , ObservationResult (..)
   , ObservedTransition (..)
   , EraIdx (..)
+
+    -- * Snapshot-derived interpreter seeding
+  , seedInterpreterFromLedgerState
 
     -- * Protocol handler
   , localStateQueryHandler
@@ -75,10 +79,12 @@ import Ouroboros.Consensus.Cardano.Block
   , StandardCrypto
   )
 import Ouroboros.Consensus.Cardano.Node ()
-import Ouroboros.Consensus.Config (TopLevelConfig)
+import Ouroboros.Consensus.Config (TopLevelConfig, configLedger)
+import Ouroboros.Consensus.HardFork.Abstract (hardForkSummary)
 import Ouroboros.Consensus.HardFork.Combinator.Ledger.Query
   ( QueryHardFork (GetInterpreter)
   )
+import qualified Ouroboros.Consensus.HardFork.History as History
 import Ouroboros.Consensus.HardFork.History.Qry
   ( Expr (..)
   , PastHorizonException
@@ -87,6 +93,7 @@ import Ouroboros.Consensus.HardFork.History.Qry
   , qryFromExpr
   , slotToEpoch'
   )
+import Ouroboros.Consensus.Ledger.Extended (ExtLedgerState (..))
 import Ouroboros.Consensus.Ledger.Query (Query (..))
 import Ouroboros.Network.Block (Point)
 import Ouroboros.Network.Protocol.LocalStateQuery.Client
@@ -133,6 +140,36 @@ newStateQueryVar topLevelCfg =
     <$> newEmptyTMVarIO
     <*> newTVarIO Nothing
     <*> newTVarIO (initObservedSummary topLevelCfg)
+
+-- ---------------------------------------------------------------------------
+-- * Snapshot-derived interpreter seeding
+-- ---------------------------------------------------------------------------
+
+-- | Pre-fill 'sqvInterpreterVar' from a loaded ledger state's
+-- hard-fork summary.
+--
+-- Used at boot when resuming from a snapshot: 'hardForkSummary'
+-- produces the same 'Interpreter' the node would return via
+-- @GetInterpreter@, so per-block 'getSlotDetails' calls serve
+-- locally instead of round-tripping to the node. The summary only
+-- covers eras up to the snapshot's tip; queries past its horizon
+-- fall through to 'getHistoryInterpreterIO' as before.
+seedInterpreterFromLedgerState
+  :: TopLevelConfig (CardanoBlock StandardCrypto)
+  -> ExtLedgerState (CardanoBlock StandardCrypto) mk
+  -> StateQueryVar
+  -> IO ()
+seedInterpreterFromLedgerState topLevelCfg ExtLedgerState{ ledgerState = ls } sqv = do
+  let summary = hardForkSummary (configLedger topLevelCfg) ls
+      interp  = History.mkInterpreter summary
+  atomically $ writeTVar (sqvInterpreterVar sqv) (Just interp)
+
+-- | True when 'sqvInterpreterVar' has been seeded (snapshot or node).
+-- Lets callers suppress observed-summary fallback diagnostics that
+-- would otherwise mislead.
+isInterpreterCached :: StateQueryVar -> IO Bool
+isInterpreterCached sqv =
+  isJust <$> atomically (readTVar (sqvInterpreterVar sqv))
 
 -- ---------------------------------------------------------------------------
 -- * Local observation

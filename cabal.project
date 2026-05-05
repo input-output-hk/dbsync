@@ -91,13 +91,28 @@ write-ghc-environment-files: always
 -- ---------------------------------------------------------------------------
 -- Source repository packages
 -- ---------------------------------------------------------------------------
+--
+-- Both stanzas pin against personal forks while EarlyN2C work is in flight.
+-- Workflow when iterating:
+--   1. Commit + push to the fork branch named in the `branch:` comment.
+--   2. Copy the new commit SHA into the matching `tag:` line below.
+--   3. `cabal build all` -- cabal sees the changed tag, re-fetches.
+-- (Branch names alone won't trigger a refetch: cabal caches by tag-value.)
+-- Once the work is upstreamed / nix is in, switch back to upstream tags
+-- and add `--sha256:` lines.
 
 source-repository-package
+  -- branch: early-n2c on git@github.com:Cmdv/cardano-node.git
   type: git
-  location: https://github.com/IntersectMBO/cardano-node
-  tag: 045bc187a36ef0cbd236db902b85dd8f202fb059
-  --sha256: sha256-D2HMIr65q0RM9+ZAjbtA9xNKyoKYfr3Kc4Vv4+s64uY=
+  location: https://github.com/Cmdv/cardano-node
+  tag: 2119265dbd09e143b03739b3d62421355e6940ff
   subdir:
     cardano-node
     trace-forward
     trace-resources
+
+source-repository-package
+  -- branch: early-n2c-10.7.1 on git@github.com:Cmdv/ouroboros-consensus.git
+  type: git
+  location: https://github.com/Cmdv/ouroboros-consensus
+  tag: e2835a74abd0ba1e489eae5e01edec6cb8a63c1d

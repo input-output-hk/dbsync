@@ -21,6 +21,7 @@ packages:
   dbsync-db
   dbsync
   dbsync-smash
+  dbsync-mock
 
 -- ---------------------------------------------------------------------------
 -- Package flags

@@ -27,6 +27,17 @@ module DbSync.Db.Schema.Core
   , encodeTxCopy
   , encodeSlotLeaderCopy
 
+    -- * Hasql encoders \/ decoders
+  , blockEncoder
+  , blockDecoder
+  , entityBlockDecoder
+  , txEncoder
+  , txDecoder
+  , entityTxDecoder
+  , slotLeaderEncoder
+  , slotLeaderDecoder
+  , entitySlotLeaderDecoder
+
     -- * Internal encoding helpers (exported for testing)
   , encodeInt64
   , encodeWord64
@@ -37,20 +48,42 @@ module DbSync.Db.Schema.Core
 
 import Cardano.Prelude
 
+import Data.Functor.Contravariant ((>$<))
 import Data.Time.Clock (UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
+import Data.Time.LocalTime (localTimeToUTC, utc, utcToLocalTime)
 
 import qualified Data.ByteString.Char8 as BS8
+import qualified Hasql.Decoders as D
+import qualified Hasql.Encoders as E
 
 import DbSync.Db.Schema.Entity (Key)
-import DbSync.Db.Schema.Ids (BlockId (..), PoolHashId (..), SlotLeaderId (..), TxId (..))
+import DbSync.Db.Schema.Ids
+  ( BlockId (..)
+  , PoolHashId (..)
+  , SlotLeaderId (..)
+  , TxId (..)
+  , idDecoder
+  , idEncoder
+  , maybeIdDecoder
+  , maybeIdEncoder
+  )
 import DbSync.Db.Schema.Types
   ( ColumnDef (..)
   , PgType (..)
   , TableDef (..)
   , TableMode (..)
   )
-import DbSync.Db.Types (DbLovelace (..), DbWord64 (..))
+import DbSync.Db.Types
+  ( DbLovelace
+  , DbWord64
+  , dbLovelaceValueDecoder
+  , dbLovelaceValueEncoder
+  , maybeDbWord64Decoder
+  , maybeDbWord64Encoder
+  , unDbLovelace
+  , unDbWord64
+  )
 import DbSync.Db.Writer.Copy.Encoder
   ( buildCopyRow
   , bBool, bHex, bInt64, bText, bUTCTime, bWord16, bWord64
@@ -288,3 +321,124 @@ encodeHex bs = "\\x" <> toHex bs
 -- without time zone).
 encodeUTCTime :: UTCTime -> ByteString
 encodeUTCTime = BS8.pack . formatTime defaultTimeLocale "%F %T"
+
+-- ---------------------------------------------------------------------------
+-- * Hasql encoders / decoders
+-- ---------------------------------------------------------------------------
+
+-- | 'UTCTime' \<-> @TIMESTAMP WITHOUT TIME ZONE@. Hasql's
+-- 'D.timestamp' \/ 'E.timestamp' speak 'LocalTime'; the column is
+-- naive UTC by convention so we shift through 'utc' on both sides.
+utcTimeAsTimestampDecoder :: D.Value UTCTime
+utcTimeAsTimestampDecoder = localTimeToUTC utc <$> D.timestamp
+
+utcTimeAsTimestampEncoder :: E.Value UTCTime
+utcTimeAsTimestampEncoder = utcToLocalTime utc >$< E.timestamp
+
+-- | Encoder for a 'Block', excluding the auto-generated @id@.
+blockEncoder :: E.Params Block
+blockEncoder = mconcat
+  [ blockHash           >$< E.param (E.nonNullable E.bytea)
+  , blockEpochNo        >$< E.param (E.nullable    $ fromIntegral >$< E.int8)
+  , blockSlotNo         >$< E.param (E.nullable    $ fromIntegral >$< E.int8)
+  , blockEpochSlotNo    >$< E.param (E.nullable    $ fromIntegral >$< E.int8)
+  , blockBlockNo        >$< E.param (E.nullable    $ fromIntegral >$< E.int8)
+  , blockPreviousId     >$< maybeIdEncoder getBlockId
+  , blockSlotLeaderId   >$< idEncoder      getSlotLeaderId
+  , blockSize           >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+  , blockTime           >$< E.param (E.nonNullable utcTimeAsTimestampEncoder)
+  , blockTxCount        >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+  , blockProtoMajor     >$< E.param (E.nonNullable $ fromIntegral >$< E.int2)
+  , blockProtoMinor     >$< E.param (E.nonNullable $ fromIntegral >$< E.int2)
+  , blockVrfKey         >$< E.param (E.nullable E.text)
+  , blockOpCert         >$< E.param (E.nullable E.bytea)
+  , blockOpCertCounter  >$< E.param (E.nullable    $ fromIntegral >$< E.int8)
+  ]
+
+-- | Decoder for the data columns of a 'Block' (excluding @id@).
+blockDecoder :: D.Row Block
+blockDecoder = Block
+  <$> D.column (D.nonNullable D.bytea)
+  <*> D.column (D.nullable    $ fromIntegral <$> D.int8)
+  <*> D.column (D.nullable    $ fromIntegral <$> D.int8)
+  <*> D.column (D.nullable    $ fromIntegral <$> D.int8)
+  <*> D.column (D.nullable    $ fromIntegral <$> D.int8)
+  <*> maybeIdDecoder BlockId
+  <*> idDecoder      SlotLeaderId
+  <*> D.column (D.nonNullable $ fromIntegral <$> D.int8)
+  <*> D.column (D.nonNullable utcTimeAsTimestampDecoder)
+  <*> D.column (D.nonNullable $ fromIntegral <$> D.int8)
+  <*> D.column (D.nonNullable $ fromIntegral <$> D.int2)
+  <*> D.column (D.nonNullable $ fromIntegral <$> D.int2)
+  <*> D.column (D.nullable D.text)
+  <*> D.column (D.nullable D.bytea)
+  <*> D.column (D.nullable    $ fromIntegral <$> D.int8)
+
+-- | Decoder for a full @block@ row, including @id@. Matches @SELECT *@
+-- on 'blockTableDef'.
+entityBlockDecoder :: D.Row (BlockId, Block)
+entityBlockDecoder = (,)
+  <$> idDecoder BlockId
+  <*> blockDecoder
+
+-- | Encoder for a 'Tx', excluding the auto-generated @id@.
+txEncoder :: E.Params Tx
+txEncoder = mconcat
+  [ txHash             >$< E.param (E.nonNullable E.bytea)
+  , txBlockId          >$< idEncoder      getBlockId
+  , txBlockIndex       >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+  , txOutSum           >$< E.param (E.nonNullable dbLovelaceValueEncoder)
+  , txFee              >$< E.param (E.nonNullable dbLovelaceValueEncoder)
+  , txDeposit          >$< E.param (E.nullable E.int8)
+  , txSize             >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+  , txInvalidBefore    >$< maybeDbWord64Encoder
+  , txInvalidHereafter >$< maybeDbWord64Encoder
+  , txValidContract    >$< E.param (E.nonNullable E.bool)
+  , txScriptSize       >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+  , txTreasuryDonation >$< E.param (E.nonNullable dbLovelaceValueEncoder)
+  ]
+
+-- | Decoder for the data columns of a 'Tx' (excluding @id@).
+txDecoder :: D.Row Tx
+txDecoder = Tx
+  <$> D.column (D.nonNullable D.bytea)
+  <*> idDecoder BlockId
+  <*> D.column (D.nonNullable $ fromIntegral <$> D.int8)
+  <*> D.column (D.nonNullable dbLovelaceValueDecoder)
+  <*> D.column (D.nonNullable dbLovelaceValueDecoder)
+  <*> D.column (D.nullable D.int8)
+  <*> D.column (D.nonNullable $ fromIntegral <$> D.int8)
+  <*> maybeDbWord64Decoder
+  <*> maybeDbWord64Decoder
+  <*> D.column (D.nonNullable D.bool)
+  <*> D.column (D.nonNullable $ fromIntegral <$> D.int8)
+  <*> D.column (D.nonNullable dbLovelaceValueDecoder)
+
+-- | Decoder for a full @tx@ row, including @id@. Matches @SELECT *@
+-- on 'txTableDef'.
+entityTxDecoder :: D.Row (TxId, Tx)
+entityTxDecoder = (,)
+  <$> idDecoder TxId
+  <*> txDecoder
+
+-- | Encoder for a 'SlotLeader' row, excluding the auto-generated @id@.
+slotLeaderEncoder :: E.Params SlotLeader
+slotLeaderEncoder = mconcat
+  [ slotLeaderHash         >$< E.param (E.nonNullable E.bytea)
+  , slotLeaderPoolHashId   >$< maybeIdEncoder getPoolHashId
+  , slotLeaderDescription  >$< E.param (E.nonNullable E.text)
+  ]
+
+-- | Decoder for the data columns of a 'SlotLeader' (excluding @id@).
+slotLeaderDecoder :: D.Row SlotLeader
+slotLeaderDecoder = SlotLeader
+  <$> D.column (D.nonNullable D.bytea)
+  <*> maybeIdDecoder PoolHashId
+  <*> D.column (D.nonNullable D.text)
+
+-- | Decoder for a full @slot_leader@ row, including @id@. Column
+-- order matches @SELECT *@ on 'slotLeaderTableDef'.
+entitySlotLeaderDecoder :: D.Row (SlotLeaderId, SlotLeader)
+entitySlotLeaderDecoder = (,)
+  <$> idDecoder SlotLeaderId
+  <*> slotLeaderDecoder

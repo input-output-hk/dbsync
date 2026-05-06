@@ -86,12 +86,14 @@ library
     DbSync.Ingest.Pipeline
     DbSync.Ingest.ReceiverStats
     DbSync.Resolver
+    DbSync.Resolver.Follow
     DbSync.Resolver.Ingest
     DbSync.StateQuery
     DbSync.StateQuery.ObservedSummary
     DbSync.StateQuery.Types
     DbSync.Writer
     DbSync.Writer.CopyAdapter
+    DbSync.Writer.InsertAdapter
     DbSync.Writer.Testing
     DbSync.Id.Counter
     DbSync.Id.DedupMap
@@ -216,12 +218,20 @@ library dbsync-testlib
     DbSync.Test.Fixtures
     DbSync.Test.Helpers
     DbSync.Test.Database
+    DbSync.Test.Hasql
+    DbSync.Test.Property.Invariants
   build-depends:
       base
     , cardano-prelude
+    , cardano-slotting
+    , dbsync
+    , dbsync-db
     , hasql                           >= 1.9 && < 2
+    , ouroboros-consensus
+    , ouroboros-consensus:cardano
     , process
     , text
+    , time
 
 -- ---------------------------------------------------------------------------
 -- Test runner
@@ -238,6 +248,11 @@ test-suite dbsync-test
     DbSync.Config.ValidationSpec
     DbSync.Config.NodeSpec
     DbSync.Config.GenesisSpec
+    DbSync.Db.Statement.BlockSpec
+    DbSync.Db.Statement.SlotLeaderSpec
+    DbSync.Db.Statement.SyncStateSpec
+    DbSync.Db.TypesSpec
+    DbSync.PropertySpec
     DbSync.Schema.AdaPotsSpec
     DbSync.Schema.CoreSpec
     DbSync.Schema.GenerateSpec
@@ -255,6 +270,7 @@ test-suite dbsync-test
     DbSync.Checkpoint.ResumeSpec
     DbSync.Checkpoint.SyncStateSpec
     DbSync.Phase.BootSpec
+    DbSync.Phase.FollowingChainTipSpec
     DbSync.StateQuery.ObservedSummarySpec
   build-depends:
       base
@@ -271,11 +287,16 @@ test-suite dbsync-test
     , io-classes:strict-stm
     , optparse-applicative
     , ouroboros-consensus
+    , ouroboros-consensus:cardano
+    , ouroboros-consensus:unstable-cardano-testlib
     , process
+    , QuickCheck
+    , scientific
     , stm
     , strict
     , text
     , time
+    , wide-word
 
 -- ---------------------------------------------------------------------------
 -- Executable

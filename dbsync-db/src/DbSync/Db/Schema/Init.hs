@@ -12,6 +12,7 @@ module DbSync.Db.Schema.Init
   ( -- * Schema lifecycle
     initSchema
   , dropSchema
+  , prepareSchemaForFollowTip
 
     -- * Version checking
   , checkSchemaVersions
@@ -41,7 +42,7 @@ import System.Process (readProcessWithExitCode)
 
 import DbSync.Db.Schema.Generate (generateCreateTable)
 import DbSync.Db.Schema.SyncState (syncStateTableDef, syncStateTableName)
-import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Schema.Types (TableDef (..), TableMode (..))
 import DbSync.Db.Sql (quoteIdent, quoteLiteral)
 
 -- ---------------------------------------------------------------------------
@@ -167,6 +168,24 @@ dropSchema tableDefs _extractorVersions connStr = do
   -- an upstream cardano-db-sync install with different columns); any caller
   -- that wants to preserve schema_version must not call dropSchema.
   execPsql connStr "DROP TABLE IF EXISTS \"schema_version\" CASCADE;"
+
+-- | Flip UNLOGGED extractor tables to LOGGED and attach an
+-- @<table>_id_seq@. Idempotent. Precondition for hasql INSERTs.
+prepareSchemaForFollowTip :: [TableDef] -> Text -> IO ()
+prepareSchemaForFollowTip tables connStr =
+  for_ (filter ((== TableUnlogged) . tdMode) tables) $ \td -> do
+    let name    = tdName td
+        seqName = name <> "_id_seq"
+    execPsql connStr $
+      "ALTER TABLE " <> quoteIdent name <> " SET LOGGED;"
+    execPsql connStr $
+      "CREATE SEQUENCE IF NOT EXISTS " <> quoteIdent seqName
+        <> " OWNED BY " <> quoteIdent name <> ".\"id\";"
+    execPsql connStr $ T.concat
+      [ "ALTER TABLE ", quoteIdent name
+      , " ALTER COLUMN \"id\" SET DEFAULT nextval('"
+      , seqName, "'::regclass);"
+      ]
 
 -- ---------------------------------------------------------------------------
 -- * Version checking

@@ -18,17 +18,31 @@ module DbSync.Db.Schema.MultiAsset
   , encodeMultiAssetCopy
   , encodeMaTxMintCopy
   , encodeMaTxOutCopy
+
+    -- * Hasql encoders \/ decoders
+  , multiAssetEncoder
+  , multiAssetDecoder
+  , entityMultiAssetDecoder
+  , maTxMintEncoder
+  , maTxMintDecoder
+  , entityMaTxMintDecoder
+  , maTxOutEncoder
+  , maTxOutDecoder
+  , entityMaTxOutDecoder
   ) where
 
 import Cardano.Prelude
 
 import Data.ByteString.Builder (Builder, byteString)
 import qualified Data.ByteString.Char8 as BS8
+import Data.Functor.Contravariant ((>$<))
+import qualified Hasql.Decoders as D
+import qualified Hasql.Encoders as E
 
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Types
-import DbSync.Db.Types (DbWord64 (..))
+import DbSync.Db.Types (DbWord64, dbWord64ValueDecoder, dbWord64ValueEncoder, unDbWord64)
 import DbSync.Db.Writer.Copy.Encoder (buildCopyRow, bHex, bInt64, bText, bWord64)
 
 -- ---------------------------------------------------------------------------
@@ -149,6 +163,78 @@ encodeMaTxOutCopy (MaTxOutId mid) m =
     , Just $ bInt64 (getTxOutId $ maTxOutTxOutId m)
     , Just $ bInt64 (getMultiAssetId $ maTxOutIdent m)
     ]
+
+-- ---------------------------------------------------------------------------
+-- * Hasql encoders / decoders
+-- ---------------------------------------------------------------------------
+
+-- | Encoder/decoder for a signed 'Integer' over PostgreSQL @numeric@.
+-- Mints / burns can in principle exceed @int8@ range, so we route through
+-- 'Sci.Scientific'. Mint quantities are always whole numbers, so 'floor'
+-- on the decode side is exact.
+integerAsNumericEncoder :: E.Value Integer
+integerAsNumericEncoder = fromInteger >$< E.numeric
+
+integerAsNumericDecoder :: D.Value Integer
+integerAsNumericDecoder = floor <$> D.numeric
+
+-- | Encoder for a 'MultiAsset', excluding the auto-generated @id@.
+multiAssetEncoder :: E.Params MultiAsset
+multiAssetEncoder = mconcat
+  [ multiAssetPolicy      >$< E.param (E.nonNullable E.bytea)
+  , multiAssetName        >$< E.param (E.nonNullable E.bytea)
+  , multiAssetFingerprint >$< E.param (E.nonNullable E.text)
+  ]
+
+-- | Decoder for the data columns of a 'MultiAsset' (excluding @id@).
+multiAssetDecoder :: D.Row MultiAsset
+multiAssetDecoder = MultiAsset
+  <$> D.column (D.nonNullable D.bytea)
+  <*> D.column (D.nonNullable D.bytea)
+  <*> D.column (D.nonNullable D.text)
+
+entityMultiAssetDecoder :: D.Row (MultiAssetId, MultiAsset)
+entityMultiAssetDecoder = (,)
+  <$> idDecoder MultiAssetId
+  <*> multiAssetDecoder
+
+-- | Encoder for a 'MaTxMint', excluding the auto-generated @id@.
+maTxMintEncoder :: E.Params MaTxMint
+maTxMintEncoder = mconcat
+  [ maTxMintQuantity >$< E.param (E.nonNullable integerAsNumericEncoder)
+  , maTxMintTxId     >$< idEncoder getTxId
+  , maTxMintIdent    >$< idEncoder getMultiAssetId
+  ]
+
+maTxMintDecoder :: D.Row MaTxMint
+maTxMintDecoder = MaTxMint
+  <$> D.column (D.nonNullable integerAsNumericDecoder)
+  <*> idDecoder TxId
+  <*> idDecoder MultiAssetId
+
+entityMaTxMintDecoder :: D.Row (MaTxMintId, MaTxMint)
+entityMaTxMintDecoder = (,)
+  <$> idDecoder MaTxMintId
+  <*> maTxMintDecoder
+
+-- | Encoder for an 'MaTxOut', excluding the auto-generated @id@.
+maTxOutEncoder :: E.Params MaTxOut
+maTxOutEncoder = mconcat
+  [ maTxOutQuantity    >$< E.param (E.nonNullable dbWord64ValueEncoder)
+  , maTxOutTxOutId     >$< idEncoder getTxOutId
+  , maTxOutIdent       >$< idEncoder getMultiAssetId
+  ]
+
+maTxOutDecoder :: D.Row MaTxOut
+maTxOutDecoder = MaTxOut
+  <$> D.column (D.nonNullable dbWord64ValueDecoder)
+  <*> idDecoder TxOutId
+  <*> idDecoder MultiAssetId
+
+entityMaTxOutDecoder :: D.Row (MaTxOutId, MaTxOut)
+entityMaTxOutDecoder = (,)
+  <$> idDecoder MaTxOutId
+  <*> maTxOutDecoder
 
 -- ---------------------------------------------------------------------------
 -- * Internal helpers

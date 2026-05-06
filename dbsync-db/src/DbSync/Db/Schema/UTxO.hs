@@ -26,14 +26,32 @@ module DbSync.Db.Schema.UTxO
   , encodeTxInCopy
   , encodeCollateralTxInCopy
   , encodeReferenceTxInCopy
+
+    -- * Hasql encoders \/ decoders
+  , txOutEncoder
+  , txOutDecoder
+  , entityTxOutDecoder
+  , txInEncoder
+  , txInDecoder
+  , entityTxInDecoder
+  , collateralTxInEncoder
+  , collateralTxInDecoder
+  , entityCollateralTxInDecoder
+  , referenceTxInEncoder
+  , referenceTxInDecoder
+  , entityReferenceTxInDecoder
   ) where
 
 import Cardano.Prelude
 
+import Data.Functor.Contravariant ((>$<))
+import qualified Hasql.Decoders as D
+import qualified Hasql.Encoders as E
+
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Types
-import DbSync.Db.Types (DbLovelace (..))
+import DbSync.Db.Types (DbLovelace (..), dbLovelaceValueDecoder, dbLovelaceValueEncoder)
 
 import DbSync.Db.Writer.Copy.Encoder (buildCopyRow, bBool, bHex, bInt64, bText, bWord64)
 
@@ -223,3 +241,116 @@ encodeReferenceTxInCopy (ReferenceTxInId iid) ri =
     , Just $ bWord64 (referenceTxInTxOutIndex ri)
     , Just $ bHex (referenceTxInTxOutHash ri)
     ]
+
+-- ---------------------------------------------------------------------------
+-- * Hasql encoders / decoders
+-- ---------------------------------------------------------------------------
+
+-- | Encoder for a 'TxOut', excluding the auto-generated @id@.
+-- Field order matches the column order in 'txOutTableDef'.
+txOutEncoder :: E.Params TxOut
+txOutEncoder = mconcat
+  [ txOutTxId             >$< idEncoder      getTxId
+  , txOutIndex            >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+  , txOutAddress          >$< E.param (E.nonNullable E.text)
+  , txOutAddressHasScript >$< E.param (E.nonNullable E.bool)
+  , txOutPaymentCred      >$< E.param (E.nullable E.bytea)
+  , txOutStakeAddressId   >$< maybeIdEncoder getStakeAddressId
+  , txOutValue            >$< E.param (E.nonNullable dbLovelaceValueEncoder)
+  , txOutDataHash         >$< E.param (E.nullable E.bytea)
+  , txOutInlineDatumId    >$< maybeIdEncoder getDatumId
+  , txOutReferenceScriptId >$< maybeIdEncoder getScriptId
+  , txOutConsumedByTxId   >$< maybeIdEncoder getTxId
+  ]
+
+-- | Decoder for the data columns of a 'TxOut' (excluding @id@).
+txOutDecoder :: D.Row TxOut
+txOutDecoder = TxOut
+  <$> idDecoder TxId
+  <*> D.column (D.nonNullable $ fromIntegral <$> D.int8)
+  <*> D.column (D.nonNullable D.text)
+  <*> D.column (D.nonNullable D.bool)
+  <*> D.column (D.nullable D.bytea)
+  <*> maybeIdDecoder StakeAddressId
+  <*> D.column (D.nonNullable dbLovelaceValueDecoder)
+  <*> D.column (D.nullable D.bytea)
+  <*> maybeIdDecoder DatumId
+  <*> maybeIdDecoder ScriptId
+  <*> maybeIdDecoder TxId
+
+-- | Decoder for a full @tx_out@ row, including @id@.
+entityTxOutDecoder :: D.Row (TxOutId, TxOut)
+entityTxOutDecoder = (,)
+  <$> idDecoder TxOutId
+  <*> txOutDecoder
+
+-- | Encoder for a 'TxIn', excluding the auto-generated @id@.
+txInEncoder :: E.Params TxIn
+txInEncoder = mconcat
+  [ txInTxInId     >$< idEncoder      getTxId
+  , txInTxOutId    >$< maybeIdEncoder getTxId
+  , txInTxOutIndex >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+  , txInTxOutHash  >$< E.param (E.nonNullable E.bytea)
+  , txInRedeemerId >$< maybeIdEncoder getRedeemerId
+  ]
+
+-- | Decoder for the data columns of a 'TxIn' (excluding @id@).
+txInDecoder :: D.Row TxIn
+txInDecoder = TxIn
+  <$> idDecoder TxId
+  <*> maybeIdDecoder TxId
+  <*> D.column (D.nonNullable $ fromIntegral <$> D.int8)
+  <*> D.column (D.nonNullable D.bytea)
+  <*> maybeIdDecoder RedeemerId
+
+-- | Decoder for a full @tx_in@ row, including @id@.
+entityTxInDecoder :: D.Row (TxInId, TxIn)
+entityTxInDecoder = (,)
+  <$> idDecoder TxInId
+  <*> txInDecoder
+
+-- | Encoder for a 'CollateralTxIn', excluding the auto-generated @id@.
+collateralTxInEncoder :: E.Params CollateralTxIn
+collateralTxInEncoder = mconcat
+  [ collateralTxInTxInId     >$< idEncoder      getTxId
+  , collateralTxInTxOutId    >$< maybeIdEncoder getTxId
+  , collateralTxInTxOutIndex >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+  , collateralTxInTxOutHash  >$< E.param (E.nonNullable E.bytea)
+  ]
+
+-- | Decoder for the data columns of a 'CollateralTxIn' (excluding @id@).
+collateralTxInDecoder :: D.Row CollateralTxIn
+collateralTxInDecoder = CollateralTxIn
+  <$> idDecoder TxId
+  <*> maybeIdDecoder TxId
+  <*> D.column (D.nonNullable $ fromIntegral <$> D.int8)
+  <*> D.column (D.nonNullable D.bytea)
+
+-- | Decoder for a full @collateral_tx_in@ row, including @id@.
+entityCollateralTxInDecoder :: D.Row (CollateralTxInId, CollateralTxIn)
+entityCollateralTxInDecoder = (,)
+  <$> idDecoder CollateralTxInId
+  <*> collateralTxInDecoder
+
+-- | Encoder for a 'ReferenceTxIn', excluding the auto-generated @id@.
+referenceTxInEncoder :: E.Params ReferenceTxIn
+referenceTxInEncoder = mconcat
+  [ referenceTxInTxInId     >$< idEncoder      getTxId
+  , referenceTxInTxOutId    >$< maybeIdEncoder getTxId
+  , referenceTxInTxOutIndex >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+  , referenceTxInTxOutHash  >$< E.param (E.nonNullable E.bytea)
+  ]
+
+-- | Decoder for the data columns of a 'ReferenceTxIn' (excluding @id@).
+referenceTxInDecoder :: D.Row ReferenceTxIn
+referenceTxInDecoder = ReferenceTxIn
+  <$> idDecoder TxId
+  <*> maybeIdDecoder TxId
+  <*> D.column (D.nonNullable $ fromIntegral <$> D.int8)
+  <*> D.column (D.nonNullable D.bytea)
+
+-- | Decoder for a full @reference_tx_in@ row, including @id@.
+entityReferenceTxInDecoder :: D.Row (ReferenceTxInId, ReferenceTxIn)
+entityReferenceTxInDecoder = (,)
+  <$> idDecoder ReferenceTxInId
+  <*> referenceTxInDecoder

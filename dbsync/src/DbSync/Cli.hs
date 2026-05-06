@@ -5,7 +5,7 @@
 --   @--socket-path@        — path to the cardano-node Unix socket
 --   @--ledger-state-dir@   — parent directory in which the @dbsync-ledger/@
 --                            sub-directory will be created and used for the
---                            LSM session and consensus snapshots
+--                            LSM session and snapshot headers
 --   @--profile@            — path to dbsync-profile.json (database, options, sync mode)
 module DbSync.Cli
   ( -- * Types
@@ -78,7 +78,7 @@ cliArgsP =
           <> metavar "DIRPATH"
           <> help
               "Parent directory in which a 'dbsync-ledger/' sub-directory \
-              \will be created and used for the LSM session and consensus snapshots"
+              \will be created and used for the LSM session and snapshot headers"
       )
     <*> strOption
       ( long "profile"

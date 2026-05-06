@@ -24,14 +24,41 @@ module DbSync.Db.Schema.StakeDelegation
   , encodeStakeDeregistrationCopy
   , encodeDelegationCopy
   , encodeWithdrawalCopy
+
+    -- * Hasql encoders \/ decoders
+  , stakeAddressEncoder
+  , stakeAddressDecoder
+  , entityStakeAddressDecoder
+  , stakeRegistrationEncoder
+  , stakeRegistrationDecoder
+  , entityStakeRegistrationDecoder
+  , stakeDeregistrationEncoder
+  , stakeDeregistrationDecoder
+  , entityStakeDeregistrationDecoder
+  , delegationEncoder
+  , delegationDecoder
+  , entityDelegationDecoder
+  , withdrawalEncoder
+  , withdrawalDecoder
+  , entityWithdrawalDecoder
   ) where
 
 import Cardano.Prelude
 
+import Data.Functor.Contravariant ((>$<))
+import qualified Hasql.Decoders as D
+import qualified Hasql.Encoders as E
+
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Types
-import DbSync.Db.Types (DbLovelace (..))
+import DbSync.Db.Types
+  ( DbLovelace (..)
+  , dbLovelaceValueDecoder
+  , dbLovelaceValueEncoder
+  , maybeDbLovelaceDecoder
+  , maybeDbLovelaceEncoder
+  )
 
 import DbSync.Db.Writer.Copy.Encoder (buildCopyRow, bHex, bInt64, bText, bWord64)
 
@@ -244,3 +271,129 @@ encodeWithdrawalCopy (WithdrawalId wid) w =
     , Just $ bWord64 (unDbLovelace $ withdrawalAmount w)
     , bInt64 . getRedeemerId <$> withdrawalRedeemerId w
     ]
+
+-- ---------------------------------------------------------------------------
+-- * Hasql encoders / decoders
+-- ---------------------------------------------------------------------------
+
+-- StakeAddress -------------------------------------------------------------
+
+stakeAddressEncoder :: E.Params StakeAddress
+stakeAddressEncoder = mconcat
+  [ stakeAddressHashRaw    >$< E.param (E.nonNullable E.bytea)
+  , stakeAddressView       >$< E.param (E.nonNullable E.text)
+  , stakeAddressScriptHash >$< E.param (E.nullable E.bytea)
+  ]
+
+stakeAddressDecoder :: D.Row StakeAddress
+stakeAddressDecoder = StakeAddress
+  <$> D.column (D.nonNullable D.bytea)
+  <*> D.column (D.nonNullable D.text)
+  <*> D.column (D.nullable D.bytea)
+
+entityStakeAddressDecoder :: D.Row (StakeAddressId, StakeAddress)
+entityStakeAddressDecoder = (,)
+  <$> idDecoder StakeAddressId
+  <*> stakeAddressDecoder
+
+-- StakeRegistration --------------------------------------------------------
+
+stakeRegistrationEncoder :: E.Params StakeRegistration
+stakeRegistrationEncoder = mconcat
+  [ stakeRegistrationAddrId    >$< idEncoder getStakeAddressId
+  , (fromIntegral :: Word16 -> Int64) . stakeRegistrationCertIndex
+                               >$< E.param (E.nonNullable E.int8)
+  , stakeRegistrationEpochNo   >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+  , stakeRegistrationTxId      >$< idEncoder getTxId
+  , stakeRegistrationDeposit   >$< maybeDbLovelaceEncoder
+  ]
+
+stakeRegistrationDecoder :: D.Row StakeRegistration
+stakeRegistrationDecoder = StakeRegistration
+  <$> idDecoder StakeAddressId
+  <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
+  <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
+  <*> idDecoder TxId
+  <*> maybeDbLovelaceDecoder
+
+entityStakeRegistrationDecoder :: D.Row (StakeRegistrationId, StakeRegistration)
+entityStakeRegistrationDecoder = (,)
+  <$> idDecoder StakeRegistrationId
+  <*> stakeRegistrationDecoder
+
+-- StakeDeregistration ------------------------------------------------------
+
+stakeDeregistrationEncoder :: E.Params StakeDeregistration
+stakeDeregistrationEncoder = mconcat
+  [ stakeDeregistrationAddrId     >$< idEncoder getStakeAddressId
+  , (fromIntegral :: Word16 -> Int64) . stakeDeregistrationCertIndex
+                                  >$< E.param (E.nonNullable E.int8)
+  , stakeDeregistrationEpochNo    >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+  , stakeDeregistrationTxId       >$< idEncoder getTxId
+  , stakeDeregistrationRedeemerId >$< maybeIdEncoder getRedeemerId
+  ]
+
+stakeDeregistrationDecoder :: D.Row StakeDeregistration
+stakeDeregistrationDecoder = StakeDeregistration
+  <$> idDecoder StakeAddressId
+  <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
+  <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
+  <*> idDecoder TxId
+  <*> maybeIdDecoder RedeemerId
+
+entityStakeDeregistrationDecoder
+  :: D.Row (StakeDeregistrationId, StakeDeregistration)
+entityStakeDeregistrationDecoder = (,)
+  <$> idDecoder StakeDeregistrationId
+  <*> stakeDeregistrationDecoder
+
+-- Delegation ---------------------------------------------------------------
+
+delegationEncoder :: E.Params Delegation
+delegationEncoder = mconcat
+  [ delegationAddrId        >$< idEncoder getStakeAddressId
+  , (fromIntegral :: Word16 -> Int64) . delegationCertIndex
+                            >$< E.param (E.nonNullable E.int8)
+  , delegationPoolHashId    >$< idEncoder getPoolHashId
+  , delegationActiveEpochNo >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+  , delegationTxId          >$< idEncoder getTxId
+  , delegationSlotNo        >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+  , delegationRedeemerId    >$< maybeIdEncoder getRedeemerId
+  ]
+
+delegationDecoder :: D.Row Delegation
+delegationDecoder = Delegation
+  <$> idDecoder StakeAddressId
+  <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
+  <*> idDecoder PoolHashId
+  <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
+  <*> idDecoder TxId
+  <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
+  <*> maybeIdDecoder RedeemerId
+
+entityDelegationDecoder :: D.Row (DelegationId, Delegation)
+entityDelegationDecoder = (,)
+  <$> idDecoder DelegationId
+  <*> delegationDecoder
+
+-- Withdrawal ---------------------------------------------------------------
+
+withdrawalEncoder :: E.Params Withdrawal
+withdrawalEncoder = mconcat
+  [ withdrawalAddrId     >$< idEncoder getStakeAddressId
+  , withdrawalTxId       >$< idEncoder getTxId
+  , withdrawalAmount     >$< E.param (E.nonNullable dbLovelaceValueEncoder)
+  , withdrawalRedeemerId >$< maybeIdEncoder getRedeemerId
+  ]
+
+withdrawalDecoder :: D.Row Withdrawal
+withdrawalDecoder = Withdrawal
+  <$> idDecoder StakeAddressId
+  <*> idDecoder TxId
+  <*> D.column (D.nonNullable dbLovelaceValueDecoder)
+  <*> maybeIdDecoder RedeemerId
+
+entityWithdrawalDecoder :: D.Row (WithdrawalId, Withdrawal)
+entityWithdrawalDecoder = (,)
+  <$> idDecoder WithdrawalId
+  <*> withdrawalDecoder

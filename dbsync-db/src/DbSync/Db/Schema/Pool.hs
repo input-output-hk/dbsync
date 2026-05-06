@@ -27,17 +27,48 @@ module DbSync.Db.Schema.Pool
   , encodePoolOwnerCopy
   , encodePoolRetireCopy
   , encodePoolRelayCopy
+
+    -- * Hasql encoders \/ decoders
+  , poolHashEncoder
+  , poolHashDecoder
+  , entityPoolHashDecoder
+  , poolUpdateEncoder
+  , poolUpdateDecoder
+  , entityPoolUpdateDecoder
+  , poolMetadataRefEncoder
+  , poolMetadataRefDecoder
+  , entityPoolMetadataRefDecoder
+  , poolOwnerEncoder
+  , poolOwnerDecoder
+  , entityPoolOwnerDecoder
+  , poolRetireEncoder
+  , poolRetireDecoder
+  , entityPoolRetireDecoder
+  , poolRelayEncoder
+  , poolRelayDecoder
+  , entityPoolRelayDecoder
   ) where
 
 import Cardano.Prelude
 
 import Data.ByteString.Builder (Builder, byteString)
 import qualified Data.ByteString.Char8 as BS8
+import Data.Functor.Contravariant ((>$<))
+import qualified Data.Text as T
+import qualified Hasql.Decoders as D
+import qualified Hasql.Encoders as E
+import qualified Text.Read as TR
 
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Types
-import DbSync.Db.Types (DbLovelace (..))
+import DbSync.Db.Types
+  ( DbLovelace (..)
+  , dbLovelaceValueDecoder
+  , dbLovelaceValueEncoder
+  , maybeDbLovelaceDecoder
+  , maybeDbLovelaceEncoder
+  )
 import DbSync.Db.Writer.Copy.Encoder (buildCopyRow, bHex, bInt64, bText, bWord64)
 
 -- ---------------------------------------------------------------------------
@@ -288,6 +319,171 @@ encodePoolRelayCopy (PoolRelayId prid) pr =
     , bText <$> poolRelayDnsSrvName pr
     , bInt64 . fromIntegral <$> poolRelayPort pr
     ]
+
+-- ---------------------------------------------------------------------------
+-- * Hasql encoders / decoders
+-- ---------------------------------------------------------------------------
+
+-- | The original schema stores @pool_update.margin@ as @text@ holding
+-- a Haskell 'show' of the rational margin (e.g. @"5.0e-2"@). We
+-- mirror that representation: encode via 'show', decode via
+-- 'TR.readMaybe' wrapped in 'D.refine' so a malformed row surfaces
+-- as a parse error rather than a runtime panic.
+doubleAsTextEncoder :: E.Value Double
+doubleAsTextEncoder = T.pack . show >$< E.text
+
+doubleAsTextDecoder :: D.Value Double
+doubleAsTextDecoder = D.refine parseDouble D.text
+  where
+    parseDouble :: Text -> Either Text Double
+    parseDouble t = case TR.readMaybe (T.unpack t) of
+      Just d  -> Right d
+      Nothing -> Left ("pool_update.margin: not a Double: " <> t)
+
+-- PoolHash -----------------------------------------------------------------
+
+poolHashEncoder :: E.Params PoolHash
+poolHashEncoder = mconcat
+  [ poolHashHashRaw >$< E.param (E.nonNullable E.bytea)
+  , poolHashView    >$< E.param (E.nonNullable E.text)
+  ]
+
+poolHashDecoder :: D.Row PoolHash
+poolHashDecoder = PoolHash
+  <$> D.column (D.nonNullable D.bytea)
+  <*> D.column (D.nonNullable D.text)
+
+entityPoolHashDecoder :: D.Row (PoolHashId, PoolHash)
+entityPoolHashDecoder = (,)
+  <$> idDecoder PoolHashId
+  <*> poolHashDecoder
+
+-- PoolUpdate ---------------------------------------------------------------
+
+poolUpdateEncoder :: E.Params PoolUpdate
+poolUpdateEncoder = mconcat
+  [ poolUpdateHashId        >$< idEncoder getPoolHashId
+  , (fromIntegral :: Word16 -> Int64) . poolUpdateCertIndex
+                            >$< E.param (E.nonNullable E.int8)
+  , poolUpdateVrfKeyHash    >$< E.param (E.nonNullable E.bytea)
+  , poolUpdatePledge        >$< E.param (E.nonNullable dbLovelaceValueEncoder)
+  , poolUpdateActiveEpochNo >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+  , poolUpdateMetaId        >$< maybeIdEncoder getPoolMetadataRefId
+  , poolUpdateMargin        >$< E.param (E.nonNullable doubleAsTextEncoder)
+  , poolUpdateFixedCost     >$< E.param (E.nonNullable dbLovelaceValueEncoder)
+  , poolUpdateRegisteredTxId >$< idEncoder getTxId
+  , poolUpdateRewardAddrId  >$< idEncoder getStakeAddressId
+  , poolUpdateDeposit       >$< maybeDbLovelaceEncoder
+  ]
+
+poolUpdateDecoder :: D.Row PoolUpdate
+poolUpdateDecoder = PoolUpdate
+  <$> idDecoder PoolHashId
+  <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
+  <*> D.column (D.nonNullable D.bytea)
+  <*> D.column (D.nonNullable dbLovelaceValueDecoder)
+  <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
+  <*> maybeIdDecoder PoolMetadataRefId
+  <*> D.column (D.nonNullable doubleAsTextDecoder)
+  <*> D.column (D.nonNullable dbLovelaceValueDecoder)
+  <*> idDecoder TxId
+  <*> idDecoder StakeAddressId
+  <*> maybeDbLovelaceDecoder
+
+entityPoolUpdateDecoder :: D.Row (PoolUpdateId, PoolUpdate)
+entityPoolUpdateDecoder = (,)
+  <$> idDecoder PoolUpdateId
+  <*> poolUpdateDecoder
+
+-- PoolMetadataRef ----------------------------------------------------------
+
+poolMetadataRefEncoder :: E.Params PoolMetadataRef
+poolMetadataRefEncoder = mconcat
+  [ poolMetadataRefPoolId         >$< idEncoder getPoolHashId
+  , poolMetadataRefUrl            >$< E.param (E.nonNullable E.text)
+  , poolMetadataRefHash           >$< E.param (E.nonNullable E.bytea)
+  , poolMetadataRefRegisteredTxId >$< idEncoder getTxId
+  ]
+
+poolMetadataRefDecoder :: D.Row PoolMetadataRef
+poolMetadataRefDecoder = PoolMetadataRef
+  <$> idDecoder PoolHashId
+  <*> D.column (D.nonNullable D.text)
+  <*> D.column (D.nonNullable D.bytea)
+  <*> idDecoder TxId
+
+entityPoolMetadataRefDecoder :: D.Row (PoolMetadataRefId, PoolMetadataRef)
+entityPoolMetadataRefDecoder = (,)
+  <$> idDecoder PoolMetadataRefId
+  <*> poolMetadataRefDecoder
+
+-- PoolOwner ----------------------------------------------------------------
+
+poolOwnerEncoder :: E.Params PoolOwner
+poolOwnerEncoder = mconcat
+  [ poolOwnerAddrId       >$< idEncoder getStakeAddressId
+  , poolOwnerPoolUpdateId >$< idEncoder getPoolUpdateId
+  ]
+
+poolOwnerDecoder :: D.Row PoolOwner
+poolOwnerDecoder = PoolOwner
+  <$> idDecoder StakeAddressId
+  <*> idDecoder PoolUpdateId
+
+entityPoolOwnerDecoder :: D.Row (PoolOwnerId, PoolOwner)
+entityPoolOwnerDecoder = (,)
+  <$> idDecoder PoolOwnerId
+  <*> poolOwnerDecoder
+
+-- PoolRetire ---------------------------------------------------------------
+
+poolRetireEncoder :: E.Params PoolRetire
+poolRetireEncoder = mconcat
+  [ poolRetireHashId        >$< idEncoder getPoolHashId
+  , (fromIntegral :: Word16 -> Int64) . poolRetireCertIndex
+                            >$< E.param (E.nonNullable E.int8)
+  , poolRetireAnnouncedTxId >$< idEncoder getTxId
+  , poolRetireRetiringEpoch >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+  ]
+
+poolRetireDecoder :: D.Row PoolRetire
+poolRetireDecoder = PoolRetire
+  <$> idDecoder PoolHashId
+  <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
+  <*> idDecoder TxId
+  <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
+
+entityPoolRetireDecoder :: D.Row (PoolRetireId, PoolRetire)
+entityPoolRetireDecoder = (,)
+  <$> idDecoder PoolRetireId
+  <*> poolRetireDecoder
+
+-- PoolRelay ----------------------------------------------------------------
+
+poolRelayEncoder :: E.Params PoolRelay
+poolRelayEncoder = mconcat
+  [ poolRelayUpdateId   >$< idEncoder getPoolUpdateId
+  , poolRelayIpv4       >$< E.param (E.nullable E.text)
+  , poolRelayIpv6       >$< E.param (E.nullable E.text)
+  , poolRelayDnsName    >$< E.param (E.nullable E.text)
+  , poolRelayDnsSrvName >$< E.param (E.nullable E.text)
+  , (fmap (fromIntegral :: Word16 -> Int64) . poolRelayPort)
+                        >$< E.param (E.nullable E.int8)
+  ]
+
+poolRelayDecoder :: D.Row PoolRelay
+poolRelayDecoder = PoolRelay
+  <$> idDecoder PoolUpdateId
+  <*> D.column (D.nullable D.text)
+  <*> D.column (D.nullable D.text)
+  <*> D.column (D.nullable D.text)
+  <*> D.column (D.nullable D.text)
+  <*> (fmap fromIntegral <$> D.column (D.nullable D.int8))
+
+entityPoolRelayDecoder :: D.Row (PoolRelayId, PoolRelay)
+entityPoolRelayDecoder = (,)
+  <$> idDecoder PoolRelayId
+  <*> poolRelayDecoder
 
 -- ---------------------------------------------------------------------------
 -- * Internal helpers

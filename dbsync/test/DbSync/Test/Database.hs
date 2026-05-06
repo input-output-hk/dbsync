@@ -27,6 +27,10 @@ module DbSync.Test.Database
   , queryTestDb
   , execTestDb
   , truncateAllTables
+
+    -- * Spec setup helpers
+  , setupFollowTipSchema
+  , teardownSchema
   ) where
 
 import Cardano.Prelude
@@ -37,6 +41,9 @@ import qualified Hasql.Connection.Settings as Settings
 
 import System.IO.Error (userError)
 import System.Process (readProcessWithExitCode)
+
+import DbSync.Db.Schema.Init (dropSchema, initSchema, prepareSchemaForFollowTip)
+import DbSync.Db.Schema.Types (TableDef)
 
 -- ---------------------------------------------------------------------------
 -- * Configuration
@@ -136,11 +143,30 @@ execTestDb sql = do
       throwIO $ userError $
         "execTestDb failed: " <> err <> "\nSQL: " <> T.unpack sql
 
--- | Truncate all tables in the test database.
--- Useful between tests when you don't want to drop/recreate the schema.
+-- | Truncate all tables in the test database. Resets owned
+-- sequences so 'INSERT ... RETURNING id' starts at 1 each time.
 truncateAllTables :: [Text] -> IO ()
 truncateAllTables tableNames =
-  execTestDb $ "TRUNCATE TABLE " <> T.intercalate ", " tableNames <> " CASCADE;"
+  execTestDb $
+    "TRUNCATE TABLE " <> T.intercalate ", " tableNames
+      <> " RESTART IDENTITY CASCADE;"
+
+-- ---------------------------------------------------------------------------
+-- * Spec setup helpers
+-- ---------------------------------------------------------------------------
+
+-- | Drop + init + flip-to-LOGGED + attach sequences. Used in
+-- @beforeAll_@ for any Spec that exercises the FollowingChainTip
+-- INSERT path.
+setupFollowTipSchema :: [TableDef] -> [(Text, Int)] -> IO ()
+setupFollowTipSchema tables versions = do
+  dropSchema tables versions testConnStr
+  initSchema tables versions testConnStr
+  prepareSchemaForFollowTip tables testConnStr
+
+-- | Drop everything for use in @afterAll_@.
+teardownSchema :: [TableDef] -> IO ()
+teardownSchema tables = dropSchema tables [] testConnStr
 
 -- ---------------------------------------------------------------------------
 -- * Internal helpers

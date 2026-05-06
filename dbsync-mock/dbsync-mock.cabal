@@ -1,0 +1,100 @@
+cabal-version: 3.6
+name:          dbsync-mock
+version:       0.1.0.0
+synopsis:      Vendored Cardano.Mock forging primitives for dbsync tests
+description:   Internal library that vendors the chain-forging primitives
+               from upstream cardano-chain-gen's Cardano.Mock.* hierarchy.
+               Used by the dbsync test-suite to drive ledger-valid blocks
+               through the new modular pipeline without the upstream
+               cardano-db / cardano-db-sync packages or a real cardano-node
+               socket. Library-only; no test-suite, no executable.
+license:       Apache-2.0
+author:        IOHK Engineering Team
+maintainer:    operations@iohk.io
+category:      Cryptocurrency
+build-type:    Simple
+
+common warnings
+  ghc-options:
+    -Wall
+    -Wcompat
+    -Wredundant-constraints
+    -Wincomplete-record-updates
+    -Wincomplete-uni-patterns
+    -Wmissing-deriving-strategies
+    -Wpartial-fields
+    -Widentities
+    -Wunused-packages
+    -Werror
+
+common defaults
+  default-language:   GHC2021
+  default-extensions:
+    NoImplicitPrelude
+    OverloadedStrings
+    DerivingStrategies
+    GeneralizedNewtypeDeriving
+    LambdaCase
+
+library
+  import:         warnings, defaults
+  hs-source-dirs: src
+  exposed-modules:
+    Cardano.Mock.Chain
+    Cardano.Mock.ChainDB
+    Cardano.Mock.ChainSync.Server
+    Cardano.Mock.ChainSync.State
+    Cardano.Mock.Forging.Crypto
+    Cardano.Mock.Forging.Interpreter
+    Cardano.Mock.Forging.Tx.Alonzo
+    Cardano.Mock.Forging.Tx.Alonzo.ScriptsExamples
+    Cardano.Mock.Forging.Tx.Babbage
+    Cardano.Mock.Forging.Tx.Conway
+    Cardano.Mock.Forging.Tx.Generic
+    Cardano.Mock.Forging.Tx.Shelley
+    Cardano.Mock.Forging.Types
+  build-depends:
+      base                       >= 4.14 && < 5
+    , aeson
+    , async
+    , bytestring
+    , cardano-binary
+    , cardano-crypto-class
+    , cardano-data
+    , cardano-diffusion
+    , cardano-ledger-allegra
+    , cardano-ledger-alonzo
+    , cardano-ledger-babbage
+    , cardano-ledger-binary
+    , cardano-ledger-conway
+    , cardano-ledger-core
+    , cardano-ledger-mary
+    , cardano-ledger-shelley     >= 1.12.3.0
+    , cardano-prelude
+    , cardano-protocol-tpraos
+    , cardano-slotting
+    , cardano-strict-containers
+    , cborg
+    , containers
+    , contra-tracer
+    , directory
+    , extra
+    , io-classes:strict-stm
+    , microlens
+    , network
+    , network-mux
+    , nothunks
+    , ouroboros-consensus
+    , ouroboros-consensus:cardano
+    , ouroboros-consensus:diffusion
+    , ouroboros-consensus:protocol
+    , ouroboros-network:api
+    , ouroboros-network:framework
+    , ouroboros-network:protocols
+    , plutus-core
+    , plutus-ledger-api:plutus-ledger-api-testlib
+    , serialise
+    , strict-sop-core
+    , text
+    , typed-protocols
+    , typed-protocols:stateful

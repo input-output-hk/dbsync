@@ -1,0 +1,174 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+-- | Test helpers for property tests over arbitrary 'CardanoBlock' values.
+--
+-- The upstream @ouroboros-consensus:unstable-cardano-testlib@ provides
+-- @Arbitrary (CardanoBlock StandardCrypto)@ and friends. The header on
+-- @Test.Consensus.Cardano.Generators@ explicitly notes that generated
+-- values are only intended for serialisation roundtrip tests — they are
+-- CBOR-shape valid but not necessarily ledger-valid. That is fine for
+-- the algebraic / shape invariants we assert here. Ledger-validity-
+-- sensitive scenarios live in Slice 5's mock-driven tests.
+--
+-- == What's exposed
+--
+-- * 'runPureExtract' — drive a single 'CardanoBlock' through
+--   @parseBlock + processBlock@ against 'mkTestWriter', returning the
+--   accumulated 'TestWriterState'.
+-- * 'runPureExtractMany' — same idea over a list of blocks, with
+--   resolver/extract state carried across so 'BlockId' / 'TxId'
+--   sequences are monotonic over the run.
+-- * 'syntheticSlotDetails' — deterministic 'SlotDetails' from a
+--   'SlotNo'. Time fields are derived from the slot number; epoch math
+--   uses Byron-era epoch sizing (21600 slots) for stability across
+--   eras. Property tests only assert on shape invariants, not on
+--   timestamps, so this is fine.
+-- * 'mkInitExtractState' — fresh 'ExtractState' with every @Id@ counter
+--   seeded at 1.
+module DbSync.Test.Property.Invariants
+  ( -- * Pipeline runners
+    runPureExtract
+  , runPureExtractMany
+
+    -- * Building blocks
+  , syntheticSlotDetails
+  , mkInitExtractState
+  , TestPropEnv (..)
+  ) where
+
+import Cardano.Prelude
+
+import Data.IORef (newIORef, readIORef)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+
+import Cardano.Slotting.Slot (EpochNo (..), EpochSize (..), SlotNo (..))
+
+import Ouroboros.Consensus.Block (blockSlot)
+import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
+import Ouroboros.Consensus.Shelley.HFEras ()                -- per-era HFC instances
+import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()  -- LedgerSupportsProtocol orphans
+
+import DbSync.Block.Parser (parseBlock)
+import DbSync.Extractor (ExtractState (..), ExtractorDef, HasExtractors (..))
+import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
+import DbSync.Id.DedupMap (DedupMaps, newMaps)
+import DbSync.Ingest.Pipeline (processBlock)
+import DbSync.Resolver (HasResolver (..), IdResolver)
+import DbSync.Resolver.Ingest (mkIngestResolver)
+import DbSync.StateQuery.Types (SlotDetails (..))
+import DbSync.Writer (HasWriter (..), Writer)
+import DbSync.Writer.Testing (TestWriterState, emptyTestWriterState, mkTestWriter)
+
+-- ---------------------------------------------------------------------------
+-- Env
+-- ---------------------------------------------------------------------------
+
+-- | Minimal environment satisfying 'processBlock''s constraints.
+-- Mirrors @TestPipelineEnv@ in 'Ingest.PipelineSpec' but lives in
+-- the test library so multiple specs can share it.
+data TestPropEnv = TestPropEnv
+  { tpeResolver   :: !(IdResolver IO)
+  , tpeWriter     :: !(Writer IO)
+  , tpeExtractors :: ![ExtractorDef]
+  }
+
+instance HasResolver TestPropEnv where
+  getResolver = tpeResolver
+
+instance HasWriter TestPropEnv where
+  getWriter = tpeWriter
+
+instance HasExtractors TestPropEnv where
+  getExtractors = tpeExtractors
+
+-- ---------------------------------------------------------------------------
+-- Runners
+-- ---------------------------------------------------------------------------
+
+-- | Drive a single 'CardanoBlock' through the pure pipeline and
+-- return the accumulated 'TestWriterState'.
+runPureExtract
+  :: [ExtractorDef]
+  -> CardanoBlock StandardCrypto
+  -> IO TestWriterState
+runPureExtract extractors block =
+  runPureExtractMany extractors [block]
+
+-- | Drive a list of 'CardanoBlock's through the pure pipeline,
+-- carrying resolver + extract state across so @BlockId@ / @TxId@
+-- sequences are continuous. Returns the final 'TestWriterState'.
+runPureExtractMany
+  :: [ExtractorDef]
+  -> [CardanoBlock StandardCrypto]
+  -> IO TestWriterState
+runPureExtractMany extractors blocks = do
+  stRef     <- newIORef mkInitExtractState
+  dedupMaps <- newMaps :: IO DedupMaps
+  ref       <- newIORef emptyTestWriterState
+  let env = TestPropEnv
+        { tpeResolver   = mkIngestResolver stRef dedupMaps
+        , tpeWriter     = mkTestWriter ref
+        , tpeExtractors = extractors
+        }
+  for_ blocks $ \block -> do
+    let sd        = syntheticSlotDetails (blockSlot block)
+        !genBlock = parseBlock sd block
+    runReaderT (processBlock genBlock) env
+  readIORef ref
+
+-- ---------------------------------------------------------------------------
+-- Building blocks
+-- ---------------------------------------------------------------------------
+
+-- | Fresh 'ExtractState' with every @Id@ counter seeded at 1.
+-- Mirrors the production startup state.
+mkInitExtractState :: ExtractState
+mkInitExtractState = ExtractState
+  { esIdCounters = IdCounters
+      { icBlockId               = mkIdCounter 1
+      , icTxId                  = mkIdCounter 1
+      , icTxOutId               = mkIdCounter 1
+      , icTxInId                = mkIdCounter 1
+      , icCollateralTxInId      = mkIdCounter 1
+      , icReferenceTxInId       = mkIdCounter 1
+      , icTxMetadataId          = mkIdCounter 1
+      , icMaTxMintId            = mkIdCounter 1
+      , icMaTxOutId             = mkIdCounter 1
+      , icSlotLeaderId          = mkIdCounter 1
+      , icStakeAddressId        = mkIdCounter 1
+      , icPoolHashId            = mkIdCounter 1
+      , icMultiAssetId          = mkIdCounter 1
+      , icScriptId              = mkIdCounter 1
+      , icStakeRegistrationId   = mkIdCounter 1
+      , icStakeDeregistrationId = mkIdCounter 1
+      , icDelegationId          = mkIdCounter 1
+      , icWithdrawalId          = mkIdCounter 1
+      , icPoolUpdateId          = mkIdCounter 1
+      , icPoolMetadataRefId     = mkIdCounter 1
+      , icPoolOwnerId           = mkIdCounter 1
+      , icPoolRetireId          = mkIdCounter 1
+      , icPoolRelayId           = mkIdCounter 1
+      , icTxCborId              = mkIdCounter 1
+      , icEpochSyncStatsId      = mkIdCounter 1
+      , icAdaPotsId             = mkIdCounter 1
+      }
+  , esLastBlockId = Nothing
+  }
+
+-- | Deterministic 'SlotDetails' derived from a 'SlotNo'. Time fields
+-- are derived from the slot number (1 second per slot, epoch 0 at
+-- POSIX 0). Epoch math uses Byron sizing (21600 slots) for stability.
+-- Property tests should not assert on timestamp accuracy — only on
+-- the shape invariants this helper preserves.
+syntheticSlotDetails :: SlotNo -> SlotDetails
+syntheticSlotDetails sn@(SlotNo s) = SlotDetails
+  { sdSlotTime    = posixSecondsToUTCTime (fromIntegral s)
+  , sdCurrentTime = posixSecondsToUTCTime (fromIntegral s)
+  , sdEpochNo     = EpochNo (s `div` epochSizeWord)
+  , sdSlotNo      = sn
+  , sdEpochSlot   = s `mod` epochSizeWord
+  , sdEpochSize   = EpochSize epochSizeWord
+  }
+  where
+    epochSizeWord :: Word64
+    epochSizeWord = 21600

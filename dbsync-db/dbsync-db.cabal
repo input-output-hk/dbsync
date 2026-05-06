@@ -56,8 +56,31 @@ library
     DbSync.Db.Schema.Version
     DbSync.Db.Schema.Migration
     DbSync.Db.Sql
+    DbSync.Db.Statement.Block
+    DbSync.Db.Statement.CollateralTxIn
+    DbSync.Db.Statement.Delegation
+    DbSync.Db.Statement.MaTxMint
+    DbSync.Db.Statement.MaTxOut
+    DbSync.Db.Statement.MultiAsset
+    DbSync.Db.Statement.PoolHash
+    DbSync.Db.Statement.PoolMetadataRef
+    DbSync.Db.Statement.PoolOwner
+    DbSync.Db.Statement.PoolRelay
+    DbSync.Db.Statement.PoolRetire
+    DbSync.Db.Statement.PoolUpdate
+    DbSync.Db.Statement.ReferenceTxIn
     DbSync.Db.Statement.Resume
+    DbSync.Db.Statement.SlotLeader
+    DbSync.Db.Statement.StakeAddress
+    DbSync.Db.Statement.StakeDeregistration
+    DbSync.Db.Statement.StakeRegistration
     DbSync.Db.Statement.SyncState
+    DbSync.Db.Statement.Tx
+    DbSync.Db.Statement.TxCbor
+    DbSync.Db.Statement.TxIn
+    DbSync.Db.Statement.TxMetadata
+    DbSync.Db.Statement.TxOut
+    DbSync.Db.Statement.Withdrawal
     DbSync.Db.Writer.Copy.Encoder
     DbSync.Db.Writer.Insert
   build-depends:
@@ -66,8 +89,10 @@ library
 
     -- Data
     , bytestring
+    , scientific
     , text
     , time
+    , wide-word
 
     -- Database (control-plane queries via hasql; the COPY-streaming
     -- path lives in `dbsync` and uses postgresql-libpq directly).

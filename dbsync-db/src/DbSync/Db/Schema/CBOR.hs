@@ -14,9 +14,18 @@ module DbSync.Db.Schema.CBOR
 
     -- * COPY encoding
   , encodeTxCborCopy
+
+    -- * Hasql encoders \/ decoders
+  , txCborEncoder
+  , txCborDecoder
+  , entityTxCborDecoder
   ) where
 
 import Cardano.Prelude
+
+import Data.Functor.Contravariant ((>$<))
+import qualified Hasql.Decoders as D
+import qualified Hasql.Encoders as E
 
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
@@ -70,3 +79,23 @@ encodeTxCborCopy (TxCborId tcid) tc =
     , Just $ bInt64 (getTxId $ txCborTxId tc)
     , Just $ bHex (txCborBytes tc)
     ]
+
+-- ---------------------------------------------------------------------------
+-- * Hasql encoders / decoders
+-- ---------------------------------------------------------------------------
+
+txCborEncoder :: E.Params TxCbor
+txCborEncoder = mconcat
+  [ txCborTxId  >$< idEncoder getTxId
+  , txCborBytes >$< E.param (E.nonNullable E.bytea)
+  ]
+
+txCborDecoder :: D.Row TxCbor
+txCborDecoder = TxCbor
+  <$> idDecoder TxId
+  <*> D.column (D.nonNullable D.bytea)
+
+entityTxCborDecoder :: D.Row (TxCborId, TxCbor)
+entityTxCborDecoder = (,)
+  <$> idDecoder TxCborId
+  <*> txCborDecoder

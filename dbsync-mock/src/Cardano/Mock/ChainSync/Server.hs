@@ -1,0 +1,430 @@
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE NumericUnderscores #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
+
+module Cardano.Mock.ChainSync.Server (
+  -- * server
+  forkServerThread,
+  withServerHandle,
+  stopServer,
+  restartServer,
+  waitForNextConnection,
+
+  -- * ServerHandle api
+  ServerHandle (..),
+  MockServerConstraint,
+  IOManager,
+  replaceGenesis,
+  addBlock,
+  rollback,
+  readChain,
+  withIOManager,
+) where
+
+import Prelude
+
+import Cardano.Mock.Chain hiding (rollback)
+import Cardano.Mock.ChainDB
+import Cardano.Mock.ChainSync.State
+import Cardano.Network.NodeToClient
+import Codec.Serialise.Class (Serialise)
+import Control.Concurrent (threadDelay)
+import Control.Concurrent.Async
+import Control.Concurrent.Class.MonadSTM.Strict (
+  MonadSTM (atomically),
+  STM,
+  StrictTVar,
+  modifyTVar,
+  newTVarIO,
+  readTVar,
+  retry,
+  writeTVar,
+ )
+import Control.Exception (IOException, bracket, try)
+import Control.Monad (forever, unless)
+import Control.Tracer
+import Data.ByteString.Lazy.Char8 (ByteString)
+import qualified Data.Map.Strict as Map
+import Data.Maybe (fromJust)
+import qualified Network.Mux as Mx
+import qualified Network.Socket as Socket
+import Network.TypedProtocol.Peer (Peer (..))
+import qualified Network.TypedProtocol.Stateful.Peer as St
+import Ouroboros.Consensus.Block (CodecConfig, HasHeader, Point, StandardHash, castPoint)
+import Ouroboros.Consensus.Config (TopLevelConfig, configCodec)
+import Ouroboros.Consensus.Ledger.Query (BlockQuery, BlockSupportsLedgerQuery, QueryFootprint (..), ShowQuery)
+import Ouroboros.Consensus.Ledger.SupportsMempool (ApplyTxErr, GenTx, TxId)
+import Ouroboros.Consensus.Ledger.SupportsProtocol (LedgerSupportsProtocol)
+import Ouroboros.Consensus.Network.NodeToClient (Apps (..), Codecs' (..), DefaultCodecs)
+import qualified Ouroboros.Consensus.Network.NodeToClient as NTC
+import Ouroboros.Consensus.Node.DbLock ()
+import Ouroboros.Consensus.Node.DbMarker ()
+import Ouroboros.Consensus.Node.InitStorage ()
+import Ouroboros.Consensus.Node.NetworkProtocolVersion (
+  BlockNodeToClientVersion,
+  SupportedNetworkProtocolVersion,
+  latestReleasedNodeVersion,
+  supportedNodeToClientVersions,
+ )
+import Ouroboros.Consensus.Node.ProtocolInfo ()
+import Ouroboros.Consensus.Node.Recovery ()
+import Ouroboros.Consensus.Node.Run (SerialiseNodeToClientConstraints)
+import Ouroboros.Consensus.Node.Tracers ()
+import Ouroboros.Consensus.Storage.Serialisation (EncodeDisk (..))
+import Ouroboros.Consensus.Util.Args ()
+import Ouroboros.Network.Block (
+  ChainUpdate (AddBlock, RollBack),
+  HeaderHash,
+  Serialised (..),
+  Tip,
+  castTip,
+  genesisPoint,
+  mkSerialised,
+ )
+import Ouroboros.Network.Channel (Channel)
+import Ouroboros.Network.Driver.Simple (runPeer)
+import qualified Ouroboros.Network.Driver.Stateful as Stateful
+import Ouroboros.Network.Magic (NetworkMagic)
+import Ouroboros.Network.Protocol.ChainSync.Server (
+  ChainSyncServer (..),
+  ServerStIdle (..),
+  ServerStIntersect (..),
+  ServerStNext (SendMsgRollBackward, SendMsgRollForward),
+  chainSyncServerPeer,
+ )
+import Ouroboros.Network.Protocol.Handshake
+import qualified Ouroboros.Network.Protocol.LocalStateQuery.Type as LocalStateQuery
+import Ouroboros.Network.Server.Simple as Server
+import Ouroboros.Network.Snocket
+import qualified Ouroboros.Network.Snocket as Snocket
+import Ouroboros.Network.Socket
+import Ouroboros.Network.Util.ShowProxy (Proxy (..), ShowProxy (..))
+import System.Directory (removeFile)
+
+{- HLINT ignore "Use readTVarIO" -}
+
+data ServerHandle m blk = ServerHandle
+  { chainProducerState :: StrictTVar m (ChainProducerState blk)
+  , threadHandle :: StrictTVar m (Async ())
+  , forkAgain :: m (Async ())
+  , socketPath :: FilePath
+  }
+
+replaceGenesis :: MonadSTM m => ServerHandle m blk -> State blk -> STM m ()
+replaceGenesis handle st =
+  modifyTVar (chainProducerState handle) $ \cps ->
+    cps {chainDB = replaceGenesisDB (chainDB cps) st}
+
+readChain :: MonadSTM m => ServerHandle m blk -> STM m (Chain blk)
+readChain handle = do
+  cchain . chainDB <$> readTVar (chainProducerState handle)
+
+addBlock ::
+  (LedgerSupportsProtocol blk, MonadSTM m) =>
+  ServerHandle m blk ->
+  blk ->
+  STM m ()
+addBlock handle blk =
+  modifyTVar (chainProducerState handle) $
+    addBlockState blk
+
+rollback ::
+  (LedgerSupportsProtocol blk, MonadSTM m) =>
+  ServerHandle m blk ->
+  Point blk ->
+  STM m ()
+rollback handle point =
+  modifyTVar (chainProducerState handle) $ \st ->
+    case rollbackState point st of
+      Nothing -> error $ "point " <> show point <> " not in chain"
+      Just st' -> st'
+
+restartServer :: ServerHandle IO blk -> IO ()
+restartServer sh = do
+  stopServer sh
+  -- On Unix, closing the socket fd does not remove the socket file. If the
+  -- file still exists when the new server tries to bind, bind() fails with
+  -- EADDRINUSE and the server thread dies silently. Explicitly remove the
+  -- file here so the new server can always bind successfully.
+  _ <- (try @IOException) $ removeFile (socketPath sh)
+  thread <- forkAgain sh
+  atomically $ writeTVar (threadHandle sh) thread
+
+stopServer :: ServerHandle IO blk -> IO ()
+stopServer sh = do
+  srvThread <- atomically $ readTVar $ threadHandle sh
+  cancel srvThread
+
+-- | Block until db-sync has made a new connection to the (restarted) server.
+-- This is detected by watching 'nextFollowerId' in 'ChainProducerState': each
+-- new client connection calls 'newFollower', incrementing the counter.
+-- Call this after 'restartServer' to ensure the test does not race ahead
+-- before db-sync has actually reconnected.
+waitForNextConnection :: ServerHandle IO blk -> IO ()
+waitForNextConnection sh = do
+  -- Snapshot the current follower id before the restart connection comes in.
+  currentId <- atomically $ nextFollowerId <$> readTVar (chainProducerState sh)
+  -- Block until a new follower (with a higher id) has been registered.
+  atomically $ do
+    cps <- readTVar (chainProducerState sh)
+    unless (nextFollowerId cps > currentId) retry
+
+type MockServerConstraint blk =
+  ( SerialiseNodeToClientConstraints blk
+  , BlockSupportsLedgerQuery blk
+  , ShowQuery (BlockQuery blk 'QFNoTables)
+  , StandardHash blk
+  , ShowProxy (ApplyTxErr blk)
+  , Serialise (HeaderHash blk)
+  , ShowProxy (BlockQuery blk)
+  , ShowProxy blk
+  , HasHeader blk
+  , ShowProxy (GenTx blk)
+  , SupportedNetworkProtocolVersion blk
+  , EncodeDisk blk blk
+  , ShowProxy (TxId (GenTx blk))
+  )
+
+forkServerThread ::
+  MockServerConstraint blk =>
+  IOManager ->
+  TopLevelConfig blk ->
+  State blk ->
+  NetworkMagic ->
+  FilePath ->
+  IO (ServerHandle IO blk)
+forkServerThread iom config initSt netMagic path = do
+  chainSt <- newTVarIO $ initChainProducerState config initSt
+  let runThread = async $ runLocalServer iom (configCodec config) netMagic path chainSt
+  thread <- runThread
+  threadVar <- newTVarIO thread
+  pure $ ServerHandle chainSt threadVar runThread path
+
+withServerHandle ::
+  MockServerConstraint blk =>
+  IOManager ->
+  TopLevelConfig blk ->
+  State blk ->
+  NetworkMagic ->
+  FilePath ->
+  (ServerHandle IO blk -> IO a) ->
+  IO a
+withServerHandle iom config initSt netMagic path =
+  bracket (forkServerThread iom config initSt netMagic path) stopServer
+
+-- | Must be called from the main thread
+runLocalServer ::
+  forall blk.
+  MockServerConstraint blk =>
+  IOManager ->
+  CodecConfig blk ->
+  NetworkMagic ->
+  FilePath ->
+  StrictTVar IO (ChainProducerState blk) ->
+  IO ()
+runLocalServer iom codecConfig netMagic localDomainSock chainProdState = do
+  _ <-
+    Server.with
+      (Snocket.socketSnocket iom)
+      nullTracer
+      Mx.nullTracers
+      makeSocketBearer
+      (\_ _ -> pure ())
+      (Socket.SockAddrUnix localDomainSock)
+      ( HandshakeArguments
+          { haHandshakeTracer = nullTracer -- showTracing stdoutTracer
+          , haBearerTracer = nullTracer -- showTracing stdoutTracer
+          , haHandshakeCodec = codecHandshake nodeToClientVersionCodec
+          , haVersionDataCodec = cborTermVersionDataCodec nodeToClientCodecCBORTerm
+          , haAcceptVersion = acceptableVersion
+          , haQueryVersion = queryVersion
+          , haTimeLimits = noTimeLimitsHandshake
+          }
+      )
+      (versions chainProdState)
+      (\_ serverAsync -> wait serverAsync)
+  pure ()
+  where
+    versions ::
+      StrictTVar IO (ChainProducerState blk) ->
+      Versions
+        NodeToClientVersion
+        NodeToClientVersionData
+        (SomeResponderApplication Socket.SockAddr ByteString IO ())
+    versions state =
+      let version = fromJust $ snd $ latestReleasedNodeVersion (Proxy @blk)
+          allVersions = supportedNodeToClientVersions (Proxy @blk)
+          blockVersion = fromJust $ Map.lookup version allVersions
+       in simpleSingletonVersions
+            version
+            (NodeToClientVersionData netMagic False)
+            (\versionData' -> SomeResponderApplication $ NTC.responder version versionData' $ mkApps state version blockVersion (NTC.defaultCodecs codecConfig blockVersion version))
+
+    mkApps ::
+      StrictTVar IO (ChainProducerState blk) ->
+      NodeToClientVersion ->
+      BlockNodeToClientVersion blk ->
+      DefaultCodecs blk IO ->
+      NTC.Apps IO localPeer ByteString ByteString ByteString ByteString ()
+    mkApps state _version blockVersion codecs =
+      Apps
+        { aChainSyncServer = chainSyncServer'
+        , aTxSubmissionServer = txSubmitServer
+        , aStateQueryServer = stateQueryServer
+        , aTxMonitorServer = txMonitorServer
+        }
+      where
+        chainSyncServer' ::
+          localPeer ->
+          Channel IO ByteString ->
+          IO ((), Maybe ByteString)
+        chainSyncServer' _them channel =
+          runPeer
+            nullTracer
+            (cChainSyncCodec codecs)
+            channel
+            (chainSyncServerPeer $ chainSyncServer state codecConfig blockVersion)
+
+        txSubmitServer ::
+          localPeer ->
+          Channel IO ByteString ->
+          IO ((), Maybe ByteString)
+        txSubmitServer _them channel =
+          runPeer
+            nullTracer
+            (cTxSubmissionCodec codecs)
+            channel
+            (Effect (forever $ threadDelay 3_600_000_000))
+
+        stateQueryServer _them channel =
+          Stateful.runPeer
+            nullTracer -- (showTracing stdoutTracer)
+            (cStateQueryCodec codecs)
+            channel
+            LocalStateQuery.StateIdle
+            (St.Effect (forever $ threadDelay 3_600_000_000))
+
+        txMonitorServer ::
+          localPeer ->
+          Channel IO ByteString ->
+          IO ((), Maybe ByteString)
+        txMonitorServer _them channel =
+          runPeer
+            nullTracer
+            (cTxMonitorCodec codecs)
+            channel
+            (Effect (forever $ threadDelay 3_600_000_000))
+
+chainSyncServer ::
+  forall blk m.
+  ( HasHeader blk
+  , MonadSTM m
+  , EncodeDisk blk blk
+  ) =>
+  StrictTVar m (ChainProducerState blk) ->
+  CodecConfig blk ->
+  BlockNodeToClientVersion blk ->
+  ChainSyncServer (Serialised blk) (Point blk) (Tip blk) m ()
+chainSyncServer state codec _blockVersion =
+  ChainSyncServer $ idle <$> newFollower
+  where
+    idle :: FollowerId -> ServerStIdle (Serialised blk) (Point blk) (Tip blk) m ()
+    idle r =
+      ServerStIdle
+        { recvMsgRequestNext = handleRequestNext r
+        , recvMsgFindIntersect = handleFindIntersect r
+        , recvMsgDoneClient = pure ()
+        }
+
+    idle' :: FollowerId -> ChainSyncServer (Serialised blk) (Point blk) (Tip blk) m ()
+    idle' = ChainSyncServer . pure . idle
+
+    handleRequestNext ::
+      FollowerId ->
+      m
+        ( Either
+            (ServerStNext (Serialised blk) (Point blk) (Tip blk) m ())
+            (m (ServerStNext (Serialised blk) (Point blk) (Tip blk) m ()))
+        )
+    handleRequestNext r = do
+      mupdate <- tryReadChainUpdate r
+      case mupdate of
+        Just update -> pure (Left (sendNext r update))
+        Nothing ->
+          -- Follower is at the head, have to block and wait for
+          -- the producer's state to change.
+          pure $ Right $ sendNext r <$> readChainUpdate r
+
+    handleFindIntersect ::
+      FollowerId ->
+      [Point blk] ->
+      m (ServerStIntersect (Serialised blk) (Point blk) (Tip blk) m ())
+    handleFindIntersect r points = do
+      changed <- improveReadPoint r points
+      case changed of
+        (Just pt, tip) -> pure $ SendMsgIntersectFound pt tip (idle' r)
+        (Nothing, tip) -> pure $ SendMsgIntersectNotFound tip (idle' r)
+
+    sendNext ::
+      FollowerId ->
+      (Tip blk, ChainUpdate blk blk) ->
+      ServerStNext (Serialised blk) (Point blk) (Tip blk) m ()
+    sendNext r (tip, AddBlock b) =
+      SendMsgRollForward (mkSerialised (encodeDisk codec) b) tip (idle' r)
+    sendNext r (tip, RollBack p) =
+      SendMsgRollBackward (castPoint p) tip (idle' r)
+
+    newFollower :: m FollowerId
+    newFollower = atomically $ do
+      cps <- readTVar state
+      let (cps', rid) = initFollower genesisPoint cps
+      writeTVar state cps'
+      pure rid
+
+    improveReadPoint ::
+      FollowerId ->
+      [Point blk] ->
+      m (Maybe (Point blk), Tip blk)
+    improveReadPoint rid points =
+      atomically $ do
+        cps <- readTVar state
+        let chain = chainDB cps
+            chainTip = headTip chain
+        case findFirstPoint (map castPoint points) chain of
+          Nothing ->
+            pure (Nothing, castTip chainTip)
+          Just ipoint -> do
+            let !cps' = updateFollower rid ipoint cps
+            writeTVar state cps'
+            let chain' = chainDB cps'
+            pure (Just (castPoint ipoint), castTip (headTip chain'))
+
+    tryReadChainUpdate ::
+      FollowerId ->
+      m (Maybe (Tip blk, ChainUpdate blk blk))
+    tryReadChainUpdate rid =
+      atomically $ do
+        cps <- readTVar state
+        case followerInstruction rid cps of
+          Nothing -> pure Nothing
+          Just (u, cps') -> do
+            writeTVar state cps'
+            let chain = chainDB cps'
+            pure $ Just (castTip (headTip chain), u)
+
+    readChainUpdate :: FollowerId -> m (Tip blk, ChainUpdate blk blk)
+    readChainUpdate rid =
+      atomically $ do
+        cps <- readTVar state
+        case followerInstruction rid cps of
+          Nothing -> retry
+          Just (u, cps') -> do
+            writeTVar state cps'
+            let chain = chainDB cps'
+            pure (castTip (headTip chain), u)

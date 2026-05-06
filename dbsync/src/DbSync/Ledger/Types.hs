@@ -173,7 +173,7 @@ data LedgerEnv = LedgerEnv
     -- at the consensus-event conversion boundary.
   , leProtocolInfo         :: !(Consensus.ProtocolInfo (CardanoBlock StandardCrypto))
   , leDir                  :: !FilePath
-    -- ^ Root state directory (LSM session + consensus snapshots
+    -- ^ Root state directory (LSM session + snapshot headers
     -- both live under this path).
   , leNetwork              :: !Ledger.Network
   , leMaxSupply            :: !Word64

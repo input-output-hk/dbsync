@@ -1,19 +1,34 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- | Newtype wrappers for database primary keys.
 --
 -- Each table's primary key gets its own newtype around 'Int64', providing
 -- type safety so that a 'BlockId' cannot accidentally be used where a
 -- 'TxId' is expected.
 module DbSync.Db.Schema.Ids
-  ( -- * Core table IDs
-    BlockId (..)
+  ( -- * Hasql encoder \/ decoder helpers
+    idDecoder
+  , maybeIdDecoder
+  , idEncoder
+  , maybeIdEncoder
+
+    -- * Core table IDs
+  , BlockId (..)
   , TxId (..)
   , SlotLeaderId (..)
+  , MetaId (..)
+  , EpochSyncTimeId (..)
+  , ReverseIndexId (..)
 
     -- * UTxO table IDs
   , TxOutId (..)
   , TxInId (..)
   , CollateralTxInId (..)
   , ReferenceTxInId (..)
+  , CollateralTxOutId (..)
+
+    -- * Address table IDs
+  , AddressId (..)
 
     -- * Metadata table IDs
   , TxMetadataId (..)
@@ -23,11 +38,19 @@ module DbSync.Db.Schema.Ids
   , MaTxMintId (..)
   , MaTxOutId (..)
 
+    -- * ScriptsDatums table IDs
+  , ExtraKeyWitnessId (..)
+  , RedeemerDataId (..)
+
     -- * StakeDelegation table IDs
   , StakeRegistrationId (..)
   , StakeDeregistrationId (..)
   , DelegationId (..)
   , WithdrawalId (..)
+  , RewardId (..)
+  , RewardRestId (..)
+  , EpochStakeId (..)
+  , EpochStakeProgressId (..)
 
     -- * Pool table IDs
   , PoolUpdateId (..)
@@ -35,15 +58,54 @@ module DbSync.Db.Schema.Ids
   , PoolOwnerId (..)
   , PoolRetireId (..)
   , PoolRelayId (..)
+  , PoolStatId (..)
+  , DelistedPoolId (..)
+  , ReservedPoolTickerId (..)
 
     -- * CBOR table IDs
   , TxCborId (..)
+
+    -- * Governance table IDs
+  , DrepHashId (..)
+  , DrepRegistrationId (..)
+  , DrepDistrId (..)
+  , DelegationVoteId (..)
+  , GovActionProposalId (..)
+  , VotingProcedureId (..)
+  , VotingAnchorId (..)
+  , ConstitutionId (..)
+  , CommitteeId (..)
+  , CommitteeHashId (..)
+  , CommitteeMemberId (..)
+  , CommitteeRegistrationId (..)
+  , CommitteeDeRegistrationId (..)
+  , ParamProposalId (..)
+  , TreasuryWithdrawalId (..)
+  , EventInfoId (..)
 
     -- * EpochSyncStats table IDs
   , EpochSyncStatsId (..)
 
     -- * EpochBoundary table IDs
   , AdaPotsId (..)
+  , EpochId (..)
+  , EpochParamId (..)
+  , EpochStateId (..)
+  , CostModelId (..)
+  , PotTransferId (..)
+  , TreasuryId (..)
+  , ReserveId (..)
+
+    -- * OffChain table IDs
+  , OffChainPoolDataId (..)
+  , OffChainPoolFetchErrorId (..)
+  , OffChainVoteDataId (..)
+  , OffChainVoteGovActionDataId (..)
+  , OffChainVoteDrepDataId (..)
+  , OffChainVoteAuthorId (..)
+  , OffChainVoteReferenceId (..)
+  , OffChainVoteExternalUpdateId (..)
+  , OffChainVoteFetchErrorId (..)
 
     -- * Referenced by other tables
   , PoolHashId (..)
@@ -54,6 +116,30 @@ module DbSync.Db.Schema.Ids
   ) where
 
 import Cardano.Prelude
+
+import Data.Functor.Contravariant ((>$<))
+import qualified Hasql.Decoders as D
+import qualified Hasql.Encoders as E
+
+-- ---------------------------------------------------------------------------
+-- * Encoder \/ decoder helpers
+-- ---------------------------------------------------------------------------
+
+-- | Build a row decoder for an @id@ column, given the constructor.
+idDecoder :: (Int64 -> a) -> D.Row a
+idDecoder f = D.column (D.nonNullable $ f <$> D.int8)
+
+-- | Build a row decoder for a nullable foreign-key column.
+maybeIdDecoder :: (Int64 -> a) -> D.Row (Maybe a)
+maybeIdDecoder f = D.column (D.nullable $ f <$> D.int8)
+
+-- | Build a parameter encoder for an @id@ column, given the accessor.
+idEncoder :: (a -> Int64) -> E.Params a
+idEncoder f = E.param $ E.nonNullable $ f >$< E.int8
+
+-- | Build a parameter encoder for a nullable foreign-key column.
+maybeIdEncoder :: (a -> Int64) -> E.Params (Maybe a)
+maybeIdEncoder f = E.param $ E.nullable $ f >$< E.int8
 
 -- ---------------------------------------------------------------------------
 -- * Core table IDs
@@ -69,6 +155,18 @@ newtype TxId = TxId { getTxId :: Int64 }
 
 -- | Primary key for the @slot_leader@ table.
 newtype SlotLeaderId = SlotLeaderId { getSlotLeaderId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @meta@ table.
+newtype MetaId = MetaId { getMetaId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @epoch_sync_time@ table.
+newtype EpochSyncTimeId = EpochSyncTimeId { getEpochSyncTimeId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @reverse_index@ table.
+newtype ReverseIndexId = ReverseIndexId { getReverseIndexId :: Int64 }
   deriving stock (Eq, Ord, Show)
 
 -- ---------------------------------------------------------------------------
@@ -89,6 +187,19 @@ newtype CollateralTxInId = CollateralTxInId { getCollateralTxInId :: Int64 }
 
 -- | Primary key for the @reference_tx_in@ table.
 newtype ReferenceTxInId = ReferenceTxInId { getReferenceTxInId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @collateral_tx_out@ table.
+newtype CollateralTxOutId = CollateralTxOutId { getCollateralTxOutId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- ---------------------------------------------------------------------------
+-- * Address table IDs
+-- ---------------------------------------------------------------------------
+
+-- | Primary key for the @address@ table.
+-- Referenced by @tx_out.address_id@.
+newtype AddressId = AddressId { getAddressId :: Int64 }
   deriving stock (Eq, Ord, Show)
 
 -- ---------------------------------------------------------------------------
@@ -113,6 +224,18 @@ newtype MaTxMintId = MaTxMintId { getMaTxMintId :: Int64 }
 
 -- | Primary key for the @ma_tx_out@ table.
 newtype MaTxOutId = MaTxOutId { getMaTxOutId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- ---------------------------------------------------------------------------
+-- * ScriptsDatums table IDs
+-- ---------------------------------------------------------------------------
+
+-- | Primary key for the @extra_key_witness@ table.
+newtype ExtraKeyWitnessId = ExtraKeyWitnessId { getExtraKeyWitnessId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @redeemer_data@ table.
+newtype RedeemerDataId = RedeemerDataId { getRedeemerDataId :: Int64 }
   deriving stock (Eq, Ord, Show)
 
 -- ---------------------------------------------------------------------------

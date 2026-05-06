@@ -307,10 +307,14 @@ mkHasLedgerEnv
     epochWait       <- newEmptyTMVarIO
     snapshotQueue   <- newTBQueueIO snapshotQueueBound
 
-    -- Layout under the ledger state directory:
-    --   <dir>/lsm/                  — LSM tables session
-    --   <dir>/consensus-snapshots/  — consensus disk snapshots
-    let snapshotsDir = dir </> "consensus-snapshots"
+    -- One snapshot, two directories — both halves required, neither a duplicate:
+    --   <dir>/snapshot-headers/<slot>/  small (KB–MB): ExtLedgerState
+    --     (era, governance, stake dist, params, tip) + utxoSize + checksum.
+    --     The entry door on resume; without it we'd replay from genesis.
+    --   <dir>/lsm/snapshots/<slot>/     bulk (multi-GB): UTxO tables only.
+    -- Can't merge: 'LSM.saveSnapshot' rejects pre-existing dirs and the
+    -- matching load path is upstream's V2 LSM 'implTakeSnapshot'.
+    let snapshotsDir = dir </> "snapshot-headers"
     createDirectoryIfMissing True snapshotsDir
 
     let codecConfig = configCodec (Consensus.pInfoConfig pinfo)
@@ -437,7 +441,7 @@ initLedgerDbFromSnapshot env snap = do
       pure (Right ())
 
 -- | Recursively wipe the ledger state directory (LSM session +
--- consensus snapshots). Companion to @dropSchema@: invoked when
+-- snapshot headers). Companion to @dropSchema@: invoked when
 -- @--resync-from-genesis@ is in effect so the next boot starts from
 -- genesis with a clean slate.
 --

@@ -1,7 +1,82 @@
-# cardano-db-sync (new architecture)
+# DbSync
 
 A Haskell ground-up reimplementation of `cardano-db-sync` targeting a ~4× faster
 genesis-to-tip sync via decoupled COPY-based parallel extraction.
+
+## Architecture
+
+```
+                ┌─────────────────────┐
+                │    cardano-node     │
+                │   (early-n2c fork)  │
+                │   ImmutableDB +     │
+                │   VolatileDB +      │
+                │   LedgerDB (LSM)    │
+                └──────────┬──────────┘
+                           │ Unix socket (n2c ChainSync)
+                           ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                              dbsync                                  │
+│                                                                      │
+│  Pipeline — concurrent stages, TBQueue-bounded, same in all phases:  │
+│                                                                      │
+│   ┌─────────┐   ┌────────┐   ┌──────────────┐                        │
+│   │Receiver │══▶│ Parser │══▶│ Extractors   │                        │
+│   │ChainSync│   │HFC eras│   │ Core, UTxO,  │                        │
+│   │ client  │   │        │   │ MultiAsset,  │                        │
+│   └─────────┘   └────────┘   │ Pool, Gov, … │                        │
+│                              └──────┬───────┘                        │
+│                                     │                                │
+│                  ┌──────────────────┴─────────────┐                  │
+│                  ▼                                ▼                  │
+│         ┌─────────────────┐            ┌─────────────────┐           │
+│         │  COPY Writers   │            │  hasql Writer   │           │
+│         │ ║ 12× parallel  │            │ INSERT + SELECT │           │
+│         │  conns (1/tbl), │            │ per-block txn,  │           │
+│         │  UNLOGGED tbls; │            │ single-threaded;│           │
+│         │  IDs pre-       │            │  IDs returned   │           │
+│         │  assigned       │            │   by the DB     │           │
+│         └────────┬────────┘            └────────┬────────┘           │
+│                  │                              │                    │
+│         IngestChainHistory         PreparingForChainTip +            │
+│                                    FollowingChainTip                 │
+│                                                                      │
+│  Side channels (parallel with the pipeline):                         │
+│   • Ledger Worker     — optional, off critical path                  │
+│   • OffChain Fetcher  — HTTP pool / vote metadata                    │
+└──────────────────┬──────────────────────────────┬────────────────────┘
+                   ▼                              ▼
+           ┌──────────────────────────────────────────────┐
+           │                 PostgreSQL                   │
+           │    UNLOGGED → LOGGED at phase transition     │
+           └──────────────────────────────────────────────┘
+
+Lifecycle:
+  IngestChainHistory  →  PreparingForChainTip  →  FollowingChainTip
+  COPY, UNLOGGED,        One-time DDL: build       hasql INSERT/SELECT
+  epoch-aligned          indexes, ALTER LOGGED,    per block, DB IDs,
+  commits, in-mem IDs    ANALYZE                   rollback-safe
+```
+
+The same pipeline runs in every phase — `Receiver → Parser → Extractors →
+Writer`. Only the **Writer** swaps between phases, and with it the strategy for
+obtaining row IDs:
+
+- **`IngestChainHistory`** writes through 12 parallel `COPY` streams (one libpq
+  connection per table) into UNLOGGED tables with epoch-aligned commits.
+  Because `COPY` has no return channel for generated IDs, monotonic IDs are
+  pre-assigned in memory by `Id/DedupMap` + `Id/Counter` *before* the row is
+  written.
+- **`PreparingForChainTip` and `FollowingChainTip`** share a single `hasql`
+  writer doing `INSERT … RETURNING` for new rows and `SELECT` for existing
+  parent IDs — IDs come back as part of the query/insert response itself, not
+  from a separate resolver step. Single-threaded so rollbacks under volatile-
+  block churn stay correct.
+
+Beyond the main pipeline, two side channels run concurrently throughout: the
+optional **Ledger Worker** (kept off the critical path during Ingest) and the
+**OffChain Fetcher** (HTTP fetches for pool / vote metadata).
+
 
 ## Modularity & profiles
 
@@ -39,73 +114,7 @@ Six presets ship in `profiles/`, ordered roughly by data volume:
 
 Copy `profiles/everything-profile.json` and trim it to build your own.
 
-## Architecture
 
-```
-┌────────────────────┐   Unix socket    ┌──────────────────────────────────────────────────────────┐
-│   cardano-node     │  (n2c ChainSync) │                          dbsync                           │
-│   (early-n2c fork) │ ◀══════════════▶ │                                                            │
-│                    │                  │   Pipeline (identical across all phases — concurrent       │
-│  ImmutableDB +     │                  │   stages connected by bounded TBQueues):                   │
-│  VolatileDB +      │                  │                                                            │
-│  LedgerDB (LSM)    │                  │   ┌──────────┐    ┌────────┐    ┌──────────────┐           │
-└────────────────────┘                  │   │ Receiver │═══▶│ Parser │═══▶│ Extractors   │           │
-                                        │   │ ChainSync│    │  HFC   │    │ Core, UTxO,  │           │
-                                        │   │  client  │    │  eras  │    │ MultiAsset,  │           │
-                                        │   └──────────┘    └────────┘    │ Pool, Gov, … │           │
-                                        │                                  └──────┬───────┘          │
-                                        │                                         ▼                  │
-                                        │                                   ┌──────────────┐         │
-                                        │                                   │  ID Resolver │         │
-                                        │                                   │ (assigns or  │         │
-                                        │                                   │  looks up)   │         │
-                                        │                                   └──────┬───────┘         │
-                                        │                                          │                 │
-                                        │             ┌────────────────────────────┴────────┐        │
-                                        │             ▼                                     ▼        │
-                                        │   ┌──────────────────┐                ┌──────────────────┐ │
-                                        │   │   COPY Writers   │                │   hasql Writer   │ │
-                                        │   │  ║ 12× parallel  │                │  INSERT + SELECT │ │
-                                        │   │   conns (1/tbl), │                │  per-block txn,  │ │
-                                        │   │   UNLOGGED tbls, │                │  single-threaded │ │
-                                        │   │   IDs in-memory  │                │  IDs from DB     │ │
-                                        │   └────────┬─────────┘                └─────────┬────────┘ │
-                                        │            │                                    │          │
-                                        │   IngestChainHistory             PreparingForChainTip +    │
-                                        │                                  FollowingChainTip         │
-                                        │                                                            │
-                                        │   Concurrent side channels (in parallel with the pipeline):│
-                                        │     • Ledger Worker     — optional, off critical path     │
-                                        │     • OffChain Fetcher  — HTTP pool / vote metadata        │
-                                        └────────────┬───────────────────────────────────┬───────────┘
-                                                     ▼                                   ▼
-                                                ┌──────────────────────────────────────────┐
-                                                │                PostgreSQL                │
-                                                │  (UNLOGGED → LOGGED at phase transition) │
-                                                └──────────────────────────────────────────┘
-
-Lifecycle:    IngestChainHistory     →    PreparingForChainTip    →    FollowingChainTip
-              COPY, UNLOGGED tables,      One-time DDL: build           hasql INSERT/SELECT per
-              epoch-aligned commits,      indexes, ALTER LOGGED,        block, DB-assigned IDs,
-              IDs pre-assigned in-mem     ANALYZE                       rollback-safe
-```
-
-The same pipeline runs in every phase — `Receiver → Parser → Extractors → ID
-Resolver → Writer`. Only two pluggable components differ between phases:
-
-- **`ID Resolver`** — during `IngestChainHistory`, monotonic IDs are pre-assigned
-  in memory by `Id/DedupMap` + `Id/Counter` so there are no DB round-trips for
-  parent IDs. From `PreparingForChainTip` onwards, the resolver reads real IDs
-  back from the DB via `SELECT`.
-- **`Writer`** — Ingest writes through 12 parallel `COPY` streams (one libpq
-  connection per table) into UNLOGGED tables with epoch-aligned commits.
-  `PreparingForChainTip` and `FollowingChainTip` share a single `hasql` writer
-  doing INSERT + SELECT per block, single-threaded so rollbacks under volatile-
-  block churn stay correct.
-
-Beyond the main pipeline, two side channels run concurrently throughout: the
-optional **Ledger Worker** (kept off the critical path during Ingest) and the
-**OffChain Fetcher** (HTTP fetches for pool / vote metadata).
 
 ## Prerequisites
 

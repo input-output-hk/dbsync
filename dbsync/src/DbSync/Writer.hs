@@ -23,6 +23,7 @@ module DbSync.Writer
 import Cardano.Prelude (IO)
 
 import DbSync.Db.Schema.AdaPots (AdaPots)
+import DbSync.Db.Schema.Address (Address)
 import DbSync.Db.Schema.CBOR (TxCbor)
 import DbSync.Db.Schema.Core (Block, SlotLeader, Tx)
 import DbSync.Db.Schema.EpochSyncStats (EpochSyncStats)
@@ -52,6 +53,7 @@ data Writer m = Writer
     -- ---------------------------------------------------------------
     -- UTxO tables
     -- ---------------------------------------------------------------
+  , writeAddress        :: !(AddressId -> Address -> m ())
   , writeTxOut          :: !(TxOutId -> TxOut -> m ())
   , writeTxIn           :: !(TxInId -> TxIn -> m ())
   , writeCollateralTxIn :: !(CollateralTxInId -> CollateralTxIn -> m ())

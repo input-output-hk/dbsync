@@ -30,6 +30,7 @@ import DbSync.Block.Types
   , GenericTxWithdrawal (..)
   , PoolRegistrationData (..)
   )
+import DbSync.Db.Schema.Address (addressTableDef)
 import DbSync.Db.Schema.CBOR (txCborTableDef)
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
 import DbSync.Db.Schema.Metadata (txMetadataTableDef)
@@ -82,6 +83,7 @@ tables =
   [ blockTableDef
   , txTableDef
   , slotLeaderTableDef
+  , addressTableDef
   , txOutTableDef
   , txInTableDef
   , collateralTxInTableDef
@@ -129,6 +131,7 @@ extractorVersions =
 tableNames :: [Text]
 tableNames =
   [ "tx_out"
+  , "address"
   , "tx_in"
   , "collateral_tx_in"
   , "reference_tx_in"
@@ -209,7 +212,9 @@ spec = describe "DbSync.Phase.FollowingChainTip" $
       it "tx_out.index, value, address round-trip" $ do
         runFollow [blockWith1Out]
         result <- T.strip <$>
-          queryTestDb "SELECT index, value, address FROM tx_out;"
+          queryTestDb
+            "SELECT tx_out.index, tx_out.value, address.address \
+            \FROM tx_out JOIN address ON address.id = tx_out.address_id;"
         result `shouldBe` "0|5000000|addr_test1xyz"
 
     describe "block with one tx and two outputs" $ do

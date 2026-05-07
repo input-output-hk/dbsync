@@ -64,6 +64,7 @@ data DedupMaps = DedupMaps
   , dmsSlotLeader   :: !DedupMap  -- ^ slot leader identifier -> SlotLeaderId
   , dmsMultiAsset   :: !DedupMap  -- ^ (policy_id ++ asset_name) -> MultiAssetId
   , dmsScriptHash   :: !DedupMap  -- ^ script hash -> ScriptId
+  , dmsAddress      :: !DedupMap  -- ^ raw payment address bytes -> AddressId
   }
 
 -- * Construction
@@ -76,6 +77,7 @@ newDedupMap = DedupMap <$> HT.new <*> newIORef 1
 newMaps :: IO DedupMaps
 newMaps = DedupMaps
   <$> newDedupMap
+  <*> newDedupMap
   <*> newDedupMap
   <*> newDedupMap
   <*> newDedupMap

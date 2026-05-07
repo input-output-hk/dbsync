@@ -24,6 +24,13 @@ data TableMode
   deriving stock (Eq, Show)
 
 -- | PostgreSQL column type.
+--
+-- Generated columns ('GENERATED ALWAYS AS (...) STORED') are not
+-- represented here — their underlying SQL type lives in 'cdType'
+-- (e.g. 'PgBigInt' for an @earned_epoch@ column) and the generation
+-- expression in 'tdGeneratedColumns'. Keeping the two pieces in
+-- separate per-table fields avoids the duplicate path that an
+-- in-band 'PgGenerated' constructor would create.
 data PgType
   = PgBigInt        -- ^ BIGINT (int8)
   | PgInteger       -- ^ INTEGER (int4)
@@ -36,7 +43,6 @@ data PgType
   | PgTimestamp      -- ^ TIMESTAMP WITHOUT TIME ZONE
   | PgTimestampTz    -- ^ TIMESTAMP WITH TIME ZONE
   | PgEnum !Text     -- ^ Custom enum type name
-  | PgGenerated !Text -- ^ GENERATED ALWAYS AS (expression)
   deriving stock (Eq, Show)
 
 -- | Definition of a single column.
@@ -50,30 +56,43 @@ data ColumnDef = ColumnDef
 -- | Definition of a database table.
 -- Used by 'DbSync.Schema.Generate' to produce CREATE TABLE DDL.
 --
--- The three optional-shaped fields — 'tdPrimaryKey', 'tdChecks',
--- 'tdColumnDefaults' — are empty for the extractor data tables
--- (which are UNLOGGED, constraint-free, and get indexes only in
--- 'PreparingForChainTip'). They exist for the small number of tables
--- that need LOGGED-from-day-one semantics with constraints — currently
--- @dbsync_sync_state@.
+-- The optional-shaped fields — 'tdPrimaryKey', 'tdChecks',
+-- 'tdColumnDefaults', 'tdUniqueConstraints', 'tdGeneratedColumns' —
+-- are empty for the extractor data tables (which are UNLOGGED,
+-- constraint-free, and get indexes only in 'PreparingForChainTip').
+-- They exist for the small number of tables that need
+-- LOGGED-from-day-one semantics with constraints — currently
+-- @dbsync_sync_state@ — and to carry per-table metadata that is
+-- consumed later (unique constraints in 'PreparingForChainTip',
+-- generated-column expressions in DDL emission).
 data TableDef = TableDef
-  { tdName           :: !Text
+  { tdName              :: !Text
       -- ^ Table name
-  , tdColumns        :: ![ColumnDef]
+  , tdColumns           :: ![ColumnDef]
       -- ^ Column definitions
-  , tdMode           :: !TableMode
+  , tdMode              :: !TableMode
       -- ^ LOGGED vs UNLOGGED
-  , tdPrimaryKey     :: !(Maybe [Text])
+  , tdPrimaryKey        :: !(Maybe [Text])
       -- ^ Optional primary key. 'Just cols' emits @PRIMARY KEY (col1, …)@
       -- as a table-level constraint. 'Nothing' for extractor tables
       -- (PK added later in 'PreparingForChainTip').
-  , tdChecks         :: ![Text]
+  , tdChecks            :: ![Text]
       -- ^ Zero or more table-level @CHECK@ constraint expressions,
       -- each emitted verbatim as @CHECK (expr)@.
-  , tdColumnDefaults :: ![(Text, Text)]
+  , tdColumnDefaults    :: ![(Text, Text)]
       -- ^ Per-column @DEFAULT@ expressions, keyed by column name.
       -- Columns not listed get no default clause. Values are emitted
       -- verbatim after the type, so e.g. @("updated_at", "now()")@
       -- yields @"updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()@.
+  , tdUniqueConstraints :: ![NonEmpty Text]
+      -- ^ Table-level @UNIQUE (col1, …)@ constraints, each a
+      -- non-empty list of column names. Not emitted at
+      -- @CREATE TABLE@ time during 'IngestChainHistory'; consumed by
+      -- 'PreparingForChainTip' indexing.
+  , tdGeneratedColumns  :: ![(Text, Text)]
+      -- ^ Per-column @GENERATED ALWAYS AS (expr) STORED@ definitions,
+      -- keyed by column name. Listed columns are excluded from the
+      -- COPY column list in 'DbSync.Copy.Connection.beginCopy' so
+      -- PostgreSQL computes them on insert.
   }
   deriving stock (Eq, Show)

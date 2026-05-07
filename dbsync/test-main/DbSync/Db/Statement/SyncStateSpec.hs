@@ -157,6 +157,7 @@ sampleRow = SyncStateRow
   , ssrMaTxMintIdCounter             = 300
   , ssrMaTxOutIdCounter              = 400
   , ssrSlotLeaderIdCounter           = 10
+  , ssrAddressIdCounter              = 1
   , ssrStakeAddressIdCounter         = 750
   , ssrPoolHashIdCounter             = 25
   , ssrMultiAssetIdCounter           = 600

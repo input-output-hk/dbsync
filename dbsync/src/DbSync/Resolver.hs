@@ -21,6 +21,7 @@ module DbSync.Resolver
 import Cardano.Prelude
 
 import Data.ByteString.Short (ShortByteString)
+import DbSync.Db.Schema.Address (Address)
 import DbSync.Db.Schema.Core (SlotLeader)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.MultiAsset (MultiAsset)
@@ -60,6 +61,11 @@ data IdResolver m = IdResolver
     -- ---------------------------------------------------------------
     -- UTxO extractor IDs
     -- ---------------------------------------------------------------
+
+    -- | Resolve an address by its raw bytes.
+    -- Returns @(AddressId, isNew)@. When @isNew = True@, the caller
+    -- should also write the 'Address' row via the 'Writer'.
+  , resolveAddress         :: !(ByteString -> Address -> m (AddressId, Bool))
 
     -- | Assign the next tx_in ID.
   , assignTxInId           :: !(m TxInId)

@@ -38,10 +38,10 @@ insertTxOutRowStmt =
            <> (snd >$< txOutEncoder)
     sql = T.concat
       [ "INSERT INTO ", table
-      , " ( id, tx_id, index, address, address_has_script, payment_cred"
-      , " , stake_address_id, value, data_hash, inline_datum_id"
+      , " ( id, tx_id, index, address_id, stake_address_id"
+      , " , value, data_hash, inline_datum_id"
       , " , reference_script_id, consumed_by_tx_id)"
-      , " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)"
+      , " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
       ]
 
 -- | Allocate a new id from the @tx_out_id_seq@ sequence.

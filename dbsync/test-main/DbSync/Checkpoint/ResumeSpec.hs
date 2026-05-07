@@ -87,6 +87,7 @@ rowAtBoundary boundarySlot nextSlotLeaderId = SyncStateRow
   , ssrMaTxMintIdCounter             = 1
   , ssrMaTxOutIdCounter              = 1
   , ssrSlotLeaderIdCounter           = nextSlotLeaderId
+  , ssrAddressIdCounter              = 1
   , ssrStakeAddressIdCounter         = 1
   , ssrPoolHashIdCounter             = 1
   , ssrMultiAssetIdCounter           = 1

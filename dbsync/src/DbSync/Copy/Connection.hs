@@ -157,10 +157,16 @@ commitTransaction cc = do
 
 -- | Build the column list for a COPY statement from a 'TableDef'.
 -- E.g. @"id", "hash", "epoch_no", "slot_no", ...@
+--
+-- Columns listed in 'tdGeneratedColumns' are excluded so PostgreSQL
+-- computes them on insert.
 buildColumnList :: TableDef -> ByteString
 buildColumnList td =
   BS.intercalate ", " $
-    map (TE.encodeUtf8 . (\c -> "\"" <> cdName c <> "\"")) (tdColumns td)
+    map (TE.encodeUtf8 . (\c -> "\"" <> cdName c <> "\"")) ingestable
+  where
+    generatedNames = map fst (tdGeneratedColumns td)
+    ingestable = filter (\c -> cdName c `notElem` generatedNames) (tdColumns td)
 
 -- | Check that a @libpq@ result is not an error.
 checkResult :: HasCallStack => CopyConnection -> Text -> Maybe PQ.Result -> IO ()

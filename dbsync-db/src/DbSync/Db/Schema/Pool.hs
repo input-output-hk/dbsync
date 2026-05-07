@@ -1,8 +1,15 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 
--- | Schema types for the Pool extractor tables: pool_hash, pool_update,
--- pool_metadata_ref, pool_owner, pool_retire, pool_relay.
+-- | Schema types for pool-related tables.
+--
+-- Tables in this module are owned by three different extractors:
+--
+--   * @pool@ extractor (block-extracted): @pool_hash@, @pool_update@,
+--     @pool_metadata_ref@, @pool_owner@, @pool_retire@, @pool_relay@.
+--   * @pool_stats@ extractor (ledger-derived, epoch-boundary): @pool_stat@.
+--   * @off_chain_pools@ extractor (operator-managed via SMASH):
+--     @delisted_pool@, @reserved_pool_ticker@.
 module DbSync.Db.Schema.Pool
   ( -- * Schema types
     PoolHash (..)
@@ -11,6 +18,9 @@ module DbSync.Db.Schema.Pool
   , PoolOwner (..)
   , PoolRetire (..)
   , PoolRelay (..)
+  , PoolStat (..)
+  , DelistedPool (..)
+  , ReservedPoolTicker (..)
 
     -- * Table definitions
   , poolHashTableDef
@@ -19,6 +29,9 @@ module DbSync.Db.Schema.Pool
   , poolOwnerTableDef
   , poolRetireTableDef
   , poolRelayTableDef
+  , poolStatTableDef
+  , delistedPoolTableDef
+  , reservedPoolTickerTableDef
 
     -- * COPY encoding
   , encodePoolHashCopy
@@ -27,6 +40,9 @@ module DbSync.Db.Schema.Pool
   , encodePoolOwnerCopy
   , encodePoolRetireCopy
   , encodePoolRelayCopy
+  , encodePoolStatCopy
+  , encodeDelistedPoolCopy
+  , encodeReservedPoolTickerCopy
 
     -- * Hasql encoders \/ decoders
   , poolHashEncoder
@@ -47,6 +63,15 @@ module DbSync.Db.Schema.Pool
   , poolRelayEncoder
   , poolRelayDecoder
   , entityPoolRelayDecoder
+  , poolStatEncoder
+  , poolStatDecoder
+  , entityPoolStatDecoder
+  , delistedPoolEncoder
+  , delistedPoolDecoder
+  , entityDelistedPoolDecoder
+  , reservedPoolTickerEncoder
+  , reservedPoolTickerDecoder
+  , entityReservedPoolTickerDecoder
   ) where
 
 import Cardano.Prelude
@@ -64,8 +89,11 @@ import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Types
 import DbSync.Db.Types
   ( DbLovelace (..)
+  , DbWord64 (..)
   , dbLovelaceValueDecoder
   , dbLovelaceValueEncoder
+  , dbWord64ValueDecoder
+  , dbWord64ValueEncoder
   , maybeDbLovelaceDecoder
   , maybeDbLovelaceEncoder
   )
@@ -81,6 +109,9 @@ type instance Key PoolMetadataRef = PoolMetadataRefId
 type instance Key PoolOwner = PoolOwnerId
 type instance Key PoolRetire = PoolRetireId
 type instance Key PoolRelay = PoolRelayId
+type instance Key PoolStat = PoolStatId
+type instance Key DelistedPool = DelistedPoolId
+type instance Key ReservedPoolTicker = ReservedPoolTickerId
 
 -- ---------------------------------------------------------------------------
 -- * Schema types
@@ -146,6 +177,34 @@ data PoolRelay = PoolRelay
   }
   deriving stock (Eq, Show)
 
+-- | The @pool_stat@ table.
+-- One row per (pool, epoch); written by the @pool_stats@ extractor
+-- from ledger state at each epoch boundary.
+data PoolStat = PoolStat
+  { poolStatPoolHashId         :: !PoolHashId
+  , poolStatEpochNo            :: !Word64
+  , poolStatNumberOfBlocks     :: !DbWord64
+  , poolStatNumberOfDelegators :: !DbWord64
+  , poolStatStake              :: !DbWord64
+  , poolStatVotingPower        :: !(Maybe DbWord64)
+  }
+  deriving stock (Eq, Show)
+
+-- | The @delisted_pool@ table. Single column, unique on @hash_raw@.
+-- Maintained by SMASH; @off_chain_pools@ feature.
+newtype DelistedPool = DelistedPool
+  { delistedPoolHashRaw :: ByteString
+  }
+  deriving stock (Eq, Show)
+
+-- | The @reserved_pool_ticker@ table. Unique on @name@.
+-- Maintained by SMASH; @off_chain_pools@ feature.
+data ReservedPoolTicker = ReservedPoolTicker
+  { reservedPoolTickerName     :: !Text
+  , reservedPoolTickerPoolHash :: !ByteString
+  }
+  deriving stock (Eq, Show)
+
 -- ---------------------------------------------------------------------------
 -- * Table definitions
 -- ---------------------------------------------------------------------------
@@ -162,6 +221,8 @@ poolHashTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
   }
 
 poolUpdateTableDef :: TableDef
@@ -185,6 +246,8 @@ poolUpdateTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
   }
 
 poolMetadataRefTableDef :: TableDef
@@ -201,6 +264,8 @@ poolMetadataRefTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
   }
 
 poolOwnerTableDef :: TableDef
@@ -215,6 +280,8 @@ poolOwnerTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
   }
 
 poolRetireTableDef :: TableDef
@@ -231,6 +298,8 @@ poolRetireTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
   }
 
 poolRelayTableDef :: TableDef
@@ -249,6 +318,59 @@ poolRelayTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
+  }
+
+poolStatTableDef :: TableDef
+poolStatTableDef = TableDef
+  { tdName    = "pool_stat"
+  , tdColumns =
+      [ ColumnDef "id"                   PgBigInt  False
+      , ColumnDef "pool_hash_id"         PgBigInt  False
+      , ColumnDef "epoch_no"             PgBigInt  False
+      , ColumnDef "number_of_blocks"     PgNumeric False
+      , ColumnDef "number_of_delegators" PgNumeric False
+      , ColumnDef "stake"                PgNumeric False
+      , ColumnDef "voting_power"         PgNumeric True
+      ]
+  , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
+  }
+
+delistedPoolTableDef :: TableDef
+delistedPoolTableDef = TableDef
+  { tdName    = "delisted_pool"
+  , tdColumns =
+      [ ColumnDef "id"       PgBigInt False
+      , ColumnDef "hash_raw" PgBytea  False
+      ]
+  , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
+  , tdUniqueConstraints = [pure "hash_raw"]
+  , tdGeneratedColumns = []
+  }
+
+reservedPoolTickerTableDef :: TableDef
+reservedPoolTickerTableDef = TableDef
+  { tdName    = "reserved_pool_ticker"
+  , tdColumns =
+      [ ColumnDef "id"        PgBigInt False
+      , ColumnDef "name"      PgText   False
+      , ColumnDef "pool_hash" PgBytea  False
+      ]
+  , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
+  , tdUniqueConstraints = [pure "name"]
+  , tdGeneratedColumns = []
   }
 
 -- ---------------------------------------------------------------------------
@@ -318,6 +440,33 @@ encodePoolRelayCopy (PoolRelayId prid) pr =
     , bText <$> poolRelayDnsName pr
     , bText <$> poolRelayDnsSrvName pr
     , bInt64 . fromIntegral <$> poolRelayPort pr
+    ]
+
+encodePoolStatCopy :: PoolStatId -> PoolStat -> ByteString
+encodePoolStatCopy (PoolStatId psid) ps =
+  buildCopyRow
+    [ Just $ bInt64 psid
+    , Just $ bInt64 (getPoolHashId $ poolStatPoolHashId ps)
+    , Just $ bWord64 (poolStatEpochNo ps)
+    , Just $ bWord64 (unDbWord64 $ poolStatNumberOfBlocks ps)
+    , Just $ bWord64 (unDbWord64 $ poolStatNumberOfDelegators ps)
+    , Just $ bWord64 (unDbWord64 $ poolStatStake ps)
+    , bWord64 . unDbWord64 <$> poolStatVotingPower ps
+    ]
+
+encodeDelistedPoolCopy :: DelistedPoolId -> DelistedPool -> ByteString
+encodeDelistedPoolCopy (DelistedPoolId did) dp =
+  buildCopyRow
+    [ Just $ bInt64 did
+    , Just $ bHex (delistedPoolHashRaw dp)
+    ]
+
+encodeReservedPoolTickerCopy :: ReservedPoolTickerId -> ReservedPoolTicker -> ByteString
+encodeReservedPoolTickerCopy (ReservedPoolTickerId rid) rpt =
+  buildCopyRow
+    [ Just $ bInt64 rid
+    , Just $ bText (reservedPoolTickerName rpt)
+    , Just $ bHex (reservedPoolTickerPoolHash rpt)
     ]
 
 -- ---------------------------------------------------------------------------
@@ -484,6 +633,65 @@ entityPoolRelayDecoder :: D.Row (PoolRelayId, PoolRelay)
 entityPoolRelayDecoder = (,)
   <$> idDecoder PoolRelayId
   <*> poolRelayDecoder
+
+-- PoolStat ----------------------------------------------------------------
+
+poolStatEncoder :: E.Params PoolStat
+poolStatEncoder = mconcat
+  [ poolStatPoolHashId         >$< idEncoder getPoolHashId
+  , poolStatEpochNo            >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+  , poolStatNumberOfBlocks     >$< E.param (E.nonNullable dbWord64ValueEncoder)
+  , poolStatNumberOfDelegators >$< E.param (E.nonNullable dbWord64ValueEncoder)
+  , poolStatStake              >$< E.param (E.nonNullable dbWord64ValueEncoder)
+  , poolStatVotingPower        >$< E.param (E.nullable dbWord64ValueEncoder)
+  ]
+
+poolStatDecoder :: D.Row PoolStat
+poolStatDecoder = PoolStat
+  <$> idDecoder PoolHashId
+  <*> D.column (D.nonNullable $ fromIntegral <$> D.int8)
+  <*> D.column (D.nonNullable dbWord64ValueDecoder)
+  <*> D.column (D.nonNullable dbWord64ValueDecoder)
+  <*> D.column (D.nonNullable dbWord64ValueDecoder)
+  <*> D.column (D.nullable dbWord64ValueDecoder)
+
+entityPoolStatDecoder :: D.Row (PoolStatId, PoolStat)
+entityPoolStatDecoder = (,)
+  <$> idDecoder PoolStatId
+  <*> poolStatDecoder
+
+-- DelistedPool ------------------------------------------------------------
+
+delistedPoolEncoder :: E.Params DelistedPool
+delistedPoolEncoder =
+  delistedPoolHashRaw >$< E.param (E.nonNullable E.bytea)
+
+delistedPoolDecoder :: D.Row DelistedPool
+delistedPoolDecoder = DelistedPool
+  <$> D.column (D.nonNullable D.bytea)
+
+entityDelistedPoolDecoder :: D.Row (DelistedPoolId, DelistedPool)
+entityDelistedPoolDecoder = (,)
+  <$> idDecoder DelistedPoolId
+  <*> delistedPoolDecoder
+
+-- ReservedPoolTicker ------------------------------------------------------
+
+reservedPoolTickerEncoder :: E.Params ReservedPoolTicker
+reservedPoolTickerEncoder = mconcat
+  [ reservedPoolTickerName     >$< E.param (E.nonNullable E.text)
+  , reservedPoolTickerPoolHash >$< E.param (E.nonNullable E.bytea)
+  ]
+
+reservedPoolTickerDecoder :: D.Row ReservedPoolTicker
+reservedPoolTickerDecoder = ReservedPoolTicker
+  <$> D.column (D.nonNullable D.text)
+  <*> D.column (D.nonNullable D.bytea)
+
+entityReservedPoolTickerDecoder :: D.Row (ReservedPoolTickerId, ReservedPoolTicker)
+entityReservedPoolTickerDecoder = (,)
+  <$> idDecoder ReservedPoolTickerId
+  <*> reservedPoolTickerDecoder
 
 -- ---------------------------------------------------------------------------
 -- * Internal helpers

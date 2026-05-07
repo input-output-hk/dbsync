@@ -82,8 +82,8 @@ spec = describe "DbSync.Db.Schema.SyncState" $ do
     it "matches the table's column order" $
       syncStateColumns `shouldBe` map cdName (tdColumns syncStateTableDef)
 
-    it "contains 35 columns (id + 3 last_committed + last_snapshot_slot + 26 counters + 4 metadata)" $
-      length syncStateColumns `shouldBe` 35
+    it "contains 36 columns (id + 3 last_committed + last_snapshot_slot + 27 counters + 4 metadata)" $
+      length syncStateColumns `shouldBe` 36
 
     it "starts with id" $
       head syncStateColumns `shouldBe` Just "id"
@@ -92,8 +92,8 @@ spec = describe "DbSync.Db.Schema.SyncState" $ do
       last syncStateColumns `shouldBe` "updated_at"
 
   describe "syncStateCounterColumns" $ do
-    it "lists 26 counters — one per current IdCounters field" $
-      length syncStateCounterColumns `shouldBe` 26
+    it "lists 27 counters — one per current IdCounters field" $
+      length syncStateCounterColumns `shouldBe` 27
 
     it "is a subset of syncStateColumns" $
       all (`elem` syncStateColumns) syncStateCounterColumns `shouldBe` True
@@ -153,6 +153,7 @@ goldenDdl = T.unlines
   , "  \"ma_tx_mint_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"ma_tx_out_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"slot_leader_id_counter\" BIGINT NOT NULL DEFAULT 1,"
+  , "  \"address_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"stake_address_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"pool_hash_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"multi_asset_id_counter\" BIGINT NOT NULL DEFAULT 1,"

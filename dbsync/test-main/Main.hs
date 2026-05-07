@@ -36,8 +36,11 @@ import qualified DbSync.Ledger.TypesSpec as LedgerTypesSpec
 import qualified DbSync.Ledger.WorkerSpec as LedgerWorkerSpec
 import qualified DbSync.Phase.BootSpec as PhaseBootSpec
 import qualified DbSync.Schema.AdaPotsSpec as SchemaAdaPotsSpec
+import qualified DbSync.Schema.AddressSpec as SchemaAddressSpec
 import qualified DbSync.Schema.CoreSpec as SchemaCoreSpec
 import qualified DbSync.Schema.GenerateSpec as SchemaGenerateSpec
+import qualified DbSync.Schema.RewardSpec as SchemaRewardSpec
+import qualified DbSync.Schema.ScriptsDatumsSpec as SchemaScriptsDatumsSpec
 import qualified DbSync.Schema.SyncStateSpec as SchemaSyncStateSpec
 import qualified DbSync.StateQuery.ObservedSummarySpec as ObservedSummarySpec
 
@@ -74,8 +77,11 @@ main = hspec $ do
     LedgerWorkerSpec.spec
     PhaseBootSpec.spec
     SchemaAdaPotsSpec.spec
+    SchemaAddressSpec.spec
     SchemaCoreSpec.spec
     SchemaGenerateSpec.spec
+    SchemaRewardSpec.spec
+    SchemaScriptsDatumsSpec.spec
     SchemaSyncStateSpec.spec
     ObservedSummarySpec.spec
 

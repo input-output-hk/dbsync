@@ -94,6 +94,8 @@ spec = do
             , tdPrimaryKey     = Nothing
             , tdChecks         = []
             , tdColumnDefaults = []
+            , tdUniqueConstraints = []
+            , tdGeneratedColumns = []
             }
           sql = generateCreateTable simpleDef
       sql `shouldBe` T.unlines
@@ -117,6 +119,8 @@ spec = do
                 [ ("id", "1")
                 , ("counter", "42")
                 ]
+            , tdUniqueConstraints = []
+            , tdGeneratedColumns = []
             }
           sql = generateCreateTable defDef
       sql `shouldBe` T.unlines
@@ -135,6 +139,8 @@ spec = do
             , tdPrimaryKey     = Just ["id"]
             , tdChecks         = []
             , tdColumnDefaults = []
+            , tdUniqueConstraints = []
+            , tdGeneratedColumns = []
             }
           sql = generateCreateTable pkDef
       sql `shouldBe` T.unlines
@@ -153,6 +159,8 @@ spec = do
             , tdPrimaryKey     = Nothing
             , tdChecks         = [ "\"id\" = 1" ]
             , tdColumnDefaults = []
+            , tdUniqueConstraints = []
+            , tdGeneratedColumns = []
             }
           sql = generateCreateTable checkDef
       sql `shouldBe` T.unlines

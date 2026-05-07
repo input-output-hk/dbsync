@@ -18,7 +18,8 @@ import qualified Data.ByteString as BS
 
 import DbSync.Block.Types (GenericTx (..), GenericTxIn (..))
 import qualified DbSync.Block.Types as G
-import DbSync.Db.Schema.Ids (TxId (..))
+import DbSync.Db.Schema.Address (Address (..), addressTableDef)
+import DbSync.Db.Schema.Ids (AddressId, TxId (..))
 import DbSync.Db.Schema.UTxO
 import DbSync.Db.Types (DbLovelace (..))
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
@@ -34,7 +35,13 @@ utxoExtractor = ExtractorDef
   { pdName         = "utxo"
   , pdVersion      = 1
   , pdDependencies = [("core", 1)]
-  , pdTables       = [txOutTableDef, txInTableDef, collateralTxInTableDef, referenceTxInTableDef]
+  , pdTables       =
+      [ addressTableDef
+      , txOutTableDef
+      , txInTableDef
+      , collateralTxInTableDef
+      , referenceTxInTableDef
+      ]
   , pdProcess      = processUTxO
   }
 
@@ -49,9 +56,12 @@ processUTxO resolver writer ctx = do
         gtx    = tcGenTx tc
         outIds = tcOutIds tc
 
-    -- 1. Write tx_out rows (using pre-assigned TxOutIds)
+    -- 1. Resolve address (write address row if new), then write tx_out
     forM_ (zip outIds (txOutputs gtx)) $ \(outId, gout) -> do
-      let txOut = mkTxOut txId gout
+      let addr = mkAddress gout
+      (addrId, isNew) <- resolveAddress resolver (G.txOutAddressRaw gout) addr
+      when isNew $ writeAddress writer addrId addr
+      let txOut = mkTxOut txId addrId gout
       writeTxOut writer outId txOut
 
     -- 2. Write tx_in rows
@@ -76,13 +86,20 @@ processUTxO resolver writer ctx = do
 -- * Record builders
 -- ---------------------------------------------------------------------------
 
-mkTxOut :: TxId -> G.GenericTxOut -> TxOut
-mkTxOut txId gout = TxOut
+mkAddress :: G.GenericTxOut -> Address
+mkAddress gout = Address
+  { addressAddress        = G.txOutAddress gout
+  , addressRaw            = G.txOutAddressRaw gout
+  , addressHasScript      = rawHasScript (G.txOutAddressRaw gout)
+  , addressPaymentCred    = extractPaymentCred (G.txOutAddressRaw gout)
+  , addressStakeAddressId = Nothing  -- resolved by StakeDelegation extractor
+  }
+
+mkTxOut :: TxId -> AddressId -> G.GenericTxOut -> TxOut
+mkTxOut txId addrId gout = TxOut
   { txOutTxId              = txId
   , txOutIndex             = fromIntegral (G.txOutIndex gout)
-  , txOutAddress           = G.txOutAddress gout
-  , txOutAddressHasScript  = addressHasScript (G.txOutAddressRaw gout)
-  , txOutPaymentCred       = extractPaymentCred (G.txOutAddressRaw gout)
+  , txOutAddressId         = addrId
   , txOutStakeAddressId    = Nothing  -- resolved by StakeDelegation extractor
   , txOutValue             = DbLovelace (G.txOutValue gout)
   , txOutDataHash          = G.txOutDataHash gout
@@ -123,8 +140,8 @@ mkReferenceTxIn txId gin = ReferenceTxIn
 -- | Check if an address contains a script (bit 4 of header byte).
 -- Shelley+ addresses encode this in the header. Byron addresses
 -- never contain scripts.
-addressHasScript :: ByteString -> Bool
-addressHasScript bs
+rawHasScript :: ByteString -> Bool
+rawHasScript bs
   | BS.null bs = False
   | otherwise  =
       let header = BS.head bs

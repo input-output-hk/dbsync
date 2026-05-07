@@ -483,6 +483,7 @@ mkInitState = ExtractState
       , icMaTxMintId         = mkIdCounter 1
       , icMaTxOutId          = mkIdCounter 1
       , icSlotLeaderId       = mkIdCounter 1
+      , icAddressId          = mkIdCounter 1
       , icStakeAddressId     = mkIdCounter 1
       , icPoolHashId         = mkIdCounter 1
       , icMultiAssetId       = mkIdCounter 1

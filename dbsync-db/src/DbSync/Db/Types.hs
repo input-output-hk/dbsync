@@ -77,6 +77,14 @@ module DbSync.Db.Types
   , bVoterRole
   , bGovActionType
   , bAnchorType
+
+    -- * Hasql encoders \/ decoders for enum types
+  , scriptPurposeEncoder
+  , scriptPurposeDecoder
+  , scriptTypeEncoder
+  , scriptTypeDecoder
+  , rewardSourceEncoder
+  , rewardSourceDecoder
   ) where
 
 import Cardano.Prelude
@@ -462,3 +470,80 @@ word128Encoder = word128ToScientific >$< E.numeric
 
 word128Decoder :: D.Value Word128
 word128Decoder = scientificToWord128 <$> D.numeric
+
+-- ---------------------------------------------------------------------------
+-- * Hasql encoders / decoders for enum types
+-- ---------------------------------------------------------------------------
+--
+-- Enums hit PostgreSQL as plain @text@. The string values must match
+-- the ones in the per-enum COPY builder above; drift between them
+-- corrupts data silently.
+
+scriptPurposeEncoder :: E.Value ScriptPurpose
+scriptPurposeEncoder = scriptPurposeToText >$< E.text
+  where
+    scriptPurposeToText = \case
+      Spend   -> "spend"
+      Mint    -> "mint"
+      Cert    -> "cert"
+      Rewrd   -> "reward"
+      Vote    -> "vote"
+      Propose -> "propose"
+
+scriptPurposeDecoder :: D.Value ScriptPurpose
+scriptPurposeDecoder = D.refine textToScriptPurpose D.text
+  where
+    textToScriptPurpose = \case
+      "spend"   -> Right Spend
+      "mint"    -> Right Mint
+      "cert"    -> Right Cert
+      "reward"  -> Right Rewrd
+      "vote"    -> Right Vote
+      "propose" -> Right Propose
+      other     -> Left $ "unknown ScriptPurpose: " <> other
+
+scriptTypeEncoder :: E.Value ScriptType
+scriptTypeEncoder = scriptTypeToText >$< E.text
+  where
+    scriptTypeToText = \case
+      MultiSig -> "multisig"
+      Timelock -> "timelock"
+      PlutusV1 -> "plutusV1"
+      PlutusV2 -> "plutusV2"
+      PlutusV3 -> "plutusV3"
+      PlutusV4 -> "plutusV4"
+
+scriptTypeDecoder :: D.Value ScriptType
+scriptTypeDecoder = D.refine textToScriptType D.text
+  where
+    textToScriptType = \case
+      "multisig" -> Right MultiSig
+      "timelock" -> Right Timelock
+      "plutusV1" -> Right PlutusV1
+      "plutusV2" -> Right PlutusV2
+      "plutusV3" -> Right PlutusV3
+      "plutusV4" -> Right PlutusV4
+      other      -> Left $ "unknown ScriptType: " <> other
+
+rewardSourceEncoder :: E.Value RewardSource
+rewardSourceEncoder = rewardSourceToText >$< E.text
+  where
+    rewardSourceToText = \case
+      RwdLeader         -> "leader"
+      RwdMember         -> "member"
+      RwdReserves       -> "reserves"
+      RwdTreasury       -> "treasury"
+      RwdDepositRefund  -> "refund"
+      RwdProposalRefund -> "proposal_refund"
+
+rewardSourceDecoder :: D.Value RewardSource
+rewardSourceDecoder = D.refine textToRewardSource D.text
+  where
+    textToRewardSource = \case
+      "leader"          -> Right RwdLeader
+      "member"          -> Right RwdMember
+      "reserves"        -> Right RwdReserves
+      "treasury"        -> Right RwdTreasury
+      "refund"          -> Right RwdDepositRefund
+      "proposal_refund" -> Right RwdProposalRefund
+      other             -> Left $ "unknown RewardSource: " <> other

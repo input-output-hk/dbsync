@@ -1,20 +1,27 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 
--- | Schema types for the EpochSyncStats extractor table: epoch_sync_stats.
+-- | Schema types for the @epoch_sync_stats@ extractor.
 --
--- Tracks sync performance metrics at each epoch boundary:
--- blocks processed, throughput, elapsed time, and sync phase.
+-- The extractor owns two tables, both written by the consumer thread
+-- at each epoch-boundary commit:
+--
+--   * @epoch_sync_stats@ — our metrics (blocks/sec, throughput, phase).
+--   * @epoch_sync_time@ — the original-project parity table
+--     (epoch number, elapsed seconds, sync state).
 module DbSync.Db.Schema.EpochSyncStats
   ( -- * Schema types
     EpochSyncStats (..)
   , SyncPhase (..)
+  , EpochSyncTime (..)
 
     -- * Table definitions
   , epochSyncStatsTableDef
+  , epochSyncTimeTableDef
 
     -- * COPY encoding
   , encodeEpochSyncStatsCopy
+  , encodeEpochSyncTimeCopy
   ) where
 
 import Cardano.Prelude
@@ -26,6 +33,7 @@ import Data.Time.Clock (UTCTime)
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Types
+import DbSync.Db.Types (SyncState, bSyncState)
 import DbSync.Db.Writer.Copy.Encoder (buildCopyRow, bInt64, bUTCTime, bWord64)
 
 -- ---------------------------------------------------------------------------
@@ -33,6 +41,7 @@ import DbSync.Db.Writer.Copy.Encoder (buildCopyRow, bInt64, bUTCTime, bWord64)
 -- ---------------------------------------------------------------------------
 
 type instance Key EpochSyncStats = EpochSyncStatsId
+type instance Key EpochSyncTime = EpochSyncTimeId
 
 -- ---------------------------------------------------------------------------
 -- * Schema types
@@ -56,6 +65,15 @@ data EpochSyncStats = EpochSyncStats
   }
   deriving stock (Eq, Show)
 
+-- | The @epoch_sync_time@ table.
+-- Original-project parity. Unique on @no@.
+data EpochSyncTime = EpochSyncTime
+  { epochSyncTimeNo      :: !Word64
+  , epochSyncTimeSeconds :: !Word64
+  , epochSyncTimeState   :: !SyncState
+  }
+  deriving stock (Eq, Show)
+
 -- ---------------------------------------------------------------------------
 -- * Table definitions
 -- ---------------------------------------------------------------------------
@@ -76,6 +94,25 @@ epochSyncStatsTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
+  }
+
+epochSyncTimeTableDef :: TableDef
+epochSyncTimeTableDef = TableDef
+  { tdName    = "epoch_sync_time"
+  , tdColumns =
+      [ ColumnDef "id"      PgBigInt              False
+      , ColumnDef "no"      PgBigInt              False
+      , ColumnDef "seconds" PgBigInt              False
+      , ColumnDef "state"   (PgEnum "syncstatetype") False
+      ]
+  , tdMode    = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
+  , tdUniqueConstraints = [pure "no"]
+  , tdGeneratedColumns = []
   }
 
 -- ---------------------------------------------------------------------------
@@ -92,6 +129,15 @@ encodeEpochSyncStatsCopy (EpochSyncStatsId essid) ess =
     , Just $ bDouble (epochSyncStatsElapsedSec ess)
     , Just $ bUTCTime (epochSyncStatsSyncedAt ess)
     , Just $ bPhase (epochSyncStatsPhase ess)
+    ]
+
+encodeEpochSyncTimeCopy :: EpochSyncTimeId -> EpochSyncTime -> ByteString
+encodeEpochSyncTimeCopy (EpochSyncTimeId estid) est =
+  buildCopyRow
+    [ Just $ bInt64 estid
+    , Just $ bWord64 (epochSyncTimeNo est)
+    , Just $ bWord64 (epochSyncTimeSeconds est)
+    , Just $ bSyncState (epochSyncTimeState est)
     ]
 
 -- ---------------------------------------------------------------------------

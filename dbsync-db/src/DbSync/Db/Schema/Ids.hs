@@ -254,6 +254,22 @@ newtype DelegationId = DelegationId { getDelegationId :: Int64 }
 newtype WithdrawalId = WithdrawalId { getWithdrawalId :: Int64 }
   deriving stock (Eq, Ord, Show)
 
+-- | Primary key for the @reward@ table.
+newtype RewardId = RewardId { getRewardId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @reward_rest@ table.
+newtype RewardRestId = RewardRestId { getRewardRestId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @epoch_stake@ table.
+newtype EpochStakeId = EpochStakeId { getEpochStakeId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @epoch_stake_progress@ table.
+newtype EpochStakeProgressId = EpochStakeProgressId { getEpochStakeProgressId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
 -- ---------------------------------------------------------------------------
 -- * Pool table IDs
 -- ---------------------------------------------------------------------------
@@ -273,12 +289,92 @@ newtype PoolRetireId = PoolRetireId { getPoolRetireId :: Int64 }
 newtype PoolRelayId = PoolRelayId { getPoolRelayId :: Int64 }
   deriving stock (Eq, Ord, Show)
 
+-- | Primary key for the @pool_stat@ table.
+newtype PoolStatId = PoolStatId { getPoolStatId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @delisted_pool@ table.
+newtype DelistedPoolId = DelistedPoolId { getDelistedPoolId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @reserved_pool_ticker@ table.
+newtype ReservedPoolTickerId = ReservedPoolTickerId { getReservedPoolTickerId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
 -- ---------------------------------------------------------------------------
 -- * CBOR table IDs
 -- ---------------------------------------------------------------------------
 
 -- | Primary key for the @tx_cbor@ table.
 newtype TxCborId = TxCborId { getTxCborId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- ---------------------------------------------------------------------------
+-- * Governance table IDs
+-- ---------------------------------------------------------------------------
+
+-- | Primary key for the @drep_hash@ table.
+newtype DrepHashId = DrepHashId { getDrepHashId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @drep_registration@ table.
+newtype DrepRegistrationId = DrepRegistrationId { getDrepRegistrationId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @drep_distr@ table.
+newtype DrepDistrId = DrepDistrId { getDrepDistrId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @delegation_vote@ table.
+newtype DelegationVoteId = DelegationVoteId { getDelegationVoteId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @gov_action_proposal@ table.
+newtype GovActionProposalId = GovActionProposalId { getGovActionProposalId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @voting_procedure@ table.
+newtype VotingProcedureId = VotingProcedureId { getVotingProcedureId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @voting_anchor@ table.
+newtype VotingAnchorId = VotingAnchorId { getVotingAnchorId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @constitution@ table.
+newtype ConstitutionId = ConstitutionId { getConstitutionId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @committee@ table.
+newtype CommitteeId = CommitteeId { getCommitteeId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @committee_hash@ table.
+newtype CommitteeHashId = CommitteeHashId { getCommitteeHashId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @committee_member@ table.
+newtype CommitteeMemberId = CommitteeMemberId { getCommitteeMemberId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @committee_registration@ table.
+newtype CommitteeRegistrationId = CommitteeRegistrationId { getCommitteeRegistrationId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @committee_de_registration@ table.
+newtype CommitteeDeRegistrationId = CommitteeDeRegistrationId { getCommitteeDeRegistrationId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @param_proposal@ table.
+newtype ParamProposalId = ParamProposalId { getParamProposalId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @treasury_withdrawal@ table.
+newtype TreasuryWithdrawalId = TreasuryWithdrawalId { getTreasuryWithdrawalId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @event_info@ table.
+newtype EventInfoId = EventInfoId { getEventInfoId :: Int64 }
   deriving stock (Eq, Ord, Show)
 
 -- ---------------------------------------------------------------------------
@@ -296,6 +392,74 @@ newtype EpochSyncStatsId = EpochSyncStatsId { getEpochSyncStatsId :: Int64 }
 -- | Primary key for the @ada_pots@ table.
 -- One row per epoch boundary; written by the EpochBoundary extractor.
 newtype AdaPotsId = AdaPotsId { getAdaPotsId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @epoch@ table.
+newtype EpochId = EpochId { getEpochId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @epoch_param@ table.
+newtype EpochParamId = EpochParamId { getEpochParamId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @epoch_state@ table.
+newtype EpochStateId = EpochStateId { getEpochStateId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @cost_model@ table.
+newtype CostModelId = CostModelId { getCostModelId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @pot_transfer@ table.
+newtype PotTransferId = PotTransferId { getPotTransferId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @treasury@ table.
+newtype TreasuryId = TreasuryId { getTreasuryId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @reserve@ table.
+newtype ReserveId = ReserveId { getReserveId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- ---------------------------------------------------------------------------
+-- * OffChain table IDs
+-- ---------------------------------------------------------------------------
+
+-- | Primary key for the @off_chain_pool_data@ table.
+newtype OffChainPoolDataId = OffChainPoolDataId { getOffChainPoolDataId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @off_chain_pool_fetch_error@ table.
+newtype OffChainPoolFetchErrorId = OffChainPoolFetchErrorId { getOffChainPoolFetchErrorId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @off_chain_vote_data@ table.
+newtype OffChainVoteDataId = OffChainVoteDataId { getOffChainVoteDataId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @off_chain_vote_gov_action_data@ table.
+newtype OffChainVoteGovActionDataId = OffChainVoteGovActionDataId { getOffChainVoteGovActionDataId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @off_chain_vote_drep_data@ table.
+newtype OffChainVoteDrepDataId = OffChainVoteDrepDataId { getOffChainVoteDrepDataId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @off_chain_vote_author@ table.
+newtype OffChainVoteAuthorId = OffChainVoteAuthorId { getOffChainVoteAuthorId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @off_chain_vote_reference@ table.
+newtype OffChainVoteReferenceId = OffChainVoteReferenceId { getOffChainVoteReferenceId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @off_chain_vote_external_update@ table.
+newtype OffChainVoteExternalUpdateId = OffChainVoteExternalUpdateId { getOffChainVoteExternalUpdateId :: Int64 }
+  deriving stock (Eq, Ord, Show)
+
+-- | Primary key for the @off_chain_vote_fetch_error@ table.
+newtype OffChainVoteFetchErrorId = OffChainVoteFetchErrorId { getOffChainVoteFetchErrorId :: Int64 }
   deriving stock (Eq, Ord, Show)
 
 -- ---------------------------------------------------------------------------

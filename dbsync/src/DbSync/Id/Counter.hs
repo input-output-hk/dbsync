@@ -41,6 +41,7 @@ data IdCounters = IdCounters
   , icMaTxMintId         :: !IdCounter
   , icMaTxOutId          :: !IdCounter
   , icSlotLeaderId       :: !IdCounter
+  , icAddressId          :: !IdCounter
   , icStakeAddressId     :: !IdCounter
   , icPoolHashId         :: !IdCounter
   , icMultiAssetId       :: !IdCounter

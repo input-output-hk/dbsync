@@ -57,6 +57,7 @@ mkTestWriter ref = Writer
         (s { twSlotLeaders = twSlotLeaders s ++ [(slid, sl)] }, ())
 
     -- UTxO (no-ops for core-only tests)
+  , writeAddress        = \_ _ -> pure ()
   , writeTxOut          = \_ _ -> pure ()
   , writeTxIn           = \_ _ -> pure ()
   , writeCollateralTxIn = \_ _ -> pure ()

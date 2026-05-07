@@ -14,6 +14,7 @@ import Cardano.Prelude
 
 import DbSync.Copy.Writer (CopyWriter (..))
 import DbSync.Db.Schema.AdaPots (encodeAdaPotsCopy)
+import DbSync.Db.Schema.Address (encodeAddressCopy)
 import DbSync.Db.Schema.CBOR (encodeTxCborCopy)
 import DbSync.Db.Schema.Core
   ( encodeBlockCopy
@@ -67,6 +68,8 @@ mkCopyWriterAdapter cw = Writer
       cwWriteRow cw "slot_leader" (encodeSlotLeaderCopy slid sl)
 
     -- UTxO
+  , writeAddress = \aid addr ->
+      cwWriteRow cw "address" (encodeAddressCopy aid addr)
   , writeTxOut = \oid txo ->
       cwWriteRow cw "tx_out" (encodeTxOutCopy oid txo)
   , writeTxIn = \iid ti ->

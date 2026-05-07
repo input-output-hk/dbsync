@@ -67,6 +67,7 @@ data SyncStateRow = SyncStateRow
   , ssrMaTxMintIdCounter             :: !Int64
   , ssrMaTxOutIdCounter              :: !Int64
   , ssrSlotLeaderIdCounter           :: !Int64
+  , ssrAddressIdCounter              :: !Int64
   , ssrStakeAddressIdCounter         :: !Int64
   , ssrPoolHashIdCounter             :: !Int64
   , ssrMultiAssetIdCounter           :: !Int64
@@ -118,6 +119,7 @@ syncStateTableDef = TableDef
       , ColumnDef "ma_tx_mint_id_counter"           PgBigInt      False
       , ColumnDef "ma_tx_out_id_counter"            PgBigInt      False
       , ColumnDef "slot_leader_id_counter"          PgBigInt      False
+      , ColumnDef "address_id_counter"              PgBigInt      False
       , ColumnDef "stake_address_id_counter"        PgBigInt      False
       , ColumnDef "pool_hash_id_counter"            PgBigInt      False
       , ColumnDef "multi_asset_id_counter"          PgBigInt      False
@@ -147,6 +149,8 @@ syncStateTableDef = TableDef
         : ("sync_complete", "false")
         : ("updated_at", "now()")
         : map (\c -> (c, "1")) syncStateCounterColumns
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
   }
 
 -- ---------------------------------------------------------------------------
@@ -171,6 +175,7 @@ syncStateCounterColumns =
   , "ma_tx_mint_id_counter"
   , "ma_tx_out_id_counter"
   , "slot_leader_id_counter"
+  , "address_id_counter"
   , "stake_address_id_counter"
   , "pool_hash_id_counter"
   , "multi_asset_id_counter"
@@ -211,6 +216,7 @@ syncStateRowEncoder =
   <> (ssrMaTxMintIdCounter                         >$< E.param (E.nonNullable E.int8))
   <> (ssrMaTxOutIdCounter                          >$< E.param (E.nonNullable E.int8))
   <> (ssrSlotLeaderIdCounter                       >$< E.param (E.nonNullable E.int8))
+  <> (ssrAddressIdCounter                          >$< E.param (E.nonNullable E.int8))
   <> (ssrStakeAddressIdCounter                     >$< E.param (E.nonNullable E.int8))
   <> (ssrPoolHashIdCounter                         >$< E.param (E.nonNullable E.int8))
   <> (ssrMultiAssetIdCounter                       >$< E.param (E.nonNullable E.int8))
@@ -256,6 +262,7 @@ syncStateRowDecoder =
         <*> D.column (D.nonNullable D.int8)                        -- ma_tx_mint_id_counter
         <*> D.column (D.nonNullable D.int8)                        -- ma_tx_out_id_counter
         <*> D.column (D.nonNullable D.int8)                        -- slot_leader_id_counter
+        <*> D.column (D.nonNullable D.int8)                        -- address_id_counter
         <*> D.column (D.nonNullable D.int8)                        -- stake_address_id_counter
         <*> D.column (D.nonNullable D.int8)                        -- pool_hash_id_counter
         <*> D.column (D.nonNullable D.int8)                        -- multi_asset_id_counter

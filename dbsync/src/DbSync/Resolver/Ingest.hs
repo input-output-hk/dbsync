@@ -71,6 +71,12 @@ mkIngestResolver stRef dedupMaps = IdResolver
       st <- readIORef stRef
       pure $ BlockId <$> esLastBlockId st
 
+    -- Dedup: Address — direct IO mutation
+  , resolveAddress = \rawBytes _addr -> do
+      let !key = SBS.toShort rawBytes
+      (aid, isNew) <- lookupOrInsert key (dmsAddress dedupMaps)
+      pure (AddressId aid, isNew)
+
     -- UTxO IDs
   , assignTxInId = atomicModifyIORef' stRef $ \st ->
       let (iid, ctr') = nextId (icTxInId $ esIdCounters st)

@@ -85,6 +85,7 @@ epoch5Row = SyncStateRow
   , ssrMaTxMintIdCounter             = 150
   , ssrMaTxOutIdCounter              = 200
   , ssrSlotLeaderIdCounter           = 8
+  , ssrAddressIdCounter              = 1
   , ssrStakeAddressIdCounter         = 400
   , ssrPoolHashIdCounter             = 12
   , ssrMultiAssetIdCounter           = 300
@@ -115,6 +116,7 @@ epoch6Row = epoch5Row
   , ssrBlockIdCounter       = 1501
   , ssrTxIdCounter           = 7500
   , ssrSlotLeaderIdCounter   = 9
+  , ssrAddressIdCounter      = 1
   , ssrEpochSyncStatsIdCounter = 7
   }
 

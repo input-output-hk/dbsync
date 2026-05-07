@@ -21,6 +21,7 @@ import qualified Hasql.Session as Sess
 import qualified Hasql.Statement as Stmt
 
 import DbSync.Db.Schema.Ids
+import DbSync.Db.Statement.Address (nextAddressIdStmt, queryAddressIdStmt)
 import DbSync.Db.Statement.Block (nextBlockIdStmt)
 import DbSync.Db.Statement.CollateralTxIn (nextCollateralTxInIdStmt)
 import DbSync.Db.Statement.Delegation (nextDelegationIdStmt)
@@ -79,6 +80,15 @@ resolver conn lastBlock = IdResolver
   , resolvePrevBlock = \_hash -> readIORef lastBlock
 
   , assignTxId = run conn () nextTxIdStmt
+
+    -- Address dedup: SELECT first by raw bytes, nextval on miss.
+  , resolveAddress = \rawBytes _addr -> do
+      mId <- run conn rawBytes queryAddressIdStmt
+      case mId of
+        Just aid -> pure (aid, False)
+        Nothing  -> do
+          aid <- run conn () nextAddressIdStmt
+          pure (aid, True)
 
     -- UTxO IDs (no resolver-side dedup — straight nextval per row)
   , assignTxOutId            = run conn () nextTxOutIdStmt

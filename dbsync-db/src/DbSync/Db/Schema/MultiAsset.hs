@@ -101,6 +101,8 @@ multiAssetTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
   }
 
 maTxMintTableDef :: TableDef
@@ -116,6 +118,8 @@ maTxMintTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
   }
 
 maTxOutTableDef :: TableDef
@@ -131,6 +135,8 @@ maTxOutTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
   }
 
 -- ---------------------------------------------------------------------------

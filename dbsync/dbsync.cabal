@@ -254,8 +254,11 @@ test-suite dbsync-test
     DbSync.Db.TypesSpec
     DbSync.PropertySpec
     DbSync.Schema.AdaPotsSpec
+    DbSync.Schema.AddressSpec
     DbSync.Schema.CoreSpec
     DbSync.Schema.GenerateSpec
+    DbSync.Schema.RewardSpec
+    DbSync.Schema.ScriptsDatumsSpec
     DbSync.Schema.SyncStateSpec
     DbSync.Extractor.CoreSpec
     DbSync.Extractor.EpochBoundarySpec

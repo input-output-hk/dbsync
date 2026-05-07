@@ -86,13 +86,24 @@ generateCreateTable td =
       | idx < total = ","
       | otherwise   = ""
 
+    -- Generated columns are emitted as
+    -- @"name" <type> GENERATED ALWAYS AS (expr) STORED@ with no
+    -- NOT NULL or DEFAULT (the generation expression takes the place
+    -- of any default; PostgreSQL infers nullability from the
+    -- expression).
     formatColumn :: ColumnDef -> Text
     formatColumn col =
-      let nullability = if cdNullable col then "" else " NOT NULL"
-          defaultClause = case lookup (cdName col) (tdColumnDefaults td) of
-            Nothing   -> ""
-            Just expr -> " DEFAULT " <> expr
-      in quoteIdent (cdName col) <> " " <> pgTypeToSql (cdType col) <> nullability <> defaultClause
+      let typeSql = pgTypeToSql (cdType col)
+          quoted  = quoteIdent (cdName col)
+      in case lookup (cdName col) (tdGeneratedColumns td) of
+           Just expr ->
+             quoted <> " " <> typeSql <> " GENERATED ALWAYS AS (" <> expr <> ") STORED"
+           Nothing ->
+             let nullability = if cdNullable col then "" else " NOT NULL"
+                 defaultClause = case lookup (cdName col) (tdColumnDefaults td) of
+                   Nothing   -> ""
+                   Just expr -> " DEFAULT " <> expr
+             in quoted <> " " <> typeSql <> nullability <> defaultClause
 
 -- | Convert a 'PgType' to its SQL string representation.
 pgTypeToSql :: PgType -> Text
@@ -108,4 +119,3 @@ pgTypeToSql = \case
   PgTimestamp   -> "TIMESTAMP WITHOUT TIME ZONE"
   PgTimestampTz -> "TIMESTAMP WITH TIME ZONE"
   PgEnum name   -> name
-  PgGenerated e -> "GENERATED ALWAYS AS (" <> e <> ") STORED"

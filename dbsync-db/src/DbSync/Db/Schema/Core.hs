@@ -3,29 +3,41 @@
 
 {- |
 Module      : DbSync.Db.Schema.Core
-Description : Schema types for the Core extractor tables: block, tx, slot_leader.
+Description : Schema types for the @core@ extractor.
 
-These are the __single canonical Haskell representation__ of each
-database table — used for COPY encoding during 'IngestChainHistory'
-and (later) for hasql INSERT\/SELECT during 'FollowingChainTip'.
-The COPY encoders ('encodeBlockCopy', 'encodeTxCopy',
-'encodeSlotLeaderCopy') emit PostgreSQL COPY text-format rows.
+The @core@ extractor owns five tables:
+
+  * @block@, @tx@, @slot_leader@ — block extraction (always-on).
+  * @meta@ — chain metadata (network name, version, start time).
+    Written once at startup.
+  * @reverse_index@ — per-block min-FK watermarks. Required by every
+    other extractor for rollback safety.
+
+Records are the single canonical Haskell representation of each
+table — used for COPY encoding during 'IngestChainHistory' and
+hasql INSERT\/SELECT during 'FollowingChainTip'.
 -}
 module DbSync.Db.Schema.Core
   ( -- * Schema types
     Block (..)
   , Tx (..)
   , SlotLeader (..)
+  , Meta (..)
+  , ReverseIndex (..)
 
     -- * Table definitions (for DDL generation)
   , blockTableDef
   , txTableDef
   , slotLeaderTableDef
+  , metaTableDef
+  , reverseIndexTableDef
 
     -- * COPY encoding
   , encodeBlockCopy
   , encodeTxCopy
   , encodeSlotLeaderCopy
+  , encodeMetaCopy
+  , encodeReverseIndexCopy
 
     -- * Hasql encoders \/ decoders
   , blockEncoder
@@ -37,6 +49,12 @@ module DbSync.Db.Schema.Core
   , slotLeaderEncoder
   , slotLeaderDecoder
   , entitySlotLeaderDecoder
+  , metaEncoder
+  , metaDecoder
+  , entityMetaDecoder
+  , reverseIndexEncoder
+  , reverseIndexDecoder
+  , entityReverseIndexDecoder
 
     -- * Internal encoding helpers (exported for testing)
   , encodeInt64
@@ -46,7 +64,7 @@ module DbSync.Db.Schema.Core
   , encodeUTCTime
   ) where
 
-import Cardano.Prelude
+import Cardano.Prelude hiding (Meta)
 
 import Data.Functor.Contravariant ((>$<))
 import Data.Time.Clock (UTCTime)
@@ -60,7 +78,9 @@ import qualified Hasql.Encoders as E
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
   ( BlockId (..)
+  , MetaId (..)
   , PoolHashId (..)
+  , ReverseIndexId (..)
   , SlotLeaderId (..)
   , TxId (..)
   , idDecoder
@@ -96,6 +116,8 @@ import DbSync.Db.Writer.Copy.Encoder
 type instance Key Block = BlockId
 type instance Key Tx = TxId
 type instance Key SlotLeader = SlotLeaderId
+type instance Key Meta = MetaId
+type instance Key ReverseIndex = ReverseIndexId
 
 -- ---------------------------------------------------------------------------
 -- * Schema types
@@ -149,6 +171,24 @@ data SlotLeader = SlotLeader
   }
   deriving stock (Eq, Show)
 
+-- | The @meta@ table.
+-- One row, written once at startup. Unique on @start_time@.
+data Meta = Meta
+  { metaStartTime   :: !UTCTime
+  , metaNetworkName :: !Text
+  , metaVersion     :: !Text
+  }
+  deriving stock (Eq, Show)
+
+-- | The @reverse_index@ table.
+-- Min-FK-id watermarks per block, used by rollback to bound DELETE
+-- ranges. Written by every block-extracting extractor.
+data ReverseIndex = ReverseIndex
+  { reverseIndexBlockId :: !BlockId
+  , reverseIndexMinIds  :: !Text
+  }
+  deriving stock (Eq, Show)
+
 -- ---------------------------------------------------------------------------
 -- * Table definitions
 -- ---------------------------------------------------------------------------
@@ -180,6 +220,8 @@ blockTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
   }
 
 -- | Table definition for the @tx@ table.
@@ -205,6 +247,8 @@ txTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
   }
 
 -- | Table definition for the @slot_leader@ table.
@@ -221,6 +265,43 @@ slotLeaderTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
+  }
+
+-- | Table definition for the @meta@ table. Unique on @start_time@.
+metaTableDef :: TableDef
+metaTableDef = TableDef
+  { tdName    = "meta"
+  , tdColumns =
+      [ ColumnDef "id"           PgBigInt    False
+      , ColumnDef "start_time"   PgTimestamp False
+      , ColumnDef "network_name" PgText      False
+      , ColumnDef "version"      PgText      False
+      ]
+  , tdMode    = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
+  , tdUniqueConstraints = [pure "start_time"]
+  , tdGeneratedColumns = []
+  }
+
+-- | Table definition for the @reverse_index@ table.
+reverseIndexTableDef :: TableDef
+reverseIndexTableDef = TableDef
+  { tdName    = "reverse_index"
+  , tdColumns =
+      [ ColumnDef "id"       PgBigInt False
+      , ColumnDef "block_id" PgBigInt False
+      , ColumnDef "min_ids"  PgText   False
+      ]
+  , tdMode    = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
   }
 
 -- ---------------------------------------------------------------------------
@@ -277,6 +358,25 @@ encodeSlotLeaderCopy (SlotLeaderId slid) sl =
     , Just $ bHex (slotLeaderHash sl)
     , bInt64 . getPoolHashId <$> slotLeaderPoolHashId sl
     , Just $ bText (slotLeaderDescription sl)
+    ]
+
+-- | Encode a 'Meta' row with its 'MetaId' into a COPY text row.
+encodeMetaCopy :: MetaId -> Meta -> ByteString
+encodeMetaCopy (MetaId mid) m =
+  buildCopyRow
+    [ Just $ bInt64 mid
+    , Just $ bUTCTime (metaStartTime m)
+    , Just $ bText (metaNetworkName m)
+    , Just $ bText (metaVersion m)
+    ]
+
+-- | Encode a 'ReverseIndex' row with its 'ReverseIndexId' into a COPY text row.
+encodeReverseIndexCopy :: ReverseIndexId -> ReverseIndex -> ByteString
+encodeReverseIndexCopy (ReverseIndexId rid) ri =
+  buildCopyRow
+    [ Just $ bInt64 rid
+    , Just $ bInt64 (getBlockId $ reverseIndexBlockId ri)
+    , Just $ bText (reverseIndexMinIds ri)
     ]
 
 -- ---------------------------------------------------------------------------
@@ -442,3 +542,43 @@ entitySlotLeaderDecoder :: D.Row (SlotLeaderId, SlotLeader)
 entitySlotLeaderDecoder = (,)
   <$> idDecoder SlotLeaderId
   <*> slotLeaderDecoder
+
+-- | Encoder for a 'Meta' row, excluding the auto-generated @id@.
+metaEncoder :: E.Params Meta
+metaEncoder = mconcat
+  [ metaStartTime   >$< E.param (E.nonNullable utcTimeAsTimestampEncoder)
+  , metaNetworkName >$< E.param (E.nonNullable E.text)
+  , metaVersion     >$< E.param (E.nonNullable E.text)
+  ]
+
+-- | Decoder for the data columns of a 'Meta' row (excluding @id@).
+metaDecoder :: D.Row Meta
+metaDecoder = Meta
+  <$> D.column (D.nonNullable utcTimeAsTimestampDecoder)
+  <*> D.column (D.nonNullable D.text)
+  <*> D.column (D.nonNullable D.text)
+
+-- | Decoder for a full @meta@ row, including @id@.
+entityMetaDecoder :: D.Row (MetaId, Meta)
+entityMetaDecoder = (,)
+  <$> idDecoder MetaId
+  <*> metaDecoder
+
+-- | Encoder for a 'ReverseIndex' row, excluding the auto-generated @id@.
+reverseIndexEncoder :: E.Params ReverseIndex
+reverseIndexEncoder = mconcat
+  [ reverseIndexBlockId >$< idEncoder getBlockId
+  , reverseIndexMinIds  >$< E.param (E.nonNullable E.text)
+  ]
+
+-- | Decoder for the data columns of a 'ReverseIndex' (excluding @id@).
+reverseIndexDecoder :: D.Row ReverseIndex
+reverseIndexDecoder = ReverseIndex
+  <$> idDecoder BlockId
+  <*> D.column (D.nonNullable D.text)
+
+-- | Decoder for a full @reverse_index@ row, including @id@.
+entityReverseIndexDecoder :: D.Row (ReverseIndexId, ReverseIndex)
+entityReverseIndexDecoder = (,)
+  <$> idDecoder ReverseIndexId
+  <*> reverseIndexDecoder

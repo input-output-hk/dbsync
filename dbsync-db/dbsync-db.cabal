@@ -42,12 +42,14 @@ library
     DbSync.Db.Schema.Ids
     DbSync.Db.Schema.Types
     DbSync.Db.Schema.Core
+    DbSync.Db.Schema.Address
     DbSync.Db.Schema.UTxO
     DbSync.Db.Schema.Metadata
     DbSync.Db.Schema.MultiAsset
     DbSync.Db.Schema.StakeDelegation
     DbSync.Db.Schema.Pool
     DbSync.Db.Schema.CBOR
+    DbSync.Db.Schema.ScriptsDatums
     DbSync.Db.Schema.EpochSyncStats
     DbSync.Db.Schema.AdaPots
     DbSync.Db.Schema.SyncState
@@ -56,6 +58,7 @@ library
     DbSync.Db.Schema.Version
     DbSync.Db.Schema.Migration
     DbSync.Db.Sql
+    DbSync.Db.Statement.Address
     DbSync.Db.Statement.Block
     DbSync.Db.Statement.CollateralTxIn
     DbSync.Db.Statement.Delegation

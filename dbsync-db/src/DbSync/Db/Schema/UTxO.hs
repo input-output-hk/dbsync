@@ -53,7 +53,7 @@ import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Types
 import DbSync.Db.Types (DbLovelace (..), dbLovelaceValueDecoder, dbLovelaceValueEncoder)
 
-import DbSync.Db.Writer.Copy.Encoder (buildCopyRow, bBool, bHex, bInt64, bText, bWord64)
+import DbSync.Db.Writer.Copy.Encoder (buildCopyRow, bHex, bInt64, bWord64)
 
 -- ---------------------------------------------------------------------------
 -- * Key type family instances
@@ -69,12 +69,15 @@ type instance Key ReferenceTxIn = ReferenceTxInId
 -- ---------------------------------------------------------------------------
 
 -- | The @tx_out@ table.
+--
+-- Address columns are normalised into the @address@ dedup table since
+-- commit 4 of @SCHEMA-PLAN.md@; @txOutAddressId@ is the FK that
+-- replaces the original inline @address@\/@address_has_script@\/
+-- @payment_cred@ trio.
 data TxOut = TxOut
   { txOutTxId              :: !TxId             -- ^ FK to tx
   , txOutIndex             :: !Word64           -- ^ Output index within the transaction
-  , txOutAddress           :: !Text             -- ^ Bech32 or Byron base58 address
-  , txOutAddressHasScript  :: !Bool             -- ^ True if address contains a script
-  , txOutPaymentCred       :: !(Maybe ByteString) -- ^ Payment credential (28 bytes)
+  , txOutAddressId         :: !AddressId        -- ^ FK to address (deduped)
   , txOutStakeAddressId    :: !(Maybe StakeAddressId) -- ^ FK to stake_address (NULL for now)
   , txOutValue             :: !DbLovelace       -- ^ Lovelace value
   , txOutDataHash          :: !(Maybe ByteString) -- ^ Datum hash (Alonzo+)
@@ -125,9 +128,7 @@ txOutTableDef = TableDef
       [ ColumnDef "id"                  PgBigInt   False
       , ColumnDef "tx_id"               PgBigInt   False
       , ColumnDef "index"               PgBigInt   False
-      , ColumnDef "address"             PgText     False
-      , ColumnDef "address_has_script"  PgBoolean  False
-      , ColumnDef "payment_cred"        PgBytea    True
+      , ColumnDef "address_id"          PgBigInt   False
       , ColumnDef "stake_address_id"    PgBigInt   True
       , ColumnDef "value"               PgNumeric  False
       , ColumnDef "data_hash"           PgBytea    True
@@ -139,6 +140,8 @@ txOutTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
   }
 
 txInTableDef :: TableDef
@@ -156,6 +159,8 @@ txInTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
   }
 
 collateralTxInTableDef :: TableDef
@@ -172,6 +177,8 @@ collateralTxInTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
   }
 
 referenceTxInTableDef :: TableDef
@@ -188,6 +195,8 @@ referenceTxInTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
   }
 
 -- ---------------------------------------------------------------------------
@@ -200,9 +209,7 @@ encodeTxOutCopy (TxOutId oid) txo =
     [ Just $ bInt64 oid
     , Just $ bInt64 (getTxId $ txOutTxId txo)
     , Just $ bWord64 (txOutIndex txo)
-    , Just $ bText (txOutAddress txo)
-    , Just $ bBool (txOutAddressHasScript txo)
-    , bHex <$> txOutPaymentCred txo
+    , Just $ bInt64 (getAddressId $ txOutAddressId txo)
     , bInt64 . getStakeAddressId <$> txOutStakeAddressId txo
     , Just $ bWord64 (unDbLovelace $ txOutValue txo)
     , bHex <$> txOutDataHash txo
@@ -252,9 +259,7 @@ txOutEncoder :: E.Params TxOut
 txOutEncoder = mconcat
   [ txOutTxId             >$< idEncoder      getTxId
   , txOutIndex            >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
-  , txOutAddress          >$< E.param (E.nonNullable E.text)
-  , txOutAddressHasScript >$< E.param (E.nonNullable E.bool)
-  , txOutPaymentCred      >$< E.param (E.nullable E.bytea)
+  , txOutAddressId        >$< idEncoder      getAddressId
   , txOutStakeAddressId   >$< maybeIdEncoder getStakeAddressId
   , txOutValue            >$< E.param (E.nonNullable dbLovelaceValueEncoder)
   , txOutDataHash         >$< E.param (E.nullable E.bytea)
@@ -268,9 +273,7 @@ txOutDecoder :: D.Row TxOut
 txOutDecoder = TxOut
   <$> idDecoder TxId
   <*> D.column (D.nonNullable $ fromIntegral <$> D.int8)
-  <*> D.column (D.nonNullable D.text)
-  <*> D.column (D.nonNullable D.bool)
-  <*> D.column (D.nullable D.bytea)
+  <*> idDecoder AddressId
   <*> maybeIdDecoder StakeAddressId
   <*> D.column (D.nonNullable dbLovelaceValueDecoder)
   <*> D.column (D.nullable D.bytea)

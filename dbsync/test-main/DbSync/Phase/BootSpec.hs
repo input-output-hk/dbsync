@@ -43,6 +43,7 @@ seededRow ledgerEnabled = SyncStateRow
   , ssrMaTxMintIdCounter             = 1
   , ssrMaTxOutIdCounter              = 1
   , ssrSlotLeaderIdCounter           = 1
+  , ssrAddressIdCounter              = 1
   , ssrStakeAddressIdCounter         = 1
   , ssrPoolHashIdCounter             = 1
   , ssrMultiAssetIdCounter           = 1

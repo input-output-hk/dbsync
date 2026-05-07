@@ -100,6 +100,8 @@ adaPotsTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
   }
 
 -- ---------------------------------------------------------------------------

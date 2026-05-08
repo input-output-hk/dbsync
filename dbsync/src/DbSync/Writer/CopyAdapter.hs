@@ -25,6 +25,7 @@ import DbSync.Db.Schema.UTxO
   ( encodeTxOutCopy
   , encodeTxInCopy
   , encodeCollateralTxInCopy
+  , encodeCollateralTxOutCopy
   , encodeReferenceTxInCopy
   )
 import DbSync.Db.Schema.Metadata (encodeTxMetadataCopy)
@@ -76,6 +77,8 @@ mkCopyWriterAdapter cw = Writer
       cwWriteRow cw "tx_in" (encodeTxInCopy iid ti)
   , writeCollateralTxIn = \iid ci ->
       cwWriteRow cw "collateral_tx_in" (encodeCollateralTxInCopy iid ci)
+  , writeCollateralTxOut = \oid co ->
+      cwWriteRow cw "collateral_tx_out" (encodeCollateralTxOutCopy oid co)
   , writeReferenceTxIn = \iid ri ->
       cwWriteRow cw "reference_tx_in" (encodeReferenceTxInCopy iid ri)
 

@@ -44,13 +44,15 @@ metadataExtractor = ExtractorDef
 
 -- | Walk every metadata key in every tx and emit one row per pair.
 -- Empty maps (parser saw aux-data but it carried no metadata) yield
--- no rows.
+-- no rows. Failed phase-2 txs are skipped — their metadata is not
+-- recorded on-chain.
 processMetadata :: ProcessBlockFn
 processMetadata resolver writer ctx =
   forM_ (bcTxs ctx) $ \tc ->
-    case txMetadata (tcGenTx tc) of
-      Nothing    -> pure ()
-      Just mdMap -> forM_ (Map.toAscList mdMap) (writeOne resolver writer (tcTxId tc))
+    when (txValidContract (tcGenTx tc)) $
+      case txMetadata (tcGenTx tc) of
+        Nothing    -> pure ()
+        Just mdMap -> forM_ (Map.toAscList mdMap) (writeOne resolver writer (tcTxId tc))
   where
     writeOne r w txId (key, value) = do
       mdId <- assignTxMetadataId r

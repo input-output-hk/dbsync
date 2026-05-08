@@ -40,33 +40,34 @@ multiAssetExtractor = ExtractorDef
 -- ---------------------------------------------------------------------------
 
 processMultiAsset :: ProcessBlockFn
-processMultiAsset resolver writer ctx = do
+processMultiAsset resolver writer ctx =
   forM_ (bcTxs ctx) $ \tc -> do
     let txId   = tcTxId tc
         gtx    = tcGenTx tc
         outIds = tcOutIds tc
 
-    -- 1. Process minting/burning events
-    forM_ (txMint gtx) $ \(policy, name, quantity) -> do
-      maId <- resolveAndWriteMultiAsset resolver writer policy name
-      mintId <- assignMaTxMintId resolver
-      let mint = MaTxMint
-            { maTxMintQuantity = quantity
-            , maTxMintTxId     = txId
-            , maTxMintIdent    = maId
-            }
-      writeMaTxMint writer mintId mint
-
-    -- 2. Process multi-asset outputs
-    forM_ (zip outIds (txOutputs gtx)) $ \(outId, gout) -> do
-      forM_ (txOutMultiAssets gout) $ \(policy, name, quantity) -> do
+    -- Phase-2 failures don't mint and produce no on-chain outputs, so
+    -- no ma_tx_mint or ma_tx_out rows belong to a failed tx.
+    when (txValidContract gtx) $ do
+      forM_ (txMint gtx) $ \(policy, name, quantity) -> do
         maId <- resolveAndWriteMultiAsset resolver writer policy name
-        maoId <- assignMaTxOutId resolver
-        let mao = MaTxOut
-              { maTxOutQuantity = DbWord64 (fromIntegral quantity)
-              , maTxOutTxOutId  = outId
-              , maTxOutIdent    = maId
+        mintId <- assignMaTxMintId resolver
+        let mint = MaTxMint
+              { maTxMintQuantity = quantity
+              , maTxMintTxId     = txId
+              , maTxMintIdent    = maId
               }
-        writeMaTxOut writer maoId mao
+        writeMaTxMint writer mintId mint
+
+      forM_ (zip outIds (txOutputs gtx)) $ \(outId, gout) -> do
+        forM_ (txOutMultiAssets gout) $ \(policy, name, quantity) -> do
+          maId <- resolveAndWriteMultiAsset resolver writer policy name
+          maoId <- assignMaTxOutId resolver
+          let mao = MaTxOut
+                { maTxOutQuantity = DbWord64 (fromIntegral quantity)
+                , maTxOutTxOutId  = outId
+                , maTxOutIdent    = maId
+                }
+          writeMaTxOut writer maoId mao
 
 

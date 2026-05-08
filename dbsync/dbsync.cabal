@@ -222,6 +222,7 @@ library dbsync-testlib
     DbSync.Test.Hasql
     DbSync.Test.Helpers
     DbSync.Test.MockChain
+    DbSync.Test.PipelineEnv
     DbSync.Test.Property.Invariants
   build-depends:
       base
@@ -274,6 +275,7 @@ test-suite dbsync-test
     DbSync.Block.MetadataSpec
     DbSync.Extractor.CoreSpec
     DbSync.Extractor.EpochBoundarySpec
+    DbSync.Extractor.PoolSpec
     DbSync.Extractor.UTxOSpec
     DbSync.Ingest.ConsumerSpec
     DbSync.Ingest.PipelineSpec

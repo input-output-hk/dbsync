@@ -18,6 +18,8 @@ module DbSync.Block.Types
   , GenericTxCertificate (..)
   , GenericTxWithdrawal (..)
   , CertAction (..)
+  , DRepIdent (..)
+  , AnchorData (..)
   , PoolRegistrationData (..)
   , PoolRelayData (..)
   , BlockEra (..)
@@ -188,36 +190,61 @@ data CertAction
       !(Maybe Word64)          -- ^ Deposit
   | CertConwayDelegVote
       !ByteString              -- ^ Stake credential hash
-      !ByteString              -- ^ DRep credential hash (or special: always-abstain / always-no-confidence)
+      !DRepIdent               -- ^ DRep target (credential or special abstain/no-confidence)
   | CertConwayDelegStakeVote
       !ByteString              -- ^ Stake credential hash
       !ByteString              -- ^ Pool key hash
-      !ByteString              -- ^ DRep credential hash
+      !DRepIdent               -- ^ DRep target
 
   -- Conway governance certificates (for future Governance extractor)
   | CertDRepRegistration
       !ByteString              -- ^ DRep credential hash
       !Word64                  -- ^ Deposit
-      !(Maybe ByteString)      -- ^ Anchor URL hash (if present)
+      !(Maybe AnchorData)      -- ^ Anchor (URL + hash) if present
   | CertDRepDeregistration
       !ByteString              -- ^ DRep credential hash
       !Word64                  -- ^ Deposit refund
   | CertDRepUpdate
       !ByteString              -- ^ DRep credential hash
-      !(Maybe ByteString)      -- ^ Anchor URL hash (if present)
+      !(Maybe AnchorData)      -- ^ Anchor (URL + hash) if present
   | CertCommitteeAuth
       !ByteString              -- ^ Cold key credential hash
       !ByteString              -- ^ Hot key credential hash
   | CertCommitteeResign
       !ByteString              -- ^ Cold key credential hash
-      !(Maybe ByteString)      -- ^ Anchor hash
+      !(Maybe AnchorData)      -- ^ Anchor (URL + hash) if present
 
-  -- MIR certificates (pre-Conway only)
-  | CertMIR !ByteString        -- ^ Raw CBOR of MIR cert
+  -- | Move-Instantaneous-Reward cert (Shelley-Babbage). Carries the
+  -- raw CBOR of the cert; the epoch-boundary extractor decodes it to
+  -- emit @treasury@ / @reserve@ rows.
+  | CertMIR !ByteString
+
+  -- | Genesis-key delegation cert (Shelley-Babbage). Carries the raw
+  -- CBOR; no current consumer reads it.
+  | CertGenesisDelegation !ByteString
 
   -- Fallback for unhandled/future certificate types
   | CertOther !ByteString      -- ^ Raw CBOR bytes
   deriving stock (Show)
+
+-- | DRep delegation target — a specific DRep credential, or one of
+-- the protocol-defined \"always abstain\" / \"always no-confidence\"
+-- meta-DReps.
+data DRepIdent
+  = DRepCred !ByteString
+      -- ^ DRep credential hash (28 bytes, key or script)
+  | DRepAlwaysAbstain
+  | DRepAlwaysNoConfidence
+  deriving stock (Eq, Show)
+
+-- | The (URL, data-hash) pair pinning off-chain text to a governance
+-- cert or proposal. Both fields are mandatory in the ledger's
+-- 'Cardano.Ledger.BaseTypes.Anchor'.
+data AnchorData = AnchorData
+  { adUrl  :: !Text
+  , adHash :: !ByteString
+  }
+  deriving stock (Eq, Show)
 
 -- | Pool registration data extracted from a @PoolRegistration@ certificate.
 data PoolRegistrationData = PoolRegistrationData

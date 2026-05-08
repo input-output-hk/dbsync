@@ -72,6 +72,7 @@ data IdResolver m = IdResolver
 
     -- | Assign the next collateral_tx_in ID.
   , assignCollateralTxInId :: !(m CollateralTxInId)
+  , assignCollateralTxOutId :: !(m CollateralTxOutId)
 
     -- | Assign the next reference_tx_in ID.
   , assignReferenceTxInId  :: !(m ReferenceTxInId)

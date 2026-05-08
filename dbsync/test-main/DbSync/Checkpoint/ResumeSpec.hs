@@ -104,6 +104,7 @@ rowAtBoundary boundarySlot nextSlotLeaderId = SyncStateRow
   , ssrTxCborIdCounter               = 1
   , ssrEpochSyncStatsIdCounter       = 1
   , ssrAdaPotsIdCounter              = 1
+  , ssrCollateralTxOutIdCounter              = 1
   , ssrSchemaVersionApplied          = 1
   , ssrLedgerEnabled                 = False
   , ssrSyncComplete                  = False

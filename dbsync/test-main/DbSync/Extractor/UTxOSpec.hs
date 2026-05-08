@@ -7,7 +7,6 @@ module DbSync.Extractor.UTxOSpec (spec) where
 
 import Cardano.Prelude
 
-import Cardano.Ledger.BaseTypes (Network (..))
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import Data.IORef (newIORef, readIORef)
@@ -20,24 +19,22 @@ import DbSync.Block.Types
   ( BlockEra (..)
   , GenericBlock (..)
   , GenericTx (..)
+  , GenericTxIn (..)
   , GenericTxOut (..)
   )
 import DbSync.Db.Schema.Address (Address (..))
 import qualified DbSync.Db.Schema.UTxO as SU
-import DbSync.Env (HasNetwork (..))
-import DbSync.Extractor (ExtractState (..), ExtractorDef (..), HasExtractors (..))
+import DbSync.Extractor (freshExtractState)
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Extractor.UTxO
   ( extractStakeCred
   , utxoExtractor
   )
-import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
 import DbSync.Id.DedupMap (newMaps)
 import DbSync.Ingest.Pipeline (processBlock)
-import DbSync.Resolver (HasResolver (..), IdResolver)
 import DbSync.Resolver.Ingest (mkIngestResolver)
-import DbSync.Writer (HasWriter (..), Writer)
+import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import DbSync.Writer.Testing (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 
 import Data.Time.Calendar (fromGregorian)
@@ -144,75 +141,50 @@ spec = do
       -- Both outputs reference the same StakeAddressId.
       headDef (panic "no sa") saIds `shouldBe` headDef (panic "no sa") (drop 1 saIds)
 
+  describe "processUTxO: phase-2 failure (txValidContract = False)" $ do
+    it "writes no tx_out rows" $ do
+      written <- runFullPipeline (blockWithFailedTx alonzoFailedTx)
+      length (twTxOuts written) `shouldBe` 0
+
+    it "writes no tx_in rows" $ do
+      written <- runFullPipeline (blockWithFailedTx alonzoFailedTx)
+      length (twTxIns written) `shouldBe` 0
+
+    it "writes no reference_tx_in rows" $ do
+      written <- runFullPipeline (blockWithFailedTx alonzoFailedTx)
+      length (twReferenceTxIns written) `shouldBe` 0
+
+    it "writes the collateral_tx_in rows" $ do
+      written <- runFullPipeline (blockWithFailedTx alonzoFailedTx)
+      length (twCollateralTxIns written) `shouldBe` 1
+
+    it "writes no collateral_tx_out for an Alonzo failure" $ do
+      written <- runFullPipeline (blockWithFailedTx alonzoFailedTx)
+      length (twCollateralTxOuts written) `shouldBe` 0
+
+    it "writes the collateral_tx_out for a Babbage+ failure" $ do
+      written <- runFullPipeline (blockWithFailedTx babbageFailedTx)
+      length (twCollateralTxOuts written) `shouldBe` 1
+
+    it "still emits the address row for a Babbage+ collateral return" $ do
+      written <- runFullPipeline (blockWithFailedTx babbageFailedTx)
+      length (twAddresses written) `shouldBe` 1
+
 -- ---------------------------------------------------------------------------
 -- Test helpers
 -- ---------------------------------------------------------------------------
 
-data TestPipelineEnv = TestPipelineEnv
-  { tpeResolver   :: !(IdResolver IO)
-  , tpeWriter     :: !(Writer IO)
-  , tpeExtractors :: ![ExtractorDef]
-  }
-
-instance HasResolver TestPipelineEnv where
-  getResolver = tpeResolver
-
-instance HasWriter TestPipelineEnv where
-  getWriter = tpeWriter
-
-instance HasExtractors TestPipelineEnv where
-  getExtractors = tpeExtractors
-
-instance HasNetwork TestPipelineEnv where
-  getNetwork _ = Mainnet
-
 -- | Run @core@ + @stake_delegation@ + @utxo@ on a single block.
 runFullPipeline :: GenericBlock -> IO TestWriterState
 runFullPipeline block = do
-  stRef <- newIORef mkInitState
+  stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
   wrRef <- newIORef emptyTestWriterState
-  let env = TestPipelineEnv
-        { tpeResolver   = mkIngestResolver stRef dedupMaps
-        , tpeWriter     = mkTestWriter wrRef
-        , tpeExtractors = [coreExtractor, stakeDelegationExtractor, utxoExtractor]
-        }
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps)
+                              (mkTestWriter wrRef)
+                              [coreExtractor, stakeDelegationExtractor, utxoExtractor]
   runReaderT (processBlock block) env
   readIORef wrRef
-
-mkInitState :: ExtractState
-mkInitState = ExtractState
-  { esIdCounters = IdCounters
-      { icBlockId            = mkIdCounter 1
-      , icTxId               = mkIdCounter 1
-      , icTxOutId            = mkIdCounter 1
-      , icTxInId             = mkIdCounter 1
-      , icCollateralTxInId   = mkIdCounter 1
-      , icReferenceTxInId    = mkIdCounter 1
-      , icTxMetadataId       = mkIdCounter 1
-      , icMaTxMintId         = mkIdCounter 1
-      , icMaTxOutId          = mkIdCounter 1
-      , icSlotLeaderId       = mkIdCounter 1
-      , icAddressId          = mkIdCounter 1
-      , icStakeAddressId     = mkIdCounter 1
-      , icPoolHashId         = mkIdCounter 1
-      , icMultiAssetId       = mkIdCounter 1
-      , icScriptId              = mkIdCounter 1
-      , icStakeRegistrationId   = mkIdCounter 1
-      , icStakeDeregistrationId = mkIdCounter 1
-      , icDelegationId          = mkIdCounter 1
-      , icWithdrawalId          = mkIdCounter 1
-      , icPoolUpdateId          = mkIdCounter 1
-      , icPoolMetadataRefId     = mkIdCounter 1
-      , icPoolOwnerId           = mkIdCounter 1
-      , icPoolRetireId          = mkIdCounter 1
-      , icPoolRelayId           = mkIdCounter 1
-      , icTxCborId              = mkIdCounter 1
-      , icEpochSyncStatsId      = mkIdCounter 1
-      , icAdaPotsId             = mkIdCounter 1
-      }
-  , esLastBlockId = Nothing
-  }
 
 -- ---------------------------------------------------------------------------
 -- Address fixtures
@@ -337,4 +309,33 @@ mkOutput idx rawAddr value = GenericTxOut
   , txOutInlineDatum = Nothing
   , txOutRefScript   = Nothing
   , txOutMultiAssets = []
+  }
+
+-- ---------------------------------------------------------------------------
+-- Phase-2 failure fixtures
+-- ---------------------------------------------------------------------------
+
+-- | A Shelley block carrying a single phase-2 failed tx.
+blockWithFailedTx :: GenericTx -> GenericBlock
+blockWithFailedTx tx = shelleyEmptyBlock { blkTxs = [tx] }
+
+-- | An Alonzo-shape failed phase-2 tx: collateral inputs only, no
+-- collateral return (the field exists in the parser only for Babbage+).
+-- The parser's failed-path produces @txOutputs = []@ regardless, but
+-- we leave one output here to assert the extractor ignores it.
+alonzoFailedTx :: GenericTx
+alonzoFailedTx = (singleOutputTx (mkBaseAddr 0x00) 5_000_000)
+  { txValidContract    = False
+  , txInputs           = []
+  , txOutputs          = []
+  , txCollateralInputs = [GenericTxIn (BS.replicate 32 0xcc) 0]
+  , txReferenceInputs  = []
+  , txCollateralOutput = Nothing
+  }
+
+-- | A Babbage+-shape failed phase-2 tx: collateral inputs and a
+-- collateral-return output.
+babbageFailedTx :: GenericTx
+babbageFailedTx = alonzoFailedTx
+  { txCollateralOutput = Just (mkOutput 1 (mkBaseAddr 0x00) 4_000_000)
   }

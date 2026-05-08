@@ -32,7 +32,7 @@ import DbSync.Db.Schema.Metadata (TxMetadata)
 import DbSync.Db.Schema.MultiAsset (MultiAsset, MaTxMint, MaTxOut)
 import DbSync.Db.Schema.Pool (PoolHash, PoolUpdate, PoolMetadataRef, PoolOwner, PoolRetire, PoolRelay)
 import DbSync.Db.Schema.StakeDelegation (StakeAddress, StakeRegistration, StakeDeregistration, Delegation, Withdrawal)
-import DbSync.Db.Schema.UTxO (TxOut, TxIn, CollateralTxIn, ReferenceTxIn)
+import DbSync.Db.Schema.UTxO (TxOut, TxIn, CollateralTxIn, CollateralTxOut, ReferenceTxIn)
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -53,11 +53,12 @@ data Writer m = Writer
     -- ---------------------------------------------------------------
     -- UTxO tables
     -- ---------------------------------------------------------------
-  , writeAddress        :: !(AddressId -> Address -> m ())
-  , writeTxOut          :: !(TxOutId -> TxOut -> m ())
-  , writeTxIn           :: !(TxInId -> TxIn -> m ())
-  , writeCollateralTxIn :: !(CollateralTxInId -> CollateralTxIn -> m ())
-  , writeReferenceTxIn  :: !(ReferenceTxInId -> ReferenceTxIn -> m ())
+  , writeAddress         :: !(AddressId -> Address -> m ())
+  , writeTxOut           :: !(TxOutId -> TxOut -> m ())
+  , writeTxIn            :: !(TxInId -> TxIn -> m ())
+  , writeCollateralTxIn  :: !(CollateralTxInId -> CollateralTxIn -> m ())
+  , writeCollateralTxOut :: !(CollateralTxOutId -> CollateralTxOut -> m ())
+  , writeReferenceTxIn   :: !(ReferenceTxInId -> ReferenceTxIn -> m ())
 
     -- ---------------------------------------------------------------
     -- Metadata tables

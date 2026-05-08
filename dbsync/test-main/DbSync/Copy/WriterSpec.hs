@@ -11,7 +11,6 @@ module DbSync.Copy.WriterSpec (spec) where
 
 import Cardano.Prelude
 
-import Cardano.Ledger.BaseTypes (Network (..))
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import Data.IORef (newIORef)
@@ -22,7 +21,6 @@ import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import Test.Hspec (Spec, afterAll_, beforeAll_, describe, it, shouldBe)
 
-import DbSync.Env (HasNetwork (..))
 import DbSync.Block.Types
   ( BlockEra (..)
   , GenericBlock (..)
@@ -32,15 +30,13 @@ import DbSync.Copy.Writer (CopyWriter (..), closeCopyWriter, mkCopyWriter)
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
 import DbSync.Db.Schema.Init (dropSchema, initSchema)
 import DbSync.Db.Schema.Types (TableDef)
-import DbSync.Extractor (ExtractState (..), ExtractorDef, HasExtractors (..))
+import DbSync.Extractor (freshExtractState)
 import DbSync.Extractor.Core (coreExtractor)
-import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
 import DbSync.Id.DedupMap (newMaps)
 import DbSync.Ingest.Pipeline (processBlock)
-import DbSync.Resolver (HasResolver (..), IdResolver)
 import DbSync.Resolver.Ingest (mkIngestResolver)
 import DbSync.Test.Database (queryTestDb, testConnBs, testConnStr, truncateAllTables)
-import DbSync.Writer (HasWriter (..), Writer)
+import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import DbSync.Writer.CopyAdapter (mkCopyWriterAdapter)
 
 coreTables :: [TableDef]
@@ -124,14 +120,11 @@ spec = describe "DbSync.Copy.Writer (multi-threaded, full pipeline)" $
       it "data survives commit + reopen cycle" $ do
         truncateAllTables coreTableNames
         -- Simulate 2 epochs: write block, commit, reopen, write another block, commit
-        stRef <- newIORef mkInitState
+        stRef <- newIORef freshExtractState
         dedupMaps <- newMaps
         cw <- mkCopyWriter testConnBs coreTables
-        let env = TestPipelineEnv
-              { tpeResolver   = mkIngestResolver stRef dedupMaps
-              , tpeWriter     = mkCopyWriterAdapter cw
-              , tpeExtractors = [coreExtractor]
-              }
+        let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps)
+                                    (mkCopyWriterAdapter cw) [coreExtractor]
 
         -- Epoch 1
         runReaderT (processBlock emptyBlock) env
@@ -165,78 +158,18 @@ spec = describe "DbSync.Copy.Writer (multi-threaded, full pipeline)" $
 -- Test runner helpers
 -- ---------------------------------------------------------------------------
 
--- | The smallest env that satisfies 'processBlock''s constraints.
-data TestPipelineEnv = TestPipelineEnv
-  { tpeResolver   :: !(IdResolver IO)
-  , tpeWriter     :: !(Writer IO)
-  , tpeExtractors :: ![ExtractorDef]
-  }
-
-instance HasResolver TestPipelineEnv where
-  getResolver = tpeResolver
-
-instance HasWriter TestPipelineEnv where
-  getWriter = tpeWriter
-
-instance HasExtractors TestPipelineEnv where
-  getExtractors = tpeExtractors
-
-instance HasNetwork TestPipelineEnv where
-  getNetwork _ = Mainnet
-
 -- | Run the full pipeline: extractor → resolver → CopyAdapter → PostgreSQL.
 runPipelineToDb :: [GenericBlock] -> IO ()
 runPipelineToDb blocks = do
-  stRef <- newIORef mkInitState
+  stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
   cw <- mkCopyWriter testConnBs coreTables
-  let env = TestPipelineEnv
-        { tpeResolver   = mkIngestResolver stRef dedupMaps
-        , tpeWriter     = mkCopyWriterAdapter cw
-        , tpeExtractors = [coreExtractor]
-        }
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps)
+                              (mkCopyWriterAdapter cw) [coreExtractor]
   forM_ blocks $ \blk ->
     runReaderT (processBlock blk) env
   cwCommit cw
   closeCopyWriter cw
-
--- ---------------------------------------------------------------------------
--- Initial state
--- ---------------------------------------------------------------------------
-
-mkInitState :: ExtractState
-mkInitState = ExtractState
-  { esIdCounters = IdCounters
-      { icBlockId            = mkIdCounter 1
-      , icTxId               = mkIdCounter 1
-      , icTxOutId            = mkIdCounter 1
-      , icTxInId             = mkIdCounter 1
-      , icCollateralTxInId   = mkIdCounter 1
-      , icReferenceTxInId    = mkIdCounter 1
-      , icTxMetadataId       = mkIdCounter 1
-      , icMaTxMintId         = mkIdCounter 1
-      , icMaTxOutId          = mkIdCounter 1
-      , icSlotLeaderId       = mkIdCounter 1
-      , icAddressId          = mkIdCounter 1
-      , icStakeAddressId     = mkIdCounter 1
-      , icPoolHashId         = mkIdCounter 1
-      , icMultiAssetId       = mkIdCounter 1
-      , icScriptId              = mkIdCounter 1
-      , icStakeRegistrationId   = mkIdCounter 1
-      , icStakeDeregistrationId = mkIdCounter 1
-      , icDelegationId          = mkIdCounter 1
-      , icWithdrawalId          = mkIdCounter 1
-      , icPoolUpdateId          = mkIdCounter 1
-      , icPoolMetadataRefId     = mkIdCounter 1
-      , icPoolOwnerId           = mkIdCounter 1
-      , icPoolRetireId          = mkIdCounter 1
-      , icPoolRelayId           = mkIdCounter 1
-      , icTxCborId              = mkIdCounter 1
-      , icEpochSyncStatsId      = mkIdCounter 1
-      , icAdaPotsId             = mkIdCounter 1
-      }
-  , esLastBlockId = Nothing
-  }
 
 -- ---------------------------------------------------------------------------
 -- Setup/teardown

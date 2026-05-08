@@ -64,20 +64,20 @@ processPool resolver writer ctx = do
       epochNo = unEpochNo (blkEpochNo gb)
       network = bcNetwork ctx
 
-  forM_ (bcTxs ctx) $ \tc -> do
+  forM_ (bcTxs ctx) $ \tc -> when (txValidContract (tcGenTx tc)) $ do
     let txId = tcTxId tc
         gtx  = tcGenTx tc
 
+    -- Phase-2 failures don't register, retire, or otherwise mutate
+    -- pool state on-chain.
     forM_ (txCertificates gtx) $ \cert -> do
       let certIdx = txCertIndex cert
       case txCertAction cert of
 
         -- Pool registration
         CertPoolRegistration prd -> do
-          -- 1. Resolve pool hash
-          phId <- resolveAndWritePoolHash resolver writer (prdPoolHash prd)
+          (phId, isFirstReg) <- resolveAndWritePoolHash resolver writer (prdPoolHash prd)
 
-          -- 2. Optionally write metadata ref
           mMetaId <- case prdMetadata prd of
             Nothing -> pure Nothing
             Just (url, hash) -> do
@@ -91,27 +91,28 @@ processPool resolver writer ctx = do
               writePoolMetadataRef writer pmId pm
               pure (Just pmId)
 
-          -- 3. Resolve reward address as stake address
           let rewardAddr = prdRewardAddr prd
               rewardCredHash = if BS.length rewardAddr > 1
                                  then BS.drop 1 rewardAddr
                                  else rewardAddr
           rewardAddrId <- resolveAndWriteStakeAddress network resolver writer rewardCredHash
 
-          -- 4. Write pool update
           puId <- assignPoolUpdateId resolver
           let pu = PoolUpdate
                 { poolUpdateHashId         = phId
                 , poolUpdateCertIndex      = certIdx
                 , poolUpdateVrfKeyHash     = prdVrfKeyHash prd
                 , poolUpdatePledge         = DbLovelace (prdPledge prd)
-                , poolUpdateActiveEpochNo  = epochNo + 2
+                  -- First registration takes effect at @epoch + 2@;
+                  -- a re-registration of an already-known pool takes
+                  -- effect one epoch later.
+                , poolUpdateActiveEpochNo  = epochNo + (if isFirstReg then 2 else 3)
                 , poolUpdateMetaId         = mMetaId
                 , poolUpdateMargin         = prdMargin prd
                 , poolUpdateFixedCost      = DbLovelace (prdCost prd)
                 , poolUpdateRegisteredTxId = txId
                 , poolUpdateRewardAddrId   = rewardAddrId
-                , poolUpdateDeposit        = Nothing  -- deposit requires ledger state
+                , poolUpdateDeposit        = Nothing  -- TODO: deposit needs ledger event
                 }
           writePoolUpdate writer puId pu
 
@@ -133,7 +134,7 @@ processPool resolver writer ctx = do
 
         -- Pool retirement
         CertPoolRetirement poolKeyHash retiringEpoch -> do
-          phId <- resolveAndWritePoolHash resolver writer poolKeyHash
+          (phId, _) <- resolveAndWritePoolHash resolver writer poolKeyHash
           prId <- assignPoolRetireId resolver
           let pr = PoolRetire
                 { poolRetireHashId        = phId

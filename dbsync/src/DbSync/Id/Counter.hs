@@ -10,6 +10,7 @@ module DbSync.Id.Counter
 
     -- * Construction
   , mkIdCounter
+  , freshIdCounters
 
     -- * Operations
   , nextId
@@ -58,6 +59,7 @@ data IdCounters = IdCounters
   , icTxCborId              :: !IdCounter
   , icEpochSyncStatsId      :: !IdCounter
   , icAdaPotsId             :: !IdCounter
+  , icCollateralTxOutId     :: !IdCounter
   }
   deriving stock (Eq, Show)
 
@@ -66,6 +68,40 @@ data IdCounters = IdCounters
 -- | Create a new counter starting from a given value.
 mkIdCounter :: Int64 -> IdCounter
 mkIdCounter = IdCounter
+
+-- | Every counter seeded at 1 — the production startup state, also
+-- the fixture used by tests that don't resume from a checkpoint.
+freshIdCounters :: IdCounters
+freshIdCounters = IdCounters
+  { icBlockId               = mkIdCounter 1
+  , icTxId                  = mkIdCounter 1
+  , icTxOutId               = mkIdCounter 1
+  , icTxInId                = mkIdCounter 1
+  , icCollateralTxInId      = mkIdCounter 1
+  , icReferenceTxInId       = mkIdCounter 1
+  , icTxMetadataId          = mkIdCounter 1
+  , icMaTxMintId            = mkIdCounter 1
+  , icMaTxOutId             = mkIdCounter 1
+  , icSlotLeaderId          = mkIdCounter 1
+  , icAddressId             = mkIdCounter 1
+  , icStakeAddressId        = mkIdCounter 1
+  , icPoolHashId            = mkIdCounter 1
+  , icMultiAssetId          = mkIdCounter 1
+  , icScriptId              = mkIdCounter 1
+  , icStakeRegistrationId   = mkIdCounter 1
+  , icStakeDeregistrationId = mkIdCounter 1
+  , icDelegationId          = mkIdCounter 1
+  , icWithdrawalId          = mkIdCounter 1
+  , icPoolUpdateId          = mkIdCounter 1
+  , icPoolMetadataRefId     = mkIdCounter 1
+  , icPoolOwnerId           = mkIdCounter 1
+  , icPoolRetireId          = mkIdCounter 1
+  , icPoolRelayId           = mkIdCounter 1
+  , icTxCborId              = mkIdCounter 1
+  , icEpochSyncStatsId      = mkIdCounter 1
+  , icAdaPotsId             = mkIdCounter 1
+  , icCollateralTxOutId     = mkIdCounter 1
+  }
 
 -- * Operations
 

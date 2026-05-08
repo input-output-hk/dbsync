@@ -37,19 +37,24 @@ import DbSync.Writer (Writer (..))
 
 -- | Resolve a pool hash by 28-byte key hash, writing a fresh
 -- @pool_hash@ row on first sighting.
+--
+-- The 'Bool' is 'True' when this call assigned a new ID — callers
+-- that need to distinguish first registration from re-registration
+-- (e.g. @pool_update.active_epoch_no@: +2 vs +3 epoch offset) consult
+-- the flag instead of querying the DB.
 resolveAndWritePoolHash
   :: IdResolver IO
   -> Writer IO
   -> ByteString
-  -> IO PoolHashId
+  -> IO (PoolHashId, Bool)
 resolveAndWritePoolHash resolver writer poolKeyHash = do
   let ph = PoolHash
         { poolHashHashRaw = poolKeyHash
         , poolHashView    = serialisePoolKeyHashToBech32 poolKeyHash
         }
-  (phId, isNew) <- resolvePoolHash resolver poolKeyHash ph
+  result@(phId, isNew) <- resolvePoolHash resolver poolKeyHash ph
   when isNew $ writePoolHash writer phId ph
-  pure phId
+  pure result
 
 -- | Resolve a stake address by 28-byte credential hash, writing a fresh
 -- @stake_address@ row on first sighting.

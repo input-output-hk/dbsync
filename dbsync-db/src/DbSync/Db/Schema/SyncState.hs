@@ -84,6 +84,7 @@ data SyncStateRow = SyncStateRow
   , ssrTxCborIdCounter               :: !Int64
   , ssrEpochSyncStatsIdCounter       :: !Int64
   , ssrAdaPotsIdCounter              :: !Int64
+  , ssrCollateralTxOutIdCounter      :: !Int64
   , ssrSchemaVersionApplied          :: !Int
   , ssrLedgerEnabled                 :: !Bool
   , ssrSyncComplete                  :: !Bool
@@ -136,6 +137,7 @@ syncStateTableDef = TableDef
       , ColumnDef "tx_cbor_id_counter"              PgBigInt      False
       , ColumnDef "epoch_sync_stats_id_counter"     PgBigInt      False
       , ColumnDef "ada_pots_id_counter"             PgBigInt      False
+      , ColumnDef "collateral_tx_out_id_counter"    PgBigInt      False
       , ColumnDef "schema_version_applied"          PgInteger     False
       , ColumnDef "ledger_enabled"                  PgBoolean     False
       , ColumnDef "sync_complete"                   PgBoolean     False
@@ -192,6 +194,7 @@ syncStateCounterColumns =
   , "tx_cbor_id_counter"
   , "epoch_sync_stats_id_counter"
   , "ada_pots_id_counter"
+  , "collateral_tx_out_id_counter"
   ]
 
 -- ---------------------------------------------------------------------------
@@ -233,6 +236,7 @@ syncStateRowEncoder =
   <> (ssrTxCborIdCounter                           >$< E.param (E.nonNullable E.int8))
   <> (ssrEpochSyncStatsIdCounter                   >$< E.param (E.nonNullable E.int8))
   <> (ssrAdaPotsIdCounter                          >$< E.param (E.nonNullable E.int8))
+  <> (ssrCollateralTxOutIdCounter                  >$< E.param (E.nonNullable E.int8))
   <> (fromIntegral . ssrSchemaVersionApplied       >$< E.param (E.nonNullable E.int4))
   <> (ssrLedgerEnabled                             >$< E.param (E.nonNullable E.bool))
 
@@ -279,6 +283,7 @@ syncStateRowDecoder =
         <*> D.column (D.nonNullable D.int8)                        -- tx_cbor_id_counter
         <*> D.column (D.nonNullable D.int8)                        -- epoch_sync_stats_id_counter
         <*> D.column (D.nonNullable D.int8)                        -- ada_pots_id_counter
+        <*> D.column (D.nonNullable D.int8)                        -- collateral_tx_out_id_counter
         <*> (fromIntegral <$> D.column (D.nonNullable D.int4))     -- schema_version_applied
         <*> D.column (D.nonNullable D.bool)                        -- ledger_enabled
         <*> D.column (D.nonNullable D.bool)                        -- sync_complete

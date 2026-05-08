@@ -93,8 +93,9 @@ writeSyncStateStmt =
       \, tx_cbor_id_counter              = $28 \
       \, epoch_sync_stats_id_counter     = $29 \
       \, ada_pots_id_counter             = $30 \
-      \, schema_version_applied          = $31 \
-      \, ledger_enabled                  = $32 \
+      \, collateral_tx_out_id_counter    = $31 \
+      \, schema_version_applied          = $32 \
+      \, ledger_enabled                  = $33 \
       \, updated_at                      = now() \
       \WHERE id = 1"
 

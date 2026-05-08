@@ -29,6 +29,7 @@ import DbSync.Db.Schema.Ids (AddressId, StakeAddressId, TxId (..))
 import DbSync.Db.Schema.UTxO
 import DbSync.Db.Types (DbLovelace (..))
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
+import DbSync.Extractor.SharedDedup (resolveAndWriteStakeAddress)
 import DbSync.Resolver (IdResolver (..))
 import DbSync.Writer (Writer (..))
 
@@ -63,32 +64,51 @@ processUTxO resolver writer ctx = do
         outIds  = tcOutIds tc
         stakeIds = tcOutStakeIds tc
 
-    -- The pipeline pre-resolves @stakeIds@ so the address row and the
-    -- tx_out row share the same StakeAddressId.
-    forM_ (zip3 outIds stakeIds (txOutputs gtx)) $ \(outId, mStakeId, gout) -> do
-      let addr = mkAddress mStakeId gout
-      (addrId, isNew) <- resolveAddress resolver (G.txOutAddressRaw gout) addr
-      when isNew $ writeAddress writer addrId addr
-      let txOut = mkTxOut txId addrId mStakeId gout
-      writeTxOut writer outId txOut
+    if G.txValidContract gtx
+      then do
+        -- Pipeline pre-resolves @stakeIds@ so the address row and the
+        -- tx_out row share the same StakeAddressId.
+        forM_ (zip3 outIds stakeIds (txOutputs gtx)) $ \(outId, mStakeId, gout) -> do
+          let addr = mkAddress mStakeId gout
+          (addrId, isNew) <- resolveAddress resolver (G.txOutAddressRaw gout) addr
+          when isNew $ writeAddress writer addrId addr
+          let txOut = mkTxOut txId addrId mStakeId gout
+          writeTxOut writer outId txOut
 
-    -- 2. Write tx_in rows
-    forM_ (txInputs gtx) $ \gin -> do
-      inId <- assignTxInId resolver
-      let txIn = mkTxIn txId gin
-      writeTxIn writer inId txIn
+        forM_ (txInputs gtx) $ \gin -> do
+          inId <- assignTxInId resolver
+          writeTxIn writer inId (mkTxIn txId gin)
 
-    -- 3. Write collateral_tx_in rows
+        forM_ (txReferenceInputs gtx) $ \gin -> do
+          inId <- assignReferenceTxInId resolver
+          writeReferenceTxIn writer inId (mkReferenceTxIn txId gin)
+      else
+        -- Phase-2 failure: the chain only records the collateral
+        -- inputs (consumed) and the optional collateral return.
+        -- Regular inputs / outputs / reference inputs do not exist
+        -- on-chain for a failed tx.
+        forM_ (txCollateralOutput gtx) $ \gout -> do
+          outId <- assignCollateralTxOutId resolver
+          mStakeId <- resolveCollateralStake gout
+          let addr = mkAddress mStakeId gout
+          (addrId, isNew) <- resolveAddress resolver (G.txOutAddressRaw gout) addr
+          when isNew $ writeAddress writer addrId addr
+          writeCollateralTxOut writer outId (mkCollateralTxOut txId addrId mStakeId gout)
+
+    -- Collateral inputs are written for every tx — valid txs record them
+    -- as a script-witness commitment, failed txs record them as the
+    -- inputs that were actually consumed.
     forM_ (txCollateralInputs gtx) $ \gin -> do
       inId <- assignCollateralTxInId resolver
-      let ci = mkCollateralTxIn txId gin
-      writeCollateralTxIn writer inId ci
-
-    -- 4. Write reference_tx_in rows
-    forM_ (txReferenceInputs gtx) $ \gin -> do
-      inId <- assignReferenceTxInId resolver
-      let ri = mkReferenceTxIn txId gin
-      writeReferenceTxIn writer inId ri
+      writeCollateralTxIn writer inId (mkCollateralTxIn txId gin)
+  where
+    -- Resolve the inline stake credential of a collateral-return
+    -- output, if its address carries one.
+    resolveCollateralStake gout =
+      case extractStakeCred (G.txOutAddressRaw gout) of
+        Nothing  -> pure Nothing
+        Just cred ->
+          Just <$> resolveAndWriteStakeAddress (bcNetwork ctx) resolver writer cred
 
 -- ---------------------------------------------------------------------------
 -- * Record builders
@@ -139,6 +159,23 @@ mkReferenceTxIn txId gin = ReferenceTxIn
   , referenceTxInTxOutId    = Nothing
   , referenceTxInTxOutIndex = fromIntegral (txInIndex gin)
   , referenceTxInTxOutHash  = txInHash gin
+  }
+
+mkCollateralTxOut
+  :: TxId -> AddressId -> Maybe StakeAddressId -> G.GenericTxOut -> CollateralTxOut
+mkCollateralTxOut txId addrId mStakeId gout = CollateralTxOut
+  { collateralTxOutTxId              = txId
+  , collateralTxOutIndex             = fromIntegral (G.txOutIndex gout)
+  , collateralTxOutAddressId         = addrId
+  , collateralTxOutStakeAddressId    = mStakeId
+  , collateralTxOutValue             = DbLovelace (G.txOutValue gout)
+  , collateralTxOutDataHash          = G.txOutDataHash gout
+    -- The collateral-return output cannot carry multi-assets, but
+    -- the original schema records a textual rendering of whatever
+    -- the body declared. Failed txs always produce @[]@ here.
+  , collateralTxOutMultiAssetsDescr  = show (G.txOutMultiAssets gout)
+  , collateralTxOutInlineDatumId     = Nothing
+  , collateralTxOutReferenceScriptId = Nothing
   }
 
 -- ---------------------------------------------------------------------------

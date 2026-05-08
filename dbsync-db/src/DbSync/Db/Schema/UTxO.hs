@@ -13,18 +13,21 @@ module DbSync.Db.Schema.UTxO
     TxOut (..)
   , TxIn (..)
   , CollateralTxIn (..)
+  , CollateralTxOut (..)
   , ReferenceTxIn (..)
 
     -- * Table definitions
   , txOutTableDef
   , txInTableDef
   , collateralTxInTableDef
+  , collateralTxOutTableDef
   , referenceTxInTableDef
 
     -- * COPY encoding
   , encodeTxOutCopy
   , encodeTxInCopy
   , encodeCollateralTxInCopy
+  , encodeCollateralTxOutCopy
   , encodeReferenceTxInCopy
 
     -- * Hasql encoders \/ decoders
@@ -37,6 +40,9 @@ module DbSync.Db.Schema.UTxO
   , collateralTxInEncoder
   , collateralTxInDecoder
   , entityCollateralTxInDecoder
+  , collateralTxOutEncoder
+  , collateralTxOutDecoder
+  , entityCollateralTxOutDecoder
   , referenceTxInEncoder
   , referenceTxInDecoder
   , entityReferenceTxInDecoder
@@ -53,7 +59,7 @@ import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Types
 import DbSync.Db.Types (DbLovelace (..), dbLovelaceValueDecoder, dbLovelaceValueEncoder)
 
-import DbSync.Db.Writer.Copy.Encoder (buildCopyRow, bHex, bInt64, bWord64)
+import DbSync.Db.Writer.Copy.Encoder (buildCopyRow, bHex, bInt64, bText, bWord64)
 
 -- ---------------------------------------------------------------------------
 -- * Key type family instances
@@ -62,6 +68,7 @@ import DbSync.Db.Writer.Copy.Encoder (buildCopyRow, bHex, bInt64, bWord64)
 type instance Key TxOut = TxOutId
 type instance Key TxIn = TxInId
 type instance Key CollateralTxIn = CollateralTxInId
+type instance Key CollateralTxOut = CollateralTxOutId
 type instance Key ReferenceTxIn = ReferenceTxInId
 
 -- ---------------------------------------------------------------------------
@@ -114,6 +121,24 @@ data ReferenceTxIn = ReferenceTxIn
   , referenceTxInTxOutId    :: !(Maybe TxId)
   , referenceTxInTxOutIndex :: !Word64
   , referenceTxInTxOutHash  :: !ByteString
+  }
+  deriving stock (Eq, Show)
+
+-- | The @collateral_tx_out@ table — the optional collateral-return
+-- output of a Babbage+ phase-2 failed transaction. Schema mirrors
+-- the @tx_out@ shape with one addition: @multi_assets_descr@ is a
+-- textual dump of the multi-asset map (the original schema does not
+-- normalise multi-assets on this table).
+data CollateralTxOut = CollateralTxOut
+  { collateralTxOutTxId               :: !TxId
+  , collateralTxOutIndex              :: !Word64
+  , collateralTxOutAddressId          :: !AddressId
+  , collateralTxOutStakeAddressId     :: !(Maybe StakeAddressId)
+  , collateralTxOutValue              :: !DbLovelace
+  , collateralTxOutDataHash           :: !(Maybe ByteString)
+  , collateralTxOutMultiAssetsDescr   :: !Text
+  , collateralTxOutInlineDatumId      :: !(Maybe DatumId)
+  , collateralTxOutReferenceScriptId  :: !(Maybe ScriptId)
   }
   deriving stock (Eq, Show)
 
@@ -199,6 +224,29 @@ referenceTxInTableDef = TableDef
   , tdGeneratedColumns = []
   }
 
+collateralTxOutTableDef :: TableDef
+collateralTxOutTableDef = TableDef
+  { tdName    = "collateral_tx_out"
+  , tdColumns =
+      [ ColumnDef "id"                  PgBigInt   False
+      , ColumnDef "tx_id"               PgBigInt   False
+      , ColumnDef "index"               PgBigInt   False
+      , ColumnDef "address_id"          PgBigInt   False
+      , ColumnDef "stake_address_id"    PgBigInt   True
+      , ColumnDef "value"               PgNumeric  False
+      , ColumnDef "data_hash"           PgBytea    True
+      , ColumnDef "multi_assets_descr"  PgText     False
+      , ColumnDef "inline_datum_id"     PgBigInt   True
+      , ColumnDef "reference_script_id" PgBigInt   True
+      ]
+  , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
+  }
+
 -- ---------------------------------------------------------------------------
 -- * COPY encoding
 -- ---------------------------------------------------------------------------
@@ -247,6 +295,21 @@ encodeReferenceTxInCopy (ReferenceTxInId iid) ri =
     , bInt64 . getTxId <$> referenceTxInTxOutId ri
     , Just $ bWord64 (referenceTxInTxOutIndex ri)
     , Just $ bHex (referenceTxInTxOutHash ri)
+    ]
+
+encodeCollateralTxOutCopy :: CollateralTxOutId -> CollateralTxOut -> ByteString
+encodeCollateralTxOutCopy (CollateralTxOutId oid) co =
+  buildCopyRow
+    [ Just $ bInt64 oid
+    , Just $ bInt64 (getTxId $ collateralTxOutTxId co)
+    , Just $ bWord64 (collateralTxOutIndex co)
+    , Just $ bInt64 (getAddressId $ collateralTxOutAddressId co)
+    , bInt64 . getStakeAddressId <$> collateralTxOutStakeAddressId co
+    , Just $ bWord64 (unDbLovelace $ collateralTxOutValue co)
+    , bHex <$> collateralTxOutDataHash co
+    , Just $ bText (collateralTxOutMultiAssetsDescr co)
+    , bInt64 . getDatumId <$> collateralTxOutInlineDatumId co
+    , bInt64 . getScriptId <$> collateralTxOutReferenceScriptId co
     ]
 
 -- ---------------------------------------------------------------------------
@@ -357,3 +420,34 @@ entityReferenceTxInDecoder :: D.Row (ReferenceTxInId, ReferenceTxIn)
 entityReferenceTxInDecoder = (,)
   <$> idDecoder ReferenceTxInId
   <*> referenceTxInDecoder
+
+-- | Encoder for a 'CollateralTxOut', excluding the auto-generated @id@.
+collateralTxOutEncoder :: E.Params CollateralTxOut
+collateralTxOutEncoder = mconcat
+  [ collateralTxOutTxId              >$< idEncoder      getTxId
+  , collateralTxOutIndex             >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+  , collateralTxOutAddressId         >$< idEncoder      getAddressId
+  , collateralTxOutStakeAddressId    >$< maybeIdEncoder getStakeAddressId
+  , collateralTxOutValue             >$< E.param (E.nonNullable dbLovelaceValueEncoder)
+  , collateralTxOutDataHash          >$< E.param (E.nullable E.bytea)
+  , collateralTxOutMultiAssetsDescr  >$< E.param (E.nonNullable E.text)
+  , collateralTxOutInlineDatumId     >$< maybeIdEncoder getDatumId
+  , collateralTxOutReferenceScriptId >$< maybeIdEncoder getScriptId
+  ]
+
+collateralTxOutDecoder :: D.Row CollateralTxOut
+collateralTxOutDecoder = CollateralTxOut
+  <$> idDecoder TxId
+  <*> D.column (D.nonNullable $ fromIntegral <$> D.int8)
+  <*> idDecoder AddressId
+  <*> maybeIdDecoder StakeAddressId
+  <*> D.column (D.nonNullable dbLovelaceValueDecoder)
+  <*> D.column (D.nullable D.bytea)
+  <*> D.column (D.nonNullable D.text)
+  <*> maybeIdDecoder DatumId
+  <*> maybeIdDecoder ScriptId
+
+entityCollateralTxOutDecoder :: D.Row (CollateralTxOutId, CollateralTxOut)
+entityCollateralTxOutDecoder = (,)
+  <$> idDecoder CollateralTxOutId
+  <*> collateralTxOutDecoder

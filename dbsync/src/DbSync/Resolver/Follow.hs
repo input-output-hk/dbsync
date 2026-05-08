@@ -24,6 +24,7 @@ import DbSync.Db.Schema.Ids
 import DbSync.Db.Statement.Address (nextAddressIdStmt, queryAddressIdStmt)
 import DbSync.Db.Statement.Block (nextBlockIdStmt)
 import DbSync.Db.Statement.CollateralTxIn (nextCollateralTxInIdStmt)
+import DbSync.Db.Statement.CollateralTxOut (nextCollateralTxOutIdStmt)
 import DbSync.Db.Statement.Delegation (nextDelegationIdStmt)
 import DbSync.Db.Statement.MaTxMint (nextMaTxMintIdStmt)
 import DbSync.Db.Statement.MaTxOut (nextMaTxOutIdStmt)
@@ -94,6 +95,7 @@ resolver conn lastBlock = IdResolver
   , assignTxOutId            = run conn () nextTxOutIdStmt
   , assignTxInId             = run conn () nextTxInIdStmt
   , assignCollateralTxInId   = run conn () nextCollateralTxInIdStmt
+  , assignCollateralTxOutId  = run conn () nextCollateralTxOutIdStmt
   , assignReferenceTxInId    = run conn () nextReferenceTxInIdStmt
 
     -- Metadata IDs (no resolver-side dedup)

@@ -102,6 +102,7 @@ epoch5Row = SyncStateRow
   , ssrTxCborIdCounter               = 5000
   , ssrEpochSyncStatsIdCounter       = 6
   , ssrAdaPotsIdCounter              = 6
+  , ssrCollateralTxOutIdCounter              = 1
   , ssrSchemaVersionApplied          = 1
   , ssrLedgerEnabled                 = False
   , ssrSyncComplete                  = False

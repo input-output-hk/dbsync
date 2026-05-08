@@ -22,6 +22,7 @@ module DbSync.Extractor
 
     -- * Re-exports (for ExtractState used by IngestResolver)
   , ExtractState (..)
+  , freshExtractState
   ) where
 
 import Cardano.Prelude
@@ -29,7 +30,7 @@ import Cardano.Prelude
 import Cardano.Ledger.BaseTypes (Network)
 
 import DbSync.Block.Types (GenericBlock, GenericTx)
-import DbSync.Id.Counter (IdCounters)
+import DbSync.Id.Counter (IdCounters, freshIdCounters)
 import DbSync.Db.Schema.Ids (BlockId, PoolHashId, SlotLeaderId, StakeAddressId, TxId, TxOutId)
 import DbSync.Db.Schema.Types (TableDef)
 import DbSync.Resolver (IdResolver)
@@ -136,3 +137,11 @@ data ExtractState = ExtractState
       --   'Nothing' before any block has been processed.
   }
   deriving stock (Eq, Show)
+
+-- | Initial state for a brand-new sync — every counter at 1, no
+-- previously-seen block.
+freshExtractState :: ExtractState
+freshExtractState = ExtractState
+  { esIdCounters  = freshIdCounters
+  , esLastBlockId = Nothing
+  }

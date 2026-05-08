@@ -62,6 +62,7 @@ library
     DbSync.Db.Statement.Address
     DbSync.Db.Statement.Block
     DbSync.Db.Statement.CollateralTxIn
+    DbSync.Db.Statement.CollateralTxOut
     DbSync.Db.Statement.Delegation
     DbSync.Db.Statement.MaTxMint
     DbSync.Db.Statement.MaTxOut

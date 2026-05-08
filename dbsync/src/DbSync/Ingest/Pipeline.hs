@@ -116,8 +116,9 @@ resolveSlotLeaderPoolHash
   :: IdResolver IO -> Writer IO -> GenericBlock -> IO (Maybe PoolHashId)
 resolveSlotLeaderPoolHash resolver writer block
   | blkEra block == Byron = pure Nothing
-  | otherwise =
-      Just <$> resolveAndWritePoolHash resolver writer (blkSlotLeader block)
+  | otherwise = do
+      (phId, _) <- resolveAndWritePoolHash resolver writer (blkSlotLeader block)
+      pure (Just phId)
 
 -- | Pre-resolve the @stake_address@ FK for one tx output.
 --

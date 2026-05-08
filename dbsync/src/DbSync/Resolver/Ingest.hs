@@ -88,6 +88,11 @@ mkIngestResolver stRef dedupMaps = IdResolver
           st' = st { esIdCounters = (esIdCounters st) { icCollateralTxInId = ctr' } }
       in (st', CollateralTxInId iid)
 
+  , assignCollateralTxOutId = atomicModifyIORef' stRef $ \st ->
+      let (iid, ctr') = nextId (icCollateralTxOutId $ esIdCounters st)
+          st' = st { esIdCounters = (esIdCounters st) { icCollateralTxOutId = ctr' } }
+      in (st', CollateralTxOutId iid)
+
   , assignReferenceTxInId = atomicModifyIORef' stRef $ \st ->
       let (iid, ctr') = nextId (icReferenceTxInId $ esIdCounters st)
           st' = st { esIdCounters = (esIdCounters st) { icReferenceTxInId = ctr' } }

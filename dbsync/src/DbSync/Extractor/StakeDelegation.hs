@@ -62,11 +62,13 @@ processStakeDelegation resolver writer ctx = do
       slotNo   = unSlotNo (blkSlotNo gb)
       network  = bcNetwork ctx
 
-  forM_ (bcTxs ctx) $ \tc -> do
+  forM_ (bcTxs ctx) $ \tc -> when (txValidContract (tcGenTx tc)) $ do
     let txId = tcTxId tc
         gtx  = tcGenTx tc
 
-    -- 1. Process certificates
+    -- Phase-2 failures don't materialise stake registrations,
+    -- delegations, or withdrawals on-chain, so the entire body of
+    -- this loop is gated above.
     forM_ (txCertificates gtx) $ \cert -> do
       let certIdx = txCertIndex cert
       case txCertAction cert of
@@ -100,7 +102,7 @@ processStakeDelegation resolver writer ctx = do
         -- Delegation
         CertDelegation credHash poolKeyHash -> do
           saId <- resolveAndWriteStakeAddress network resolver writer credHash
-          phId <- resolveAndWritePoolHash resolver writer poolKeyHash
+          (phId, _) <- resolveAndWritePoolHash resolver writer poolKeyHash
           dId  <- assignDelegationId resolver
           let d = Delegation
                 { delegationAddrId        = saId
@@ -116,7 +118,7 @@ processStakeDelegation resolver writer ctx = do
         -- Conway combined: register + delegate
         CertConwayRegDeleg credHash poolKeyHash mDeposit -> do
           saId <- resolveAndWriteStakeAddress network resolver writer credHash
-          phId <- resolveAndWritePoolHash resolver writer poolKeyHash
+          (phId, _) <- resolveAndWritePoolHash resolver writer poolKeyHash
           -- Write registration
           srId <- assignStakeRegistrationId resolver
           let sr = StakeRegistration
@@ -140,10 +142,11 @@ processStakeDelegation resolver writer ctx = do
                 }
           writeDelegation writer dId d
 
-        -- Conway: delegate to stake pool + DRep (ignore DRep for now)
-        CertConwayDelegStakeVote credHash poolKeyHash _drepHash -> do
+        -- Combined stake-pool + DRep delegation; the DRep half is
+        -- consumed by the governance extractor.
+        CertConwayDelegStakeVote credHash poolKeyHash _drep -> do
           saId <- resolveAndWriteStakeAddress network resolver writer credHash
-          phId <- resolveAndWritePoolHash resolver writer poolKeyHash
+          (phId, _) <- resolveAndWritePoolHash resolver writer poolKeyHash
           dId  <- assignDelegationId resolver
           let d = Delegation
                 { delegationAddrId        = saId

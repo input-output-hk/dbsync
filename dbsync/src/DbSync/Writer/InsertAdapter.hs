@@ -19,6 +19,7 @@ import qualified Hasql.Statement as Stmt
 import DbSync.Db.Statement.Address (insertAddressRowStmt)
 import DbSync.Db.Statement.Block (insertBlockRowStmt)
 import DbSync.Db.Statement.CollateralTxIn (insertCollateralTxInRowStmt)
+import DbSync.Db.Statement.CollateralTxOut (insertCollateralTxOutRowStmt)
 import DbSync.Db.Statement.Delegation (insertDelegationRowStmt)
 import DbSync.Db.Statement.MaTxMint (insertMaTxMintRowStmt)
 import DbSync.Db.Statement.MaTxOut (insertMaTxOutRowStmt)
@@ -53,8 +54,9 @@ mkInsertWriter conn = Writer
   , writeAddress        = \aid addr -> run conn (aid, addr) insertAddressRowStmt
   , writeTxOut          = \oid txo -> run conn (oid, txo) insertTxOutRowStmt
   , writeTxIn           = \iid ti  -> run conn (iid, ti)  insertTxInRowStmt
-  , writeCollateralTxIn = \iid ci  -> run conn (iid, ci)  insertCollateralTxInRowStmt
-  , writeReferenceTxIn  = \iid ri  -> run conn (iid, ri)  insertReferenceTxInRowStmt
+  , writeCollateralTxIn  = \iid ci  -> run conn (iid, ci)  insertCollateralTxInRowStmt
+  , writeCollateralTxOut = \oid co  -> run conn (oid, co)  insertCollateralTxOutRowStmt
+  , writeReferenceTxIn   = \iid ri  -> run conn (iid, ri)  insertReferenceTxInRowStmt
 
     -- Metadata writers
   , writeTxMetadata     = \mid md  -> run conn (mid, md)  insertTxMetadataRowStmt

@@ -49,8 +49,7 @@ import DbSync.Db.Schema.Init
   , renderSchemaMismatch
   )
 import DbSync.Env (CoreEnv (..), IngestEnv (..))
-import DbSync.Extractor (ExtractState (..), ExtractorDef (..))
-import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
+import DbSync.Extractor (ExtractState, ExtractorDef (..), freshExtractState)
 import DbSync.Id.DedupMap (newMaps)
 import DbSync.Ingest.Consumer (runConsumer)
 import DbSync.Ingest.ReceiverStats (newReceiverStats)
@@ -473,35 +472,4 @@ resolveSlot logInfo ctrl slot = do
 -- | Initial extraction state for IngestChainHistory.
 -- Dedup maps are created separately via 'newMaps' (mutable hash tables).
 mkInitState :: ExtractState
-mkInitState = ExtractState
-  { esIdCounters = IdCounters
-      { icBlockId            = mkIdCounter 1
-      , icTxId               = mkIdCounter 1
-      , icTxOutId            = mkIdCounter 1
-      , icTxInId             = mkIdCounter 1
-      , icCollateralTxInId   = mkIdCounter 1
-      , icReferenceTxInId    = mkIdCounter 1
-      , icTxMetadataId       = mkIdCounter 1
-      , icMaTxMintId         = mkIdCounter 1
-      , icMaTxOutId          = mkIdCounter 1
-      , icSlotLeaderId       = mkIdCounter 1
-      , icAddressId          = mkIdCounter 1
-      , icStakeAddressId     = mkIdCounter 1
-      , icPoolHashId         = mkIdCounter 1
-      , icMultiAssetId       = mkIdCounter 1
-      , icScriptId              = mkIdCounter 1
-      , icStakeRegistrationId   = mkIdCounter 1
-      , icStakeDeregistrationId = mkIdCounter 1
-      , icDelegationId          = mkIdCounter 1
-      , icWithdrawalId          = mkIdCounter 1
-      , icPoolUpdateId          = mkIdCounter 1
-      , icPoolMetadataRefId     = mkIdCounter 1
-      , icPoolOwnerId           = mkIdCounter 1
-      , icPoolRetireId          = mkIdCounter 1
-      , icPoolRelayId           = mkIdCounter 1
-      , icTxCborId              = mkIdCounter 1
-      , icEpochSyncStatsId      = mkIdCounter 1
-      , icAdaPotsId             = mkIdCounter 1
-      }
-  , esLastBlockId = Nothing
-  }
+mkInitState = freshExtractState

@@ -29,6 +29,7 @@ import qualified DbSync.Config.ValidationSpec as ConfigValidationSpec
 import qualified DbSync.Db.TypesSpec as DbTypesSpec
 import qualified DbSync.Extractor.CoreSpec as ExtractorCoreSpec
 import qualified DbSync.Extractor.EpochBoundarySpec as ExtractorEpochBoundarySpec
+import qualified DbSync.Extractor.PoolSpec as ExtractorPoolSpec
 import qualified DbSync.Extractor.UTxOSpec as ExtractorUTxOSpec
 import qualified DbSync.Ingest.ConsumerSpec as IngestConsumerSpec
 import qualified DbSync.Ingest.PipelineSpec as IngestPipelineSpec
@@ -75,6 +76,7 @@ main = hspec $ do
     DbTypesSpec.spec
     ExtractorCoreSpec.spec
     ExtractorEpochBoundarySpec.spec
+    ExtractorPoolSpec.spec
     ExtractorUTxOSpec.spec
     IngestConsumerSpec.spec
     IngestPipelineSpec.spec

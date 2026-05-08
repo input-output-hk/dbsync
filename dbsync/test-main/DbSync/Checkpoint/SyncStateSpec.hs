@@ -276,6 +276,7 @@ sampleRow = SyncStateRow
   , ssrTxCborIdCounter               = 1500
   , ssrEpochSyncStatsIdCounter       = 5
   , ssrAdaPotsIdCounter              = 5
+  , ssrCollateralTxOutIdCounter              = 1
   , ssrSchemaVersionApplied          = 1
   , ssrLedgerEnabled                 = True
   , ssrSyncComplete                  = False

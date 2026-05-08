@@ -99,6 +99,7 @@ mkBoundarySyncStateRow slotNo blockNo blockHash counters schemaVersion ledgerEna
     , ssrTxCborIdCounter               = icNext (icTxCborId              counters)
     , ssrEpochSyncStatsIdCounter       = icNext (icEpochSyncStatsId      counters)
     , ssrAdaPotsIdCounter              = icNext (icAdaPotsId             counters)
+    , ssrCollateralTxOutIdCounter      = icNext (icCollateralTxOutId     counters)
     , ssrSchemaVersionApplied          = schemaVersion
     , ssrLedgerEnabled                 = ledgerEnabled
     , ssrSyncComplete                  = False
@@ -138,6 +139,7 @@ mkResumeExtractState row =
         , icTxCborId              = mkIdCounter (ssrTxCborIdCounter              row)
         , icEpochSyncStatsId      = mkIdCounter (ssrEpochSyncStatsIdCounter      row)
         , icAdaPotsId             = mkIdCounter (ssrAdaPotsIdCounter             row)
+        , icCollateralTxOutId     = mkIdCounter (ssrCollateralTxOutIdCounter     row)
         }
     , esLastBlockId = Nothing
     }

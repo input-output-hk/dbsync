@@ -61,6 +61,7 @@ library
     DbSync.Phase.PreparingForChainTip
     DbSync.Phase.FollowingChainTip
     DbSync.Block.Receiver
+    DbSync.Block.Metadata
     DbSync.Block.Parser
     DbSync.Block.Parser.Block
     DbSync.Block.Parser.Byron
@@ -270,6 +271,7 @@ test-suite dbsync-test
     DbSync.Schema.ScriptsDatumsSpec
     DbSync.Schema.SyncStateSpec
     DbSync.Util.Bech32Spec
+    DbSync.Block.MetadataSpec
     DbSync.Extractor.CoreSpec
     DbSync.Extractor.EpochBoundarySpec
     DbSync.Extractor.UTxOSpec
@@ -289,6 +291,7 @@ test-suite dbsync-test
     DbSync.StateQuery.ObservedSummarySpec
   build-depends:
       base
+    , aeson
     , base16-bytestring
     , bech32
     , dbsync
@@ -296,6 +299,7 @@ test-suite dbsync-test
     , dbsync-mock
     , dbsync:dbsync-testlib
     , hspec
+    , cardano-ledger-binary
     , cardano-ledger-core
     , cardano-prelude
     , cardano-slotting

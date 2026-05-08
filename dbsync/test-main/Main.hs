@@ -45,6 +45,7 @@ import qualified DbSync.Schema.RewardSpec as SchemaRewardSpec
 import qualified DbSync.Schema.ScriptsDatumsSpec as SchemaScriptsDatumsSpec
 import qualified DbSync.Schema.SyncStateSpec as SchemaSyncStateSpec
 import qualified DbSync.StateQuery.ObservedSummarySpec as ObservedSummarySpec
+import qualified DbSync.Block.MetadataSpec as BlockMetadataSpec
 import qualified DbSync.Util.Bech32Spec as UtilBech32Spec
 
 -- Property tests
@@ -91,6 +92,7 @@ main = hspec $ do
     SchemaSyncStateSpec.spec
     ObservedSummarySpec.spec
     UtilBech32Spec.spec
+    BlockMetadataSpec.spec
 
   describe "Property tests" $
     PropertySpec.spec

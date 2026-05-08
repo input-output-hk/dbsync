@@ -16,7 +16,10 @@ import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 
 import qualified Data.ByteString as BS
+import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
+
+import qualified DbSync.Block.Metadata as Metadata
 
 import Test.Hspec (Spec, afterAll_, beforeAll_, before_, describe, it, shouldBe)
 
@@ -252,17 +255,19 @@ spec = describe "DbSync.Phase.FollowingChainTip" $
           "7370656e745f74785f686173685f696e00000000000000000000000000000000"
 
     describe "block with one tx and metadata" $ do
-      it "writes 1 tx_metadata row" $ do
+      it "writes 1 tx_metadata row per metadata key" $ do
         runFollow [blockWithMetadata]
         n <- T.strip <$> queryTestDb "SELECT count(*) FROM tx_metadata;"
         n `shouldBe` "1"
 
-      it "tx_metadata round-trips bytes + key + tx_id, json is NULL" $ do
+      it "stores key, no-schema JSON, single-key CBOR, and tx_id" $ do
         runFollow [blockWithMetadata]
         result <- T.strip <$>
           queryTestDb "SELECT key, json, encode(bytes, 'hex'), tx_id FROM tx_metadata;"
-        -- key=0 (placeholder), json=NULL, bytes="metadata-cbor" hex, tx_id=1
-        result `shouldBe` "0||6d657461646174612d63626f72|1"
+        -- key=42, json="\"hello\"", bytes=cbor({42: "hello"}), tx_id=1.
+        -- CBOR breakdown: 0xa1 = 1-entry map, 0x18 0x2a = uint 42,
+        -- 0x65 + "hello" bytes = 5-byte text string.
+        result `shouldBe` "42|\"hello\"|a1182a6568656c6c6f|1"
 
     describe "block minting one multi-asset" $ do
       it "writes 1 multi_asset and 1 ma_tx_mint row" $ do
@@ -518,7 +523,7 @@ blockWithAllInputs = emptyBlock
 
 blockWithMetadata :: GenericBlock
 blockWithMetadata = emptyBlock
-  { blkTxs = [sampleTx { txMetadata = Just "metadata-cbor" }]
+  { blkTxs = [sampleTx { txMetadata = Just (Map.singleton 42 (Metadata.S "hello")) }]
   }
 
 -- | A 28-byte policy ID (raw bytes; padded with NULs).

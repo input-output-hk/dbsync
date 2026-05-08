@@ -28,6 +28,7 @@ module DbSync.Block.Types
 
 import Cardano.Prelude
 
+import Cardano.Ledger.Metadata (Metadatum)
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import Data.Time.Clock (UTCTime)
@@ -110,10 +111,10 @@ data GenericTx = GenericTx
   , txCollateralOutput  :: !(Maybe GenericTxOut)
   , txCertificates      :: ![GenericTxCertificate]
   , txWithdrawals       :: ![GenericTxWithdrawal]
-  , txMetadata          :: Maybe ByteString
-      -- ^ Raw CBOR metadata. Intentionally lazy — @serialize'@ is deferred
-      -- until the Metadata extractor forces this field. If the extractor is
-      -- disabled, @serialize'@ never runs (zero cost).
+  , txMetadata          :: Maybe (Map Word64 Metadatum)
+      -- ^ Per-key metadata, structured. Intentionally lazy — populated
+      -- by the per-era 'DbSync.Block.Metadata.from*Metadata' helpers
+      -- and only forced when the Metadata extractor reads it.
   , txMint              :: ![(ByteString, ByteString, Integer)]
       -- ^ [(policy_id, asset_name, quantity)]
   , txCborRaw           :: Maybe ByteString

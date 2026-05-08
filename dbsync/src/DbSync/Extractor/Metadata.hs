@@ -2,20 +2,22 @@
 
 -- | Metadata extractor.
 --
--- Extracts transaction metadata into the @tx_metadata@ table.
--- Each metadata key in a transaction produces a separate row.
---
--- During 'IngestChainHistory', metadata bytes are stored as-is (CBOR).
--- JSON rendering is deferred (set to NULL) — it can be populated
--- post-load if needed.
+-- Emits one @tx_metadata@ row per metadata key in a transaction.
+-- Each row stores the single-key CBOR encoding of that pair (matching
+-- what the original @cardano-db-sync@ writes) plus the no-schema JSON
+-- rendering of the value.
 module DbSync.Extractor.Metadata
   ( metadataExtractor
   ) where
 
 import Cardano.Prelude
 
-import qualified Data.ByteString as BS
+import qualified Data.Aeson as Aeson
+import qualified Data.ByteString.Lazy as LBS
+import qualified Data.Map.Strict as Map
+import qualified Data.Text.Encoding as Text
 
+import DbSync.Block.Metadata (metadataValueToJson, serialiseSingleton)
 import DbSync.Block.Types (GenericTx (..))
 import DbSync.Db.Schema.Metadata
 import DbSync.Db.Types (DbWord64 (..))
@@ -40,26 +42,30 @@ metadataExtractor = ExtractorDef
 -- * Processing
 -- ---------------------------------------------------------------------------
 
--- | Process metadata for each transaction.
---
--- If a transaction has metadata bytes, we write a single tx_metadata
--- row with key=0 and the raw CBOR bytes. Full per-key decomposition
--- will be added when we have a CBOR metadata parser.
+-- | Walk every metadata key in every tx and emit one row per pair.
+-- Empty maps (parser saw aux-data but it carried no metadata) yield
+-- no rows.
 processMetadata :: ProcessBlockFn
-processMetadata resolver writer ctx = do
-  forM_ (bcTxs ctx) $ \tc -> do
-    let txId = tcTxId tc
-        gtx  = tcGenTx tc
-    case txMetadata gtx of
-      Nothing -> pure ()
-      Just mdBytes
-        | BS.null mdBytes -> pure ()
-        | otherwise -> do
-            mdId <- assignTxMetadataId resolver
-            let md = TxMetadata
-                  { txMetadataKey   = DbWord64 0  -- placeholder key
-                  , txMetadataJson  = Nothing      -- JSON rendering deferred
-                  , txMetadataBytes = mdBytes
-                  , txMetadataTxId  = txId
-                  }
-            writeTxMetadata writer mdId md
+processMetadata resolver writer ctx =
+  forM_ (bcTxs ctx) $ \tc ->
+    case txMetadata (tcGenTx tc) of
+      Nothing    -> pure ()
+      Just mdMap -> forM_ (Map.toAscList mdMap) (writeOne resolver writer (tcTxId tc))
+  where
+    writeOne r w txId (key, value) = do
+      mdId <- assignTxMetadataId r
+      let row = TxMetadata
+            { txMetadataKey   = DbWord64 key
+            , txMetadataJson  = renderJson value
+            , txMetadataBytes = serialiseSingleton key value
+            , txMetadataTxId  = txId
+            }
+      writeTxMetadata w mdId row
+
+    -- 'Aeson.encode' yields valid UTF-8 by construction, so
+    -- 'Text.decodeUtf8'' should never fail here; the 'Nothing'
+    -- fallback is defensive.
+    renderJson value =
+      case Text.decodeUtf8' (LBS.toStrict (Aeson.encode (metadataValueToJson value))) of
+        Right t -> Just t
+        Left _  -> Nothing

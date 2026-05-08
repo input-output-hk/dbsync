@@ -59,6 +59,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Text.Encoding as Text
 import Lens.Micro ((^.))
 
+import qualified DbSync.Block.Metadata as Metadata
 import DbSync.Util.Bech32 (serialiseShelleyAddrToBech32)
 
 import Ouroboros.Consensus.Cardano.Block
@@ -330,12 +331,11 @@ keyHashToBytes (Ledger.KeyHash h) = Crypto.hashToBytes h
 coinToWord64 :: Coin -> Word64
 coinToWord64 (Coin c) = fromIntegral c
 
--- | Extract raw metadata CBOR, if present.
-getTxMetadataRaw :: Core.EraTx era => Core.Tx l era -> Maybe ByteString
-getTxMetadataRaw tx =
-  case strictMaybeToMaybe (tx ^. Core.auxDataTxL) of
-    Nothing  -> Nothing
-    Just aux -> Just (serialize' aux)
+-- | Project the era-specific auxiliary data, if present.
+-- Per-era 'from*Metadata' helpers consume this to recover the
+-- @Map Word64 Metadatum@.
+getTxAuxData :: Core.EraTx era => Core.Tx l era -> Maybe (Core.TxAuxData era)
+getTxAuxData tx = strictMaybeToMaybe (tx ^. Core.auxDataTxL)
 
 -- | Validity interval extraction (Allegra+ eras).
 getInterval :: AllegraEraTxBody era => Core.TxBody l era -> (Maybe Word64, Maybe Word64)
@@ -416,7 +416,7 @@ fromShelleyTx (blkIndex, tx) =
     , txCollateralOutput = Nothing
     , txCertificates     = mkTxCertificatesShelleyEra shelleyCertToAction txBody
     , txWithdrawals      = mkTxWithdrawals txBody
-    , txMetadata         = getTxMetadataRaw tx
+    , txMetadata         = Metadata.getMetadata <$> getTxAuxData tx
     , txMint             = []
     , txCborRaw          = Just (getTxCborBytes tx)
     }
@@ -449,7 +449,7 @@ fromAllegraTx (blkIndex, tx) =
     , txCollateralOutput = Nothing
     , txCertificates     = mkTxCertificatesShelleyEra shelleyCertToAction txBody
     , txWithdrawals      = mkTxWithdrawals txBody
-    , txMetadata         = getTxMetadataRaw tx
+    , txMetadata         = Metadata.getMetadata <$> getTxAuxData tx
     , txMint             = []
     , txCborRaw          = Just (getTxCborBytes tx)
     }
@@ -482,7 +482,7 @@ fromMaryTx (blkIndex, tx) =
     , txCollateralOutput = Nothing
     , txCertificates     = mkTxCertificatesShelleyEra shelleyCertToAction txBody
     , txWithdrawals      = mkTxWithdrawals txBody
-    , txMetadata         = getTxMetadataRaw tx
+    , txMetadata         = Metadata.getMetadata <$> getTxAuxData tx
     , txMint             = getMint txBody
     , txCborRaw          = Just (getTxCborBytes tx)
     }
@@ -517,7 +517,7 @@ fromAlonzoTx (blkIndex, tx) =
     , txCollateralOutput = Nothing
     , txCertificates     = mkTxCertificatesShelleyEra shelleyCertToAction txBody
     , txWithdrawals      = mkTxWithdrawals txBody
-    , txMetadata         = getTxMetadataRaw tx
+    , txMetadata         = Metadata.getMetadata <$> getTxAuxData tx
     , txMint             = getMint txBody
     , txCborRaw          = Just (getTxCborBytes tx)
     }
@@ -553,7 +553,7 @@ fromBabbageTx (blkIndex, tx) =
     , txCollateralOutput = Nothing  -- TODO: extract Babbage collateral output
     , txCertificates     = mkTxCertificatesShelleyEra shelleyCertToAction txBody
     , txWithdrawals      = mkTxWithdrawals txBody
-    , txMetadata         = getTxMetadataRaw tx
+    , txMetadata         = Metadata.getMetadata <$> getTxAuxData tx
     , txMint             = getMint txBody
     , txCborRaw          = Just (getTxCborBytes tx)
     }
@@ -590,7 +590,7 @@ fromConwayTx (blkIndex, tx) =
     , txCollateralOutput = Nothing  -- TODO: extract collateral output
     , txCertificates     = mkTxCertificatesShelleyEra conwayCertToAction txBody
     , txWithdrawals      = mkTxWithdrawals txBody
-    , txMetadata         = getTxMetadataRaw tx
+    , txMetadata         = Metadata.getMetadata <$> getTxAuxData tx
     , txMint             = getMint txBody
     , txCborRaw          = Just (getTxCborBytes tx)
     }
@@ -626,7 +626,7 @@ fromDijkstraTx (blkIndex, tx) =
     , txCollateralOutput = Nothing
     , txCertificates     = mkTxCertificatesShelleyEra (\c -> CertOther (serialize' c)) txBody
     , txWithdrawals      = mkTxWithdrawals txBody
-    , txMetadata         = getTxMetadataRaw tx
+    , txMetadata         = Metadata.getMetadata <$> getTxAuxData tx
     , txMint             = getMint txBody
     , txCborRaw          = Just (getTxCborBytes tx)
     }

@@ -26,11 +26,10 @@ import DbSync.Block.Types
   , GenericTxWithdrawal (..)
   , CertAction (..)
   )
-import DbSync.Db.Schema.Ids
-import DbSync.Db.Schema.Pool (PoolHash (..))
 import DbSync.Db.Schema.StakeDelegation
 import DbSync.Db.Types (DbLovelace (..))
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
+import DbSync.Extractor.SharedDedup (resolveAndWritePoolHash, resolveAndWriteStakeAddress)
 import DbSync.Resolver (IdResolver (..))
 import DbSync.Writer (Writer (..))
 
@@ -61,6 +60,7 @@ processStakeDelegation resolver writer ctx = do
   let gb       = bcGenBlock ctx
       epochNo  = unEpochNo (blkEpochNo gb)
       slotNo   = unSlotNo (blkSlotNo gb)
+      network  = bcNetwork ctx
 
   forM_ (bcTxs ctx) $ \tc -> do
     let txId = tcTxId tc
@@ -73,7 +73,7 @@ processStakeDelegation resolver writer ctx = do
 
         -- Stake registration (Shelley-Babbage + Conway)
         CertStakeRegistration credHash mDeposit -> do
-          saId <- resolveAndWriteStakeAddress resolver writer credHash
+          saId <- resolveAndWriteStakeAddress network resolver writer credHash
           srId <- assignStakeRegistrationId resolver
           let sr = StakeRegistration
                 { stakeRegistrationAddrId    = saId
@@ -86,7 +86,7 @@ processStakeDelegation resolver writer ctx = do
 
         -- Stake deregistration
         CertStakeDeregistration credHash -> do
-          saId <- resolveAndWriteStakeAddress resolver writer credHash
+          saId <- resolveAndWriteStakeAddress network resolver writer credHash
           sdId <- assignStakeDeregistrationId resolver
           let sd = StakeDeregistration
                 { stakeDeregistrationAddrId     = saId
@@ -99,7 +99,7 @@ processStakeDelegation resolver writer ctx = do
 
         -- Delegation
         CertDelegation credHash poolKeyHash -> do
-          saId <- resolveAndWriteStakeAddress resolver writer credHash
+          saId <- resolveAndWriteStakeAddress network resolver writer credHash
           phId <- resolveAndWritePoolHash resolver writer poolKeyHash
           dId  <- assignDelegationId resolver
           let d = Delegation
@@ -115,7 +115,7 @@ processStakeDelegation resolver writer ctx = do
 
         -- Conway combined: register + delegate
         CertConwayRegDeleg credHash poolKeyHash mDeposit -> do
-          saId <- resolveAndWriteStakeAddress resolver writer credHash
+          saId <- resolveAndWriteStakeAddress network resolver writer credHash
           phId <- resolveAndWritePoolHash resolver writer poolKeyHash
           -- Write registration
           srId <- assignStakeRegistrationId resolver
@@ -142,7 +142,7 @@ processStakeDelegation resolver writer ctx = do
 
         -- Conway: delegate to stake pool + DRep (ignore DRep for now)
         CertConwayDelegStakeVote credHash poolKeyHash _drepHash -> do
-          saId <- resolveAndWriteStakeAddress resolver writer credHash
+          saId <- resolveAndWriteStakeAddress network resolver writer credHash
           phId <- resolveAndWritePoolHash resolver writer poolKeyHash
           dId  <- assignDelegationId resolver
           let d = Delegation
@@ -166,7 +166,7 @@ processStakeDelegation resolver writer ctx = do
           credHash = if BS.length rewardAddr > 1
                        then BS.drop 1 rewardAddr
                        else rewardAddr
-      saId <- resolveAndWriteStakeAddress resolver writer credHash
+      saId <- resolveAndWriteStakeAddress network resolver writer credHash
       wId  <- assignWithdrawalId resolver
       let wd = Withdrawal
             { withdrawalAddrId     = saId
@@ -176,56 +176,4 @@ processStakeDelegation resolver writer ctx = do
             }
       writeWithdrawal writer wId wd
 
--- ---------------------------------------------------------------------------
--- * Helpers
--- ---------------------------------------------------------------------------
 
--- | Resolve a stake address by credential hash. If new, write the
--- @stake_address@ row.
-resolveAndWriteStakeAddress
-  :: IdResolver IO
-  -> Writer IO
-  -> ByteString    -- ^ Stake credential hash (28 bytes)
-  -> IO StakeAddressId
-resolveAndWriteStakeAddress resolver writer credHash = do
-  let sa = StakeAddress
-        { stakeAddressHashRaw    = credHash
-        , stakeAddressView       = "stake_" <> hexEncode credHash
-        , stakeAddressScriptHash = Nothing
-        }
-  (saId, isNew) <- resolveStakeAddress resolver credHash sa
-  when isNew $
-    writeStakeAddress writer saId sa
-  pure saId
-
--- | Resolve a pool hash by key hash. If new, write the @pool_hash@ row.
--- This ensures the dedup entry and row exist even if the Pool extractor
--- hasn't processed the pool registration cert yet.
-resolveAndWritePoolHash
-  :: IdResolver IO
-  -> Writer IO
-  -> ByteString    -- ^ Pool key hash (28 bytes)
-  -> IO PoolHashId
-resolveAndWritePoolHash resolver writer poolKeyHash = do
-  let ph = PoolHash
-        { poolHashHashRaw = poolKeyHash
-        , poolHashView    = "pool_" <> hexEncode poolKeyHash
-        }
-  (phId, isNew) <- resolvePoolHash resolver poolKeyHash ph
-  when isNew $
-    writePoolHash writer phId ph
-  pure phId
-
--- | Hex-encode a 'ByteString' to 'Text'.
-hexEncode :: ByteString -> Text
-hexEncode = toS @[Char] @Text . concatMap hexByte . BS.unpack
-  where
-    hexByte :: Word8 -> [Char]
-    hexByte w =
-      let hi = w `div` 16
-          lo = w `mod` 16
-      in [hexDigit hi, hexDigit lo]
-    hexDigit :: Word8 -> Char
-    hexDigit n
-      | n < 10    = toEnum (fromIntegral n + fromEnum '0')
-      | otherwise = toEnum (fromIntegral n - 10 + fromEnum 'a')

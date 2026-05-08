@@ -11,6 +11,7 @@ module DbSync.Copy.WriterSpec (spec) where
 
 import Cardano.Prelude
 
+import Cardano.Ledger.BaseTypes (Network (..))
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import Data.IORef (newIORef)
@@ -21,6 +22,7 @@ import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import Test.Hspec (Spec, afterAll_, beforeAll_, describe, it, shouldBe)
 
+import DbSync.Env (HasNetwork (..))
 import DbSync.Block.Types
   ( BlockEra (..)
   , GenericBlock (..)
@@ -178,6 +180,9 @@ instance HasWriter TestPipelineEnv where
 
 instance HasExtractors TestPipelineEnv where
   getExtractors = tpeExtractors
+
+instance HasNetwork TestPipelineEnv where
+  getNetwork _ = Mainnet
 
 -- | Run the full pipeline: extractor → resolver → CopyAdapter → PostgreSQL.
 runPipelineToDb :: [GenericBlock] -> IO ()

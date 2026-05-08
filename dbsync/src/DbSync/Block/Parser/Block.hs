@@ -41,9 +41,9 @@ import qualified Cardano.Crypto.Hash as Crypto
 import qualified Cardano.Crypto.KES.Class as KES
 import Cardano.Crypto.VRF.Class (VerKeyVRF, rawSerialiseVerKeyVRF)
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Base16 as Base16
-import qualified Data.Text.Encoding as Text
 import Lens.Micro ((^.))
+
+import DbSync.Util.Bech32 (serialiseVrfVkToBech32)
 
 import Cardano.Ledger.Keys (hashKey, unKeyHash)
 import qualified Cardano.Ledger.BaseTypes as Ledger
@@ -302,8 +302,6 @@ splitProtoVer pv =
   , fromIntegral (Ledger.pvMinor pv :: Natural)
   )
 
--- | Serialize a VRF verification key to text.
--- Uses hex encoding for now. The original uses Bech32 with @vrf_vk@ prefix.
--- TODO: Add @bech32@ dependency and use proper Bech32 encoding.
+-- | Serialise a VRF verification key as Bech32 with HRP @vrf_vk@.
 vrfKeyToText :: VerKeyVRF (VRF StandardCrypto) -> Text
-vrfKeyToText vk = Text.decodeUtf8 (Base16.encode (rawSerialiseVerKeyVRF vk))
+vrfKeyToText = serialiseVrfVkToBech32 . rawSerialiseVerKeyVRF

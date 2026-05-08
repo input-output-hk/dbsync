@@ -76,6 +76,7 @@ library
     DbSync.Extractor.Pool
     DbSync.Extractor.ScriptsDatums
     DbSync.Extractor.Governance
+    DbSync.Extractor.SharedDedup
     DbSync.Extractor.Cbor
     DbSync.Extractor.EpochSyncStats
     DbSync.Extractor.EpochBoundary
@@ -214,21 +215,28 @@ library dbsync-testlib
   import:         warnings, defaults
   hs-source-dirs: test
   exposed-modules:
-    DbSync.Test.Generators
-    DbSync.Test.Fixtures
-    DbSync.Test.Helpers
     DbSync.Test.Database
+    DbSync.Test.Fixtures
+    DbSync.Test.Generators
     DbSync.Test.Hasql
+    DbSync.Test.Helpers
+    DbSync.Test.MockChain
     DbSync.Test.Property.Invariants
   build-depends:
       base
+    , cardano-crypto-class
+    , cardano-ledger-core
+    , cardano-node
     , cardano-prelude
     , cardano-slotting
     , dbsync
     , dbsync-db
+    , dbsync-mock
+    , filepath
     , hasql                           >= 1.9 && < 2
     , ouroboros-consensus
     , ouroboros-consensus:cardano
+    , ouroboros-network:api
     , process
     , text
     , time
@@ -257,11 +265,14 @@ test-suite dbsync-test
     DbSync.Schema.AddressSpec
     DbSync.Schema.CoreSpec
     DbSync.Schema.GenerateSpec
+    DbSync.Schema.GovernanceSpec
     DbSync.Schema.RewardSpec
     DbSync.Schema.ScriptsDatumsSpec
     DbSync.Schema.SyncStateSpec
+    DbSync.Util.Bech32Spec
     DbSync.Extractor.CoreSpec
     DbSync.Extractor.EpochBoundarySpec
+    DbSync.Extractor.UTxOSpec
     DbSync.Ingest.ConsumerSpec
     DbSync.Ingest.PipelineSpec
     DbSync.Schema.InitSpec
@@ -274,11 +285,15 @@ test-suite dbsync-test
     DbSync.Checkpoint.SyncStateSpec
     DbSync.Phase.BootSpec
     DbSync.Phase.FollowingChainTipSpec
+    DbSync.Phase.MockChainSpec
     DbSync.StateQuery.ObservedSummarySpec
   build-depends:
       base
+    , base16-bytestring
+    , bech32
     , dbsync
     , dbsync-db
+    , dbsync-mock
     , dbsync:dbsync-testlib
     , hspec
     , cardano-ledger-core

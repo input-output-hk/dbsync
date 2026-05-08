@@ -10,16 +10,22 @@
 -- post-load via a SQL join in 'PreparingForChainTip'.
 module DbSync.Extractor.UTxO
   ( utxoExtractor
+
+    -- * Internal helpers (exported for tests)
+  , extractStakeCred
+  , mkAddress
+  , mkTxOut
   ) where
 
 import Cardano.Prelude
 
 import qualified Data.ByteString as BS
+import Data.List (zip3)
 
 import DbSync.Block.Types (GenericTx (..), GenericTxIn (..))
 import qualified DbSync.Block.Types as G
 import DbSync.Db.Schema.Address (Address (..), addressTableDef)
-import DbSync.Db.Schema.Ids (AddressId, TxId (..))
+import DbSync.Db.Schema.Ids (AddressId, StakeAddressId, TxId (..))
 import DbSync.Db.Schema.UTxO
 import DbSync.Db.Types (DbLovelace (..))
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
@@ -34,7 +40,7 @@ utxoExtractor :: ExtractorDef
 utxoExtractor = ExtractorDef
   { pdName         = "utxo"
   , pdVersion      = 1
-  , pdDependencies = [("core", 1)]
+  , pdDependencies = [("core", 1), ("stake_delegation", 1)]
   , pdTables       =
       [ addressTableDef
       , txOutTableDef
@@ -52,16 +58,18 @@ utxoExtractor = ExtractorDef
 processUTxO :: ProcessBlockFn
 processUTxO resolver writer ctx = do
   forM_ (bcTxs ctx) $ \tc -> do
-    let txId   = tcTxId tc
-        gtx    = tcGenTx tc
-        outIds = tcOutIds tc
+    let txId    = tcTxId tc
+        gtx     = tcGenTx tc
+        outIds  = tcOutIds tc
+        stakeIds = tcOutStakeIds tc
 
-    -- 1. Resolve address (write address row if new), then write tx_out
-    forM_ (zip outIds (txOutputs gtx)) $ \(outId, gout) -> do
-      let addr = mkAddress gout
+    -- The pipeline pre-resolves @stakeIds@ so the address row and the
+    -- tx_out row share the same StakeAddressId.
+    forM_ (zip3 outIds stakeIds (txOutputs gtx)) $ \(outId, mStakeId, gout) -> do
+      let addr = mkAddress mStakeId gout
       (addrId, isNew) <- resolveAddress resolver (G.txOutAddressRaw gout) addr
       when isNew $ writeAddress writer addrId addr
-      let txOut = mkTxOut txId addrId gout
+      let txOut = mkTxOut txId addrId mStakeId gout
       writeTxOut writer outId txOut
 
     -- 2. Write tx_in rows
@@ -86,21 +94,21 @@ processUTxO resolver writer ctx = do
 -- * Record builders
 -- ---------------------------------------------------------------------------
 
-mkAddress :: G.GenericTxOut -> Address
-mkAddress gout = Address
+mkAddress :: Maybe StakeAddressId -> G.GenericTxOut -> Address
+mkAddress mStakeId gout = Address
   { addressAddress        = G.txOutAddress gout
   , addressRaw            = G.txOutAddressRaw gout
   , addressHasScript      = rawHasScript (G.txOutAddressRaw gout)
   , addressPaymentCred    = extractPaymentCred (G.txOutAddressRaw gout)
-  , addressStakeAddressId = Nothing  -- resolved by StakeDelegation extractor
+  , addressStakeAddressId = mStakeId
   }
 
-mkTxOut :: TxId -> AddressId -> G.GenericTxOut -> TxOut
-mkTxOut txId addrId gout = TxOut
+mkTxOut :: TxId -> AddressId -> Maybe StakeAddressId -> G.GenericTxOut -> TxOut
+mkTxOut txId addrId mStakeId gout = TxOut
   { txOutTxId              = txId
   , txOutIndex             = fromIntegral (G.txOutIndex gout)
   , txOutAddressId         = addrId
-  , txOutStakeAddressId    = Nothing  -- resolved by StakeDelegation extractor
+  , txOutStakeAddressId    = mStakeId
   , txOutValue             = DbLovelace (G.txOutValue gout)
   , txOutDataHash          = G.txOutDataHash gout
   , txOutInlineDatumId     = Nothing  -- resolved by ScriptsDatums extractor
@@ -157,3 +165,21 @@ extractPaymentCred bs
       in if header .&. 0xE0 == 0x00  -- Byron address type
          then Nothing
          else Just $ BS.take 28 (BS.drop 1 bs)
+
+-- | Extract the inline 28-byte stake credential from a Shelley address.
+--
+-- Returns 'Just' for base addresses (header types @0x00@\/@0x10@\/@0x20@\/@0x30@,
+-- per CIP-19) where bytes 30-57 carry the stake key or script hash.
+-- Pointer, enterprise, reward, and Byron addresses have no inline cred
+-- and yield 'Nothing'.
+extractStakeCred :: ByteString -> Maybe ByteString
+extractStakeCred bs
+  | BS.length bs < 57 = Nothing
+  | otherwise =
+      let typeBits = BS.head bs .&. 0xF0
+      in if typeBits == 0x00
+           || typeBits == 0x10
+           || typeBits == 0x20
+           || typeBits == 0x30
+           then Just (BS.take 28 (BS.drop 29 bs))
+           else Nothing

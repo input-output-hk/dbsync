@@ -17,6 +17,7 @@ module DbSync.Config.Genesis
     -- * Building consensus config
   , mkTopLevelConfig
   , mkProtocolInfoCardano
+  , mkProtocolInfoCardanoForging
   ) where
 
 import Cardano.Prelude
@@ -40,6 +41,7 @@ import Control.Monad.Trans.Except.Extra
 import Control.Tracer (Tracer, nullTracer)
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Char8 as BS
+import Ouroboros.Consensus.Block.Forging (BlockForging, MkBlockForging (..))
 import Ouroboros.Consensus.Cardano (Nonce (..), ProtVer (ProtVer))
 import qualified Ouroboros.Consensus.Cardano as Consensus
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
@@ -48,7 +50,7 @@ import Ouroboros.Consensus.Config (TopLevelConfig, emptyCheckpointsMap)
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo)
 import qualified Ouroboros.Consensus.Node.ProtocolInfo as Consensus
 import Ouroboros.Consensus.Protocol.Praos.AgentClient (KESAgentClientTrace)
-import Ouroboros.Consensus.Shelley.Node (ShelleyGenesis (..))
+import Ouroboros.Consensus.Shelley.Node (ShelleyGenesis (..), ShelleyLeaderCredentials)
 import System.FilePath ((</>))
 
 import DbSync.Config.Types
@@ -102,38 +104,73 @@ readCardanoGenesisConfig nc genesisDir = runExceptT $
 mkTopLevelConfig :: NodeConfig -> GenesisConfig -> TopLevelConfig (CardanoBlock StandardCrypto)
 mkTopLevelConfig nc gc = Consensus.pInfoConfig $ mkProtocolInfoCardano nc gc
 
--- | Build the 'ProtocolInfo' from genesis data.
+-- | Build the 'ProtocolInfo' from genesis data, with no leader
+-- credentials. This is the production sync-only path.
 mkProtocolInfoCardano
   :: NodeConfig
   -> GenesisConfig
   -> ProtocolInfo (CardanoBlock StandardCrypto)
 mkProtocolInfoCardano nc gc =
   fst (second (\f -> f (nullTracer :: Tracer IO KESAgentClientTrace)) $
-    protocolInfoCardano $
-      CardanoProtocolParams
-        { byronProtocolParams =
-            Consensus.ProtocolParamsByron
-              { Consensus.byronGenesis = gcByron gc
-              , Consensus.byronPbftSignatureThreshold = Nothing
-              , Consensus.byronProtocolVersion = Byron.Update.ProtocolVersion 0 2 0
-              , Consensus.byronSoftwareVersion = mkByronSoftwareVersion
-              , Consensus.byronLeaderCredentials = Nothing
-              }
-        , shelleyBasedProtocolParams =
-            Consensus.ProtocolParamsShelleyBased
-              { Consensus.shelleyBasedInitialNonce = shelleyPraosNonce (scGenesisHash $ gcShelley gc)
-              , Consensus.shelleyBasedLeaderCredentials = []
-              }
-        , cardanoProtocolVersion = ProtVer (natVersion @10) 0
-        , cardanoLedgerTransitionConfig =
-            Ledger.mkLatestTransitionConfig
-              (scConfig $ gcShelley gc)
-              (gcAlonzo gc)
-              (gcConway gc)
-              emptyDijkstraGenesis
-        , cardanoHardForkTriggers = mkHardForkTriggers nc
-        , cardanoCheckpoints = emptyCheckpointsMap
-        })
+    protocolInfoCardano (cardanoProtocolParams nc gc []))
+
+-- | Build the 'ProtocolInfo' /and/ resolve the matching
+-- 'BlockForging' actions, given a list of Shelley leader
+-- credentials.
+--
+-- Used by the test harness ('DbSync.Test.MockChain') to drive the
+-- vendored chain-gen interpreter. Production sync uses the
+-- credential-free 'mkProtocolInfoCardano' path above.
+mkProtocolInfoCardanoForging
+  :: NodeConfig
+  -> GenesisConfig
+  -> [ShelleyLeaderCredentials StandardCrypto]
+  -> IO ( ProtocolInfo (CardanoBlock StandardCrypto)
+        , [BlockForging IO (CardanoBlock StandardCrypto)]
+        )
+mkProtocolInfoCardanoForging nc gc creds = do
+  let (pinfo, mkForgings) = protocolInfoCardano (cardanoProtocolParams nc gc creds)
+  -- 'mkForgings' yields one 'MkBlockForging' per credential set;
+  -- each one is an action allocating a 'BlockForging' (and any
+  -- per-key resources like KES HotKeys). Tests are short-lived so
+  -- we don't bother finalising on teardown — the OS reclaims on exit.
+  mkForgingActions <- mkForgings (nullTracer :: Tracer IO KESAgentClientTrace)
+  forgings <- traverse mkBlockForging mkForgingActions
+  pure (pinfo, forgings)
+
+-- | Shared 'CardanoProtocolParams' construction. The credentials
+-- argument is what distinguishes the sync-only path (empty) from the
+-- forging-test path (populated from a bulk credentials file).
+cardanoProtocolParams
+  :: NodeConfig
+  -> GenesisConfig
+  -> [ShelleyLeaderCredentials StandardCrypto]
+  -> CardanoProtocolParams StandardCrypto
+cardanoProtocolParams nc gc creds =
+  CardanoProtocolParams
+    { byronProtocolParams =
+        Consensus.ProtocolParamsByron
+          { Consensus.byronGenesis = gcByron gc
+          , Consensus.byronPbftSignatureThreshold = Nothing
+          , Consensus.byronProtocolVersion = Byron.Update.ProtocolVersion 0 2 0
+          , Consensus.byronSoftwareVersion = mkByronSoftwareVersion
+          , Consensus.byronLeaderCredentials = Nothing
+          }
+    , shelleyBasedProtocolParams =
+        Consensus.ProtocolParamsShelleyBased
+          { Consensus.shelleyBasedInitialNonce = shelleyPraosNonce (scGenesisHash $ gcShelley gc)
+          , Consensus.shelleyBasedLeaderCredentials = creds
+          }
+    , cardanoProtocolVersion = ProtVer (natVersion @10) 0
+    , cardanoLedgerTransitionConfig =
+        Ledger.mkLatestTransitionConfig
+          (scConfig $ gcShelley gc)
+          (gcAlonzo gc)
+          (gcConway gc)
+          emptyDijkstraGenesis
+    , cardanoHardForkTriggers = mkHardForkTriggers nc
+    , cardanoCheckpoints = emptyCheckpointsMap
+    }
 
 -- ---------------------------------------------------------------------------
 -- * Internal: per-era genesis readers

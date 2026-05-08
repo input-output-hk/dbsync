@@ -34,7 +34,7 @@ import DbSync.Db.Schema.Core
   , slotLeaderTableDef
   , txTableDef
   )
-import DbSync.Db.Schema.Ids (BlockId (..), SlotLeaderId)
+import DbSync.Db.Schema.Ids (BlockId (..), PoolHashId, SlotLeaderId)
 import DbSync.Db.Types (DbLovelace (..), DbWord64 (..))
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
 import DbSync.Writer (Writer (..))
@@ -74,7 +74,7 @@ processCore _resolver writer ctx = do
 
   -- 1. Write slot leader row if new
   when (bcSlotLeaderNew ctx) $
-    writeSlotLeader writer slId (mkSlotLeader gb)
+    writeSlotLeader writer slId (mkSlotLeader (bcSlotLeaderPoolHashId ctx) gb)
 
   -- 2. Write block
   let block = mkBlock gb (bcPrevBlockId ctx) slId
@@ -110,11 +110,14 @@ mkBlock gb prevId slId = Block
   }
 
 -- | Build a 'SlotLeader' record.
--- Pool hash resolution is deferred — 'slotLeaderPoolHashId' is 'Nothing'.
-mkSlotLeader :: GenericBlock -> SlotLeader
-mkSlotLeader gb = SlotLeader
+--
+-- The pool-hash FK arrives pre-resolved from the pipeline; it is
+-- 'Nothing' for Byron blocks (the leader hash is a genesis-key
+-- delegate, not a stake-pool key) and for EBBs.
+mkSlotLeader :: Maybe PoolHashId -> GenericBlock -> SlotLeader
+mkSlotLeader mPoolHashId gb = SlotLeader
   { slotLeaderHash        = blkSlotLeader gb
-  , slotLeaderPoolHashId  = Nothing
+  , slotLeaderPoolHashId  = mPoolHashId
   , slotLeaderDescription = mkSlotLeaderDesc (blkSlotLeader gb)
   }
 

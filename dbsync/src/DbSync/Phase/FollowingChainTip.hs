@@ -8,10 +8,12 @@ module DbSync.Phase.FollowingChainTip
 
 import Cardano.Prelude
 
+import Cardano.Ledger.BaseTypes (Network)
 import qualified Hasql.Connection as Conn
 
 import DbSync.AppM (FollowM)
 import DbSync.Block.Types (GenericBlock)
+import DbSync.Env (HasNetwork (..))
 import DbSync.Extractor (ExtractorDef, HasExtractors (..))
 import DbSync.Ingest.Pipeline (processBlock)
 import DbSync.Resolver (HasResolver (..), IdResolver)
@@ -26,11 +28,21 @@ run = panic "TODO: not implemented"
 -- | Drive a fixed list of blocks through the FollowingChainTip
 -- pipeline against the given connection. Used by tests; production
 -- 'run' will pull from the receiver queue instead.
-processBlocks :: Conn.Connection -> [ExtractorDef] -> [GenericBlock] -> IO ()
-processBlocks conn extractors blocks = do
+processBlocks
+  :: Conn.Connection
+  -> Network
+  -> [ExtractorDef]
+  -> [GenericBlock]
+  -> IO ()
+processBlocks conn network extractors blocks = do
   resolver <- mkFollowResolver conn
   let writer = mkInsertWriter conn
-      env    = Env { envResolver = resolver, envWriter = writer, envExtractors = extractors }
+      env    = Env
+        { envResolver   = resolver
+        , envWriter     = writer
+        , envExtractors = extractors
+        , envNetwork    = network
+        }
   for_ blocks $ \blk -> runReaderT (processBlock blk) env
 
 -- | Minimal env satisfying 'processBlock''s constraints.
@@ -38,8 +50,10 @@ data Env = Env
   { envResolver   :: !(IdResolver IO)
   , envWriter     :: !(Writer IO)
   , envExtractors :: ![ExtractorDef]
+  , envNetwork    :: !Network
   }
 
 instance HasResolver Env where getResolver = envResolver
 instance HasWriter Env where getWriter = envWriter
 instance HasExtractors Env where getExtractors = envExtractors
+instance HasNetwork Env where getNetwork = envNetwork

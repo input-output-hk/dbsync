@@ -29,6 +29,7 @@ import qualified DbSync.Config.ValidationSpec as ConfigValidationSpec
 import qualified DbSync.Db.TypesSpec as DbTypesSpec
 import qualified DbSync.Extractor.CoreSpec as ExtractorCoreSpec
 import qualified DbSync.Extractor.EpochBoundarySpec as ExtractorEpochBoundarySpec
+import qualified DbSync.Extractor.UTxOSpec as ExtractorUTxOSpec
 import qualified DbSync.Ingest.ConsumerSpec as IngestConsumerSpec
 import qualified DbSync.Ingest.PipelineSpec as IngestPipelineSpec
 import qualified DbSync.Ledger.StateSpec as LedgerStateSpec
@@ -39,10 +40,12 @@ import qualified DbSync.Schema.AdaPotsSpec as SchemaAdaPotsSpec
 import qualified DbSync.Schema.AddressSpec as SchemaAddressSpec
 import qualified DbSync.Schema.CoreSpec as SchemaCoreSpec
 import qualified DbSync.Schema.GenerateSpec as SchemaGenerateSpec
+import qualified DbSync.Schema.GovernanceSpec as SchemaGovernanceSpec
 import qualified DbSync.Schema.RewardSpec as SchemaRewardSpec
 import qualified DbSync.Schema.ScriptsDatumsSpec as SchemaScriptsDatumsSpec
 import qualified DbSync.Schema.SyncStateSpec as SchemaSyncStateSpec
 import qualified DbSync.StateQuery.ObservedSummarySpec as ObservedSummarySpec
+import qualified DbSync.Util.Bech32Spec as UtilBech32Spec
 
 -- Property tests
 import qualified DbSync.PropertySpec as PropertySpec
@@ -56,6 +59,7 @@ import qualified DbSync.Db.Statement.BlockSpec as DbStatementBlockSpec
 import qualified DbSync.Db.Statement.SlotLeaderSpec as DbStatementSlotLeaderSpec
 import qualified DbSync.Db.Statement.SyncStateSpec as DbStatementSyncStateSpec
 import qualified DbSync.Phase.FollowingChainTipSpec as PhaseFollowingChainTipSpec
+import qualified DbSync.Phase.MockChainSpec as PhaseMockChainSpec
 import qualified DbSync.Schema.InitSpec as SchemaInitSpec
 
 main :: IO ()
@@ -70,6 +74,7 @@ main = hspec $ do
     DbTypesSpec.spec
     ExtractorCoreSpec.spec
     ExtractorEpochBoundarySpec.spec
+    ExtractorUTxOSpec.spec
     IngestConsumerSpec.spec
     IngestPipelineSpec.spec
     LedgerStateSpec.spec
@@ -80,10 +85,12 @@ main = hspec $ do
     SchemaAddressSpec.spec
     SchemaCoreSpec.spec
     SchemaGenerateSpec.spec
+    SchemaGovernanceSpec.spec
     SchemaRewardSpec.spec
     SchemaScriptsDatumsSpec.spec
     SchemaSyncStateSpec.spec
     ObservedSummarySpec.spec
+    UtilBech32Spec.spec
 
   describe "Property tests" $
     PropertySpec.spec
@@ -97,4 +104,5 @@ main = hspec $ do
     DbStatementSlotLeaderSpec.spec
     DbStatementSyncStateSpec.spec
     PhaseFollowingChainTipSpec.spec
+    PhaseMockChainSpec.spec
     SchemaInitSpec.spec

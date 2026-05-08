@@ -27,6 +27,7 @@ module DbSync.Env
 
     -- * Accessor classes
   , HasConfig (..)
+  , HasNetwork (..)
   ) where
 
 import Cardano.Prelude
@@ -34,6 +35,7 @@ import Cardano.Prelude
 import Control.Concurrent.STM (TBQueue, TVar)
 import Data.IORef (IORef)
 
+import Cardano.Ledger.BaseTypes (Network)
 import Cardano.Slotting.Slot (SlotNo)
 import Ouroboros.Consensus.BlockchainTime.WallClock.Types (SystemStart)
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
@@ -74,6 +76,12 @@ type LedgerState = ()
 class HasConfig env where
   getConfig :: env -> SyncConfig
 
+-- | Access the chain's 'Network' (mainnet vs testnet) from any
+-- environment. Read once at startup from the Shelley genesis and
+-- never changes for the lifetime of a sync.
+class HasNetwork env where
+  getNetwork :: env -> Network
+
 -- ---------------------------------------------------------------------------
 -- * Environment types
 -- ---------------------------------------------------------------------------
@@ -93,6 +101,9 @@ data CoreEnv = CoreEnv
     -- ^ Extracted cardano-node configuration
   , ceExtractors :: ![ExtractorDef]
     -- ^ Active extractor definitions
+  , ceNetwork    :: !Network
+    -- ^ Chain network ID, sourced from the Shelley genesis.
+    --   Drives the HRP for stake / reward Bech32 encodings.
   }
 
 -- | Environment for the 'IngestChainHistory' phase.
@@ -207,6 +218,15 @@ instance HasConfig IngestEnv where
 
 instance HasConfig FollowEnv where
   getConfig = getConfig . feCore
+
+instance HasNetwork CoreEnv where
+  getNetwork = ceNetwork
+
+instance HasNetwork IngestEnv where
+  getNetwork = getNetwork . ieCore
+
+instance HasNetwork FollowEnv where
+  getNetwork = getNetwork . feCore
 
 -- ---------------------------------------------------------------------------
 -- * HasExtractors instances (orphan — class defined in DbSync.Extractor)

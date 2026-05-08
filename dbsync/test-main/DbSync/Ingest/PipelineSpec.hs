@@ -9,6 +9,7 @@ module DbSync.Ingest.PipelineSpec (spec) where
 
 import Cardano.Prelude
 
+import Cardano.Ledger.BaseTypes (Network (..))
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
@@ -26,6 +27,7 @@ import DbSync.Block.Types
   )
 import DbSync.Db.Schema.Core (Block (..))
 import DbSync.Db.Schema.Ids (BlockId (..), TxId (..))
+import DbSync.Env (HasNetwork (..))
 import DbSync.Extractor (ExtractState (..), ExtractorDef (..), HasExtractors (..))
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
@@ -127,6 +129,9 @@ instance HasWriter TestPipelineEnv where
 
 instance HasExtractors TestPipelineEnv where
   getExtractors = tpeExtractors
+
+instance HasNetwork TestPipelineEnv where
+  getNetwork _ = Mainnet
 
 -- ---------------------------------------------------------------------------
 -- Test runners

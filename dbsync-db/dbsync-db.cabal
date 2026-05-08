@@ -50,6 +50,7 @@ library
     DbSync.Db.Schema.Pool
     DbSync.Db.Schema.CBOR
     DbSync.Db.Schema.ScriptsDatums
+    DbSync.Db.Schema.Governance
     DbSync.Db.Schema.EpochSyncStats
     DbSync.Db.Schema.AdaPots
     DbSync.Db.Schema.SyncState
@@ -86,9 +87,14 @@ library
     DbSync.Db.Statement.Withdrawal
     DbSync.Db.Writer.Copy.Encoder
     DbSync.Db.Writer.Insert
+    DbSync.Util.Bech32
   build-depends:
       base                  >= 4.14 && < 5
     , cardano-prelude
+
+    -- Crypto / encoding
+    , bech32
+    , cardano-crypto-class
 
     -- Data
     , bytestring

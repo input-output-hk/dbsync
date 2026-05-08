@@ -50,13 +50,16 @@ import qualified Cardano.Ledger.State as PoolP
 import qualified Cardano.Ledger.TxIn as Ledger
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 
+import qualified Cardano.Chain.Common as Byron
+
 import Data.Array.Byte (ByteArray (..))
-import qualified Data.ByteString.Base16 as Base16
 import Data.ByteString.Short (ShortByteString (SBS))
 import qualified Data.ByteString.Short as SBS
 import qualified Data.Map.Strict as Map
 import qualified Data.Text.Encoding as Text
 import Lens.Micro ((^.))
+
+import DbSync.Util.Bech32 (serialiseShelleyAddrToBech32)
 
 import Ouroboros.Consensus.Cardano.Block
   ( AllegraEra
@@ -374,10 +377,17 @@ mkCollTxIn txBody = map fromTxIn $ toList $ txBody ^. collateralInputsTxBodyL
 mkRefTxIn :: BabbageEraTxBody era => Core.TxBody Core.TopTx era -> [GenericTxIn]
 mkRefTxIn txBody = map fromTxIn $ toList $ txBody ^. referenceInputsTxBodyL
 
--- | Address to text. Uses hex encoding of raw bytes for now.
--- TODO: Switch to proper Bech32 encoding for Shelley+ addresses.
+-- | Render a Shelley+ payment address.
+--
+-- Shelley/Allegra/… addresses go through Bech32 (HRP @addr@ on
+-- mainnet, @addr_test@ on testnet); Byron-shaped bootstrap addresses
+-- (which can still appear as outputs in Shelley+ blocks) round-trip
+-- through Base58.
 addrToText :: Ledger.Addr -> Text
-addrToText addr = Text.decodeUtf8 (Base16.encode (Ledger.serialiseAddr addr))
+addrToText (Ledger.AddrBootstrap (Ledger.BootstrapAddress byronAddr)) =
+  Text.decodeUtf8 (Byron.addrToBase58 byronAddr)
+addrToText addr@Ledger.Addr{} =
+  serialiseShelleyAddrToBech32 (Ledger.serialiseAddr addr)
 
 -- ---------------------------------------------------------------------------
 -- * Shelley era

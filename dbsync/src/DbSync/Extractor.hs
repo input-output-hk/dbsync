@@ -26,9 +26,11 @@ module DbSync.Extractor
 
 import Cardano.Prelude
 
+import Cardano.Ledger.BaseTypes (Network)
+
 import DbSync.Block.Types (GenericBlock, GenericTx)
 import DbSync.Id.Counter (IdCounters)
-import DbSync.Db.Schema.Ids (BlockId, SlotLeaderId, TxId, TxOutId)
+import DbSync.Db.Schema.Ids (BlockId, PoolHashId, SlotLeaderId, StakeAddressId, TxId, TxOutId)
 import DbSync.Db.Schema.Types (TableDef)
 import DbSync.Resolver (IdResolver)
 import DbSync.Writer (Writer)
@@ -76,9 +78,14 @@ data BlockContext = BlockContext
   , bcSlotLeaderId :: !SlotLeaderId
   , bcSlotLeaderNew :: !Bool
       -- ^ 'True' when this slot leader was seen for the first time
+  , bcSlotLeaderPoolHashId :: !(Maybe PoolHashId)
+      -- ^ Pool-hash FK for Shelley+ blocks; 'Nothing' for Byron and EBBs.
   , bcPrevBlockId  :: !(Maybe BlockId)
   , bcGenBlock     :: !GenericBlock
   , bcTxs          :: ![TxContext]
+  , bcNetwork      :: !Network
+      -- ^ Chain network ID; drives the HRP on Bech32 stake / reward
+      -- encodings produced by extractors.
   }
 
 -- | A transaction with pre-assigned shared IDs.
@@ -86,8 +93,11 @@ data TxContext = TxContext
   { tcTxId   :: !TxId
   , tcGenTx  :: !GenericTx
   , tcOutIds :: ![TxOutId]
-      -- ^ Pre-assigned TxOutId for each output, in order.
-      -- @length tcOutIds == length (txOutputs tcGenTx)@
+      -- ^ One TxOutId per output, same length and order as @txOutputs gtx@.
+  , tcOutStakeIds :: ![Maybe StakeAddressId]
+      -- ^ One stake-address FK per output, in the same order. 'Nothing'
+      -- when the address carries no inline stake credential (Byron,
+      -- enterprise, pointer, reward).
   }
 
 -- ---------------------------------------------------------------------------

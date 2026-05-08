@@ -14,9 +14,18 @@ module DbSync.Ingest.Pipeline
 
 import Cardano.Prelude
 
-import DbSync.Block.Types (GenericBlock (..), GenericTx (..))
+import Cardano.Ledger.BaseTypes (Network)
+
+import DbSync.Block.Types (BlockEra (..), GenericBlock (..), GenericTx (..), GenericTxOut (..))
+import DbSync.Env (HasNetwork (..))
 import DbSync.Extractor (ExtractorDef (..), BlockContext (..), HasExtractors (..), TxContext (..))
 import DbSync.Extractor.Core (mkSlotLeader)
+import DbSync.Extractor.SharedDedup
+  ( resolveAndWritePoolHash
+  , resolveAndWriteStakeAddress
+  )
+import DbSync.Extractor.UTxO (extractStakeCred)
+import DbSync.Db.Schema.Ids (PoolHashId, StakeAddressId)
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
 import DbSync.Writer (HasWriter (..), Writer)
 
@@ -43,6 +52,7 @@ processBlock
      , HasResolver env
      , HasWriter env
      , HasExtractors env
+     , HasNetwork env
      , MonadIO m
      )
   => GenericBlock
@@ -51,7 +61,8 @@ processBlock block = do
   resolver   <- asks getResolver
   writer     <- asks getWriter
   extractors <- asks getExtractors
-  liftIO $ runProcessBlock resolver writer extractors block
+  network    <- asks getNetwork
+  liftIO $ runProcessBlock resolver writer extractors network block
 
 -- | The pure-IO core of 'processBlock'. Kept separate so the env-pulling
 -- wrapper stays trivial and the extractor pipeline (which is hot-path code
@@ -60,35 +71,67 @@ runProcessBlock
   :: IdResolver IO
   -> Writer IO
   -> [ExtractorDef]
+  -> Network
   -> GenericBlock
   -> IO ()
-runProcessBlock resolver writer extractors block = do
-  -- 1. Resolve slot leader (dedup)
-  let leader = mkSlotLeader block
+runProcessBlock resolver writer extractors network block = do
+  -- For Shelley+ blocks the slot-leader hash IS a pool key hash; resolve
+  -- it before extractors run so @slot_leader.pool_hash_id@ can be set
+  -- without giving @core@ a circular dependency on @pool@.
+  mPoolHashId <- resolveSlotLeaderPoolHash resolver writer block
+
+  let leader = mkSlotLeader mPoolHashId block
   (slId, isNew) <- resolveSlotLeader resolver (blkSlotLeader block) leader
 
-  -- 2. Resolve previous block
   prevId <- resolvePrevBlock resolver (blkPreviousHash block)
-
-  -- 3. Assign block ID
   blockId <- assignBlockId resolver
 
-  -- 4. Assign per-tx TxIds and per-output TxOutIds
+  -- Per-tx and per-output IDs plus the per-output stake-address FK.
   txCtxs <- forM (blkTxs block) $ \gtx -> do
     txId <- assignTxId resolver
     outIds <- forM (txOutputs gtx) $ \_ -> assignTxOutId resolver
-    pure $ TxContext txId gtx outIds
+    stakeIds <- forM (txOutputs gtx) (resolveOutStakeId network resolver writer)
+    pure $ TxContext txId gtx outIds stakeIds
 
-  -- 5. Build context
   let ctx = BlockContext
-        { bcBlockId       = blockId
-        , bcSlotLeaderId  = slId
-        , bcSlotLeaderNew = isNew
-        , bcPrevBlockId   = prevId
-        , bcGenBlock      = block
-        , bcTxs           = txCtxs
+        { bcBlockId              = blockId
+        , bcSlotLeaderId         = slId
+        , bcSlotLeaderNew        = isNew
+        , bcSlotLeaderPoolHashId = mPoolHashId
+        , bcPrevBlockId          = prevId
+        , bcGenBlock             = block
+        , bcTxs                  = txCtxs
+        , bcNetwork              = network
         }
 
-  -- 6. Run each extractor
   forM_ extractors $ \ext ->
     pdProcess ext resolver writer ctx
+
+-- | Resolve the slot leader's pool hash for Shelley+ blocks.
+--
+-- Byron blocks delegate slot leadership through genesis keys (not pool
+-- keys) and EBBs carry a synthetic null leader, so both produce
+-- 'Nothing' here. For everything else we dedup-write a pool_hash row.
+resolveSlotLeaderPoolHash
+  :: IdResolver IO -> Writer IO -> GenericBlock -> IO (Maybe PoolHashId)
+resolveSlotLeaderPoolHash resolver writer block
+  | blkEra block == Byron = pure Nothing
+  | otherwise =
+      Just <$> resolveAndWritePoolHash resolver writer (blkSlotLeader block)
+
+-- | Pre-resolve the @stake_address@ FK for one tx output.
+--
+-- Lives here (rather than in the UTxO extractor) so the @utxo@ and
+-- @stake_delegation@ extractors stay textually independent — the
+-- pipeline is the only place that calls into both.
+resolveOutStakeId
+  :: Network
+  -> IdResolver IO
+  -> Writer IO
+  -> GenericTxOut
+  -> IO (Maybe StakeAddressId)
+resolveOutStakeId network resolver writer gout =
+  case extractStakeCred (txOutAddressRaw gout) of
+    Nothing -> pure Nothing
+    Just credHash ->
+      Just <$> resolveAndWriteStakeAddress network resolver writer credHash

@@ -9,6 +9,7 @@ module DbSync.Phase.FollowingChainTipSpec (spec) where
 
 import Cardano.Prelude
 
+import Cardano.Ledger.BaseTypes (Network (..))
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import Data.Time.Calendar (fromGregorian)
@@ -408,7 +409,7 @@ spec = describe "DbSync.Phase.FollowingChainTip" $
 runFollow :: [GenericBlock] -> IO ()
 runFollow blocks =
   withTestConnection $ \conn ->
-    Follow.processBlocks conn extractors blocks
+    Follow.processBlocks conn Mainnet extractors blocks
 
 -- ---------------------------------------------------------------------------
 -- Fixtures (same shape as Copy.WriterSpec)

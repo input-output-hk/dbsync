@@ -29,9 +29,9 @@ import DbSync.Block.Types
   )
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Pool
-import DbSync.Db.Schema.StakeDelegation (StakeAddress (..))
 import DbSync.Db.Types (DbLovelace (..))
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
+import DbSync.Extractor.SharedDedup (resolveAndWritePoolHash, resolveAndWriteStakeAddress)
 import DbSync.Resolver (IdResolver (..))
 import DbSync.Writer (Writer (..))
 
@@ -62,6 +62,7 @@ processPool :: ProcessBlockFn
 processPool resolver writer ctx = do
   let gb      = bcGenBlock ctx
       epochNo = unEpochNo (blkEpochNo gb)
+      network = bcNetwork ctx
 
   forM_ (bcTxs ctx) $ \tc -> do
     let txId = tcTxId tc
@@ -95,7 +96,7 @@ processPool resolver writer ctx = do
               rewardCredHash = if BS.length rewardAddr > 1
                                  then BS.drop 1 rewardAddr
                                  else rewardAddr
-          rewardAddrId <- resolveAndWriteStakeAddress resolver writer rewardCredHash
+          rewardAddrId <- resolveAndWriteStakeAddress network resolver writer rewardCredHash
 
           -- 4. Write pool update
           puId <- assignPoolUpdateId resolver
@@ -116,7 +117,7 @@ processPool resolver writer ctx = do
 
           -- 5. Write pool owners
           forM_ (prdOwners prd) $ \ownerHash -> do
-            ownerAddrId <- resolveAndWriteStakeAddress resolver writer ownerHash
+            ownerAddrId <- resolveAndWriteStakeAddress network resolver writer ownerHash
             poId <- assignPoolOwnerId resolver
             let po = PoolOwner
                   { poolOwnerAddrId       = ownerAddrId
@@ -176,50 +177,4 @@ mkPoolRelay puId (PoolRelayDnsSrv srvName) = PoolRelay
   , poolRelayPort       = Nothing
   }
 
--- | Resolve a pool hash by key hash. If new, write the @pool_hash@ row.
-resolveAndWritePoolHash
-  :: IdResolver IO
-  -> Writer IO
-  -> ByteString
-  -> IO PoolHashId
-resolveAndWritePoolHash resolver writer poolKeyHash = do
-  let ph = PoolHash
-        { poolHashHashRaw = poolKeyHash
-        , poolHashView    = "pool_" <> hexEncode poolKeyHash
-        }
-  (phId, isNew) <- resolvePoolHash resolver poolKeyHash ph
-  when isNew $
-    writePoolHash writer phId ph
-  pure phId
 
--- | Resolve a stake address by credential hash. If new, write the
--- @stake_address@ row.
-resolveAndWriteStakeAddress
-  :: IdResolver IO
-  -> Writer IO
-  -> ByteString
-  -> IO StakeAddressId
-resolveAndWriteStakeAddress resolver writer credHash = do
-  let sa = StakeAddress
-        { stakeAddressHashRaw    = credHash
-        , stakeAddressView       = "stake_" <> hexEncode credHash
-        , stakeAddressScriptHash = Nothing
-        }
-  (saId, isNew) <- resolveStakeAddress resolver credHash sa
-  when isNew $
-    writeStakeAddress writer saId sa
-  pure saId
-
--- | Hex-encode a 'ByteString' to 'Text'.
-hexEncode :: ByteString -> Text
-hexEncode = toS @[Char] @Text . concatMap hexByte . BS.unpack
-  where
-    hexByte :: Word8 -> [Char]
-    hexByte w =
-      let hi = w `div` 16
-          lo = w `mod` 16
-      in [hexDigit hi, hexDigit lo]
-    hexDigit :: Word8 -> Char
-    hexDigit n
-      | n < 10    = toEnum (fromIntegral n + fromEnum '0')
-      | otherwise = toEnum (fromIntegral n - 10 + fromEnum 'a')

@@ -10,6 +10,7 @@ module DbSync.Extractor.CoreSpec (spec) where
 
 import Cardano.Prelude
 
+import Cardano.Ledger.BaseTypes (Network (..))
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import Data.IORef (newIORef, readIORef)
@@ -23,9 +24,10 @@ import DbSync.Block.Types
   , GenericBlock (..)
   , GenericTx (..)
   )
-import DbSync.Db.Schema.Core (Block (..))
+import DbSync.Db.Schema.Core (Block (..), SlotLeader (..))
 import qualified DbSync.Db.Schema.Core as SC
 import DbSync.Db.Schema.Ids (BlockId (..), TxId (..))
+import DbSync.Env (HasNetwork (..))
 import DbSync.Extractor (ExtractState (..), ExtractorDef (..), HasExtractors (..))
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Id.Counter (IdCounters (..), mkIdCounter)
@@ -35,6 +37,7 @@ import DbSync.Resolver (HasResolver (..), IdResolver)
 import DbSync.Resolver.Ingest (mkIngestResolver)
 import DbSync.Writer (HasWriter (..), Writer)
 import DbSync.Writer.Testing (TestWriterState (..), emptyTestWriterState, mkTestWriter)
+import Test.Hspec (shouldSatisfy)
 
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
@@ -122,6 +125,25 @@ spec = do
       let idxs = map (SC.txBlockIndex . snd) (twTxs written)
       idxs `shouldBe` [0, 1, 2]
 
+  describe "mkSlotLeader / pool hash propagation" $ do
+    it "Shelley+ blocks populate slot_leader.pool_hash_id" $ do
+      written <- runCore emptyBlock
+      let (_, sl) = headDef (panic "no slot_leader") (twSlotLeaders written)
+      slotLeaderPoolHashId sl `shouldSatisfy` isJust
+
+    it "writes a pool_hash row for the Shelley slot leader" $ do
+      written <- runCore emptyBlock
+      length (twPoolHashes written) `shouldBe` 1
+
+    it "Byron blocks leave slot_leader.pool_hash_id NULL" $ do
+      written <- runCore byronBlock
+      let (_, sl) = headDef (panic "no slot_leader") (twSlotLeaders written)
+      slotLeaderPoolHashId sl `shouldBe` Nothing
+
+    it "Byron blocks write no pool_hash row" $ do
+      written <- runCore byronBlock
+      length (twPoolHashes written) `shouldBe` 0
+
 -- ---------------------------------------------------------------------------
 -- Test helpers
 -- ---------------------------------------------------------------------------
@@ -141,6 +163,9 @@ instance HasWriter TestPipelineEnv where
 
 instance HasExtractors TestPipelineEnv where
   getExtractors = tpeExtractors
+
+instance HasNetwork TestPipelineEnv where
+  getNetwork _ = Mainnet
 
 -- | Run the core extractor on a single block, return written records.
 runCore :: GenericBlock -> IO TestWriterState
@@ -246,6 +271,17 @@ emptyBlock2 = emptyBlock
   { blkHash    = BS.replicate 32 1
   , blkBlockNo = BlockNo 2
   , blkSlotNo  = SlotNo 120
+  }
+
+-- | A Byron-era block. The slot-leader hash is a genesis-key delegate,
+-- not a stake-pool key, so the pool-hash FK must stay NULL.
+byronBlock :: GenericBlock
+byronBlock = emptyBlock
+  { blkEra           = Byron
+  , blkHash          = BS.replicate 32 0xc0
+  , blkVrfKey        = Nothing
+  , blkOpCert        = Nothing
+  , blkOpCertCounter = Nothing
   }
 
 blockWith3Txs :: GenericBlock

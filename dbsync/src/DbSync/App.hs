@@ -7,13 +7,23 @@ module DbSync.App
   ( -- * Environment construction
     buildCoreEnv
 
+    -- * Extractor list construction (exported for testing)
+  , buildExtractors
+  , validateExtractorDeps
+  , topoSortExtractors
+
     -- * Startup
   , runStartup
   ) where
 
 import Cardano.Prelude
 
+import Cardano.Ledger.BaseTypes (Network)
 import Control.Tracer (traceWith)
+import qualified Data.Graph as Graph
+import qualified Data.Map.Strict as Map
+import qualified Data.Text as Text
+import qualified Data.Tree as Tree
 
 import DbSync.Config.Types
   ( NodeConfig
@@ -22,6 +32,7 @@ import DbSync.Config.Types
   , SyncConfig (..)
   )
 import DbSync.Env (CoreEnv (..))
+import DbSync.Error (throwInternal)
 import DbSync.Metrics (Metrics (..))
 import DbSync.Extractor (ExtractorDef (..))
 import DbSync.Extractor.Core (coreExtractor)
@@ -42,29 +53,36 @@ import DbSync.AppM (CoreM)
 
 -- | Build the shared core environment from parsed configs.
 --
--- Constructs the tracer, placeholder metrics, and the list of
--- active extractor definitions based on the config.
-buildCoreEnv :: AppTracer -> SyncConfig -> NodeConfig -> IO CoreEnv
-buildCoreEnv tracer syncCfg nodeCfg = do
-  let extractors = buildExtractors (scOptions syncCfg)
-      metrics = placeholderMetrics
+-- Aborts startup via 'throwInternal' if 'buildExtractors' returns
+-- 'Left' (missing dependency, version mismatch, or cycle) — these
+-- mean the profile is misconfigured and the run cannot proceed.
+buildCoreEnv :: AppTracer -> SyncConfig -> NodeConfig -> Network -> IO CoreEnv
+buildCoreEnv tracer syncCfg nodeCfg network = do
+  extractors <- case buildExtractors (scOptions syncCfg) of
+    Left err  -> throwInternal err
+    Right xs  -> pure xs
+  let metrics = placeholderMetrics
   pure CoreEnv
     { ceTracer      = tracer
     , ceMetrics     = metrics
     , ceConfig      = syncCfg
     , ceNodeConfig  = nodeCfg
-    , ceExtractors = extractors
+    , ceExtractors  = extractors
+    , ceNetwork     = network
     }
 
--- | Build the list of enabled extractors from config.
+-- | Build the list of enabled extractors from config, validate their
+-- dependencies, and return them in dependency-respecting order.
 --
--- 'coreExtractor' is unconditional and always first — every other
--- extractor's tables reference its block/tx/slot_leader rows via
--- foreign keys, so it has no off switch and no entry in 'SyncOptions'.
--- The remaining extractors are opt-in via @db_options@; stubs stand in
--- for those not yet implemented.
-buildExtractors :: SyncOptions -> [ExtractorDef]
-buildExtractors pc = coreExtractor : mapMaybe mkProj optionalExtractors
+-- 'coreExtractor' is unconditional — every other extractor's tables
+-- reference its block / tx / slot_leader rows. Optional extractors
+-- come from @db_options@; unknown names get a no-op stub so the
+-- schema is still created when work has not landed yet.
+buildExtractors :: SyncOptions -> Either Text [ExtractorDef]
+buildExtractors pc = do
+  let raw = coreExtractor : mapMaybe mkProj optionalExtractors
+  validateExtractorDeps raw
+  topoSortExtractors raw
   where
     mkProj :: (Text, SyncOption) -> Maybe ExtractorDef
     mkProj (name, cfg)
@@ -97,6 +115,92 @@ buildExtractors pc = coreExtractor : mapMaybe mkProj optionalExtractors
       , ("epoch_sync_stats", pcEpochSyncStats pc)
       , ("epoch_boundary",   pcEpochBoundary pc)
       , ("current_state",    pcCurrentState pc)
+      ]
+
+-- ---------------------------------------------------------------------------
+-- * Dependency validation + topological sort
+-- ---------------------------------------------------------------------------
+
+-- | Check every declared dependency resolves to an enabled extractor
+-- of sufficient version. Stops at the first failure — later errors
+-- are usually a consequence of the first.
+validateExtractorDeps :: [ExtractorDef] -> Either Text ()
+validateExtractorDeps exts = traverse_ checkOne exts
+  where
+    nameMap :: Map.Map Text ExtractorDef
+    nameMap = Map.fromList [(pdName e, e) | e <- exts]
+
+    checkOne :: ExtractorDef -> Either Text ()
+    checkOne e = traverse_ (checkDep e) (pdDependencies e)
+
+    checkDep :: ExtractorDef -> (Text, Int) -> Either Text ()
+    checkDep e (depName, minVer) =
+      case Map.lookup depName nameMap of
+        Nothing ->
+          Left $
+            "Extractor '" <> pdName e <> "' is enabled but its dependency '"
+              <> depName <> "' is not enabled.\n"
+              <> "Add  \"" <> depName <> "\": true  to the db_options section "
+              <> "of your dbsync-profile.json."
+        Just dep
+          | pdVersion dep < minVer ->
+              Left $
+                "Extractor '" <> pdName e <> "' requires dependency '"
+                  <> depName <> "' version >= " <> show minVer
+                  <> ", but the enabled '" <> depName
+                  <> "' is only version " <> show (pdVersion dep) <> "."
+          | otherwise -> Right ()
+
+-- | Topologically sort extractors so producers come before consumers.
+-- Cycles are detected via strongly-connected components and reported
+-- as errors. Assumes 'validateExtractorDeps' has already passed.
+topoSortExtractors :: [ExtractorDef] -> Either Text [ExtractorDef]
+topoSortExtractors exts =
+  case cycles of
+    (c:_) ->
+      Left $
+        "Cyclic extractor dependencies detected: "
+          <> Text.intercalate " -> " (map nameOfVertex c)
+          <> ". Remove a dependency edge or split the affected extractors."
+    [] ->
+      Right $ map extractorOfVertex (Graph.topSort graph)
+  where
+    -- For each extractor, the names of OTHER extractors that depend on
+    -- it. We need the "who depends on me" direction (not "who I depend
+    -- on") because 'Graph.topSort' returns vertices in edge-tail-first
+    -- order, and we want dependencies before consumers.
+    consumersOf :: Map.Map Text [Text]
+    consumersOf =
+      Map.fromListWith (++)
+        [ (depName, [pdName e])
+        | e <- exts
+        , (depName, _) <- pdDependencies e
+        ]
+
+    edges :: [(ExtractorDef, Text, [Text])]
+    edges =
+      [ (e, pdName e, Map.findWithDefault [] (pdName e) consumersOf)
+      | e <- exts
+      ]
+
+    graph        :: Graph.Graph
+    vertexToNode :: Graph.Vertex -> (ExtractorDef, Text, [Text])
+    (graph, vertexToNode, _) = Graph.graphFromEdges edges
+
+    extractorOfVertex :: Graph.Vertex -> ExtractorDef
+    extractorOfVertex v = case vertexToNode v of (e, _, _) -> e
+
+    nameOfVertex :: Graph.Vertex -> Text
+    nameOfVertex v = case vertexToNode v of (_, n, _) -> n
+
+    -- An SCC with more than one vertex contains a cycle; singletons are
+    -- the normal case.
+    cycles :: [[Graph.Vertex]]
+    cycles =
+      [ flat
+      | t <- Graph.scc graph
+      , let flat = Tree.flatten t
+      , length flat > 1
       ]
 
 -- | Placeholder extractor — name only, no real extraction logic yet.

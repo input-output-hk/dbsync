@@ -130,13 +130,9 @@ main = do
       exitFailure
     Right cfg -> pure cfg
 
-  -- 6. Build the shared core environment
-  coreEnv <- buildCoreEnv tracer validProfile nodeCfg
-
-  -- 7. Startup logging
-  runAppM coreEnv runStartup
-
-  -- 8. Read genesis files → TopLevelConfig
+  -- 6. Read genesis files → TopLevelConfig.
+  --    Done before buildCoreEnv so the chain's Network can be sourced
+  --    from the Shelley genesis and stored on CoreEnv.
   genesisResult <- readCardanoGenesisConfig nodeCfg configDir
   genesisCfg <- case genesisResult of
     Left err -> do
@@ -148,6 +144,13 @@ main = do
 
   let topLevelCfg = mkTopLevelConfig nodeCfg genesisCfg
       networkMagic = getNetworkMagic genesisCfg
+      network      = sgNetworkId (scConfig (gcShelley genesisCfg))
+
+  -- 7. Build the shared core environment
+  coreEnv <- buildCoreEnv tracer validProfile nodeCfg network
+
+  -- 8. Startup logging
+  runAppM coreEnv runStartup
 
   -- LSM session lives in <--ledger-state-dir>/dbsync-ledger/.
   let ledgerStateDir = caLedgerStateDir args </> "dbsync-ledger"
@@ -221,7 +224,6 @@ main = do
   -- 13. SystemStart and ledger plumbing.
   let systemStart = SystemStart (sgSystemStart $ scConfig $ gcShelley genesisCfg)
       pinfo       = mkProtocolInfoCardano nodeCfg genesisCfg
-      network     = sgNetworkId (scConfig (gcShelley genesisCfg))
 
   -- Ledger is opt-in via profile (ledger.enabled = true). The LSM
   -- session is opened here so the boot decision can list disk

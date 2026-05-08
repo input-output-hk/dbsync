@@ -85,6 +85,18 @@ module DbSync.Db.Types
   , scriptTypeDecoder
   , rewardSourceEncoder
   , rewardSourceDecoder
+  , voteEncoder
+  , voteDecoder
+  , voterRoleEncoder
+  , voterRoleDecoder
+  , govActionTypeEncoder
+  , govActionTypeDecoder
+  , anchorTypeEncoder
+  , anchorTypeDecoder
+
+    -- * Hasql encoders \/ decoders for newtype wrappers
+  , voteUrlEncoder
+  , voteUrlDecoder
   ) where
 
 import Cardano.Prelude
@@ -547,3 +559,98 @@ rewardSourceDecoder = D.refine textToRewardSource D.text
       "refund"          -> Right RwdDepositRefund
       "proposal_refund" -> Right RwdProposalRefund
       other             -> Left $ "unknown RewardSource: " <> other
+
+voteEncoder :: E.Value Vote
+voteEncoder = voteToText >$< E.text
+  where
+    voteToText = \case
+      VoteYes     -> "Yes"
+      VoteNo      -> "No"
+      VoteAbstain -> "Abstain"
+
+voteDecoder :: D.Value Vote
+voteDecoder = D.refine textToVote D.text
+  where
+    textToVote = \case
+      "Yes"     -> Right VoteYes
+      "No"      -> Right VoteNo
+      "Abstain" -> Right VoteAbstain
+      other     -> Left $ "unknown Vote: " <> other
+
+voterRoleEncoder :: E.Value VoterRole
+voterRoleEncoder = voterRoleToText >$< E.text
+  where
+    voterRoleToText = \case
+      ConstitutionalCommittee -> "ConstitutionalCommittee"
+      DRep                    -> "DRep"
+      SPO                     -> "SPO"
+
+voterRoleDecoder :: D.Value VoterRole
+voterRoleDecoder = D.refine textToVoterRole D.text
+  where
+    textToVoterRole = \case
+      "ConstitutionalCommittee" -> Right ConstitutionalCommittee
+      "DRep"                    -> Right DRep
+      "SPO"                     -> Right SPO
+      other                     -> Left $ "unknown VoterRole: " <> other
+
+govActionTypeEncoder :: E.Value GovActionType
+govActionTypeEncoder = govActionTypeToText >$< E.text
+  where
+    govActionTypeToText = \case
+      ParameterChange     -> "ParameterChange"
+      HardForkInitiation  -> "HardForkInitiation"
+      TreasuryWithdrawals -> "TreasuryWithdrawals"
+      NoConfidence        -> "NoConfidence"
+      NewCommitteeType    -> "NewCommittee"
+      NewConstitution     -> "NewConstitution"
+      InfoAction          -> "InfoAction"
+
+govActionTypeDecoder :: D.Value GovActionType
+govActionTypeDecoder = D.refine textToGovActionType D.text
+  where
+    textToGovActionType = \case
+      "ParameterChange"     -> Right ParameterChange
+      "HardForkInitiation"  -> Right HardForkInitiation
+      "TreasuryWithdrawals" -> Right TreasuryWithdrawals
+      "NoConfidence"        -> Right NoConfidence
+      "NewCommittee"        -> Right NewCommitteeType
+      "NewConstitution"     -> Right NewConstitution
+      "InfoAction"          -> Right InfoAction
+      other                 -> Left $ "unknown GovActionType: " <> other
+
+anchorTypeEncoder :: E.Value AnchorType
+anchorTypeEncoder = anchorTypeToText >$< E.text
+  where
+    anchorTypeToText = \case
+      GovActionAnchor      -> "gov_action"
+      DrepAnchor           -> "drep"
+      OtherAnchor          -> "other"
+      VoteAnchor           -> "vote"
+      CommitteeDeRegAnchor -> "committee_dereg"
+      ConstitutionAnchor   -> "constitution"
+
+anchorTypeDecoder :: D.Value AnchorType
+anchorTypeDecoder = D.refine textToAnchorType D.text
+  where
+    textToAnchorType = \case
+      "gov_action"      -> Right GovActionAnchor
+      "drep"            -> Right DrepAnchor
+      "other"           -> Right OtherAnchor
+      "vote"            -> Right VoteAnchor
+      "committee_dereg" -> Right CommitteeDeRegAnchor
+      "constitution"    -> Right ConstitutionAnchor
+      other             -> Left $ "unknown AnchorType: " <> other
+
+-- ---------------------------------------------------------------------------
+-- * Hasql encoders / decoders for newtype wrappers
+-- ---------------------------------------------------------------------------
+
+-- | 'VoteUrl' is a thin newtype around 'Text' — encode\/decode as
+-- a plain @text@ column. Wrapping at the Haskell level gives us
+-- type safety without any wire-format ceremony.
+voteUrlEncoder :: E.Value VoteUrl
+voteUrlEncoder = unVoteUrl >$< E.text
+
+voteUrlDecoder :: D.Value VoteUrl
+voteUrlDecoder = VoteUrl <$> D.text

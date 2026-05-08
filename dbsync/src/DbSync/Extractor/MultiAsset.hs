@@ -14,14 +14,11 @@ module DbSync.Extractor.MultiAsset
 
 import Cardano.Prelude
 
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Short as SBS
-
 import DbSync.Block.Types (GenericTx (..), GenericTxOut (..))
-import DbSync.Db.Schema.Ids (MultiAssetId (..))
 import DbSync.Db.Schema.MultiAsset
 import DbSync.Db.Types (DbWord64 (..))
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
+import DbSync.Extractor.SharedDedup (resolveAndWriteMultiAsset)
 import DbSync.Resolver (IdResolver (..))
 import DbSync.Writer (Writer (..))
 
@@ -72,45 +69,4 @@ processMultiAsset resolver writer ctx = do
               }
         writeMaTxOut writer maoId mao
 
--- ---------------------------------------------------------------------------
--- * Helpers
--- ---------------------------------------------------------------------------
 
--- | Resolve a multi-asset by (policy, name). If new, write the
--- @multi_asset@ row to the writer.
-resolveAndWriteMultiAsset
-  :: IdResolver IO
-  -> Writer IO
-  -> ByteString    -- ^ policy ID
-  -> ByteString    -- ^ asset name
-  -> IO MultiAssetId
-resolveAndWriteMultiAsset resolver writer policy name = do
-  -- Build key as ShortByteString directly to avoid an intermediate
-  -- pinned ByteString from (<>). SBS is unpinned and GC-friendly.
-  let key = SBS.toShort policy <> SBS.toShort name
-      ma = MultiAsset
-        { multiAssetPolicy      = policy
-        , multiAssetName        = name
-        , multiAssetFingerprint = mkFingerprint policy name
-        }
-  (maId, isNew) <- resolveMultiAsset resolver key ma  -- key is ShortByteString
-  when isNew $
-    writeMultiAsset writer maId ma
-  pure maId
-
--- | Compute a CIP-14 asset fingerprint placeholder.
--- TODO: Implement proper CIP-14 (bech32 encoding of blake2b hash).
--- For now, use a hex representation.
-mkFingerprint :: ByteString -> ByteString -> Text
-mkFingerprint policy name =
-  "asset" <> toS @[Char] @Text (concatMap hexByte (BS.unpack (BS.take 20 (policy <> name))))
-  where
-    hexByte :: Word8 -> [Char]
-    hexByte w =
-      let hi = w `div` 16
-          lo = w `mod` 16
-      in [hexDigit hi, hexDigit lo]
-    hexDigit :: Word8 -> Char
-    hexDigit n
-      | n < 10    = toEnum (fromIntegral n + fromEnum '0')
-      | otherwise = toEnum (fromIntegral n - 10 + fromEnum 'a')

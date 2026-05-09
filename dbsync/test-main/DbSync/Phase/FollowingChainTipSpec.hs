@@ -343,12 +343,14 @@ spec = describe "DbSync.Phase.FollowingChainTip" $
         wd  `shouldBe` "1|1|7000000"
 
     describe "block with a minimal pool registration" $ do
-      it "writes 1 pool_hash, 1 pool_update, and 1 stake_address" $ do
+      it "writes 1 pool_update, 1 stake_address, and dedupes pool_hash" $ do
         runFollow [blockWithPoolReg]
         phN <- T.strip <$> queryTestDb "SELECT count(*) FROM pool_hash;"
         puN <- T.strip <$> queryTestDb "SELECT count(*) FROM pool_update;"
         saN <- T.strip <$> queryTestDb "SELECT count(*) FROM stake_address;"
-        phN `shouldBe` "1"
+        -- 2 pool_hash rows: one for the slot leader (Shelley+ pipeline
+        -- always writes one), one for the registered pool itself.
+        phN `shouldBe` "2"
         puN `shouldBe` "1"
         saN `shouldBe` "1"  -- the reward addr
 
@@ -366,18 +368,21 @@ spec = describe "DbSync.Phase.FollowingChainTip" $
         runFollow [blockWithPoolRegMeta]
         pmr <- T.strip <$>
           queryTestDb "SELECT pool_id, url, encode(hash, 'hex') FROM pool_metadata_ref;"
-        pmr `shouldBe` "1|https://pool.example.com/meta.json|6d657461686173685f33325f62797465735f70616464645f5f5f5f5f5f5f5f5f"
+        -- pool_id = 2: the slot leader allocates id=1, the registered
+        -- pool gets id=2.
+        pmr `shouldBe` "2|https://pool.example.com/meta.json|6d657461686173685f33325f62797465735f70616464645f5f5f5f5f5f5f5f5f"
 
     describe "block with a pool retirement cert" $
-      it "writes 1 pool_hash and 1 pool_retire" $ do
+      it "writes 1 pool_retire row and dedupes pool_hash" $ do
         runFollow [blockWithPoolRetire]
         phN <- T.strip <$> queryTestDb "SELECT count(*) FROM pool_hash;"
         prN <- T.strip <$> queryTestDb "SELECT count(*) FROM pool_retire;"
-        phN `shouldBe` "1"
+        -- 2 pool_hash rows: slot leader + retired pool.
+        phN `shouldBe` "2"
         prN `shouldBe` "1"
 
     describe "block with a delegation cert (cross-extractor flow)" $
-      it "writes 1 stake_address, 1 pool_hash, and 1 delegation row" $ do
+      it "writes 1 stake_address and 1 delegation row, dedupes pool_hash" $ do
         runFollow [blockWithDelegation]
         saN <- T.strip <$> queryTestDb "SELECT count(*) FROM stake_address;"
         phN <- T.strip <$> queryTestDb "SELECT count(*) FROM pool_hash;"
@@ -385,9 +390,11 @@ spec = describe "DbSync.Phase.FollowingChainTip" $
           queryTestDb
             "SELECT addr_id, pool_hash_id, active_epoch_no, tx_id FROM delegation;"
         saN `shouldBe` "1"
-        phN `shouldBe` "1"
-        -- active_epoch_no = blkEpochNo (5) + 2 = 7
-        d   `shouldBe` "1|1|7|1"
+        -- 2 pool_hash rows: slot leader (id=1) + delegation target (id=2).
+        phN `shouldBe` "2"
+        -- active_epoch_no = blkEpochNo (5) + 2 = 7; pool_hash_id = 2
+        -- because the slot leader took id=1.
+        d   `shouldBe` "1|2|7|1"
 
     describe "block with a tx carrying CBOR bytes" $ do
       it "writes 1 tx_cbor row when txCborRaw is set" $ do

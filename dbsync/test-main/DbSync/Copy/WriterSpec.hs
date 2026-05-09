@@ -29,6 +29,7 @@ import DbSync.Block.Types
 import DbSync.Copy.Writer (CopyWriter (..), closeCopyWriter, mkCopyWriter)
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
 import DbSync.Db.Schema.Init (dropSchema, initSchema)
+import DbSync.Db.Schema.Pool (poolHashTableDef)
 import DbSync.Db.Schema.Types (TableDef)
 import DbSync.Extractor (freshExtractState)
 import DbSync.Extractor.Core (coreExtractor)
@@ -39,14 +40,19 @@ import DbSync.Test.Database (queryTestDb, testConnBs, testConnStr, truncateAllTa
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import DbSync.Writer.CopyAdapter (mkCopyWriterAdapter)
 
+-- | The tables this spec exercises. @pool_hash@ is included because
+-- the pipeline (not 'coreExtractor' itself) writes a @pool_hash@ row
+-- for the slot leader on every Shelley+ block — see
+-- 'DbSync.Ingest.Pipeline.resolveSlotLeaderPoolHash'. Omitting it
+-- causes the COPY writer to panic on the first non-Byron block.
 coreTables :: [TableDef]
-coreTables = [blockTableDef, txTableDef, slotLeaderTableDef]
+coreTables = [blockTableDef, txTableDef, slotLeaderTableDef, poolHashTableDef]
 
 coreVersions :: [(Text, Int)]
 coreVersions = [("core", 1)]
 
 coreTableNames :: [Text]
-coreTableNames = ["tx", "block", "slot_leader"]
+coreTableNames = ["tx", "block", "slot_leader", "pool_hash"]
 
 spec :: Spec
 spec = describe "DbSync.Copy.Writer (multi-threaded, full pipeline)" $

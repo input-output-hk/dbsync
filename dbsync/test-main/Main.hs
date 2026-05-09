@@ -26,6 +26,8 @@ import qualified DbSync.Config.GenesisSpec as ConfigGenesisSpec
 import qualified DbSync.Config.NodeSpec as ConfigNodeSpec
 import qualified DbSync.Config.TypesSpec as ConfigTypesSpec
 import qualified DbSync.Config.ValidationSpec as ConfigValidationSpec
+import qualified DbSync.Db.Statement.IndexesSpec as DbStatementIndexesSpec
+import qualified DbSync.Db.Statement.SequencesSpec as DbStatementSequencesSpec
 import qualified DbSync.Db.TypesSpec as DbTypesSpec
 import qualified DbSync.Extractor.CoreSpec as ExtractorCoreSpec
 import qualified DbSync.Extractor.EpochBoundarySpec as ExtractorEpochBoundarySpec
@@ -62,6 +64,7 @@ import qualified DbSync.Db.Statement.SlotLeaderSpec as DbStatementSlotLeaderSpec
 import qualified DbSync.Db.Statement.SyncStateSpec as DbStatementSyncStateSpec
 import qualified DbSync.Phase.FollowingChainTipSpec as PhaseFollowingChainTipSpec
 import qualified DbSync.Phase.MockChainSpec as PhaseMockChainSpec
+import qualified DbSync.Phase.PreparingForChainTipSpec as PhasePreparingForChainTipSpec
 import qualified DbSync.Schema.InitSpec as SchemaInitSpec
 
 main :: IO ()
@@ -73,6 +76,8 @@ main = hspec $ do
     ConfigNodeSpec.spec
     ConfigTypesSpec.spec
     ConfigValidationSpec.spec
+    DbStatementIndexesSpec.spec
+    DbStatementSequencesSpec.spec
     DbTypesSpec.spec
     ExtractorCoreSpec.spec
     ExtractorEpochBoundarySpec.spec
@@ -109,4 +114,5 @@ main = hspec $ do
     DbStatementSyncStateSpec.spec
     PhaseFollowingChainTipSpec.spec
     PhaseMockChainSpec.spec
+    PhasePreparingForChainTipSpec.spec
     SchemaInitSpec.spec

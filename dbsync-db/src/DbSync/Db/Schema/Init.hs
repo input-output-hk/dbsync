@@ -26,6 +26,13 @@ module DbSync.Db.Schema.Init
   , decideSchemaAction
   , renderSchemaMismatch
 
+    -- * Schema-flip DDL builders (pure)
+  , prepareSchemaForFollowTipSql
+  , setLoggedSql
+  , createIdSequenceSql
+  , attachIdDefaultSql
+  , analyzeSql
+
     -- * psql helpers (exported for tests)
   , execPsql
   , queryPsql
@@ -173,19 +180,55 @@ dropSchema tableDefs _extractorVersions connStr = do
 -- @<table>_id_seq@. Idempotent. Precondition for hasql INSERTs.
 prepareSchemaForFollowTip :: [TableDef] -> Text -> IO ()
 prepareSchemaForFollowTip tables connStr =
-  for_ (filter ((== TableUnlogged) . tdMode) tables) $ \td -> do
-    let name    = tdName td
-        seqName = name <> "_id_seq"
-    execPsql connStr $
-      "ALTER TABLE " <> quoteIdent name <> " SET LOGGED;"
-    execPsql connStr $
-      "CREATE SEQUENCE IF NOT EXISTS " <> quoteIdent seqName
-        <> " OWNED BY " <> quoteIdent name <> ".\"id\";"
-    execPsql connStr $ T.concat
-      [ "ALTER TABLE ", quoteIdent name
-      , " ALTER COLUMN \"id\" SET DEFAULT nextval('"
-      , seqName, "'::regclass);"
-      ]
+  for_ (prepareSchemaForFollowTipSql tables) (execPsql connStr)
+
+-- | The DDL statements that 'prepareSchemaForFollowTip' would run,
+-- as a flat list — for callers that want to send them via hasql
+-- rather than @psql@. Includes only the UNLOGGED tables; tables
+-- already LOGGED contribute nothing.
+prepareSchemaForFollowTipSql :: [TableDef] -> [Text]
+prepareSchemaForFollowTipSql tables =
+  concatMap perTable (filter ((== TableUnlogged) . tdMode) tables)
+  where
+    perTable td =
+      let name = tdName td
+      in [ setLoggedSql name
+         , createIdSequenceSql name
+         , attachIdDefaultSql name
+         ]
+
+-- | @ALTER TABLE … SET LOGGED@ DDL for a single table.
+setLoggedSql :: Text -> Text
+setLoggedSql tableName =
+  "ALTER TABLE " <> quoteIdent tableName <> " SET LOGGED"
+
+-- | Create the @<table>_id_seq@ sequence and attach ownership to
+-- the @id@ column. Idempotent (@IF NOT EXISTS@).
+createIdSequenceSql :: Text -> Text
+createIdSequenceSql tableName =
+  T.concat
+    [ "CREATE SEQUENCE IF NOT EXISTS "
+    , quoteIdent (tableName <> "_id_seq")
+    , " OWNED BY "
+    , quoteIdent tableName, ".\"id\""
+    ]
+
+-- | Wire the @id@ column's @DEFAULT@ to @nextval(<table>_id_seq)@.
+attachIdDefaultSql :: Text -> Text
+attachIdDefaultSql tableName =
+  T.concat
+    [ "ALTER TABLE ", quoteIdent tableName
+    , " ALTER COLUMN \"id\" SET DEFAULT nextval('"
+    , tableName <> "_id_seq"
+    , "'::regclass)"
+    ]
+
+-- | @ANALYZE@ on a single table. Used after the bulk pass to refresh
+-- planner statistics that the new indexes and updated columns
+-- invalidated.
+analyzeSql :: Text -> Text
+analyzeSql tableName =
+  "ANALYZE " <> quoteIdent tableName
 
 -- ---------------------------------------------------------------------------
 -- * Version checking

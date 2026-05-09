@@ -59,6 +59,10 @@ library
     DbSync.Phase.Boot
     DbSync.Phase.IngestChainHistory
     DbSync.Phase.PreparingForChainTip
+    DbSync.Phase.PreparingForChainTip.Backfill
+    DbSync.Phase.PreparingForChainTip.Indexes
+    DbSync.Phase.PreparingForChainTip.Resolve
+    DbSync.Phase.PreparingForChainTip.Sequences
     DbSync.Phase.FollowingChainTip
     DbSync.Block.Receiver
     DbSync.Block.Metadata
@@ -259,6 +263,8 @@ test-suite dbsync-test
     DbSync.Config.NodeSpec
     DbSync.Config.GenesisSpec
     DbSync.Db.Statement.BlockSpec
+    DbSync.Db.Statement.IndexesSpec
+    DbSync.Db.Statement.SequencesSpec
     DbSync.Db.Statement.SlotLeaderSpec
     DbSync.Db.Statement.SyncStateSpec
     DbSync.Db.TypesSpec
@@ -290,6 +296,7 @@ test-suite dbsync-test
     DbSync.Phase.BootSpec
     DbSync.Phase.FollowingChainTipSpec
     DbSync.Phase.MockChainSpec
+    DbSync.Phase.PreparingForChainTipSpec
     DbSync.StateQuery.ObservedSummarySpec
   build-depends:
       base

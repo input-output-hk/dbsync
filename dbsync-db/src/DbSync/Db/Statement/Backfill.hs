@@ -3,13 +3,16 @@
 -- | Hasql 'Statement' bindings for the post-load tx-column backfill
 -- pass.
 --
--- The ingest parser cannot fill three @tx@ columns from the body
+-- The ingest parser cannot fill four @tx@ columns from the body
 -- alone:
 --
 --   * @fee@ on a phase-2 failed Alonzo+ tx — the body's declared fee
 --     is meaningless because the protocol charges collateral inputs
 --     minus the optional collateral return instead. The parser
 --     writes @0@ as a sentinel.
+--   * @fee@ on a Byron tx — Byron has no explicit fee field; the
+--     real fee is @inputs - outputs@. The Byron parser cannot
+--     resolve input values, so it writes @0@ as a sentinel.
 --   * @deposit@ on a phase-2 failed tx — always @0@ because the
 --     deposit is forfeited along with all body effects. The parser
 --     leaves it NULL; this module sets it to @0@.
@@ -27,6 +30,7 @@ module DbSync.Db.Statement.Backfill
   ( backfillPhaseTwoFeeStmt
   , backfillPhaseTwoDepositStmt
   , backfillValidContractDepositStmt
+  , backfillByronFeeStmt
   ) where
 
 import Cardano.Prelude
@@ -114,4 +118,36 @@ backfillValidContractDepositStmt =
       , "WHERE tx.id = i.tx_id"
       , "  AND tx.valid_contract = TRUE"
       , "  AND tx.deposit IS NULL"
+      ]
+
+-- | Compute @fee = inputs - outputs@ for Byron-era txs whose @fee@
+-- is still the parser's @0@ sentinel. Byron is identified via
+-- @block.proto_major < 2@.
+--
+-- Genesis-era txs (the initial UTxO setup) are not extracted by the
+-- ingest pipeline at all, so they never appear here. A regular
+-- Byron tx whose inputs cannot be resolved (orphan, edge case) is
+-- naturally excluded by the inner @JOIN@ on the @in_sum@ CTE.
+--
+-- Requires 'resolveTxInStmt' to have populated @tx_in.tx_out_id@.
+backfillByronFeeStmt :: Stmt.Statement () Int64
+backfillByronFeeStmt =
+  Stmt.preparable sql E.noParams D.rowsAffected
+  where
+    sql = T.unwords
+      [ "WITH in_sum AS ("
+      , "  SELECT ti.tx_in_id AS tx_id, SUM(producing.value) AS total"
+      , "  FROM tx_in ti"
+      , "  JOIN tx_out producing"
+      , "    ON producing.tx_id = ti.tx_out_id"
+      , "   AND producing.index = ti.tx_out_index"
+      , "  GROUP BY ti.tx_in_id"
+      , ")"
+      , "UPDATE tx"
+      , "SET fee = COALESCE(i.total, 0) - tx.out_sum"
+      , "FROM in_sum i, block b"
+      , "WHERE tx.id = i.tx_id"
+      , "  AND b.id = tx.block_id"
+      , "  AND b.proto_major < 2"
+      , "  AND tx.fee = 0"
       ]

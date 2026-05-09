@@ -3,8 +3,10 @@
 -- | End-to-end tests for 'DbSync.Phase.PreparingForChainTip.run'.
 --
 -- The whole pipeline is driven from a small set of 'GenericBlock'
--- fixtures: two blocks, three transactions, a phase-2 failure with
--- collateral. The fixtures flow through the real extractors and
+-- fixtures: a Shelley producer, a Shelley spending block (one
+-- valid-contract spender + one phase-2 failure with collateral),
+-- and a Byron block whose single tx spends one of the producer's
+-- outputs. The fixtures flow through the real extractors and
 -- COPY writer so the rows the post-load pass operates on are
 -- shaped exactly the way 'IngestChainHistory' would have shaped
 -- them — no hand-rolled INSERTs.
@@ -17,6 +19,7 @@
 --     (collateral consumption is intentionally not tracked).
 --   * @tx.fee@ on the phase-2 failure is collateral-in minus
 --     collateral-out.
+--   * @tx.fee@ on the Byron tx is inputs minus outputs.
 --   * @tx.deposit@ for valid-contract tx is the inputs-minus-
 --     outputs fallback; for the phase-2 failure it's @0@.
 --   * Tables flipped from UNLOGGED to LOGGED.
@@ -194,7 +197,7 @@ setUp :: IO ()
 setUp = do
   dropSchema tables versions testConnStr
   initSchema tables versions testConnStr
-  runPipelineThenPrepare [producerBlock, spendingBlock]
+  runPipelineThenPrepare [producerBlock, spendingBlock, byronBlock]
 
 tearDown :: IO ()
 tearDown = dropSchema tables [] testConnStr
@@ -219,15 +222,16 @@ spec = describe "DbSync.Phase.PreparingForChainTip" $
           "SELECT tx_out_id FROM collateral_tx_in WHERE id = 1"
         result `shouldBe` "1"
 
-      it "tx_out.consumed_by_tx_id is set on the spent output only" $ do
+      it "tx_out.consumed_by_tx_id is set on every spending tx_in" $ do
         result <- T.strip <$> queryTestDb
           "SELECT id, consumed_by_tx_id FROM tx_out ORDER BY id"
         let rows = T.lines result
         rows `shouldBe`
-          [ "1|2"  -- producer.0: spent by the consuming tx_in
+          [ "1|2"  -- producer.0: spent by the Shelley consumer (tx 2)
           , "2|"   -- producer.1: only collateral consumed it; not tracked
-          , "3|"   -- producer.2: never spent
+          , "3|4"  -- producer.2: spent by the Byron tx (tx 4)
           , "4|"   -- consumer's own output: never spent
+          , "5|"   -- byron tx's own output: never spent
           ]
 
     describe "tx column backfill" $ do
@@ -257,6 +261,13 @@ spec = describe "DbSync.Phase.PreparingForChainTip" $
           "SELECT fee FROM tx WHERE block_id = 2 AND block_index = 0"
         result `shouldBe` "200000"
 
+      it "Byron tx.fee is computed as inputs - outputs" $ do
+        -- The Byron tx spends producer.2 (value 2_000_000) and
+        -- writes one output of 1_500_000. Expected fee = 500_000.
+        result <- T.strip <$> queryTestDb
+          "SELECT fee FROM tx WHERE block_id = 3"
+        result `shouldBe` "500000"
+
     describe "schema-mode flip" $
       it "every extractor table is now LOGGED" $ do
         -- pg_class.relpersistence: 'p' = permanent (LOGGED), 'u' = UNLOGGED
@@ -284,19 +295,21 @@ spec = describe "DbSync.Phase.PreparingForChainTip" $
 
     describe "sequence reset" $ do
       it "tx_id_seq's next value is MAX(id) + 1" $ do
-        -- Three txs landed (producer + valid-contract spender + phase-2)
+        -- Four txs landed: producer, valid-contract spender, phase-2
+        -- failure, Byron spender. MAX(id) = 4, next allocation = 5.
         result <- T.strip <$> queryTestDb "SELECT nextval('tx_id_seq')"
-        result `shouldBe` "4"
-
-      it "tx_out_id_seq's next value is MAX(id) + 1" $ do
-        -- Producer wrote three outputs; consumer wrote one; phase-2
-        -- wrote none. MAX(id) = 4, next allocation = 5.
-        result <- T.strip <$> queryTestDb "SELECT nextval('tx_out_id_seq')"
         result `shouldBe` "5"
 
+      it "tx_out_id_seq's next value is MAX(id) + 1" $ do
+        -- Producer wrote three outputs; consumer wrote one; Byron
+        -- wrote one; phase-2 wrote none. MAX(id) = 5, next = 6.
+        result <- T.strip <$> queryTestDb "SELECT nextval('tx_out_id_seq')"
+        result `shouldBe` "6"
+
       it "tx_in_id_seq's next value is MAX(id) + 1" $ do
+        -- Two tx_in rows: consumer's spend + Byron's spend.
         result <- T.strip <$> queryTestDb "SELECT nextval('tx_in_id_seq')"
-        result `shouldBe` "2"
+        result `shouldBe` "3"
 
       it "an empty table's sequence still starts at 1" $ do
         -- No reference_tx_in rows were produced; setval(seq, 0+1, false)
@@ -432,4 +445,38 @@ spendingBlock = producerBlock
   , blkBlockNo      = BlockNo 2
   , blkEpochSlotNo  = 120
   , blkTxs          = [consumerTx, phase2Tx]
+  }
+
+-- | A Byron-era tx spending the producer's third output. Fee is the
+-- @0@ sentinel; the post-load pass should replace it with the
+-- @inputs - outputs@ difference (500 000).
+byronTx :: GenericTx
+byronTx = (emptyTx (padHash32 "BYRON"))
+  { txBlockIndex = 0
+  , txSize       = 150
+  , txOutSum     = 1500000
+  , txInputs     = [GenericTxIn producerHash 2]
+  , txOutputs    = [mkOut 0 1500000]
+  }
+
+-- | Byron block. Era and proto-major flag drive the fee backfill's
+-- @block.proto_major < 2@ filter; everything else mirrors the
+-- shape used by the Byron parser. Slot leader is a different hash
+-- so the dedup map allocates a new @slot_leader@ row, and Byron
+-- blocks deliberately skip the @pool_hash@ write.
+byronBlock :: GenericBlock
+byronBlock = producerBlock
+  { blkEra           = Byron
+  , blkHash          = padHash32 "BLK3"
+  , blkPreviousHash  = blkHash spendingBlock
+  , blkSlotNo        = SlotNo 200
+  , blkBlockNo       = BlockNo 3
+  , blkEpochSlotNo   = 200
+  , blkSlotLeader    = BS.replicate 28 0xcd
+  , blkProtoMajor    = 1
+  , blkProtoMinor    = 0
+  , blkVrfKey        = Nothing
+  , blkOpCert        = Nothing
+  , blkOpCertCounter = Nothing
+  , blkTxs           = [byronTx]
   }

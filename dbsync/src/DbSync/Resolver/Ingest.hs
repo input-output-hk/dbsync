@@ -194,4 +194,9 @@ mkIngestResolver stRef dedupMaps = IdResolver
       let (i, ctr') = nextId (icAdaPotsId $ esIdCounters st)
           st' = st { esIdCounters = (esIdCounters st) { icAdaPotsId = ctr' } }
       in (st', AdaPotsId i)
+
+    -- Inline value resolution: forbidden during Ingest. Extractors
+    -- must rely on the post-load SQL backfill instead.
+  , resolveInputValues = \_ ->
+      panic "Resolver.Ingest: resolveInputValues is post-load only"
   }

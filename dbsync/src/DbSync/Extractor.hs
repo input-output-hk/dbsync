@@ -17,8 +17,14 @@ module DbSync.Extractor
   , BlockContext (..)
   , TxContext (..)
 
-    -- * Accessor class
+    -- * Per-block ledger output
+  , BlockLedgerData (..)
+  , emptyBlockLedgerData
+
+    -- * Accessor classes
   , HasExtractors (..)
+  , HasLedgerData (..)
+  , HasSyncPhase (..)
 
     -- * Re-exports (for ExtractState used by IngestResolver)
   , ExtractState (..)
@@ -28,11 +34,14 @@ module DbSync.Extractor
 import Cardano.Prelude
 
 import Cardano.Ledger.BaseTypes (Network)
+import Cardano.Ledger.Coin (Coin)
 
 import DbSync.Block.Types (GenericBlock, GenericTx)
 import DbSync.Id.Counter (IdCounters, freshIdCounters)
 import DbSync.Db.Schema.Ids (BlockId, PoolHashId, SlotLeaderId, StakeAddressId, TxId, TxOutId)
 import DbSync.Db.Schema.Types (TableDef)
+import DbSync.Ledger.Types (DepositsMap, emptyDepositsMap)
+import DbSync.Phase (SyncPhase)
 import DbSync.Resolver (IdResolver)
 import DbSync.Writer (Writer)
 
@@ -87,6 +96,10 @@ data BlockContext = BlockContext
   , bcNetwork      :: !Network
       -- ^ Chain network ID; drives the HRP on Bech32 stake / reward
       -- encodings produced by extractors.
+  , bcLedgerData   :: !BlockLedgerData
+      -- ^ Worker output for this block. Empty when ledger is OFF.
+  , bcSyncPhase    :: !SyncPhase
+      -- ^ Drives Ingest vs Follow dispatch in 'mkTx'.
   }
 
 -- | A transaction with pre-assigned shared IDs.
@@ -102,16 +115,46 @@ data TxContext = TxContext
   }
 
 -- ---------------------------------------------------------------------------
--- * Accessor class
+-- * Per-block ledger output
 -- ---------------------------------------------------------------------------
 
--- | Access the active extractor list from any environment.
---
--- Extractors are decided once at startup (from the profile config) and never
--- change for a run — so storing them on the env is just plumbing rather than
--- reconfiguration.
+-- | One block's worth of ledger-worker output, consumed by extractors.
+data BlockLedgerData = BlockLedgerData
+  { bldLedgerEnabled   :: !Bool
+      -- ^ False disables the other fields; extractors fall through.
+  , bldDepositsMap     :: !DepositsMap
+      -- ^ Per-tx deposits, keyed by tx-body hash. Plain txs aren't here.
+  , bldStakeKeyDeposit :: !(Maybe Coin)
+      -- ^ Protocol-param stake-key deposit at this block.
+  , bldPoolDeposit     :: !(Maybe Coin)
+      -- ^ Protocol-param pool deposit at this block.
+  }
+
+-- | Default for the ledger-disabled case.
+emptyBlockLedgerData :: BlockLedgerData
+emptyBlockLedgerData = BlockLedgerData
+  { bldLedgerEnabled   = False
+  , bldDepositsMap     = emptyDepositsMap
+  , bldStakeKeyDeposit = Nothing
+  , bldPoolDeposit     = Nothing
+  }
+
+-- ---------------------------------------------------------------------------
+-- * Accessor classes
+-- ---------------------------------------------------------------------------
+
+-- | Read the active extractor list from the env.
 class HasExtractors env where
   getExtractors :: env -> [ExtractorDef]
+
+-- | Fetch per-block ledger data. Ingest+ON blocks until the worker
+-- has applied the block; ledger-OFF returns 'emptyBlockLedgerData'.
+class HasLedgerData env where
+  getLedgerData :: env -> GenericBlock -> IO BlockLedgerData
+
+-- | Read the lifecycle phase from the env. Constant for the run.
+class HasSyncPhase env where
+  getSyncPhase :: env -> SyncPhase
 
 -- ---------------------------------------------------------------------------
 -- * ExtractState (used by IngestResolver)

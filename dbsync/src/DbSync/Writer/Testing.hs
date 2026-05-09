@@ -28,6 +28,7 @@ import DbSync.Db.Schema.Ids
   , ReferenceTxInId
   , SlotLeaderId
   , StakeAddressId
+  , StakeRegistrationId
   , TxId
   , TxInId
   , TxMetadataId
@@ -36,7 +37,7 @@ import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Metadata (TxMetadata)
 import DbSync.Db.Schema.MultiAsset (MaTxMint)
 import DbSync.Db.Schema.Pool (PoolHash, PoolUpdate)
-import DbSync.Db.Schema.StakeDelegation (StakeAddress)
+import DbSync.Db.Schema.StakeDelegation (StakeAddress, StakeRegistration)
 import DbSync.Db.Schema.UTxO (CollateralTxIn, CollateralTxOut, ReferenceTxIn, TxIn, TxOut)
 import DbSync.Writer (Writer (..))
 
@@ -56,6 +57,7 @@ data TestWriterState = TestWriterState
   , twCollateralTxOuts  :: ![(CollateralTxOutId, CollateralTxOut)]
   , twReferenceTxIns    :: ![(ReferenceTxInId, ReferenceTxIn)]
   , twStakeAddresses    :: ![(StakeAddressId, StakeAddress)]
+  , twStakeRegistrations :: ![(StakeRegistrationId, StakeRegistration)]
   , twPoolHashes        :: ![(PoolHashId, PoolHash)]
   , twPoolUpdates       :: ![(PoolUpdateId, PoolUpdate)]
   , twTxMetadata        :: ![(TxMetadataId, TxMetadata)]
@@ -77,6 +79,7 @@ emptyTestWriterState = TestWriterState
   , twCollateralTxOuts  = []
   , twReferenceTxIns    = []
   , twStakeAddresses    = []
+  , twStakeRegistrations = []
   , twPoolHashes        = []
   , twPoolUpdates       = []
   , twTxMetadata        = []
@@ -140,7 +143,9 @@ mkTestWriter ref = Writer
   , writeStakeAddress = \said sa ->
       atomicModifyIORef' ref $ \s ->
         (s { twStakeAddresses = twStakeAddresses s ++ [(said, sa)] }, ())
-  , writeStakeRegistration   = \_ _ -> pure ()
+  , writeStakeRegistration   = \srid sr ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twStakeRegistrations = twStakeRegistrations s ++ [(srid, sr)] }, ())
   , writeStakeDeregistration = \_ _ -> pure ()
   , writeDelegation          = \_ _ -> pure ()
   , writeWithdrawal          = \_ _ -> pure ()

@@ -14,8 +14,15 @@ import qualified Hasql.Connection as Conn
 import DbSync.AppM (FollowM)
 import DbSync.Block.Types (GenericBlock)
 import DbSync.Env (HasNetwork (..))
-import DbSync.Extractor (ExtractorDef, HasExtractors (..))
+import DbSync.Extractor
+  ( ExtractorDef
+  , HasExtractors (..)
+  , HasLedgerData (..)
+  , HasSyncPhase (..)
+  , emptyBlockLedgerData
+  )
 import DbSync.Ingest.Pipeline (processBlock)
+import DbSync.Phase (SyncPhase (..))
 import DbSync.Resolver (HasResolver (..), IdResolver)
 import DbSync.Resolver.Follow (mkFollowResolver)
 import DbSync.Writer (HasWriter (..), Writer)
@@ -57,3 +64,11 @@ instance HasResolver Env where getResolver = envResolver
 instance HasWriter Env where getWriter = envWriter
 instance HasExtractors Env where getExtractors = envExtractors
 instance HasNetwork Env where getNetwork = envNetwork
+
+-- The Follow path's worker plumbing doesn't write deposit data here
+-- yet; tests exercise the dispatch via 'resolveInputValues'.
+instance HasLedgerData Env where
+  getLedgerData _ _ = pure emptyBlockLedgerData
+
+instance HasSyncPhase Env where
+  getSyncPhase _ = FollowingChainTip

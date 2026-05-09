@@ -282,6 +282,7 @@ test-suite dbsync-test
     DbSync.Extractor.CoreSpec
     DbSync.Extractor.EpochBoundarySpec
     DbSync.Extractor.PoolSpec
+    DbSync.Extractor.StakeDelegationSpec
     DbSync.Extractor.UTxOSpec
     DbSync.Ingest.ConsumerSpec
     DbSync.Ingest.PipelineSpec

@@ -23,15 +23,24 @@ import DbSync.Block.Types
   , GenericTxCertificate (..)
   , PoolRegistrationData (..)
   )
+import Cardano.Ledger.BaseTypes (Network (..))
+import Cardano.Ledger.Coin (Coin (..))
+
+import DbSync.Db.Types (DbLovelace (..))
 import qualified DbSync.Db.Schema.Pool as SP
-import DbSync.Extractor (freshExtractState)
+import DbSync.Extractor
+  ( BlockLedgerData (..)
+  , emptyBlockLedgerData
+  , freshExtractState
+  )
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Extractor.Pool (poolExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Id.DedupMap (newMaps)
 import DbSync.Ingest.Pipeline (processBlock)
+import DbSync.Phase (SyncPhase (..))
 import DbSync.Resolver.Ingest (mkIngestResolver)
-import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
+import DbSync.Test.PipelineEnv (mkTestPipelineEnv, mkTestPipelineEnvWith)
 import DbSync.Writer.Testing (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 
 import Data.Time.Calendar (fromGregorian)
@@ -69,6 +78,35 @@ spec = do
       written <- runPool (blockWithFailedPoolReg poolHashA 5)
       length (twPoolUpdates written) `shouldBe` 0
 
+  describe "pool_update.deposit (worker-supplied protocol param)" $ do
+    it "is NULL when the ledger feature is OFF" $ do
+      -- Default 'mkTestPipelineEnv' supplies emptyBlockLedgerData, so
+      -- 'bldLedgerEnabled' is False and the deposit stays Nothing.
+      written <- runPool (blockWithPoolReg poolHashA 5)
+      let pu = snd (headDef (panic "no pool_update") (twPoolUpdates written))
+      SP.poolUpdateDeposit pu `shouldBe` Nothing
+
+    it "is the protocol-param value on first registration when ledger ON" $ do
+      let bld = (emptyBlockLedgerData :: BlockLedgerData)
+            { bldLedgerEnabled = True
+            , bldPoolDeposit   = Just (Coin 500_000_000)
+            }
+      written <- runPoolWith bld (blockWithPoolReg poolHashA 5)
+      let pu = snd (headDef (panic "no pool_update") (twPoolUpdates written))
+      SP.poolUpdateDeposit pu `shouldBe` Just (DbLovelace 500_000_000)
+
+    it "is NULL on a re-registration even when ledger ON" $ do
+      let bld = (emptyBlockLedgerData :: BlockLedgerData)
+            { bldLedgerEnabled = True
+            , bldPoolDeposit   = Just (Coin 500_000_000)
+            }
+      written <- runPoolWithBlocks bld
+                   [blockWithPoolReg poolHashA 5, blockWithPoolReg poolHashA 6]
+      let updates = twPoolUpdates written
+      length updates `shouldBe` 2
+      SP.poolUpdateDeposit (snd (updates !! 0)) `shouldBe` Just (DbLovelace 500_000_000)
+      SP.poolUpdateDeposit (snd (updates !! 1)) `shouldBe` Nothing
+
 -- ---------------------------------------------------------------------------
 -- Test plumbing
 -- ---------------------------------------------------------------------------
@@ -87,6 +125,23 @@ runPoolBlocks blocks = do
   let env = mkTestPipelineEnv (mkIngestResolver stRef dedup)
                               (mkTestWriter wrRef)
                               [coreExtractor, stakeDelegationExtractor, poolExtractor]
+  for_ blocks $ \b -> runReaderT (processBlock b) env
+  readIORef wrRef
+
+-- | Run one block with a custom 'BlockLedgerData' fixture.
+runPoolWith :: BlockLedgerData -> GenericBlock -> IO TestWriterState
+runPoolWith bld block = runPoolWithBlocks bld [block]
+
+-- | Run several blocks sharing one 'BlockLedgerData' value.
+runPoolWithBlocks :: BlockLedgerData -> [GenericBlock] -> IO TestWriterState
+runPoolWithBlocks bld blocks = do
+  stRef <- newIORef freshExtractState
+  dedup <- newMaps
+  wrRef <- newIORef emptyTestWriterState
+  let env = mkTestPipelineEnvWith Mainnet
+              (mkIngestResolver stRef dedup) (mkTestWriter wrRef)
+              [coreExtractor, stakeDelegationExtractor, poolExtractor]
+              (\_ -> pure bld) IngestChainHistory
   for_ blocks $ \b -> runReaderT (processBlock b) env
   readIORef wrRef
 

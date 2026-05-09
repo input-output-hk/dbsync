@@ -18,7 +18,15 @@ import Cardano.Ledger.BaseTypes (Network)
 
 import DbSync.Block.Types (BlockEra (..), GenericBlock (..), GenericTx (..), GenericTxOut (..))
 import DbSync.Env (HasNetwork (..))
-import DbSync.Extractor (ExtractorDef (..), BlockContext (..), HasExtractors (..), TxContext (..))
+import DbSync.Extractor
+  ( BlockContext (..)
+  , BlockLedgerData
+  , ExtractorDef (..)
+  , HasExtractors (..)
+  , HasLedgerData (..)
+  , HasSyncPhase (..)
+  , TxContext (..)
+  )
 import DbSync.Extractor.Core (mkSlotLeader)
 import DbSync.Extractor.SharedDedup
   ( resolveAndWritePoolHash
@@ -26,6 +34,7 @@ import DbSync.Extractor.SharedDedup
   )
 import DbSync.Extractor.UTxO (extractStakeCred)
 import DbSync.Db.Schema.Ids (PoolHashId, StakeAddressId)
+import DbSync.Phase (SyncPhase)
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
 import DbSync.Writer (HasWriter (..), Writer)
 
@@ -53,6 +62,8 @@ processBlock
      , HasWriter env
      , HasExtractors env
      , HasNetwork env
+     , HasLedgerData env
+     , HasSyncPhase env
      , MonadIO m
      )
   => GenericBlock
@@ -62,7 +73,11 @@ processBlock block = do
   writer     <- asks getWriter
   extractors <- asks getExtractors
   network    <- asks getNetwork
-  liftIO $ runProcessBlock resolver writer extractors network block
+  phase      <- asks getSyncPhase
+  env        <- ask
+  liftIO $ do
+    ledgerData <- getLedgerData env block
+    runProcessBlock resolver writer extractors network phase ledgerData block
 
 -- | The pure-IO core of 'processBlock'. Kept separate so the env-pulling
 -- wrapper stays trivial and the extractor pipeline (which is hot-path code
@@ -72,9 +87,11 @@ runProcessBlock
   -> Writer IO
   -> [ExtractorDef]
   -> Network
+  -> SyncPhase
+  -> BlockLedgerData
   -> GenericBlock
   -> IO ()
-runProcessBlock resolver writer extractors network block = do
+runProcessBlock resolver writer extractors network phase ledgerData block = do
   -- For Shelley+ blocks the slot-leader hash IS a pool key hash; resolve
   -- it before extractors run so @slot_leader.pool_hash_id@ can be set
   -- without giving @core@ a circular dependency on @pool@.
@@ -102,6 +119,8 @@ runProcessBlock resolver writer extractors network block = do
         , bcGenBlock             = block
         , bcTxs                  = txCtxs
         , bcNetwork              = network
+        , bcLedgerData           = ledgerData
+        , bcSyncPhase            = phase
         }
 
   forM_ extractors $ \ext ->

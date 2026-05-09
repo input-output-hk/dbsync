@@ -1,31 +1,48 @@
 -- | Shared 'processBlock' environment for unit and property tests.
 --
 -- 'processBlock' is polymorphic over an env that supplies a resolver,
--- writer, extractor list, and network. Specs across the suite all
--- need the same plumbing — this module is the one place that wiring
--- lives.
+-- writer, extractor list, network, ledger-data fetch, and sync
+-- phase. Specs across the suite all need the same plumbing — this
+-- module is the one place that wiring lives.
 module DbSync.Test.PipelineEnv
   ( -- * Test env
     TestPipelineEnv (..)
   , mkTestPipelineEnv
   , mkTestPipelineEnvOn
+  , mkTestPipelineEnvWith
   ) where
 
 import Cardano.Prelude
 
 import Cardano.Ledger.BaseTypes (Network (..))
 
+import DbSync.Block.Types (GenericBlock)
 import DbSync.Env (HasNetwork (..))
-import DbSync.Extractor (ExtractorDef, HasExtractors (..))
+import DbSync.Extractor
+  ( BlockLedgerData
+  , ExtractorDef
+  , HasExtractors (..)
+  , HasLedgerData (..)
+  , HasSyncPhase (..)
+  , emptyBlockLedgerData
+  )
+import DbSync.Phase (SyncPhase (..))
 import DbSync.Resolver (HasResolver (..), IdResolver)
 import DbSync.Writer (HasWriter (..), Writer)
 
--- | The minimal env shape every spec passes to 'processBlock'.
+-- | The env shape every spec passes to 'processBlock'.
+--
+-- 'tpeLedgerData' lets a test inject worker output for blocks that
+-- exercise ledger-ON paths; defaults to 'emptyBlockLedgerData'.
+-- 'tpeSyncPhase' chooses between Ingest (post-load fallback) and
+-- Follow (inline value resolution); defaults to 'IngestChainHistory'.
 data TestPipelineEnv = TestPipelineEnv
   { tpeResolver   :: !(IdResolver IO)
   , tpeWriter     :: !(Writer IO)
   , tpeExtractors :: ![ExtractorDef]
   , tpeNetwork    :: !Network
+  , tpeLedgerData :: !(GenericBlock -> IO BlockLedgerData)
+  , tpeSyncPhase  :: !SyncPhase
   }
 
 instance HasResolver TestPipelineEnv where
@@ -40,19 +57,40 @@ instance HasExtractors TestPipelineEnv where
 instance HasNetwork TestPipelineEnv where
   getNetwork = tpeNetwork
 
--- | Build an env on the mainnet network.  Most unit tests don't care
--- about the network bit; those that do should use
--- 'mkTestPipelineEnvOn'.
+instance HasLedgerData TestPipelineEnv where
+  getLedgerData env = tpeLedgerData env
+
+instance HasSyncPhase TestPipelineEnv where
+  getSyncPhase = tpeSyncPhase
+
+-- | Build an env on mainnet with empty ledger data and Ingest phase.
 mkTestPipelineEnv
   :: IdResolver IO -> Writer IO -> [ExtractorDef] -> TestPipelineEnv
 mkTestPipelineEnv = mkTestPipelineEnvOn Mainnet
 
--- | Build an env with an explicit network.
+-- | Build an env with an explicit network; ledger data empty,
+-- Ingest phase.
 mkTestPipelineEnvOn
   :: Network -> IdResolver IO -> Writer IO -> [ExtractorDef] -> TestPipelineEnv
-mkTestPipelineEnvOn n r w exs = TestPipelineEnv
+mkTestPipelineEnvOn n r w exs =
+  mkTestPipelineEnvWith n r w exs (\_ -> pure emptyBlockLedgerData) IngestChainHistory
+
+-- | Full constructor: caller supplies the ledger-data fetcher and
+-- sync phase. Used by specs that exercise ledger-ON dispatch or the
+-- Follow path.
+mkTestPipelineEnvWith
+  :: Network
+  -> IdResolver IO
+  -> Writer IO
+  -> [ExtractorDef]
+  -> (GenericBlock -> IO BlockLedgerData)
+  -> SyncPhase
+  -> TestPipelineEnv
+mkTestPipelineEnvWith n r w exs ld phase = TestPipelineEnv
   { tpeResolver   = r
   , tpeWriter     = w
   , tpeExtractors = exs
   , tpeNetwork    = n
+  , tpeLedgerData = ld
+  , tpeSyncPhase  = phase
   }

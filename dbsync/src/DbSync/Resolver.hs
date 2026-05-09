@@ -27,6 +27,7 @@ import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.MultiAsset (MultiAsset)
 import DbSync.Db.Schema.Pool (PoolHash)
 import DbSync.Db.Schema.StakeDelegation (StakeAddress)
+import DbSync.Db.Types (DbLovelace)
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -163,6 +164,15 @@ data IdResolver m = IdResolver
 
     -- | Assign the next ada_pots ID.
   , assignAdaPotsId :: !(m AdaPotsId)
+
+    -- ---------------------------------------------------------------
+    -- Inline value resolution (Follow path)
+    -- ---------------------------------------------------------------
+
+    -- | Look up output values by (producing tx hash, output index).
+    -- 'Nothing' for any pair the resolver cannot fulfil. Ingest
+    -- panics: value resolution is post-load only there.
+  , resolveInputValues :: !([(ByteString, Word16)] -> m [Maybe DbLovelace])
   }
 
 -- ---------------------------------------------------------------------------

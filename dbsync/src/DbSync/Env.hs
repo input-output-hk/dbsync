@@ -33,6 +33,8 @@ module DbSync.Env
 import Cardano.Prelude
 
 import Control.Concurrent.STM (TBQueue, TVar)
+import Control.Concurrent.STM.TBQueue (readTBQueue)
+import qualified Data.Strict.Maybe as Strict
 import Data.IORef (IORef)
 
 import Cardano.Ledger.BaseTypes (Network)
@@ -43,11 +45,25 @@ import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
 import DbSync.Checkpoint.SyncState (ControlConnection)
 import DbSync.Config.Types (NodeConfig, SyncConfig)
 import DbSync.Copy.Writer (CopyWriter)
-import DbSync.Extractor (ExtractState, ExtractorDef, HasExtractors (..))
+import qualified DbSync.Era.Shelley.Generic.ProtoParams as Generic
+import DbSync.Extractor
+  ( BlockLedgerData (..)
+  , ExtractState
+  , ExtractorDef
+  , HasExtractors (..)
+  , HasLedgerData (..)
+  , HasSyncPhase (..)
+  , emptyBlockLedgerData
+  )
 import DbSync.Id.DedupMap (DedupMaps)
 import DbSync.Ingest.ReceiverStats (ReceiverStats)
-import DbSync.Ledger.Types (HasLedgerEnv, LedgerEnv (..))
+import DbSync.Ledger.Types
+  ( ApplyResult (..)
+  , HasLedgerEnv (..)
+  , LedgerEnv (..)
+  )
 import DbSync.Metrics (HasMetrics (..), Metrics)
+import DbSync.Phase (SyncPhase (..))
 import DbSync.Resolver (HasResolver (..), IdResolver)
 import DbSync.StateQuery.Types (StateQueryVar)
 import DbSync.Trace (HasTracer (..))
@@ -260,3 +276,40 @@ instance HasWriter IngestEnv where
 
 -- NOTE: 'FollowEnv' will gain a 'HasWriter' instance once the
 -- 'FollowingChainTip' INSERT writer lands.
+
+-- ---------------------------------------------------------------------------
+-- * HasLedgerData / HasSyncPhase instances
+-- ---------------------------------------------------------------------------
+
+-- | Pop the per-block apply result from the worker's
+-- 'leAppliedQueue' and project the deposit data into a
+-- 'BlockLedgerData'. Returns 'emptyBlockLedgerData' when the
+-- ledger feature is disabled.
+--
+-- The block argument is unused: the queue's order matches the
+-- consumer's order by construction.
+instance HasLedgerData IngestEnv where
+  getLedgerData env _block = case ieHasLedgerEnv env of
+    LedgerDisabled _ -> pure emptyBlockLedgerData
+    LedgerEnabled lenv -> do
+      ar <- atomically $ readTBQueue (leAppliedQueue lenv)
+      let mDeposits = case apDeposits ar of
+            Strict.Just d  -> Just d
+            Strict.Nothing -> Nothing
+      pure BlockLedgerData
+        { bldLedgerEnabled   = True
+        , bldDepositsMap     = apDepositsMap ar
+        , bldStakeKeyDeposit = Generic.stakeKeyDeposit <$> mDeposits
+        , bldPoolDeposit     = Generic.poolDeposit <$> mDeposits
+        }
+
+instance HasSyncPhase IngestEnv where
+  getSyncPhase _ = IngestChainHistory
+
+-- | 'FollowEnv' currently has no ledger env; returns empty until
+-- the Follow-side worker plumbing lands.
+instance HasLedgerData FollowEnv where
+  getLedgerData _ _ = pure emptyBlockLedgerData
+
+instance HasSyncPhase FollowEnv where
+  getSyncPhase _ = FollowingChainTip

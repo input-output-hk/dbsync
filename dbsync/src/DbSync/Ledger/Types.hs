@@ -219,6 +219,12 @@ data LedgerEnv = LedgerEnv
     -- 'LedgerWorker'. The consumer reads this at epoch boundaries
     -- (Phase 7) to drive the EpochBoundary extractor; the worker
     -- writes it on every successful 'applyBlock'.
+  , leAppliedQueue         :: !(TBQueue ApplyResult)
+    -- ^ @LedgerWorker → Consumer@ — per-block apply results in
+    -- order. The consumer pops one per block to populate
+    -- @bcLedgerData@; the worker pushes after each successful
+    -- @applyBlock@. Bounded so a slow consumer back-pressures the
+    -- worker rather than memory-growing the queue.
   , leControlConnection    :: !ControlConnection
     -- ^ PG connection used by the snapshot-writer thread to record
     -- successful snapshot completions in

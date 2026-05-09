@@ -54,7 +54,7 @@ import DbSync.Db.Statement.Tx (nextTxIdStmt)
 import DbSync.Db.Statement.TxCbor (nextTxCborIdStmt)
 import DbSync.Db.Statement.TxIn (nextTxInIdStmt)
 import DbSync.Db.Statement.TxMetadata (nextTxMetadataIdStmt)
-import DbSync.Db.Statement.TxOut (nextTxOutIdStmt)
+import DbSync.Db.Statement.TxOut (nextTxOutIdStmt, queryOutputValueStmt)
 import DbSync.Db.Statement.Withdrawal (nextWithdrawalIdStmt)
 import DbSync.Resolver (IdResolver (..))
 
@@ -157,6 +157,10 @@ resolver conn lastBlock = IdResolver
   -- construction.
   , assignEpochSyncStatsId   = todo "assignEpochSyncStatsId"
   , assignAdaPotsId          = todo "assignAdaPotsId"
+
+    -- Inline value resolution: per-pair SELECT against tx_out.
+  , resolveInputValues = \pairs ->
+      forM pairs $ \pair -> run conn pair queryOutputValueStmt
   }
 
 run :: Conn.Connection -> a -> Stmt.Statement a b -> IO b

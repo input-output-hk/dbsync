@@ -19,6 +19,8 @@ import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 
 import qualified Data.ByteString as BS
 
+import Cardano.Ledger.Coin (Coin (..))
+
 import DbSync.Block.Types
   ( GenericBlock (..)
   , GenericTx (..)
@@ -28,7 +30,13 @@ import DbSync.Block.Types
   )
 import DbSync.Db.Schema.StakeDelegation
 import DbSync.Db.Types (DbLovelace (..))
-import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
+import DbSync.Extractor
+  ( BlockContext (..)
+  , BlockLedgerData (..)
+  , ExtractorDef (..)
+  , ProcessBlockFn
+  , TxContext (..)
+  )
 import DbSync.Extractor.SharedDedup (resolveAndWritePoolHash, resolveAndWriteStakeAddress)
 import DbSync.Resolver (IdResolver (..))
 import DbSync.Writer (Writer (..))
@@ -82,7 +90,7 @@ processStakeDelegation resolver writer ctx = do
                 , stakeRegistrationCertIndex = certIdx
                 , stakeRegistrationEpochNo   = epochNo
                 , stakeRegistrationTxId      = txId
-                , stakeRegistrationDeposit   = DbLovelace <$> mDeposit
+                , stakeRegistrationDeposit   = stakeDeposit mDeposit
                 }
           writeStakeRegistration writer srId sr
 
@@ -126,7 +134,7 @@ processStakeDelegation resolver writer ctx = do
                 , stakeRegistrationCertIndex = certIdx
                 , stakeRegistrationEpochNo   = epochNo
                 , stakeRegistrationTxId      = txId
-                , stakeRegistrationDeposit   = DbLovelace <$> mDeposit
+                , stakeRegistrationDeposit   = stakeDeposit mDeposit
                 }
           writeStakeRegistration writer srId sr
           -- Write delegation
@@ -178,5 +186,13 @@ processStakeDelegation resolver writer ctx = do
             , withdrawalRedeemerId = Nothing
             }
       writeWithdrawal writer wId wd
+  where
+    -- Conway+ certs carry the deposit inline; Shelley-Babbage rely
+    -- on the worker's protocol-param value when the ledger is on.
+    stakeDeposit :: Maybe Word64 -> Maybe DbLovelace
+    stakeDeposit (Just d) = Just (DbLovelace d)
+    stakeDeposit Nothing  = coinToDbLovelace <$> bldStakeKeyDeposit (bcLedgerData ctx)
 
+coinToDbLovelace :: Coin -> DbLovelace
+coinToDbLovelace (Coin n) = DbLovelace (fromInteger n)
 

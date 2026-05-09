@@ -10,6 +10,9 @@ module DbSync.Db.Statement.TxOut
 
     -- * ID allocation
   , nextTxOutIdStmt
+
+    -- * Lookups
+  , queryOutputValueStmt
   ) where
 
 import Cardano.Prelude
@@ -23,6 +26,7 @@ import qualified Hasql.Statement as Stmt
 import DbSync.Db.Schema.Ids (TxOutId (..), idDecoder, idEncoder)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Schema.UTxO (TxOut, txOutEncoder, txOutTableDef)
+import DbSync.Db.Types (DbLovelace, dbLovelaceValueDecoder)
 
 table :: Text
 table = tdName txOutTableDef
@@ -50,3 +54,18 @@ nextTxOutIdStmt =
   Stmt.preparable sql E.noParams (D.singleRow $ idDecoder TxOutId)
   where
     sql = "SELECT nextval('" <> table <> "_id_seq')"
+
+-- | Look up a 'tx_out.value' by the producing tx's hash and the
+-- output index. 'Nothing' when no such output exists in the DB.
+queryOutputValueStmt :: Stmt.Statement (ByteString, Word16) (Maybe DbLovelace)
+queryOutputValueStmt =
+  Stmt.preparable sql encoder (D.rowMaybe valueDecoder)
+  where
+    encoder = (fst >$< E.param (E.nonNullable E.bytea))
+           <> (snd >$< E.param (E.nonNullable (fromIntegral >$< E.int8)))
+    valueDecoder = D.column (D.nonNullable dbLovelaceValueDecoder)
+    sql = T.concat
+      [ "SELECT tx_out.value FROM tx_out"
+      , " JOIN tx ON tx.id = tx_out.tx_id"
+      , " WHERE tx.hash = $1 AND tx_out.index = $2"
+      ]

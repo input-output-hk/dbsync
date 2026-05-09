@@ -19,6 +19,7 @@ module DbSync.Extractor.Core
 
 import Cardano.Prelude
 
+import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 
@@ -35,8 +36,17 @@ import DbSync.Db.Schema.Core
   , txTableDef
   )
 import DbSync.Db.Schema.Ids (BlockId (..), PoolHashId, SlotLeaderId)
-import DbSync.Db.Types (DbLovelace (..), DbWord64 (..))
-import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
+import DbSync.Db.Types (DbLovelace (..), DbWord64 (..), unDbLovelace)
+import DbSync.Extractor
+  ( BlockContext (..)
+  , BlockLedgerData (..)
+  , ExtractorDef (..)
+  , ProcessBlockFn
+  , TxContext (..)
+  )
+import DbSync.Ledger.Types (lookupDepositsMap)
+import DbSync.Phase (SyncPhase (..))
+import DbSync.Resolver (IdResolver (..))
 import DbSync.Writer (Writer (..))
 
 -- ---------------------------------------------------------------------------
@@ -65,9 +75,9 @@ coreExtractor = ExtractorDef
 -- Uses pre-assigned IDs from BlockContext:
 -- 1. Write slot leader row if new
 -- 2. Write block row
--- 3. Write tx rows
+-- 3. Write tx rows (with phase- and ledger-aware fee/deposit dispatch)
 processCore :: ProcessBlockFn
-processCore _resolver writer ctx = do
+processCore resolver writer ctx = do
   let gb = bcGenBlock ctx
       blockId = bcBlockId ctx
       slId = bcSlotLeaderId ctx
@@ -82,8 +92,67 @@ processCore _resolver writer ctx = do
 
   -- 3. Write transactions
   forM_ (bcTxs ctx) $ \tc -> do
-    let tx = mkTx blockId (tcGenTx tc)
+    (fee, deposit) <- computeTxFinancials resolver ctx (tcGenTx tc)
+    let tx = (mkTx blockId (tcGenTx tc))
+              { txFee     = fee
+              , txDeposit = deposit
+              }
     writeTx writer (tcTxId tc) tx
+
+-- | Pick @tx.fee@ and @tx.deposit@ for one transaction based on
+-- whether it succeeded, whether the ledger worker is on, and which
+-- lifecycle phase is driving the run. Branches:
+--
+--   * Phase-2 failure, Follow — inline collateral diff via
+--     'resolveInputValues'; @deposit = Just 0@.
+--   * Phase-2 failure, Ingest — keep parser's @fee = 0@ sentinel
+--     (post-load SQL fills it); @deposit = Just 0@.
+--   * Valid + ledger ON, deposit observed — @bcDepositsMap@ value.
+--   * Valid + ledger ON, no deposit event — @deposit = Nothing@
+--     (plain transfer; matches original behaviour).
+--   * Valid + ledger OFF, Follow — inline identity via
+--     'resolveInputValues'.
+--   * Valid + ledger OFF, Ingest — @deposit = Nothing@ (post-load
+--     SQL fills it from the same identity formula).
+computeTxFinancials
+  :: IdResolver IO
+  -> BlockContext
+  -> G.GenericTx
+  -> IO (DbLovelace, Maybe Int64)
+computeTxFinancials resolver ctx gtx
+  | not (G.txValidContract gtx) = phase2 (bcSyncPhase ctx)
+  | otherwise = valid (bcSyncPhase ctx) (bcLedgerData ctx)
+  where
+    parserFee = DbLovelace (G.txFee gtx)
+
+    phase2 FollowingChainTip = do
+      collInValues <- resolveInputValues resolver
+        [(G.txInHash i, G.txInIndex i) | i <- G.txCollateralInputs gtx]
+      let collInSum  = sum (map (maybe 0 unDbLovelace) collInValues)
+          collOutSum = maybe 0 G.txOutValue (G.txCollateralOutput gtx)
+      pure (DbLovelace (collInSum - collOutSum), Just 0)
+    phase2 _ = pure (parserFee, Just 0)
+
+    valid _ bld
+      | bldLedgerEnabled bld =
+          let mDep = lookupDepositsMap (G.txHash gtx) (bldDepositsMap bld)
+           in pure (parserFee, fmap coinToInt64 mDep)
+    valid FollowingChainTip _ = do
+      inValues <- resolveInputValues resolver
+        [(G.txInHash i, G.txInIndex i) | i <- G.txInputs gtx]
+      let inSum    = sum (map (maybe 0 unDbLovelace) inValues) :: Word64
+          wdSum    = sum (map G.txwAmount (G.txWithdrawals gtx)) :: Word64
+          outSum   = G.txOutSum gtx
+          fee      = G.txFee gtx
+          donation = G.txTreasuryDonation gtx
+          dep      = fromIntegral inSum + fromIntegral wdSum
+                   - fromIntegral outSum - fromIntegral fee
+                   - fromIntegral donation :: Int64
+      pure (parserFee, Just dep)
+    valid _ _ = pure (parserFee, Nothing)
+
+coinToInt64 :: Coin -> Int64
+coinToInt64 (Coin n) = fromInteger n
 
 -- ---------------------------------------------------------------------------
 -- * Record builders (pure, shared across phases)

@@ -18,20 +18,37 @@ import qualified Data.ByteString as BS
 
 import Test.Hspec (Spec, describe, it, shouldBe)
 
+import qualified Data.Map.Strict as Map
+
+import Cardano.Ledger.BaseTypes (Network (..))
+import Cardano.Ledger.Coin (Coin (..))
+
 import DbSync.Block.Types
   ( BlockEra (..)
   , GenericBlock (..)
   , GenericTx (..)
+  , GenericTxIn (..)
+  , GenericTxOut (..)
   )
+import qualified DbSync.Block.Types as G
 import DbSync.Db.Schema.Core (Block (..), SlotLeader (..))
 import qualified DbSync.Db.Schema.Core as SC
 import DbSync.Db.Schema.Ids (BlockId (..), TxId (..))
-import DbSync.Extractor (ExtractorDef (..), freshExtractState)
+import DbSync.Db.Types (DbLovelace (..))
+import DbSync.Extractor
+  ( BlockLedgerData (..)
+  , ExtractorDef (..)
+  , emptyBlockLedgerData
+  , freshExtractState
+  )
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Ingest.Pipeline (processBlock)
 import DbSync.Id.DedupMap (newMaps)
+import DbSync.Ledger.Types (DepositsMap (..))
+import DbSync.Phase (SyncPhase (..))
+import DbSync.Resolver (IdResolver (..))
 import DbSync.Resolver.Ingest (mkIngestResolver)
-import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
+import DbSync.Test.PipelineEnv (mkTestPipelineEnv, mkTestPipelineEnvWith)
 import DbSync.Writer.Testing (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 import Test.Hspec (shouldSatisfy)
 
@@ -139,6 +156,72 @@ spec = do
     it "Byron blocks write no pool_hash row" $ do
       written <- runCore byronBlock
       length (twPoolHashes written) `shouldBe` 0
+
+  describe "tx.fee / tx.deposit dispatch" $ do
+
+    describe "phase-2 failure" $ do
+      it "Ingest leaves fee at the parser sentinel and deposit at 0" $ do
+        written <- runCoreWith emptyBlockLedgerData IngestChainHistory
+                     [] (blockWithTx phase2Tx)
+        case twTxs written of
+          [(_, tx)] -> do
+            SC.txFee tx     `shouldBe` DbLovelace 0
+            SC.txDeposit tx `shouldBe` Just 0
+          _ -> panic "expected exactly one tx"
+
+      it "Follow computes fee from collateral inputs minus collateral return" $ do
+        let collInValues = [Just (DbLovelace 5_000_000)]
+        written <- runCoreWith emptyBlockLedgerData FollowingChainTip
+                     collInValues (blockWithTx phase2Tx)
+        case twTxs written of
+          [(_, tx)] -> do
+            -- 5_000_000 collateral in - 2_000_000 collateral out
+            SC.txFee tx     `shouldBe` DbLovelace 3_000_000
+            SC.txDeposit tx `shouldBe` Just 0
+          _ -> panic "expected exactly one tx"
+
+    describe "valid contract, ledger ON" $ do
+      it "fills deposit from bcDepositsMap when the tx has a deposit event" $ do
+        let bld = (emptyBlockLedgerData :: BlockLedgerData)
+              { bldLedgerEnabled = True
+              , bldDepositsMap   = DepositsMap
+                  (Map.singleton (G.txHash validTx) (Coin 2_000_000))
+              }
+        written <- runCoreWith bld IngestChainHistory [] (blockWithTx validTx)
+        case twTxs written of
+          [(_, tx)] -> SC.txDeposit tx `shouldBe` Just 2_000_000
+          _ -> panic "expected exactly one tx"
+
+      it "leaves deposit NULL for plain txs (no deposit event)" $ do
+        let bld = emptyBlockLedgerData { bldLedgerEnabled = True }
+        written <- runCoreWith bld IngestChainHistory [] (blockWithTx validTx)
+        case twTxs written of
+          [(_, tx)] -> SC.txDeposit tx `shouldBe` Nothing
+          _ -> panic "expected exactly one tx"
+
+    describe "valid contract, ledger OFF" $ do
+      it "Follow computes deposit via the inputs - outputs identity" $ do
+        let inValues = [Just (DbLovelace 10_000_000)]
+            tx = validTx
+              { G.txInputs   = [GenericTxIn (BS.replicate 32 0xaa) 0]
+              , G.txOutSum   = 9_000_000
+              , G.txFee      = 200_000
+              , G.txOutputs  = [outFor 9_000_000]
+              }
+        written <- runCoreWith emptyBlockLedgerData FollowingChainTip
+                     inValues (blockWithTx tx)
+        case twTxs written of
+          [(_, t)] ->
+            -- 10_000_000 - 9_000_000 - 200_000 - 0 (donation) = 800_000
+            SC.txDeposit t `shouldBe` Just 800_000
+          _ -> panic "expected exactly one tx"
+
+      it "Ingest leaves deposit NULL for the SQL backfill to fill in" $ do
+        written <- runCoreWith emptyBlockLedgerData IngestChainHistory
+                     [] (blockWithTx validTx)
+        case twTxs written of
+          [(_, tx)] -> SC.txDeposit tx `shouldBe` Nothing
+          _ -> panic "expected exactly one tx"
 
 -- ---------------------------------------------------------------------------
 -- Test helpers
@@ -248,3 +331,62 @@ mkTx idx txH = GenericTx
   , txMint              = []
   , txCborRaw           = Nothing
   }
+
+-- ---------------------------------------------------------------------------
+-- Fee / deposit dispatch helpers
+-- ---------------------------------------------------------------------------
+
+-- | Run 'coreExtractor' with custom 'BlockLedgerData', 'SyncPhase',
+-- and a stubbed 'resolveInputValues' return value.
+runCoreWith
+  :: BlockLedgerData
+  -> SyncPhase
+  -> [Maybe DbLovelace]   -- ^ what 'resolveInputValues' should return
+  -> GenericBlock
+  -> IO TestWriterState
+runCoreWith ledgerData phase inValues block = do
+  stRef     <- newIORef freshExtractState
+  dedupMaps <- newMaps
+  wrRef     <- newIORef emptyTestWriterState
+  let baseResolver = mkIngestResolver stRef dedupMaps
+      resolver = baseResolver { resolveInputValues = \_ -> pure inValues }
+      env = mkTestPipelineEnvWith Mainnet resolver (mkTestWriter wrRef)
+              [coreExtractor] (\_ -> pure ledgerData) phase
+  runReaderT (processBlock block) env
+  readIORef wrRef
+
+-- | A valid (phase-2 success) tx with no inputs / outputs / withdrawals
+-- by default. Field overrides supply the dispatch-relevant data.
+validTx :: GenericTx
+validTx = mkTx 0 "validtx"
+
+-- | A phase-2 failed tx with one collateral input and a 2_000_000
+-- collateral return.
+phase2Tx :: GenericTx
+phase2Tx = (mkTx 0 "phase2tx")
+  { G.txValidContract    = False
+  , G.txFee              = 0
+  , G.txOutSum           = 0
+  , G.txOutputs          = []
+  , G.txCollateralInputs = [GenericTxIn (BS.replicate 32 0xbb) 0]
+  , G.txCollateralOutput = Just (outFor 2_000_000)
+  }
+
+-- | A 'GenericTxOut' carrying the supplied lovelace value. Address
+-- bytes are the same Shelley-shape pad used by every other test
+-- fixture in the suite.
+outFor :: Word64 -> GenericTxOut
+outFor v = GenericTxOut
+  { G.txOutIndex       = 0
+  , G.txOutAddress     = "addr_test1xyz"
+  , G.txOutAddressRaw  = BS.pack (0x00 : replicate 56 0x11)
+  , G.txOutValue       = v
+  , G.txOutDataHash    = Nothing
+  , G.txOutInlineDatum = Nothing
+  , G.txOutRefScript   = Nothing
+  , G.txOutMultiAssets = []
+  }
+
+-- | Wrap a tx in 'emptyBlock'.
+blockWithTx :: GenericTx -> GenericBlock
+blockWithTx tx = emptyBlock { blkTxs = [tx] }

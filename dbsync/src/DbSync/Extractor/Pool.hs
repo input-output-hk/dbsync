@@ -19,6 +19,8 @@ import Cardano.Slotting.Slot (EpochNo (..))
 
 import qualified Data.ByteString as BS
 
+import Cardano.Ledger.Coin (Coin (..))
+
 import DbSync.Block.Types
   ( GenericBlock (..)
   , GenericTx (..)
@@ -30,7 +32,13 @@ import DbSync.Block.Types
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Pool
 import DbSync.Db.Types (DbLovelace (..))
-import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
+import DbSync.Extractor
+  ( BlockContext (..)
+  , BlockLedgerData (..)
+  , ExtractorDef (..)
+  , ProcessBlockFn
+  , TxContext (..)
+  )
 import DbSync.Extractor.SharedDedup (resolveAndWritePoolHash, resolveAndWriteStakeAddress)
 import DbSync.Resolver (IdResolver (..))
 import DbSync.Writer (Writer (..))
@@ -63,6 +71,10 @@ processPool resolver writer ctx = do
   let gb      = bcGenBlock ctx
       epochNo = unEpochNo (blkEpochNo gb)
       network = bcNetwork ctx
+      -- Worker-supplied protocol param when ledger ON; 'Nothing'
+      -- otherwise — pool_update.deposit stays NULL to match the
+      -- original schema's behaviour for ledger-disabled runs.
+      mPoolDeposit = bldPoolDeposit (bcLedgerData ctx)
 
   forM_ (bcTxs ctx) $ \tc -> when (txValidContract (tcGenTx tc)) $ do
     let txId = tcTxId tc
@@ -98,7 +110,12 @@ processPool resolver writer ctx = do
           rewardAddrId <- resolveAndWriteStakeAddress network resolver writer rewardCredHash
 
           puId <- assignPoolUpdateId resolver
-          let pu = PoolUpdate
+          -- Only first registration is charged the deposit; re-
+          -- registration of an already-known pool keeps the
+          -- existing deposit on file.
+          let mDeposit = if isFirstReg then coinToDbLovelace <$> mPoolDeposit
+                                       else Nothing
+              pu = PoolUpdate
                 { poolUpdateHashId         = phId
                 , poolUpdateCertIndex      = certIdx
                 , poolUpdateVrfKeyHash     = prdVrfKeyHash prd
@@ -112,7 +129,7 @@ processPool resolver writer ctx = do
                 , poolUpdateFixedCost      = DbLovelace (prdCost prd)
                 , poolUpdateRegisteredTxId = txId
                 , poolUpdateRewardAddrId   = rewardAddrId
-                , poolUpdateDeposit        = Nothing  -- TODO: deposit needs ledger event
+                , poolUpdateDeposit        = mDeposit
                 }
           writePoolUpdate writer puId pu
 
@@ -178,4 +195,7 @@ mkPoolRelay puId (PoolRelayDnsSrv srvName) = PoolRelay
   , poolRelayPort       = Nothing
   }
 
+-- | Project a 'Coin' deposit value into the schema's 'DbLovelace'.
+coinToDbLovelace :: Coin -> DbLovelace
+coinToDbLovelace (Coin n) = DbLovelace (fromInteger n)
 

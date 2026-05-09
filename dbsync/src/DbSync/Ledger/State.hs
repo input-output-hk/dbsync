@@ -103,7 +103,7 @@ import Control.Concurrent.Class.MonadSTM.Strict
   , writeTVar
   )
 import qualified Control.Concurrent.Class.MonadSTM.Strict as STM
-import Control.Concurrent.STM.TBQueue (newTBQueueIO)
+import Control.Concurrent.STM.TBQueue (newTBQueueIO, writeTBQueue)
 import qualified Data.ByteString.Short as SBS
 import qualified Data.Map.Strict as Map
 import qualified Data.Sequence.Strict as StrictSeq
@@ -303,6 +303,7 @@ mkHasLedgerEnv
     stateVar        <- newTVarIO Strict.Nothing
     latestApplyVar  <- newTVarIO Strict.Nothing
     ledgerQueue     <- newTBQueueIO ledgerQueueBound
+    appliedQueue    <- newTBQueueIO appliedQueueBound
     epochReady      <- newEmptyTMVarIO
     epochWait       <- newEmptyTMVarIO
     snapshotQueue   <- newTBQueueIO snapshotQueueBound
@@ -397,6 +398,7 @@ mkHasLedgerEnv
           , leLoadSnapshot         = loadSnap
           , leClose                = closeBackend
           , leLatestApplyResult    = latestApplyVar
+          , leAppliedQueue         = appliedQueue
           , leControlConnection    = ctrlConn
           }
   where
@@ -404,6 +406,12 @@ mkHasLedgerEnv
     -- back-pressure into the receiver as soon as it falls behind.
     ledgerQueueBound :: Natural
     ledgerQueueBound = 100
+
+    -- Mirrors @ledgerQueueBound@: the worker pushes one apply
+    -- result per block it consumed, so the back-pressure shape on
+    -- this side matches the receiver-to-worker side.
+    appliedQueueBound :: Natural
+    appliedQueueBound = 100
 
     -- One slot per retained snapshot (the manager keeps three) plus
     -- a little slack so a mid-write snapshot doesn't block the worker.
@@ -597,7 +605,9 @@ applyBlock blk slotDetails = do
               , apGovActionState  = getGovState finalState
               , apDepositsMap     = DepositsMap deposits
               }
-      liftIO $ atomically $ writeTVar (leLatestApplyResult env) (Strict.Just appResult)
+      liftIO $ atomically $ do
+        writeTVar (leLatestApplyResult env) (Strict.Just appResult)
+        writeTBQueue (leAppliedQueue env) appResult
       pure (oldRef, appResult, pruned)
 
 -- | 'applyBlock' plus the snapshot-cadence decision and pruning of

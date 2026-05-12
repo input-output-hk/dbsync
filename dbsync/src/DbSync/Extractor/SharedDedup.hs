@@ -17,7 +17,6 @@ import Cardano.Prelude
 
 import Cardano.Ledger.BaseTypes (Network (..))
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Short as SBS
 
 import DbSync.Db.Schema.Ids (MultiAssetId, PoolHashId, StakeAddressId)
 import DbSync.Db.Schema.MultiAsset (MultiAsset (..))
@@ -29,6 +28,7 @@ import DbSync.Util.Bech32
   , serialisePoolKeyHashToBech32
   , serialiseStakeKeyHashToBech32
   )
+import DbSync.Util.DedupHash (hashDedupKey)
 import DbSync.Writer (Writer (..))
 
 -- ---------------------------------------------------------------------------
@@ -91,9 +91,10 @@ resolveAndWriteStakeAddress network resolver writer credHash = do
 -- | Resolve a multi-asset by @(policy, name)@, writing a fresh
 -- @multi_asset@ row on first sighting.
 --
--- The dedup key is the unpinned 'ShortByteString' concatenation of
--- policy and name — using 'ByteString' here would create an
--- intermediate pinned allocation per call.
+-- The in-memory dedup key is @hashDedupKey (policy <> name)@. The
+-- boot-time rebuild path in 'DbSync.Checkpoint.SyncState.populateMultiAsset'
+-- MUST apply the same hash to the same input; otherwise resumed
+-- runs will allocate fresh ids for already-known assets.
 resolveAndWriteMultiAsset
   :: IdResolver IO
   -> Writer IO
@@ -101,7 +102,7 @@ resolveAndWriteMultiAsset
   -> ByteString    -- ^ asset name
   -> IO MultiAssetId
 resolveAndWriteMultiAsset resolver writer policy name = do
-  let key = SBS.toShort policy <> SBS.toShort name
+  let !key = hashDedupKey (policy <> name)
       ma = MultiAsset
         { multiAssetPolicy      = policy
         , multiAssetName        = name

@@ -35,6 +35,7 @@ import DbSync.Extractor (freshExtractState)
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Id.DedupMap (newMaps)
 import DbSync.Ingest.Pipeline (processBlock)
+import DbSync.Resolver.AddressBuffer (newAddressBufferRef)
 import DbSync.Resolver.Ingest (mkIngestResolver)
 import DbSync.Test.Database (queryTestDb, testConnBs, testConnStr, truncateAllTables)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
@@ -128,8 +129,9 @@ spec = describe "DbSync.Copy.Writer (multi-threaded, full pipeline)" $
         -- Simulate 2 epochs: write block, commit, reopen, write another block, commit
         stRef <- newIORef freshExtractState
         dedupMaps <- newMaps
+        addrBuf <- newAddressBufferRef
         cw <- mkCopyWriter testConnBs coreTables
-        let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps)
+        let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf)
                                     (mkCopyWriterAdapter cw) [coreExtractor]
 
         -- Epoch 1
@@ -169,8 +171,9 @@ runPipelineToDb :: [GenericBlock] -> IO ()
 runPipelineToDb blocks = do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
+  addrBuf <- newAddressBufferRef
   cw <- mkCopyWriter testConnBs coreTables
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf)
                               (mkCopyWriterAdapter cw) [coreExtractor]
   forM_ blocks $ \blk ->
     runReaderT (processBlock blk) env

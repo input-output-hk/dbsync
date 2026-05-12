@@ -20,11 +20,19 @@ import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 import qualified Hasql.Statement as Stmt
 
+import DbSync.Db.Schema.Address (Address)
 import DbSync.Db.Schema.Ids
-import DbSync.Db.Statement.Address (nextAddressIdStmt, queryAddressIdStmt)
+import DbSync.Db.Statement.Address
+  ( insertAddressRowStmt
+  , nextAddressIdStmt
+  , queryAddressIdStmt
+  )
 import DbSync.Db.Statement.Block (nextBlockIdStmt)
 import DbSync.Db.Statement.CollateralTxIn (nextCollateralTxInIdStmt)
-import DbSync.Db.Statement.CollateralTxOut (nextCollateralTxOutIdStmt)
+import DbSync.Db.Statement.CollateralTxOut
+  ( nextCollateralTxOutIdStmt
+  , updateCollateralTxOutAddressIdStmt
+  )
 import DbSync.Db.Statement.Delegation (nextDelegationIdStmt)
 import DbSync.Db.Statement.MaTxMint (nextMaTxMintIdStmt)
 import DbSync.Db.Statement.MaTxOut (nextMaTxOutIdStmt)
@@ -54,7 +62,11 @@ import DbSync.Db.Statement.Tx (nextTxIdStmt)
 import DbSync.Db.Statement.TxCbor (nextTxCborIdStmt)
 import DbSync.Db.Statement.TxIn (nextTxInIdStmt)
 import DbSync.Db.Statement.TxMetadata (nextTxMetadataIdStmt)
-import DbSync.Db.Statement.TxOut (nextTxOutIdStmt, queryOutputValueStmt)
+import DbSync.Db.Statement.TxOut
+  ( nextTxOutIdStmt
+  , queryOutputValueStmt
+  , updateTxOutAddressIdStmt
+  )
 import DbSync.Db.Statement.Withdrawal (nextWithdrawalIdStmt)
 import DbSync.Resolver (IdResolver (..))
 
@@ -82,14 +94,15 @@ resolver conn lastBlock = IdResolver
 
   , assignTxId = run conn () nextTxIdStmt
 
-    -- Address dedup: SELECT first by raw bytes, nextval on miss.
-  , resolveAddress = \rawBytes _addr -> do
-      mId <- run conn rawBytes queryAddressIdStmt
-      case mId of
-        Just aid -> pure (aid, False)
-        Nothing  -> do
-          aid <- run conn () nextAddressIdStmt
-          pure (aid, True)
+    -- Address recording: resolve the FK synchronously and UPDATE the
+    -- row that 'writeTxOut' has just inserted with @address_id = NULL@.
+    -- See 'resolveAddressId'.
+  , recordTxOutAddress = \txOutId rawBytes addr -> do
+      aid <- resolveAddressId conn rawBytes addr
+      run conn (aid, txOutId) updateTxOutAddressIdStmt
+  , recordCollateralTxOutAddress = \outId rawBytes addr -> do
+      aid <- resolveAddressId conn rawBytes addr
+      run conn (aid, outId) updateCollateralTxOutAddressIdStmt
 
     -- UTxO IDs (no resolver-side dedup — straight nextval per row)
   , assignTxOutId            = run conn () nextTxOutIdStmt
@@ -169,6 +182,20 @@ run conn p stmt = do
   case result of
     Right b -> pure b
     Left e  -> panic $ "Follow resolver session failed: " <> show e
+
+-- | Look up an existing @address.id@ by raw bytes, or insert a new
+-- row and return its allocated id. Used by @recordTxOutAddress@ and
+-- @recordCollateralTxOutAddress@ to obtain the FK value before the
+-- subsequent UPDATE.
+resolveAddressId :: Conn.Connection -> ByteString -> Address -> IO AddressId
+resolveAddressId conn rawBytes addr = do
+  mId <- run conn rawBytes queryAddressIdStmt
+  case mId of
+    Just aid -> pure aid
+    Nothing  -> do
+      aid <- run conn () nextAddressIdStmt
+      run conn (aid, addr) insertAddressRowStmt
+      pure aid
 
 todo :: Text -> IO a
 todo name = pure $ panic $ "Resolver.Follow." <> name <> " not yet implemented"

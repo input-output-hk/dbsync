@@ -26,6 +26,11 @@ import DbSync.Extractor (ExtractState (..))
 import DbSync.Id.Counter (IdCounters (..), nextId)
 import DbSync.Id.DedupMap (DedupMaps (..), lookupOrInsert)
 import DbSync.Resolver (IdResolver (..))
+import DbSync.Resolver.AddressBuffer
+  ( AddressBufferRef
+  , recordCollateralTxOut
+  , recordTxOut
+  )
 
 -- ---------------------------------------------------------------------------
 -- * Construction
@@ -34,15 +39,20 @@ import DbSync.Resolver (IdResolver (..))
 -- | Build an 'IdResolver' for 'IngestChainHistory'.
 --
 -- Dedup operations mutate the mutable hash tables in 'DedupMaps'
--- directly (zero GC pressure, zero path-copying). Non-dedup counter
--- operations use 'atomicModifyIORef'' on 'ExtractState'.
+-- directly. Non-dedup counter operations use 'atomicModifyIORef''
+-- on 'ExtractState'.
 --
 -- 'ByteString' keys from the blockchain are converted to
--- 'ShortByteString' at the boundary -- this is the only place the
--- conversion happens. Extractors and the 'IdResolver' interface
+-- 'ShortByteString' at this boundary so the dedup-map storage
+-- stays unpinned. Extractors and the 'IdResolver' interface
 -- remain 'ByteString'-based.
-mkIngestResolver :: IORef ExtractState -> DedupMaps -> IdResolver IO
-mkIngestResolver stRef dedupMaps = IdResolver
+--
+-- @recordTxOutAddress@\/@recordCollateralTxOutAddress@ append to
+-- the per-epoch 'AddressBufferRef'; the background 'AddressResolver'
+-- worker reads the buffer one epoch later, writes the @address@ rows,
+-- and fills in @tx_out.address_id@\/@collateral_tx_out.address_id@.
+mkIngestResolver :: IORef ExtractState -> DedupMaps -> AddressBufferRef -> IdResolver IO
+mkIngestResolver stRef dedupMaps addrBufRef = IdResolver
   { -- Core shared IDs
     assignBlockId = atomicModifyIORef' stRef $ \st ->
       let (bid, ctr') = nextId (icBlockId $ esIdCounters st)
@@ -71,11 +81,9 @@ mkIngestResolver stRef dedupMaps = IdResolver
       st <- readIORef stRef
       pure $ BlockId <$> esLastBlockId st
 
-    -- Dedup: Address — direct IO mutation
-  , resolveAddress = \rawBytes _addr -> do
-      let !key = SBS.toShort rawBytes
-      (aid, isNew) <- lookupOrInsert key (dmsAddress dedupMaps)
-      pure (AddressId aid, isNew)
+    -- Address: queue raw bytes + derived fields for the worker.
+  , recordTxOutAddress = recordTxOut addrBufRef
+  , recordCollateralTxOutAddress = recordCollateralTxOut addrBufRef
 
     -- UTxO IDs
   , assignTxInId = atomicModifyIORef' stRef $ \st ->

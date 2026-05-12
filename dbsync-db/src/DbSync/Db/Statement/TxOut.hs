@@ -8,6 +8,10 @@ module DbSync.Db.Statement.TxOut
   ( -- * Inserts
     insertTxOutRowStmt
 
+    -- * Updates
+  , updateTxOutAddressIdStmt
+  , bulkUpdateTxOutAddressIdsStmt
+
     -- * ID allocation
   , nextTxOutIdStmt
 
@@ -23,7 +27,7 @@ import qualified Hasql.Decoders as D
 import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
-import DbSync.Db.Schema.Ids (TxOutId (..), idDecoder, idEncoder)
+import DbSync.Db.Schema.Ids (AddressId (..), TxOutId (..), idDecoder, idEncoder)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Schema.UTxO (TxOut, txOutEncoder, txOutTableDef)
 import DbSync.Db.Types (DbLovelace, dbLovelaceValueDecoder)
@@ -46,6 +50,32 @@ insertTxOutRowStmt =
       , " , value, data_hash, inline_datum_id"
       , " , reference_script_id, consumed_by_tx_id)"
       , " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
+      ]
+
+-- | Fill in @tx_out.address_id@ for an existing row.
+updateTxOutAddressIdStmt :: Stmt.Statement (AddressId, TxOutId) ()
+updateTxOutAddressIdStmt =
+  Stmt.preparable sql encoder D.noResult
+  where
+    encoder = (fst >$< idEncoder getAddressId)
+           <> (snd >$< idEncoder getTxOutId)
+    sql = "UPDATE " <> table <> " SET address_id = $1 WHERE id = $2"
+
+-- | Bulk-update @tx_out.address_id@. Two parallel arrays: tx_out ids
+-- and the address id to assign to each. One round-trip regardless of
+-- input size; used by the IngestChainHistory address-resolver worker
+-- to fold an epoch's worth of FK fills into one statement.
+bulkUpdateTxOutAddressIdsStmt :: Stmt.Statement ([Int64], [Int64]) ()
+bulkUpdateTxOutAddressIdsStmt =
+  Stmt.preparable sql encoder D.noResult
+  where
+    int8Array = E.param (E.nonNullable (E.foldableArray (E.nonNullable E.int8)))
+    encoder = (fst >$< int8Array)    -- tx_out ids
+           <> (snd >$< int8Array)    -- address ids
+    sql = T.concat
+      [ "UPDATE ", table, " SET address_id = u.aid"
+      , " FROM unnest($1, $2) AS u(tx_out_id, aid)"
+      , " WHERE ", table, ".id = u.tx_out_id"
       ]
 
 -- | Allocate a new id from the @tx_out_id_seq@ sequence.

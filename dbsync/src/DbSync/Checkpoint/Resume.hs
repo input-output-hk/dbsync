@@ -82,6 +82,14 @@ classify td
 
 -- | One entry per dedup table, mapping its name to the counter on
 -- 'SyncStateRow' that records \"the next id we'd assign\".
+--
+-- @address@ is included so partial-epoch rows from the background
+-- 'DbSync.Resolver.AddressWorker.AddressResolver' get cleaned up:
+-- a crash between the worker's INSERTs and 'writeSyncState' leaves
+-- @address@ rows with @id >= ssrAddressIdCounter@; without this
+-- entry the next run's SELECT-before-INSERT dedup races with the
+-- orphan rows and produces duplicates that fail the post-load
+-- @UNIQUE (raw)@ index build in 'PreparingForChainTip'.
 dedupCounterFor :: Text -> Maybe (SyncStateRow -> Int64)
 dedupCounterFor = \case
   "slot_leader"   -> Just ssrSlotLeaderIdCounter
@@ -89,6 +97,7 @@ dedupCounterFor = \case
   "pool_hash"     -> Just ssrPoolHashIdCounter
   "multi_asset"   -> Just ssrMultiAssetIdCounter
   "script"        -> Just ssrScriptIdCounter
+  "address"       -> Just ssrAddressIdCounter
   _               -> Nothing
 
 -- | Run a 'Stmt.Statement' on the control connection, lifting any

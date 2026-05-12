@@ -47,6 +47,7 @@ import DbSync.Id.DedupMap (newMaps)
 import DbSync.Ledger.Types (DepositsMap (..))
 import DbSync.Phase (SyncPhase (..))
 import DbSync.Resolver (IdResolver (..))
+import DbSync.Resolver.AddressBuffer (newAddressBufferRef)
 import DbSync.Resolver.Ingest (mkIngestResolver)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv, mkTestPipelineEnvWith)
 import DbSync.Writer.Testing (TestWriterState (..), emptyTestWriterState, mkTestWriter)
@@ -232,8 +233,9 @@ runCore :: GenericBlock -> IO TestWriterState
 runCore block = do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
+  addrBuf <- newAddressBufferRef
   wrRef <- newIORef emptyTestWriterState
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf)
                               (mkTestWriter wrRef) [coreExtractor]
   runReaderT (processBlock block) env
   readIORef wrRef
@@ -243,7 +245,8 @@ runCoreTwoBlocks :: GenericBlock -> GenericBlock -> IO (TestWriterState, TestWri
 runCoreTwoBlocks block1 block2 = do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
-  let resolver = mkIngestResolver stRef dedupMaps
+  addrBuf <- newAddressBufferRef
+  let resolver = mkIngestResolver stRef dedupMaps addrBuf
 
   wrRef1 <- newIORef emptyTestWriterState
   let env1 = mkTestPipelineEnv resolver (mkTestWriter wrRef1) [coreExtractor]
@@ -347,8 +350,9 @@ runCoreWith
 runCoreWith ledgerData phase inValues block = do
   stRef     <- newIORef freshExtractState
   dedupMaps <- newMaps
+  addrBuf   <- newAddressBufferRef
   wrRef     <- newIORef emptyTestWriterState
-  let baseResolver = mkIngestResolver stRef dedupMaps
+  let baseResolver = mkIngestResolver stRef dedupMaps addrBuf
       resolver = baseResolver { resolveInputValues = \_ -> pure inValues }
       env = mkTestPipelineEnvWith Mainnet resolver (mkTestWriter wrRef)
               [coreExtractor] (\_ -> pure ledgerData) phase

@@ -92,6 +92,8 @@ library
     DbSync.Ingest.Pipeline
     DbSync.Ingest.ReceiverStats
     DbSync.Resolver
+    DbSync.Resolver.AddressBuffer
+    DbSync.Resolver.AddressWorker
     DbSync.Resolver.Follow
     DbSync.Resolver.Ingest
     DbSync.StateQuery
@@ -121,6 +123,7 @@ library
     DbSync.Ledger.Worker
     DbSync.Node.Connection
     DbSync.Util
+    DbSync.Watchdog
     DbSync.OffChain.Types
     DbSync.OffChain.Fetcher
     DbSync.OffChain.Pool
@@ -269,6 +272,7 @@ test-suite dbsync-test
     DbSync.Db.Statement.SyncStateSpec
     DbSync.Db.TypesSpec
     DbSync.PropertySpec
+    DbSync.Resolver.AddressWorkerSpec
     DbSync.Schema.AdaPotsSpec
     DbSync.Schema.AddressSpec
     DbSync.Schema.CoreSpec
@@ -278,6 +282,7 @@ test-suite dbsync-test
     DbSync.Schema.ScriptsDatumsSpec
     DbSync.Schema.SyncStateSpec
     DbSync.Util.Bech32Spec
+    DbSync.Util.DedupHashSpec
     DbSync.Block.MetadataSpec
     DbSync.Extractor.CoreSpec
     DbSync.Extractor.EpochBoundarySpec
@@ -309,6 +314,7 @@ test-suite dbsync-test
     , dbsync-mock
     , dbsync:dbsync-testlib
     , hspec
+    , cardano-crypto-class
     , cardano-ledger-binary
     , cardano-ledger-core
     , cardano-prelude
@@ -342,8 +348,13 @@ executable dbsync
   --   -A64m  : 64 MB nursery (vs default 4 MB) — minor GC 16x less often
   --   -N6    : 6 capabilities
   --   -T     : enable GHC runtime statistics
-  --   --disable-delayed-os-memory-return : return freed pages to OS immediately
-  ghc-options:    -threaded -rtsopts "-with-rtsopts=-A64m -N6 -T --disable-delayed-os-memory-return"
+  --
+  -- We deliberately *omit* --disable-delayed-os-memory-return so that
+  -- pages freed by the GC are returned to the kernel between
+  -- collections. With the flag enabled, RSS pins at peak heap forever,
+  -- masking dedup-map growth as a 16+ GB RSS regression. See
+  -- PLANS/MEMORY_INVESTIGATION.md (Slice A).
+  ghc-options:    -threaded -rtsopts "-with-rtsopts=-A64m -N6 -T"
   build-depends:
       base
     , dbsync

@@ -54,10 +54,17 @@ import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol () -- LedgerSupportsP
 
 import DbSync.AppM (LedgerM, runAppM)
 import qualified DbSync.Era.Shelley.Generic.EpochUpdate as Generic
-import DbSync.Ledger.State (applyBlockAndSnapshot)
+import DbSync.Ledger.State (applyBlockAndSnapshot, getTopLevelConfig, readCurrentStateUnsafe)
 import DbSync.Ledger.Types (ApplyResult (..), LedgerEnv (..))
-import DbSync.StateQuery (SlotDetails, StateQueryVar, getSlotDetailsIO)
+import DbSync.StateQuery
+  ( SlotDetails
+  , StateQueryVar
+  , getSlotDetailsIO
+  , seedInterpreterFromLedgerState
+  )
+import DbSync.StateQuery.Types (sdSlotNo)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
+import DbSync.Watchdog (Watchdog, bumpWorker, setWorkerNote)
 
 -- ---------------------------------------------------------------------------
 -- * Hooks
@@ -75,23 +82,39 @@ data WorkerHooks blk = WorkerHooks
   }
 
 -- | Build the production hook set from a 'LedgerEnv', a
--- 'StateQueryVar', and the optional resume replay boundary.
+-- 'StateQueryVar', a 'Watchdog' handle, and the optional resume
+-- replay boundary.
 --
 -- The 'consistent' flag passed to 'applyBlockAndSnapshot' is
 -- conservatively 'False' during Ingest (we treat the chain tip as
 -- far away); Phase 7 will set it 'True' once the receiver knows
 -- we're inside @k=2160@ of the node tip.
+--
+-- The 'Watchdog' note is stamped around each hook call so a hang
+-- inside @applyBlockAndSnapshot@ or @seedInterpreterFromLedgerState@
+-- is visible in the watchdog log line.
 realWorkerHooks
   :: LedgerEnv
   -> StateQueryVar
+  -> Watchdog
   -> Maybe SlotNo
   -> WorkerHooks (CardanoBlock StandardCrypto)
-realWorkerHooks env sqv mReplayBoundary =
+realWorkerHooks env sqv wd mReplayBoundary =
   WorkerHooks
-    { whGetSlotDetails = \blk ->
+    { whGetSlotDetails = \blk -> do
+        setWorkerNote wd "worker: getSlotDetailsIO"
         getSlotDetailsIO (leTracer env) sqv (leSystemStart env) (blockSlot blk)
-    , whApplyAndSnapshot = \blk sd ->
-        runAppM env (applyBlockAndSnapshot blk sd False mReplayBoundary)
+    , whApplyAndSnapshot = \blk sd -> do
+        setWorkerNote wd "worker: applyBlockAndSnapshot"
+        result <- runAppM env (applyBlockAndSnapshot blk sd False mReplayBoundary)
+        -- Re-seed the cached HFC interpreter from the post-apply state so
+        -- the next getSlotDetailsIO stays inside the summary's horizon.
+        setWorkerNote wd "worker: readCurrentStateUnsafe (re-seed)"
+        newState <- runAppM env readCurrentStateUnsafe
+        setWorkerNote wd "worker: seedInterpreterFromLedgerState"
+        seedInterpreterFromLedgerState (getTopLevelConfig env) newState sqv
+        setWorkerNote wd "worker: post-apply"
+        pure result
     }
 
 -- ---------------------------------------------------------------------------
@@ -103,22 +126,26 @@ realWorkerHooks env sqv mReplayBoundary =
 -- on every epoch boundary.
 --
 -- Runs in 'LedgerM' so the 'LedgerEnv' comes from the 'MonadReader'
--- context. 'StateQueryVar' lives on 'IngestEnv' rather than
--- 'LedgerEnv', so the caller pairs them up and invokes
--- @runAppM env (runLedgerWorker mReplayBoundary sqv)@. The
--- replay boundary is forwarded to 'applyBlockAndSnapshot'.
+-- context. 'StateQueryVar' and 'Watchdog' live on 'IngestEnv'
+-- rather than 'LedgerEnv', so the caller pairs them up and invokes
+-- @runAppM env (runLedgerWorker mReplayBoundary sqv wd)@. The
+-- replay boundary is forwarded to 'applyBlockAndSnapshot'; the
+-- watchdog handle is used by the hooks to publish per-block
+-- progress and free-text call-site notes.
 runLedgerWorker
   :: Maybe SlotNo
   -> StateQueryVar
+  -> Watchdog
   -> LedgerM ()
-runLedgerWorker mReplayBoundary sqv = do
+runLedgerWorker mReplayBoundary sqv wd = do
   env <- ask
   liftIO $ do
     traceWith (leTracer env) $ LogMsg Info "LedgerWorker"
       "starting (draining ledger queue)" Nothing
     runLedgerWorkerWith
       (Just (leTracer env))
-      (realWorkerHooks env sqv mReplayBoundary)
+      (realWorkerHooks env sqv wd mReplayBoundary)
+      (Just wd)
       (leLedgerQueue env)
       (leEpochReady env)
       (leEpochWait env)
@@ -132,14 +159,19 @@ runLedgerWorker mReplayBoundary sqv = do
 -- supplied) at 'Error' severity and re-thrown so the supervising
 -- 'Async' propagates the failure. Tests pass 'Nothing' to keep the
 -- output quiet.
+--
+-- When a 'Watchdog' handle is supplied, the worker bumps the
+-- per-thread liveness counter after each successful apply. Tests
+-- pass 'Nothing' so the loop runs unwatched.
 runLedgerWorkerWith
   :: Maybe AppTracer
   -> WorkerHooks blk
+  -> Maybe Watchdog
   -> TBQueue blk
   -> Strict.StrictTMVar IO EpochNo                   -- ^ epochReady (out)
   -> Strict.StrictTMVar IO EpochNo                   -- ^ epochWait  (in)
   -> IO ()
-runLedgerWorkerWith mTracer hooks queue epochReady epochWait =
+runLedgerWorkerWith mTracer hooks mWatchdog queue epochReady epochWait =
   loop `catch` \(e :: SomeException) -> do
     for_ mTracer $ \tracer ->
       traceWith tracer $ LogMsg Error "LedgerWorker"
@@ -147,9 +179,13 @@ runLedgerWorkerWith mTracer hooks queue epochReady epochWait =
     throwIO e
   where
     loop = forever $ do
+      for_ mWatchdog $ \wd -> setWorkerNote wd "worker: readTBQueue (waiting for block)"
       blk <- atomically $ readTBQueue queue
       sd  <- whGetSlotDetails hooks blk
       (result, _tookSnap) <- whApplyAndSnapshot hooks blk sd
+
+      -- Watchdog bump: one applied block.
+      for_ mWatchdog $ \wd -> bumpWorker wd (sdSlotNo sd)
 
       -- Signal epoch boundary if the apply call detected one.
       case apNewEpoch result of

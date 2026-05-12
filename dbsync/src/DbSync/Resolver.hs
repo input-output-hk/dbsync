@@ -63,10 +63,21 @@ data IdResolver m = IdResolver
     -- UTxO extractor IDs
     -- ---------------------------------------------------------------
 
-    -- | Resolve an address by its raw bytes.
-    -- Returns @(AddressId, isNew)@. When @isNew = True@, the caller
-    -- should also write the 'Address' row via the 'Writer'.
-  , resolveAddress         :: !(ByteString -> Address -> m (AddressId, Bool))
+    -- | Record a tx_out's address for off-thread resolution.
+    --
+    -- The caller passes the @tx_out.id@ that has just been (or is
+    -- about to be) written, the raw address bytes, and the
+    -- precomputed 'Address' row (with Bech32 text, has-script flag,
+    -- payment credential, and any resolved @stake_address_id@).
+    --
+    -- During Ingest the 'AddressResolver' worker consumes the
+    -- per-epoch buffer one epoch later and fills @tx_out.address_id@
+    -- and the @address@ table accordingly. During Follow the
+    -- implementation resolves the FK synchronously (LRU + DB).
+  , recordTxOutAddress           :: !(TxOutId -> ByteString -> Address -> m ())
+
+    -- | As 'recordTxOutAddress' but for @collateral_tx_out@.
+  , recordCollateralTxOutAddress :: !(CollateralTxOutId -> ByteString -> Address -> m ())
 
     -- | Assign the next tx_in ID.
   , assignTxInId           :: !(m TxInId)

@@ -53,7 +53,7 @@ spec = describe "runLedgerWorkerWith" $ do
     epochWait   <- Strict.newEmptyTMVarIO
     callsRef    <- newIORef (0 :: Int)
     workerThread <- async $
-      runLedgerWorkerWith Nothing (countingHooks callsRef Nothing)
+      runLedgerWorkerWith Nothing (countingHooks callsRef Nothing) Nothing
         queue epochReady epochWait
 
     -- Push three "blocks". The fake hook treats any value that
@@ -81,7 +81,7 @@ spec = describe "runLedgerWorkerWith" $ do
         onEpochAt2 _ = SMaybe.Nothing
 
     workerThread <- async $
-      runLedgerWorkerWith Nothing (countingHooks callsRef (Just onEpochAt2))
+      runLedgerWorkerWith Nothing (countingHooks callsRef (Just onEpochAt2)) Nothing
         queue epochReady epochWait
 
     atomically $ do
@@ -101,7 +101,7 @@ spec = describe "runLedgerWorkerWith" $ do
     epochWait   <- Strict.newEmptyTMVarIO
     callsRef    <- newIORef (0 :: Int)
     workerThread <- async $
-      runLedgerWorkerWith Nothing (countingHooks callsRef Nothing)
+      runLedgerWorkerWith Nothing (countingHooks callsRef Nothing) Nothing
         queue epochReady epochWait
 
     -- No blocks pushed; the worker is blocked on the queue.
@@ -147,7 +147,6 @@ mkApplyResult ne =
     , apGovExpiresAfter = SMaybe.Nothing
     , apPoolsRegistered = Set.empty
     , apNewEpoch        = ne
-    , apOldLedger       = SMaybe.Nothing
     , apDeposits        = SMaybe.Nothing
     , apSlotDetails     = dummySlotDetails
     , apStakeSlice      = Generic.NoSlices

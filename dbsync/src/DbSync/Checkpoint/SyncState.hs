@@ -59,6 +59,7 @@ import DbSync.Id.DedupMap
   , insertExisting
   , newMaps
   )
+import DbSync.Util.DedupHash (hashDedupKey)
 
 -- ---------------------------------------------------------------------------
 -- * Connection lifecycle
@@ -185,13 +186,16 @@ populateSingle ctrl tableName keyCol dm = do
   forM_ rows $ \(rowId, key) ->
     insertExisting (SBS.toShort key) rowId dm
 
--- | Populate the multi-asset dedup map; key is @policy ++ name@.
+-- | Populate the multi-asset dedup map. Keys must match the form
+-- written by 'DbSync.Extractor.SharedDedup.resolveAndWriteMultiAsset'
+-- (Blake2b-224 of @policy ++ name@), otherwise a resumed run will
+-- allocate fresh ids for already-known assets.
 populateMultiAsset :: HasCallStack => ControlConnection -> DedupMap -> IO ()
 populateMultiAsset ctrl dm = do
   rows <- runStmt "rebuildDedupMaps[multi_asset]" ctrl ()
             selectMultiAssetDedupStmt
   forM_ rows $ \(rowId, policy, name) ->
-    insertExisting (SBS.toShort policy <> SBS.toShort name) rowId dm
+    insertExisting (hashDedupKey (policy <> name)) rowId dm
 
 -- ---------------------------------------------------------------------------
 -- * Internal: statement runner

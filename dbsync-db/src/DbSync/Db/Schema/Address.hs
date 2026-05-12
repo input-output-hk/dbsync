@@ -81,7 +81,7 @@ addressTableDef = TableDef
       , ColumnDef "stake_address_id" PgBigInt True
       ]
   , tdMode    = TableUnlogged
-  , tdPrimaryKey     = Nothing
+  , tdPrimaryKey     = Just ["id"]
   , tdChecks         = []
   , tdColumnDefaults = []
   , tdUniqueConstraints = [pure "raw"]

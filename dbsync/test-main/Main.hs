@@ -51,9 +51,11 @@ import qualified DbSync.Schema.SyncStateSpec as SchemaSyncStateSpec
 import qualified DbSync.StateQuery.ObservedSummarySpec as ObservedSummarySpec
 import qualified DbSync.Block.MetadataSpec as BlockMetadataSpec
 import qualified DbSync.Util.Bech32Spec as UtilBech32Spec
+import qualified DbSync.Util.DedupHashSpec as UtilDedupHashSpec
 
 -- Property tests
 import qualified DbSync.PropertySpec as PropertySpec
+import qualified DbSync.Resolver.AddressWorkerSpec as AddressWorkerSpec
 
 -- Database integration
 import qualified DbSync.Checkpoint.ManagerSpec as CheckpointManagerSpec
@@ -101,7 +103,9 @@ main = hspec $ do
     SchemaSyncStateSpec.spec
     ObservedSummarySpec.spec
     UtilBech32Spec.spec
+    UtilDedupHashSpec.spec
     BlockMetadataSpec.spec
+    AddressWorkerSpec.spec
 
   describe "Property tests" $
     PropertySpec.spec

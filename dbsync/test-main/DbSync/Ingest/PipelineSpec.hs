@@ -30,6 +30,7 @@ import DbSync.Extractor (ExtractorDef (..), freshExtractState)
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Id.DedupMap (newMaps)
 import DbSync.Ingest.Pipeline (processBlock)
+import DbSync.Resolver.AddressBuffer (newAddressBufferRef)
 import DbSync.Resolver.Ingest (mkIngestResolver)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import DbSync.Writer.Testing (TestWriterState (..), emptyTestWriterState, mkTestWriter)
@@ -110,8 +111,9 @@ runPipeline :: [ExtractorDef] -> GenericBlock -> IO TestWriterState
 runPipeline extractors block = do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
+  addrBuf <- newAddressBufferRef
   wrRef <- newIORef emptyTestWriterState
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf)
                               (mkTestWriter wrRef) extractors
   runReaderT (processBlock block) env
   readIORef wrRef
@@ -120,7 +122,8 @@ runPipelineTwoBlocks :: [ExtractorDef] -> GenericBlock -> GenericBlock -> IO (Te
 runPipelineTwoBlocks extractors block1 block2 = do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
-  let resolver = mkIngestResolver stRef dedupMaps
+  addrBuf <- newAddressBufferRef
+  let resolver = mkIngestResolver stRef dedupMaps addrBuf
 
   wrRef1 <- newIORef emptyTestWriterState
   let env1 = mkTestPipelineEnv resolver (mkTestWriter wrRef1) extractors

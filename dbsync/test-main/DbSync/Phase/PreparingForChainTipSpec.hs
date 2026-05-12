@@ -102,6 +102,7 @@ import DbSync.Extractor.UTxO (utxoExtractor)
 import DbSync.Id.DedupMap (newMaps)
 import DbSync.Ingest.Pipeline (processBlock)
 import qualified DbSync.Phase.PreparingForChainTip as Prep
+import DbSync.Resolver.AddressBuffer (newAddressBufferRef)
 import DbSync.Resolver.Ingest (mkIngestResolver)
 import DbSync.Test.Database
   ( queryTestDb
@@ -181,8 +182,9 @@ runPipelineThenPrepare :: [GenericBlock] -> IO ()
 runPipelineThenPrepare blocks = do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
+  addrBuf <- newAddressBufferRef
   cw <- mkCopyWriter testConnBs tables
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf)
                               (mkCopyWriterAdapter cw) extractors
   for_ blocks $ \blk -> runReaderT (processBlock blk) env
   cwCommit cw

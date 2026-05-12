@@ -8,6 +8,10 @@ module DbSync.Db.Statement.CollateralTxOut
   ( -- * Inserts
     insertCollateralTxOutRowStmt
 
+    -- * Updates
+  , updateCollateralTxOutAddressIdStmt
+  , bulkUpdateCollateralTxOutAddressIdsStmt
+
     -- * ID allocation
   , nextCollateralTxOutIdStmt
   ) where
@@ -20,7 +24,7 @@ import qualified Hasql.Decoders as D
 import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
-import DbSync.Db.Schema.Ids (CollateralTxOutId (..), idDecoder, idEncoder)
+import DbSync.Db.Schema.Ids (AddressId (..), CollateralTxOutId (..), idDecoder, idEncoder)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Schema.UTxO
   ( CollateralTxOut
@@ -42,6 +46,31 @@ insertCollateralTxOutRowStmt =
       , " ( id, tx_id, index, address_id, stake_address_id, value"
       , " , data_hash, multi_assets_descr, inline_datum_id, reference_script_id)"
       , " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
+      ]
+
+-- | Fill in @collateral_tx_out.address_id@ for an existing row.
+updateCollateralTxOutAddressIdStmt :: Stmt.Statement (AddressId, CollateralTxOutId) ()
+updateCollateralTxOutAddressIdStmt =
+  Stmt.preparable sql encoder D.noResult
+  where
+    encoder = (fst >$< idEncoder getAddressId)
+           <> (snd >$< idEncoder getCollateralTxOutId)
+    sql = "UPDATE " <> table <> " SET address_id = $1 WHERE id = $2"
+
+-- | Bulk-update @collateral_tx_out.address_id@. Same shape as
+-- 'DbSync.Db.Statement.TxOut.bulkUpdateTxOutAddressIdsStmt'; one
+-- round-trip regardless of input size.
+bulkUpdateCollateralTxOutAddressIdsStmt :: Stmt.Statement ([Int64], [Int64]) ()
+bulkUpdateCollateralTxOutAddressIdsStmt =
+  Stmt.preparable sql encoder D.noResult
+  where
+    int8Array = E.param (E.nonNullable (E.foldableArray (E.nonNullable E.int8)))
+    encoder = (fst >$< int8Array)    -- collateral_tx_out ids
+           <> (snd >$< int8Array)    -- address ids
+    sql = T.concat
+      [ "UPDATE ", table, " SET address_id = u.aid"
+      , " FROM unnest($1, $2) AS u(out_id, aid)"
+      , " WHERE ", table, ".id = u.out_id"
       ]
 
 nextCollateralTxOutIdStmt :: Stmt.Statement () CollateralTxOutId

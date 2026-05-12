@@ -396,7 +396,6 @@ data ApplyResult = ApplyResult
     -- ^ Pool registrations observed __before__ the block was applied.
   , apNewEpoch        :: !(Strict.Maybe Generic.NewEpoch)
     -- ^ Only 'Just' for the first block of a new epoch.
-  , apOldLedger       :: !(Strict.Maybe CardanoLedgerState)
   , apDeposits        :: !(Strict.Maybe Generic.Deposits)
   , apSlotDetails     :: !SlotDetails
   , apStakeSlice      :: !Generic.StakeSliceRes
@@ -414,7 +413,6 @@ defaultApplyResult slotDetails =
     , apGovExpiresAfter = Strict.Nothing
     , apPoolsRegistered = Set.empty
     , apNewEpoch        = Strict.Nothing
-    , apOldLedger       = Strict.Nothing
     , apDeposits        = Strict.Nothing
     , apSlotDetails     = slotDetails
     , apStakeSlice      = Generic.NoSlices

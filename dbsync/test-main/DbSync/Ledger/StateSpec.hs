@@ -64,7 +64,6 @@ spec = do
             , apGovExpiresAfter = Strict.Nothing
             , apPoolsRegistered = Set.empty
             , apNewEpoch        = mEpoch
-            , apOldLedger       = Strict.Nothing
             , apDeposits        = Strict.Nothing
             , apSlotDetails     = dummySlotDetails
             , apStakeSlice      = Generic.NoSlices

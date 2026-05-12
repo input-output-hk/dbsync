@@ -91,10 +91,10 @@ epochSyncStatsTableDef = TableDef
       , ColumnDef "phase"            PgText      False
       ]
   , tdMode    = TableUnlogged
-  , tdPrimaryKey     = Nothing
+  , tdPrimaryKey     = Just ["id"]
   , tdChecks         = []
   , tdColumnDefaults = []
-  , tdUniqueConstraints = []
+  , tdUniqueConstraints = [pure "epoch_no"]
   , tdGeneratedColumns = []
   }
 

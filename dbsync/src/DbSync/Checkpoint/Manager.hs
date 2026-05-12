@@ -54,19 +54,25 @@ commitEpoch cw controlConn newRow = do
   cwReopen cw
 
 -- | Build a 'SyncStateRow' from the boundary block's
--- @(slot, blockNo, hash)@, the current 'IdCounters' snapshot, and
--- the run-time configuration. 'ssrLastSnapshotSlot' and
--- 'ssrSyncComplete' are left at their identity values; the
--- @writeSyncState@ encoder ignores those columns.
+-- @(slot, blockNo, hash)@, the current 'IdCounters' snapshot, the
+-- address-resolver's in-process address counter, and the run-time
+-- configuration. 'ssrLastSnapshotSlot' and 'ssrSyncComplete' are left
+-- at their identity values; the @writeSyncState@ encoder ignores
+-- those columns.
+--
+-- The address counter is passed in separately because it lives on the
+-- 'DbSync.Resolver.AddressWorker.AddressResolver' (the worker is the
+-- sole allocator of @address.id@) rather than in 'IdCounters'.
 mkBoundarySyncStateRow
   :: Word64        -- ^ Last committed slot (boundary block's slot)
   -> Word64        -- ^ Last committed block number
   -> ByteString    -- ^ Last committed block header hash
   -> IdCounters
+  -> Int64         -- ^ Next @address.id@ from the address resolver
   -> Int           -- ^ Schema version applied
   -> Bool          -- ^ @ledger.enabled@ from config
   -> SyncStateRow
-mkBoundarySyncStateRow slotNo blockNo blockHash counters schemaVersion ledgerEnabled =
+mkBoundarySyncStateRow slotNo blockNo blockHash counters addressIdCounter schemaVersion ledgerEnabled =
   SyncStateRow
     { ssrLastCommittedSlot             = Just slotNo
     , ssrLastCommittedBlockNo          = Just blockNo
@@ -82,7 +88,7 @@ mkBoundarySyncStateRow slotNo blockNo blockHash counters schemaVersion ledgerEna
     , ssrMaTxMintIdCounter             = icNext (icMaTxMintId         counters)
     , ssrMaTxOutIdCounter              = icNext (icMaTxOutId          counters)
     , ssrSlotLeaderIdCounter           = icNext (icSlotLeaderId       counters)
-    , ssrAddressIdCounter              = icNext (icAddressId          counters)
+    , ssrAddressIdCounter              = addressIdCounter
     , ssrStakeAddressIdCounter         = icNext (icStakeAddressId     counters)
     , ssrPoolHashIdCounter             = icNext (icPoolHashId         counters)
     , ssrMultiAssetIdCounter           = icNext (icMultiAssetId       counters)

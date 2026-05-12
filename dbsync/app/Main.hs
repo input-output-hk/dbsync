@@ -72,10 +72,13 @@ import DbSync.Phase.Boot
   , mkCardanoPoint
   , renderBootError
   )
+import DbSync.Resolver.AddressBuffer (newAddressBufferRef)
+import DbSync.Resolver.AddressWorker (awaitDrained, closeAddressResolver, mkAddressResolver)
 import DbSync.Resolver.Ingest (mkIngestResolver)
 import DbSync.StateQuery (newStateQueryVar, seedInterpreterFromLedgerState)
 import DbSync.Trace.Backend (mkStdErrTracer)
 import DbSync.Trace.Types (LogMsg (..), Severity (..))
+import DbSync.Watchdog (newWatchdog, runWatchdog)
 import DbSync.Writer.CopyAdapter (mkCopyWriterAdapter)
 
 import qualified Data.Text as T
@@ -276,7 +279,7 @@ main = do
   -- resumes, where the receiver intersects at the snapshot slot
   -- (≤ last_committed_slot) and the consumer must skip the replay
   -- window.
-  (initialExtractState, dedupMaps, intersectReq, replayBoundary, replayStart) <- case bootDecision of
+  (initialExtractState, dedupMaps, intersectReq, replayBoundary, replayStart, initialAddressId) <- case bootDecision of
     BootFresh -> do
       case hasLedgerEnv of
         LedgerEnabled lenv -> do
@@ -284,7 +287,7 @@ main = do
           initLedgerDbFromGenesis lenv
         LedgerDisabled _ -> pure ()
       maps <- newMaps
-      pure (mkInitState, maps, IntersectGenesis, Nothing, Nothing)
+      pure (mkInitState, maps, IntersectGenesis, Nothing, Nothing, 1)
 
     BootResume rc -> do
       let row = rcSyncState rc
@@ -341,6 +344,7 @@ main = do
         , intersectReq
         , replayBs
         , replaySt
+        , ssrAddressIdCounter row
         )
 
     BootFollowingFastPath _ ->
@@ -355,8 +359,11 @@ main = do
   copyWriter    <- mkCopyWriter connStr tableDefs
   blockQueue    <- newTBQueueIO 500
   receiverStats <- newReceiverStats
+  watchdog      <- newWatchdog
+  addrBuffer    <- newAddressBufferRef
+  addrResolver  <- mkAddressResolver tracer hasqlSettings initialAddressId
 
-  let resolver = mkIngestResolver stRef dedupMaps
+  let resolver = mkIngestResolver stRef dedupMaps addrBuffer
       writer   = mkCopyWriterAdapter copyWriter
 
   let ingestEnv = IngestEnv
@@ -364,6 +371,8 @@ main = do
         , ieBlockQueue              = blockQueue
         , ieCopyWriter              = copyWriter
         , ieDedupMaps               = dedupMaps
+        , ieAddressBuffer           = addrBuffer
+        , ieAddressResolver         = addrResolver
         , ieHasLedgerEnv            = hasLedgerEnv
         , ieStateQueryVar           = stateQueryVar
         , ieSystemStart             = systemStart
@@ -374,6 +383,7 @@ main = do
         , ieControlConnection       = consumerCtrlConn
         , ieLastCommittedSlotAtBoot = replayBoundary
         , ieReplayStartSlot         = replayStart
+        , ieWatchdog                = watchdog
         }
 
   -- 13. Start block reception + consumer (+ ledger worker if enabled)
@@ -386,6 +396,13 @@ main = do
             cwCommit copyWriter `catch` \(e :: SomeException) ->
               logError $ "Error during final commit: " <> show e
             closeCopyWriter copyWriter
+            logInfo "Draining address resolver..."
+            awaitDrained addrResolver `catch` \(e :: SomeException) ->
+              logError $ "Error draining address resolver: " <> show e
+            logInfo "Stopping address resolver..."
+            closeAddressResolver addrResolver
+              `catch` \(e :: SomeException) ->
+                logError $ "Error closing address resolver: " <> show e
             logInfo "Closing consumer control connection..."
             closeControlConnection consumerCtrlConn
               `catch` \(e :: SomeException) ->
@@ -406,18 +423,32 @@ main = do
   -- propagates here and brings the app down with a visible stack trace,
   -- instead of leaving us hung on a queue while the worker has died
   -- silently.
+  --
+  -- The watchdog is started under every case so it can flag a hang
+  -- regardless of which sub-thread is stuck. It only logs (no
+  -- side-effects on the pipeline), so a crash inside it should be
+  -- visible but recoverable; 'link'ing it means a watchdog bug would
+  -- bring the app down loudly rather than silently degrading visibility.
+  let mLedgerQueue = case hasLedgerEnv of
+        LedgerEnabled lenv -> Just (leLedgerQueue lenv)
+        LedgerDisabled _   -> Nothing
+      mAppliedQueue = case hasLedgerEnv of
+        LedgerEnabled lenv -> Just (leAppliedQueue lenv)
+        LedgerDisabled _   -> Nothing
   withIOManager $ \iomgr ->
-    withAsync (runAppM ingestEnv $ connectToNode iomgr topLevelCfg networkMagic (caSocketPath args) intersectReq) $ \nodeThread -> do
-      link nodeThread
-      case hasLedgerEnv of
-        LedgerEnabled lenv ->
-          withAsync (runAppM lenv (runLedgerWorker replayBoundary stateQueryVar)) $ \workerThread -> do
-            link workerThread
-            withAsync (runLedgerStateWriteThread hasLedgerEnv) $ \snapWriter -> do
-              link snapWriter
-              runIngestPipeline iomgr
-        LedgerDisabled _ ->
-          runIngestPipeline iomgr
+    withAsync (runWatchdog tracer watchdog blockQueue mLedgerQueue mAppliedQueue) $ \watchdogThread -> do
+      link watchdogThread
+      withAsync (runAppM ingestEnv $ connectToNode iomgr topLevelCfg networkMagic (caSocketPath args) intersectReq) $ \nodeThread -> do
+        link nodeThread
+        case hasLedgerEnv of
+          LedgerEnabled lenv ->
+            withAsync (runAppM lenv (runLedgerWorker replayBoundary stateQueryVar watchdog)) $ \workerThread -> do
+              link workerThread
+              withAsync (runLedgerStateWriteThread hasLedgerEnv) $ \snapWriter -> do
+                link snapWriter
+                runIngestPipeline iomgr
+          LedgerDisabled _ ->
+            runIngestPipeline iomgr
 
 -- | Turn a 'ResumeContext' into the receiver's intersection
 -- requirement. Mirrors upstream cardano-db-sync's

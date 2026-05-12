@@ -12,9 +12,11 @@ module DbSync.Extractor.UTxO
   ( utxoExtractor
 
     -- * Internal helpers (exported for tests)
+  , extractPaymentCred
   , extractStakeCred
   , mkAddress
   , mkTxOut
+  , rawHasScript
   ) where
 
 import Cardano.Prelude
@@ -47,6 +49,7 @@ utxoExtractor = ExtractorDef
       , txOutTableDef
       , txInTableDef
       , collateralTxInTableDef
+      , collateralTxOutTableDef
       , referenceTxInTableDef
       ]
   , pdProcess      = processUTxO
@@ -66,14 +69,23 @@ processUTxO resolver writer ctx = do
 
     if G.txValidContract gtx
       then do
-        -- Pipeline pre-resolves @stakeIds@ so the address row and the
-        -- tx_out row share the same StakeAddressId.
+        -- Pipeline pre-resolves @stakeIds@ so the address record and
+        -- the tx_out row share the same StakeAddressId.
+        --
+        -- Each output appends its raw address + derived fields to the
+        -- per-epoch address buffer via 'recordTxOutAddress'; the
+        -- background 'AddressResolver' worker fills in
+        -- @tx_out.address_id@ an epoch later.
         forM_ (zip3 outIds stakeIds (txOutputs gtx)) $ \(outId, mStakeId, gout) -> do
-          let addr = mkAddress mStakeId gout
-          (addrId, isNew) <- resolveAddress resolver (G.txOutAddressRaw gout) addr
-          when isNew $ writeAddress writer addrId addr
-          let txOut = mkTxOut txId addrId mStakeId gout
-          writeTxOut writer outId txOut
+          let raw  = G.txOutAddressRaw gout
+              addr = mkAddress mStakeId gout
+          -- Write the tx_out row with @address_id = Nothing@ first,
+          -- then hand the (id, raw, derived) tuple to the resolver.
+          -- The Follow resolver runs an UPDATE to fill in @address_id@
+          -- synchronously; the Ingest resolver appends the tuple to
+          -- a per-epoch buffer the worker drains an epoch later.
+          writeTxOut writer outId (mkTxOut txId Nothing mStakeId gout)
+          recordTxOutAddress resolver outId raw addr
 
         forM_ (txInputs gtx) $ \gin -> do
           inId <- assignTxInId resolver
@@ -90,10 +102,10 @@ processUTxO resolver writer ctx = do
         forM_ (txCollateralOutput gtx) $ \gout -> do
           outId <- assignCollateralTxOutId resolver
           mStakeId <- resolveCollateralStake gout
-          let addr = mkAddress mStakeId gout
-          (addrId, isNew) <- resolveAddress resolver (G.txOutAddressRaw gout) addr
-          when isNew $ writeAddress writer addrId addr
-          writeCollateralTxOut writer outId (mkCollateralTxOut txId addrId mStakeId gout)
+          let raw  = G.txOutAddressRaw gout
+              addr = mkAddress mStakeId gout
+          writeCollateralTxOut writer outId (mkCollateralTxOut txId Nothing mStakeId gout)
+          recordCollateralTxOutAddress resolver outId raw addr
 
     -- Collateral inputs are written for every tx — valid txs record them
     -- as a script-witness commitment, failed txs record them as the
@@ -123,11 +135,11 @@ mkAddress mStakeId gout = Address
   , addressStakeAddressId = mStakeId
   }
 
-mkTxOut :: TxId -> AddressId -> Maybe StakeAddressId -> G.GenericTxOut -> TxOut
+mkTxOut :: TxId -> Maybe AddressId -> Maybe StakeAddressId -> G.GenericTxOut -> TxOut
 mkTxOut txId addrId mStakeId gout = TxOut
   { txOutTxId              = txId
   , txOutIndex             = fromIntegral (G.txOutIndex gout)
-  , txOutAddressId         = addrId
+  , txOutAddressId         = addrId  -- 'Nothing' until the AddressResolver worker fills it in
   , txOutStakeAddressId    = mStakeId
   , txOutValue             = DbLovelace (G.txOutValue gout)
   , txOutDataHash          = G.txOutDataHash gout
@@ -162,11 +174,11 @@ mkReferenceTxIn txId gin = ReferenceTxIn
   }
 
 mkCollateralTxOut
-  :: TxId -> AddressId -> Maybe StakeAddressId -> G.GenericTxOut -> CollateralTxOut
+  :: TxId -> Maybe AddressId -> Maybe StakeAddressId -> G.GenericTxOut -> CollateralTxOut
 mkCollateralTxOut txId addrId mStakeId gout = CollateralTxOut
   { collateralTxOutTxId              = txId
   , collateralTxOutIndex             = fromIntegral (G.txOutIndex gout)
-  , collateralTxOutAddressId         = addrId
+  , collateralTxOutAddressId         = addrId  -- 'Nothing' until the AddressResolver worker fills it in
   , collateralTxOutStakeAddressId    = mStakeId
   , collateralTxOutValue             = DbLovelace (G.txOutValue gout)
   , collateralTxOutDataHash          = G.txOutDataHash gout
@@ -192,16 +204,26 @@ rawHasScript bs
       let header = BS.head bs
       in (header .&. 0x10) /= 0  -- bit 4 set = script address
 
--- | Extract the payment credential (first 28 bytes after header)
--- from a Shelley+ address. Returns Nothing for Byron addresses.
+-- | Extract the 28-byte payment credential from a Shelley address
+-- (bytes 1..28 after the header).
+--
+-- Returns 'Just' for the eight Shelley address types that carry a
+-- payment credential (base/pointer/enterprise, header high nibble
+-- 0x0..0x7), and 'Nothing' for everything else:
+--
+--   * Byron raws — CBOR-wrapped, not Shelley header+payload, so
+--     bytes 1..28 would be CBOR-frame bytes rather than a credential.
+--   * Reward addresses (0xE0/0xF0) — those bytes are the stake hash,
+--     not a payment credential.
+--   * Anything shorter than 29 bytes.
 extractPaymentCred :: ByteString -> Maybe ByteString
 extractPaymentCred bs
-  | BS.length bs < 29 = Nothing  -- Too short for Shelley address
+  | BS.length bs < 29 = Nothing
   | otherwise =
-      let header = BS.head bs
-      in if header .&. 0xE0 == 0x00  -- Byron address type
-         then Nothing
-         else Just $ BS.take 28 (BS.drop 1 bs)
+      let typeBits = BS.head bs .&. 0xF0
+      in if typeBits <= 0x70
+           then Just (BS.take 28 (BS.drop 1 bs))
+           else Nothing
 
 -- | Extract the inline 28-byte stake credential from a Shelley address.
 --

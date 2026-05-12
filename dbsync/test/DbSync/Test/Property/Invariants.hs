@@ -50,6 +50,7 @@ import DbSync.Block.Parser (parseBlock)
 import DbSync.Extractor (ExtractorDef, freshExtractState)
 import DbSync.Id.DedupMap (DedupMaps, newMaps)
 import DbSync.Ingest.Pipeline (processBlock)
+import DbSync.Resolver.AddressBuffer (newAddressBufferRef)
 import DbSync.Resolver.Ingest (mkIngestResolver)
 import DbSync.StateQuery.Types (SlotDetails (..))
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
@@ -78,8 +79,9 @@ runPureExtractMany
 runPureExtractMany extractors blocks = do
   stRef     <- newIORef freshExtractState
   dedupMaps <- newMaps :: IO DedupMaps
+  addrBuf   <- newAddressBufferRef
   ref       <- newIORef emptyTestWriterState
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf)
                               (mkTestWriter ref) extractors
   for_ blocks $ \block -> do
     let sd        = syntheticSlotDetails (blockSlot block)

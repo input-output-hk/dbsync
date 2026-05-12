@@ -44,6 +44,7 @@ import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Id.DedupMap (newMaps)
 import DbSync.Ingest.Pipeline (processBlock)
 import DbSync.Phase (SyncPhase (..))
+import DbSync.Resolver.AddressBuffer (newAddressBufferRef)
 import DbSync.Resolver.Ingest (mkIngestResolver)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnvWith)
 import DbSync.Writer.Testing (TestWriterState (..), emptyTestWriterState, mkTestWriter)
@@ -91,9 +92,10 @@ runWith :: BlockLedgerData -> GenericBlock -> IO TestWriterState
 runWith bld block = do
   stRef <- newIORef freshExtractState
   dedup <- newMaps
+  addrBuf <- newAddressBufferRef
   wrRef <- newIORef emptyTestWriterState
   let env = mkTestPipelineEnvWith Mainnet
-              (mkIngestResolver stRef dedup) (mkTestWriter wrRef)
+              (mkIngestResolver stRef dedup addrBuf) (mkTestWriter wrRef)
               [coreExtractor, stakeDelegationExtractor]
               (\_ -> pure bld) IngestChainHistory
   runReaderT (processBlock block) env

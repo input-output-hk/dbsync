@@ -38,6 +38,7 @@ module DbSync.Ingest.Consumer
 
     -- * Queue utilities
   , drainTBQueue
+  , drainAppliedQueue
 
     -- * Replay-progress logging (exported for tests)
   , ReplayLogState (..)
@@ -58,14 +59,17 @@ import Control.Concurrent.STM (TBQueue, readTBQueue, tryReadTBQueue)
 import Control.Tracer (traceWith)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import qualified Data.Strict.Maybe as SMaybe
+import qualified Data.Text as Text
 import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime, NominalDiffTime)
+import GHC.Stats (RTSStats (..), GCDetails (..), getRTSStats, getRTSStatsEnabled)
 import System.Mem (performMajorGC)
 import Text.Printf (printf)
 
 import DbSync.AppM (IngestM)
 import DbSync.Block.Parser (parseBlock)
 import DbSync.Block.Types (GenericBlock (..))
-import DbSync.Checkpoint.Manager (commitEpoch, mkBoundarySyncStateRow)
+import DbSync.Checkpoint.Manager (mkBoundarySyncStateRow)
+import DbSync.Checkpoint.SyncState (writeSyncState)
 import DbSync.Config.Types (LedgerConfig (..), SyncConfig (..))
 import DbSync.Copy.Writer (CopyWriter (..))
 import DbSync.Db.Schema.EpochSyncStats (EpochSyncStats (..), SyncPhase (..))
@@ -73,6 +77,7 @@ import DbSync.Db.Schema.Ids (BlockId (..))
 import DbSync.Env (HasConfig (..), IngestEnv (..))
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Extractor.EpochBoundary (runEpochBoundary)
+import DbSync.Id.DedupMap (dedupMapSizes)
 import DbSync.Ingest.Pipeline (processBlock)
 import DbSync.Ingest.ReceiverStats (EpochSnapshot (..), readAndResetEpoch)
 import DbSync.Ledger.Types
@@ -81,6 +86,13 @@ import DbSync.Ledger.Types
   , LedgerEnv (..)
   )
 import DbSync.Resolver (IdResolver (..))
+import DbSync.Resolver.AddressBuffer (takeAndReset)
+import DbSync.Resolver.AddressWorker
+  ( ResolveJob (..)
+  , awaitDrained
+  , enqueueResolveJob
+  , readAddressIdCounter
+  )
 import DbSync.StateQuery
   ( ObservationResult (..)
   , ObservedTransition (..)
@@ -91,6 +103,7 @@ import DbSync.StateQuery
   )
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (LogMsg (..), Severity (..))
+import DbSync.Watchdog (bumpConsumer, setConsumerNote)
 import DbSync.Writer (Writer (..))
 
 import Ouroboros.Consensus.Block (blockSlot)
@@ -259,6 +272,47 @@ fmtInt n
     commaJoin [x] = x
     commaJoin (x:xs) = x ++ "," ++ commaJoin xs
 
+-- | Format a @(name, count)@ list as @"name=N1,234 …"@ for log lines.
+renderDedupCounts :: [(Text, Int)] -> Text
+renderDedupCounts = Text.intercalate " " . map one
+  where
+    one (n, c) = n <> "=" <> fmtInt (fromIntegral c)
+
+-- | Sample the GHC runtime's view of memory usage at the moment of call.
+--
+-- Returns @(liveBytes, totalCommittedBytes)@, where:
+--
+--   * @liveBytes@ is the live data after the most recent GC (the
+--     working set GHC actually retains)
+--   * @totalCommittedBytes@ is the largest amount of memory GHC has
+--     committed during the run (closest approximation to peak RSS
+--     attributable to the Haskell heap)
+--
+-- Requires @+RTS -T -RTS@; safe to call from any thread. Returns
+-- 'Nothing' if RTS stats aren't enabled.
+sampleHeapBytes :: IO (Maybe (Word64, Word64))
+sampleHeapBytes = do
+  enabled <- getRTSStatsEnabled
+  if enabled
+    then do
+      s <- getRTSStats
+      pure $ Just (gcdetails_live_bytes (gc s), max_mem_in_use_bytes s)
+    else pure Nothing
+
+-- | Render a byte count as a short human-readable string, e.g.
+-- @123MB@, @1.4GB@.
+fmtBytes :: Word64 -> Text
+fmtBytes b
+  | b >= gib = Text.pack (printf "%.1fGB" (fromIntegral b / fromIntegral gib :: Double))
+  | b >= mib = Text.pack (printf "%dMB"   (b `div` mib))
+  | b >= kib = Text.pack (printf "%dKB"   (b `div` kib))
+  | otherwise = show b <> "B"
+  where
+    kib, mib, gib :: Word64
+    kib = 1024
+    mib = 1024 * 1024
+    gib = 1024 * 1024 * 1024
+
 -- | Format seconds as human-readable duration.
 fmtDuration :: Double -> Text
 fmtDuration secs
@@ -356,9 +410,13 @@ runConsumer = do
       receiverStats <- asks ieReceiverStats
       hasLedger     <- asks ieHasLedgerEnv
       extractStRef  <- asks ieExtractState
+      dedupMaps     <- asks ieDedupMaps
+      addressBuffer <- asks ieAddressBuffer
+      addressResolver <- asks ieAddressResolver
       ctrlConn      <- asks ieControlConnection
       bootSlot      <- asks ieLastCommittedSlotAtBoot
       replayStart   <- asks ieReplayStartSlot
+      watchdog      <- asks ieWatchdog
       cfg           <- asks getConfig
       let ledgerEnabledCfg = lcEnabled (scLedger cfg)
           schemaVersion    = 1 :: Int
@@ -389,10 +447,13 @@ runConsumer = do
               <> " blocks in " <> fmtF2 (realToFrac elapsed :: Double)
               <> "s, resuming COPY at slot " <> show (unSlotNo slot)
 
-      -- Replay-window skip: blocks at slot ≤ bootSlot are already
-      -- in PG (the ledger worker still receives them via the
-      -- separately-fed ledger queue, so the in-RAM ledger catches
-      -- up).
+      -- Drain one leAppliedQueue entry per replayed block; otherwise
+      -- the bounded queue fills and the worker deadlocks.
+      when isReplay $ case hasLedger of
+        LedgerEnabled lenv -> liftIO $ drainAppliedQueue (leAppliedQueue lenv)
+        LedgerDisabled _   -> pure ()
+
+      -- Replayed blocks are already in PG; skip processBlock.
       unless isReplay $ do
         -- Update the observed summary before 'getSlotDetails' so
         -- any era-boundary transition is in scope when the slot
@@ -457,19 +518,50 @@ runConsumer = do
             extractState    <- liftIO $ readIORef extractStRef
             let counters    = esIdCounters extractState
 
-            -- 'commitEpoch' drains COPY queues, advances
-            -- dbsync_sync_state, and reopens streams for the next
-            -- epoch.
+            -- Atomic epoch boundary: flush COPY → enqueue + await the
+            -- address resolver → advance sync_state → reopen streams.
+            -- The order matters: sync_state only advances after the
+            -- worker has resolved every @tx_out.address_id@ FK for
+            -- this epoch, so a crash after this point leaves the DB
+            -- in a fully-resolved state up to @last_committed_slot@.
             commitStart <- liftIO getCurrentTime
-            liftIO $ case mLastBlock of
-              Just (lastSlot, lastBlockNo, lastHash) -> do
-                let row = mkBoundarySyncStateRow
-                            lastSlot lastBlockNo lastHash
-                            counters schemaVersion ledgerEnabledCfg
-                commitEpoch copyWriter ctrlConn row
-              Nothing -> do
-                cwCommit copyWriter
-                cwReopen copyWriter
+            liftIO $ do
+              -- 1. Flush COPY streams — tx_outs durable, address_id = NULL.
+              setConsumerNote watchdog "consumer: cwCommit (flushing COPY)"
+              cwCommit copyWriter
+
+              -- 2. Hand the per-epoch address-resolution buffer to the worker.
+              --    'enqueueResolveJob' blocks if the worker queue is at its
+              --    bound, back-pressuring the main pipeline.
+              setConsumerNote watchdog "consumer: enqueueResolveJob"
+              buf <- takeAndReset addressBuffer
+              enqueueResolveJob addressResolver (ResolveJob prev buf)
+
+              -- 3. Block until the worker has processed all queued jobs.
+              --    After this, every tx_out / collateral_tx_out through
+              --    this epoch has its address_id populated.
+              setConsumerNote watchdog "consumer: awaitDrained (address resolver)"
+              awaitDrained addressResolver
+
+              -- 4. Safe to advance sync_state: COPY data is durable AND
+              --    address_id FKs are resolved. The address counter is
+              --    read from the resolver (not 'counters') because the
+              --    worker is its sole allocator.
+              setConsumerNote watchdog "consumer: writeSyncState"
+              addressIdCounter <- readAddressIdCounter addressResolver
+              case mLastBlock of
+                Just (lastSlot, lastBlockNo, lastHash) -> do
+                  let row = mkBoundarySyncStateRow
+                              lastSlot lastBlockNo lastHash
+                              counters addressIdCounter
+                              schemaVersion ledgerEnabledCfg
+                  writeSyncState ctrlConn row
+                Nothing -> pure ()
+
+              -- 5. Reopen COPY streams for the next epoch.
+              setConsumerNote watchdog "consumer: cwReopen"
+              cwReopen copyWriter
+              setConsumerNote watchdog "consumer: post-commit"
             commitEnd <- liftIO getCurrentTime
             let commitSec :: NominalDiffTime
                 commitSec = diffUTCTime commitEnd commitStart
@@ -507,6 +599,24 @@ runConsumer = do
                 <> " | " <> status
               ) Nothing
 
+            -- Dedup-map size + heap-usage trace: helps diagnose RAM
+            -- growth driven by per-entity hash-table accumulation
+            -- (address, multi_asset, …). 'heap=' is live bytes after
+            -- the most recent GC; 'peak=' is the high-water mark of
+            -- memory GHC has committed (≈ peak heap-attributed RSS,
+            -- once @--disable-delayed-os-memory-return@ is off).
+            dedupCounts <- liftIO $ dedupMapSizes dedupMaps
+            heapInfo    <- liftIO sampleHeapBytes
+            let heapText = case heapInfo of
+                  Just (live, peak) ->
+                    " | heap=" <> fmtBytes live <> " peak=" <> fmtBytes peak
+                  Nothing -> ""
+            liftIO $ traceWith tracer $ LogMsg Info "Dedup"
+              ( "Epoch " <> show (unEpochNo prev)
+                <> " | " <> renderDedupCounts dedupCounts
+                <> heapText
+              ) Nothing
+
             -- Reset for next epoch
             liftIO $ writeIORef statsRef emptyPipelineStats
             liftIO $ writeIORef blockCountRef 0
@@ -514,6 +624,7 @@ runConsumer = do
           _ -> pure ()
 
         -- Run extractors + write to COPY queues
+        liftIO $ setConsumerNote watchdog "consumer: processBlock"
         processBlock genBlock
 
         -- Boundary-block extractor (epoch-table writes that depend
@@ -522,10 +633,12 @@ runConsumer = do
           Just prev | prev /= blockEpoch ->
             case hasLedger of
               LedgerEnabled lenv -> do
+                liftIO $ setConsumerNote watchdog "consumer: waitForApplyResultAt (boundary)"
                 applyResult <- liftIO $ waitForApplyResultAt lenv slot
                 mLastBlockId <- liftIO $ esLastBlockId <$> readIORef extractStRef
                 case mLastBlockId of
-                  Just lastBid ->
+                  Just lastBid -> do
+                    liftIO $ setConsumerNote watchdog "consumer: runEpochBoundary"
                     liftIO $ runEpochBoundary applyResult (BlockId lastBid) resolver writer
                   Nothing -> pure ()
               LedgerDisabled _ ->
@@ -541,6 +654,11 @@ runConsumer = do
           , unBlockNo (blkBlockNo genBlock)
           , blkHash genBlock
           )
+
+      -- Watchdog bump: per iteration, replay or not, so the
+      -- watchdog still sees forward progress during the replay
+      -- window (where 'processBlock' is skipped).
+      liftIO $ bumpConsumer watchdog slot
 
       -- Recurse, whether the block was processed or skipped.
       processBatch prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef rest
@@ -636,3 +754,7 @@ drainTBQueue q maxN = atomically $ do
       case mVal of
         Nothing  -> pure []
         Just val -> (val :) <$> go (n - 1)
+
+-- | Pop and discard one entry from the worker → consumer apply-result queue.
+drainAppliedQueue :: TBQueue ApplyResult -> IO ()
+drainAppliedQueue q = atomically $ void $ readTBQueue q

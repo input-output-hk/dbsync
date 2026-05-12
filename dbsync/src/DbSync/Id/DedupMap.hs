@@ -32,6 +32,8 @@ module DbSync.Id.DedupMap
   , DbSync.Id.DedupMap.lookup
   , insertExisting
   , size
+  , sizeApprox
+  , dedupMapSizes
 
     -- * Introspection (for future checkpoint serialisation)
   , toList
@@ -62,9 +64,8 @@ data DedupMaps = DedupMaps
   { dmsPoolHash     :: !DedupMap  -- ^ pool key hash -> PoolHashId
   , dmsStakeAddress :: !DedupMap  -- ^ stake credential hash -> StakeAddressId
   , dmsSlotLeader   :: !DedupMap  -- ^ slot leader identifier -> SlotLeaderId
-  , dmsMultiAsset   :: !DedupMap  -- ^ (policy_id ++ asset_name) -> MultiAssetId
+  , dmsMultiAsset   :: !DedupMap  -- ^ blake2b-224 (policy_id ++ asset_name) -> MultiAssetId
   , dmsScriptHash   :: !DedupMap  -- ^ script hash -> ScriptId
-  , dmsAddress      :: !DedupMap  -- ^ raw payment address bytes -> AddressId
   }
 
 -- * Construction
@@ -77,7 +78,6 @@ newDedupMap = DedupMap <$> HT.new <*> newIORef 1
 newMaps :: IO DedupMaps
 newMaps = DedupMaps
   <$> newDedupMap
-  <*> newDedupMap
   <*> newDedupMap
   <*> newDedupMap
   <*> newDedupMap
@@ -124,7 +124,32 @@ size dm = do
   entries <- HT.toList (dmTable dm)
   pure (length entries)
 
+-- | O(1) approximate size from the ID counter.
+-- Returns @counter - 1@: exact on a fresh run; on a resumed run where
+-- 'insertExisting' bumped the counter, this is an upper bound (the max
+-- assigned ID). Cheap enough to call at every epoch boundary.
+sizeApprox :: DedupMap -> IO Int
+sizeApprox dm = do
+  cnt <- readIORef (dmCounter dm)
+  pure $ max 0 (fromIntegral cnt - 1)
+
 -- | Dump all entries for serialisation (e.g. checkpoint persistence).
 -- The returned list is in arbitrary order.
 toList :: DedupMap -> IO [(ShortByteString, Int64)]
 toList dm = HT.toList (dmTable dm)
+
+-- | Approximate entry counts for every dedup map, named for log output.
+dedupMapSizes :: DedupMaps -> IO [(Text, Int)]
+dedupMapSizes maps = do
+  pool   <- sizeApprox (dmsPoolHash maps)
+  stake  <- sizeApprox (dmsStakeAddress maps)
+  leader <- sizeApprox (dmsSlotLeader maps)
+  asset  <- sizeApprox (dmsMultiAsset maps)
+  script <- sizeApprox (dmsScriptHash maps)
+  pure
+    [ ("pool",        pool)
+    , ("stake",       stake)
+    , ("slot_leader", leader)
+    , ("multi_asset", asset)
+    , ("script",      script)
+    ]

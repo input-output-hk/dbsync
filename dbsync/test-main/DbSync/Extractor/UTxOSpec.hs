@@ -12,6 +12,7 @@ import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import Data.IORef (newIORef, readIORef)
 
 import qualified Data.ByteString as BS
+import qualified Data.Map.Strict as Map
 
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
@@ -23,16 +24,23 @@ import DbSync.Block.Types
   , GenericTxOut (..)
   )
 import DbSync.Db.Schema.Address (Address (..))
+import DbSync.Db.Schema.Ids (AddressId (..))
 import qualified DbSync.Db.Schema.UTxO as SU
 import DbSync.Extractor (freshExtractState)
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Extractor.UTxO
-  ( extractStakeCred
+  ( extractPaymentCred
+  , extractStakeCred
+  , rawHasScript
   , utxoExtractor
   )
 import DbSync.Id.DedupMap (newMaps)
 import DbSync.Ingest.Pipeline (processBlock)
+import DbSync.Resolver.AddressBuffer
+  ( EpochAddressBuffer (..)
+  , newAddressBufferRef
+  )
 import DbSync.Resolver.Ingest (mkIngestResolver)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import DbSync.Writer.Testing (TestWriterState (..), emptyTestWriterState, mkTestWriter)
@@ -81,6 +89,71 @@ spec = do
 
     it "returns Nothing on an empty input" $
       extractStakeCred BS.empty `shouldBe` Nothing
+
+  describe "extractPaymentCred / Shelley address parser" $ do
+    it "extracts the payment credential from a base key-key address (0x00)" $
+      extractPaymentCred (mkBaseAddr 0x00) `shouldBe` Just paymentCred28
+
+    it "extracts the payment credential from a base script-key address (0x10)" $
+      extractPaymentCred (mkBaseAddr 0x10) `shouldBe` Just paymentCred28
+
+    it "extracts the payment credential from a base key-script address (0x20)" $
+      extractPaymentCred (mkBaseAddr 0x20) `shouldBe` Just paymentCred28
+
+    it "extracts the payment credential from a base script-script address (0x30)" $
+      extractPaymentCred (mkBaseAddr 0x30) `shouldBe` Just paymentCred28
+
+    it "ignores network-id bits (low nibble) when matching the type" $ do
+      -- 0x01 = base key-key on mainnet
+      extractPaymentCred (mkBaseAddr 0x01) `shouldBe` Just paymentCred28
+      extractPaymentCred (mkBaseAddr 0x11) `shouldBe` Just paymentCred28
+
+    it "extracts the payment credential from pointer addresses (0x40, 0x50)" $ do
+      extractPaymentCred (mkBaseAddr 0x40) `shouldBe` Just paymentCred28
+      extractPaymentCred (mkBaseAddr 0x50) `shouldBe` Just paymentCred28
+
+    it "extracts the payment credential from enterprise addresses (0x60, 0x70)" $ do
+      extractPaymentCred (mkBaseAddr 0x60) `shouldBe` Just paymentCred28
+      extractPaymentCred (mkBaseAddr 0x70) `shouldBe` Just paymentCred28
+
+    it "returns Nothing for Byron type-8 headers (0x80)" $
+      extractPaymentCred (mkBaseAddr 0x80) `shouldBe` Nothing
+
+    it "returns Nothing for reward addresses (0xE0, 0xF0)" $ do
+      extractPaymentCred (mkBaseAddr 0xE0) `shouldBe` Nothing
+      extractPaymentCred (mkBaseAddr 0xF0) `shouldBe` Nothing
+
+    it "returns Nothing for Byron CBOR-wrapped raw bytes (start byte 0x82)" $
+      -- Real Byron raws begin with CBOR array marker 0x82, not a Shelley
+      -- header. Bytes 1..28 would be CBOR-frame garbage, not a credential.
+      extractPaymentCred (BS.pack (0x82 : replicate 75 0xcc)) `shouldBe` Nothing
+
+    it "returns Nothing when the address is shorter than 29 bytes" $ do
+      extractPaymentCred (BS.pack [0x00]) `shouldBe` Nothing
+      extractPaymentCred (BS.pack (0x00 : replicate 27 0xaa)) `shouldBe` Nothing
+
+    it "returns Nothing on an empty input" $
+      extractPaymentCred BS.empty `shouldBe` Nothing
+
+  describe "rawHasScript / Shelley address parser" $ do
+    it "returns False for key-payment base addresses (0x00, 0x20)" $ do
+      rawHasScript (mkBaseAddr 0x00) `shouldBe` False
+      rawHasScript (mkBaseAddr 0x20) `shouldBe` False
+
+    it "returns True for script-payment base addresses (0x10, 0x30)" $ do
+      rawHasScript (mkBaseAddr 0x10) `shouldBe` True
+      rawHasScript (mkBaseAddr 0x30) `shouldBe` True
+
+    it "returns False for key-payment pointer/enterprise (0x40, 0x60)" $ do
+      rawHasScript (mkBaseAddr 0x40) `shouldBe` False
+      rawHasScript (mkBaseAddr 0x60) `shouldBe` False
+
+    it "returns True for script-payment pointer/enterprise (0x50, 0x70)" $ do
+      rawHasScript (mkBaseAddr 0x50) `shouldBe` True
+      rawHasScript (mkBaseAddr 0x70) `shouldBe` True
+
+    it "returns False on empty input" $
+      rawHasScript BS.empty `shouldBe` False
 
   describe "processBlock: tx_out.stake_address_id propagation" $ do
     it "populates tx_out.stake_address_id for a base address" $ do
@@ -131,6 +204,23 @@ spec = do
       addressStakeAddressId (snd (headDef (panic "no address") addrs))
         `shouldBe` Nothing
 
+  describe "processBlock: address.payment_cred propagation" $ do
+    it "populates address.payment_cred for a base key-key address (0x00)" $ do
+      written <- runFullPipeline (blockWithOutput (mkBaseAddr 0x00))
+      addressPaymentCred (snd (headDef (panic "no address") (twAddresses written)))
+        `shouldBe` Just paymentCred28
+
+    it "populates address.payment_cred for an enterprise address (0x60)" $ do
+      written <- runFullPipeline (blockWithOutput (mkBaseAddr 0x60))
+      addressPaymentCred (snd (headDef (panic "no address") (twAddresses written)))
+        `shouldBe` Just paymentCred28
+
+    it "leaves address.payment_cred NULL for Byron CBOR-wrapped bytes" $ do
+      let byronRaw = BS.pack (0x82 : replicate 75 0xcc)
+      written <- runFullPipeline (blockWithOutput byronRaw)
+      addressPaymentCred (snd (headDef (panic "no address") (twAddresses written)))
+        `shouldBe` Nothing
+
   describe "processBlock: stake_address dedup across outputs" $ do
     it "two outputs with the same stake cred share one stake_address row" $ do
       written <- runFullPipeline (blockWithTwoOutputsSameStake (mkBaseAddr 0x00))
@@ -175,16 +265,30 @@ spec = do
 -- ---------------------------------------------------------------------------
 
 -- | Run @core@ + @stake_delegation@ + @utxo@ on a single block.
+-- | Run @core@ + @stake_delegation@ + @utxo@ on a single block.
+--
+-- The UTxO extractor records each output's address in the per-epoch
+-- 'EpochAddressBuffer' rather than writing 'Address' rows via the
+-- 'Writer'. To keep assertions on 'twAddresses' meaningful for these
+-- tests, we materialise the buffer's address map into the returned
+-- 'TestWriterState' with synthetic ids in insertion order.
 runFullPipeline :: GenericBlock -> IO TestWriterState
 runFullPipeline block = do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
+  addrBuf <- newAddressBufferRef
   wrRef <- newIORef emptyTestWriterState
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf)
                               (mkTestWriter wrRef)
                               [coreExtractor, stakeDelegationExtractor, utxoExtractor]
   runReaderT (processBlock block) env
-  readIORef wrRef
+  written <- readIORef wrRef
+  buf <- readIORef addrBuf
+  let buffered = zipWith
+        (\i addr -> (AddressId i, addr))
+        [1 ..]
+        (Map.elems (eabAddresses buf))
+  pure written { twAddresses = buffered }
 
 -- ---------------------------------------------------------------------------
 -- Address fixtures

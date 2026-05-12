@@ -58,6 +58,7 @@ import Ouroboros.Network.Block
   , Point
   , Tip (..)
   , blockNo
+  , blockSlot
   , genesisPoint
   , getTipBlockNo
   )
@@ -107,6 +108,7 @@ import DbSync.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..))
 import DbSync.StateQuery (StateQueryVar, localStateQueryHandler)
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
+import DbSync.Watchdog (Watchdog, bumpReceiver)
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -162,6 +164,7 @@ connectToNode iomgr topLevelCfg networkMagic socketPath intersect = do
   blockQueue     <- asks ieBlockQueue
   stateQueryVar  <- asks ieStateQueryVar
   receiverStats  <- asks ieReceiverStats
+  watchdog       <- asks ieWatchdog
   hasLedgerEnv   <- asks ieHasLedgerEnv
   -- The ledger queue only exists in the enabled arm; pattern-matching
   -- it out here keeps blockFetchClient's optional second-target
@@ -179,7 +182,7 @@ connectToNode iomgr topLevelCfg networkMagic socketPath intersect = do
         (supportedNodeToClientVersions (Proxy @(CardanoBlock StandardCrypto)))
         (subscriptionTracers tracer)
         subscriptionParams
-        (nodeProtocols tracer codecConfig blockQueue mLedgerQueue receiverStats stateQueryVar intersect)
+        (nodeProtocols tracer codecConfig blockQueue mLedgerQueue receiverStats watchdog stateQueryVar intersect)
   where
     codecConfig :: CodecConfig (CardanoBlock StandardCrypto)
     codecConfig = configCodec topLevelCfg
@@ -251,12 +254,13 @@ nodeProtocols
   -> TBQueue (CardanoBlock StandardCrypto)
   -> Maybe (TBQueue (CardanoBlock StandardCrypto))
   -> ReceiverStats
+  -> Watchdog
   -> StateQueryVar
   -> IntersectionRequirement
   -> Network.NodeToClientVersion
   -> BlockNodeToClientVersion (CardanoBlock StandardCrypto)
   -> NodeToClientProtocols 'Mux.InitiatorMode LocalAddress BSL.ByteString IO () Void
-nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats stateQueryVar intersect version blockVersion =
+nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats watchdog stateQueryVar intersect version blockVersion =
   NodeToClientProtocols
     { localChainSyncProtocol = chainSyncProtocol
     , localTxSubmissionProtocol = dummyTxSubmit
@@ -275,7 +279,7 @@ nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats stateQ
             (cChainSyncCodec codecs)
             channel
             ( chainSyncClientPeerPipelined $
-                blockFetchClient appTracer blockQueue mLedgerQueue receiverStats intersect
+                blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog intersect
             )
         pure ((), Nothing)
 
@@ -317,6 +321,7 @@ blockFetchClient
   -> TBQueue (CardanoBlock StandardCrypto)            -- ^ Main pipeline queue
   -> Maybe (TBQueue (CardanoBlock StandardCrypto))    -- ^ Optional ledger worker queue
   -> ReceiverStats
+  -> Watchdog
   -> IntersectionRequirement
   -> ChainSyncClientPipelined
        (CardanoBlock StandardCrypto)
@@ -324,7 +329,7 @@ blockFetchClient
        (Tip (CardanoBlock StandardCrypto))
        IO
        ()
-blockFetchClient appTracer blockQueue mLedgerQueue receiverStats intersect =
+blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog intersect =
   ChainSyncClientPipelined $ pure $
     SendMsgFindIntersect
       intersectPoints
@@ -412,6 +417,7 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats intersect =
             when (bnRaw == 1) $
               traceWith appTracer $ LogMsg Info "ChainSync" "Receiving blocks" Nothing
             recordBlockReceived receiverStats
+            bumpReceiver watchdog (blockSlot blk)
             -- Try a non-blocking write first so we can tell whether the
             -- queue was full at the moment of arrival. A non-zero
             -- 'rsWritesBlocked' means the consumer is the bottleneck;

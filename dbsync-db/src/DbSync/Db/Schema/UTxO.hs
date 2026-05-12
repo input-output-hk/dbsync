@@ -77,14 +77,19 @@ type instance Key ReferenceTxIn = ReferenceTxInId
 
 -- | The @tx_out@ table.
 --
--- Address columns are normalised into the @address@ dedup table since
--- commit 4 of @SCHEMA-PLAN.md@; @txOutAddressId@ is the FK that
--- replaces the original inline @address@\/@address_has_script@\/
--- @payment_cred@ trio.
+-- Address columns are normalised into the @address@ dedup table.
+-- @txOutAddressId@ is the FK that replaces the original inline
+-- @address@\/@address_has_script@\/@payment_cred@ trio.
+--
+-- The FK is permanently nullable: 'Nothing' for rows whose owning
+-- epoch hasn't been processed by the 'AddressResolver' worker yet,
+-- 'Just' once the worker fills it in. The schema does not change
+-- between phases — the column stays @NULL@-able forever — which
+-- keeps the on-disk shape stable for downstream consumers.
 data TxOut = TxOut
   { txOutTxId              :: !TxId             -- ^ FK to tx
   , txOutIndex             :: !Word64           -- ^ Output index within the transaction
-  , txOutAddressId         :: !AddressId        -- ^ FK to address (deduped)
+  , txOutAddressId         :: !(Maybe AddressId) -- ^ FK to address (NULL during ingest)
   , txOutStakeAddressId    :: !(Maybe StakeAddressId) -- ^ FK to stake_address (NULL for now)
   , txOutValue             :: !DbLovelace       -- ^ Lovelace value
   , txOutDataHash          :: !(Maybe ByteString) -- ^ Datum hash (Alonzo+)
@@ -129,10 +134,14 @@ data ReferenceTxIn = ReferenceTxIn
 -- the @tx_out@ shape with one addition: @multi_assets_descr@ is a
 -- textual dump of the multi-asset map (the original schema does not
 -- normalise multi-assets on this table).
+--
+-- @collateralTxOutAddressId@ follows the same lifecycle as
+-- 'TxOut.txOutAddressId': permanently nullable, filled in by the
+-- 'AddressResolver' worker an epoch after the row is written.
 data CollateralTxOut = CollateralTxOut
   { collateralTxOutTxId               :: !TxId
   , collateralTxOutIndex              :: !Word64
-  , collateralTxOutAddressId          :: !AddressId
+  , collateralTxOutAddressId          :: !(Maybe AddressId)
   , collateralTxOutStakeAddressId     :: !(Maybe StakeAddressId)
   , collateralTxOutValue              :: !DbLovelace
   , collateralTxOutDataHash           :: !(Maybe ByteString)
@@ -153,7 +162,9 @@ txOutTableDef = TableDef
       [ ColumnDef "id"                  PgBigInt   False
       , ColumnDef "tx_id"               PgBigInt   False
       , ColumnDef "index"               PgBigInt   False
-      , ColumnDef "address_id"          PgBigInt   False
+        -- address_id is nullable. The AddressResolver worker fills
+        -- it in an epoch after the row is written.
+      , ColumnDef "address_id"          PgBigInt   True
       , ColumnDef "stake_address_id"    PgBigInt   True
       , ColumnDef "value"               PgNumeric  False
       , ColumnDef "data_hash"           PgBytea    True
@@ -231,7 +242,8 @@ collateralTxOutTableDef = TableDef
       [ ColumnDef "id"                  PgBigInt   False
       , ColumnDef "tx_id"               PgBigInt   False
       , ColumnDef "index"               PgBigInt   False
-      , ColumnDef "address_id"          PgBigInt   False
+        -- See note on txOutTableDef.address_id.
+      , ColumnDef "address_id"          PgBigInt   True
       , ColumnDef "stake_address_id"    PgBigInt   True
       , ColumnDef "value"               PgNumeric  False
       , ColumnDef "data_hash"           PgBytea    True
@@ -257,7 +269,7 @@ encodeTxOutCopy (TxOutId oid) txo =
     [ Just $ bInt64 oid
     , Just $ bInt64 (getTxId $ txOutTxId txo)
     , Just $ bWord64 (txOutIndex txo)
-    , Just $ bInt64 (getAddressId $ txOutAddressId txo)
+    , bInt64 . getAddressId <$> txOutAddressId txo
     , bInt64 . getStakeAddressId <$> txOutStakeAddressId txo
     , Just $ bWord64 (unDbLovelace $ txOutValue txo)
     , bHex <$> txOutDataHash txo
@@ -303,7 +315,7 @@ encodeCollateralTxOutCopy (CollateralTxOutId oid) co =
     [ Just $ bInt64 oid
     , Just $ bInt64 (getTxId $ collateralTxOutTxId co)
     , Just $ bWord64 (collateralTxOutIndex co)
-    , Just $ bInt64 (getAddressId $ collateralTxOutAddressId co)
+    , bInt64 . getAddressId <$> collateralTxOutAddressId co
     , bInt64 . getStakeAddressId <$> collateralTxOutStakeAddressId co
     , Just $ bWord64 (unDbLovelace $ collateralTxOutValue co)
     , bHex <$> collateralTxOutDataHash co
@@ -322,7 +334,7 @@ txOutEncoder :: E.Params TxOut
 txOutEncoder = mconcat
   [ txOutTxId             >$< idEncoder      getTxId
   , txOutIndex            >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
-  , txOutAddressId        >$< idEncoder      getAddressId
+  , txOutAddressId        >$< maybeIdEncoder getAddressId
   , txOutStakeAddressId   >$< maybeIdEncoder getStakeAddressId
   , txOutValue            >$< E.param (E.nonNullable dbLovelaceValueEncoder)
   , txOutDataHash         >$< E.param (E.nullable E.bytea)
@@ -336,7 +348,7 @@ txOutDecoder :: D.Row TxOut
 txOutDecoder = TxOut
   <$> idDecoder TxId
   <*> D.column (D.nonNullable $ fromIntegral <$> D.int8)
-  <*> idDecoder AddressId
+  <*> maybeIdDecoder AddressId
   <*> maybeIdDecoder StakeAddressId
   <*> D.column (D.nonNullable dbLovelaceValueDecoder)
   <*> D.column (D.nullable D.bytea)
@@ -426,7 +438,7 @@ collateralTxOutEncoder :: E.Params CollateralTxOut
 collateralTxOutEncoder = mconcat
   [ collateralTxOutTxId              >$< idEncoder      getTxId
   , collateralTxOutIndex             >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
-  , collateralTxOutAddressId         >$< idEncoder      getAddressId
+  , collateralTxOutAddressId         >$< maybeIdEncoder getAddressId
   , collateralTxOutStakeAddressId    >$< maybeIdEncoder getStakeAddressId
   , collateralTxOutValue             >$< E.param (E.nonNullable dbLovelaceValueEncoder)
   , collateralTxOutDataHash          >$< E.param (E.nullable E.bytea)
@@ -439,7 +451,7 @@ collateralTxOutDecoder :: D.Row CollateralTxOut
 collateralTxOutDecoder = CollateralTxOut
   <$> idDecoder TxId
   <*> D.column (D.nonNullable $ fromIntegral <$> D.int8)
-  <*> idDecoder AddressId
+  <*> maybeIdDecoder AddressId
   <*> maybeIdDecoder StakeAddressId
   <*> D.column (D.nonNullable dbLovelaceValueDecoder)
   <*> D.column (D.nullable D.bytea)

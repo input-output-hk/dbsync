@@ -65,9 +65,12 @@ import DbSync.Ledger.Types
 import DbSync.Metrics (HasMetrics (..), Metrics)
 import DbSync.Phase (SyncPhase (..))
 import DbSync.Resolver (HasResolver (..), IdResolver)
+import DbSync.Resolver.AddressBuffer (AddressBufferRef)
+import DbSync.Resolver.AddressWorker (AddressResolver)
 import DbSync.StateQuery.Types (StateQueryVar)
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer)
+import DbSync.Watchdog (Watchdog)
 import DbSync.Writer (HasWriter (..), Writer)
 
 -- NOTE: DedupMaps is internally mutable (BasicHashTable + IORef counters).
@@ -145,6 +148,15 @@ data IngestEnv = IngestEnv
     -- ^ Multi-threaded COPY writer (per-table TBQueues + worker threads)
   , ieDedupMaps     :: !DedupMaps
     -- ^ Mutable deduplication maps (internally mutable hash tables)
+  , ieAddressBuffer :: !AddressBufferRef
+    -- ^ Per-epoch buffer of address-resolution work for the
+    -- 'ieAddressResolver' worker. The consumer hands the contents
+    -- to the worker at each epoch boundary and resets the ref to
+    -- empty.
+  , ieAddressResolver :: !AddressResolver
+    -- ^ Background worker that drains 'ieAddressBuffer' and writes
+    -- @address@ rows / fills @tx_out.address_id@ FKs an epoch behind
+    -- the main pipeline.
   , ieHasLedgerEnv  :: !HasLedgerEnv
     -- ^ Ledger subsystem — either enabled (carrying its own queues,
     -- 'LedgerDB', and snapshot machinery) or disabled (minimal).
@@ -180,6 +192,12 @@ data IngestEnv = IngestEnv
     -- ^ Lower edge of the replay window (the chosen snapshot's
     -- slot). Drives the percentage in the consumer\'s replay
     -- progress log. 'Nothing' otherwise.
+  , ieWatchdog                :: !Watchdog
+    -- ^ Per-thread liveness counters sampled by a background
+    -- watchdog. Consumer + receiver bump via this handle; the
+    -- ledger worker bumps via the same handle, passed explicitly
+    -- to 'DbSync.Ledger.Worker.runLedgerWorker' because the worker
+    -- runs under 'LedgerEnv' (no 'IngestEnv' in scope).
   }
 
 -- | Environment for the 'FollowingChainTip' phase.

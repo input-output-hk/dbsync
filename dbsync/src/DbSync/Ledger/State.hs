@@ -407,11 +407,12 @@ mkHasLedgerEnv
     ledgerQueueBound :: Natural
     ledgerQueueBound = 100
 
-    -- Mirrors @ledgerQueueBound@: the worker pushes one apply
-    -- result per block it consumed, so the back-pressure shape on
-    -- this side matches the receiver-to-worker side.
+    -- Shallow bound: each entry retains heavy per-block payloads
+    -- (events, stake slices, gov state) held in reserve for future
+    -- extractor wiring. A 10-deep queue caps memory while keeping
+    -- enough decoupling for short consumer pauses.
     appliedQueueBound :: Natural
-    appliedQueueBound = 100
+    appliedQueueBound = 10
 
     -- One slot per retained snapshot (the manager keeps three) plus
     -- a little slack so a mid-write snapshot doesn't block the worker.
@@ -597,7 +598,6 @@ applyBlock blk slotDetails = do
               , apGovExpiresAfter = getGovExpiration newCls'
               , apPoolsRegistered = getRegisteredPools oldCls
               , apNewEpoch        = maybeToStrictMaybe newEpoch
-              , apOldLedger       = Strict.Just oldCls
               , apDeposits        = maybeToStrictMaybe (Generic.getDeposits finalState)
               , apSlotDetails     = slotDetails
               , apStakeSlice      = getStakeSlice env newCls' False

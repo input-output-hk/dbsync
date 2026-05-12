@@ -30,6 +30,7 @@ import qualified Hasql.Statement as Stmt
 import DbSync.Db.Schema.Ids (MultiAssetId (..), idDecoder, idEncoder)
 import DbSync.Db.Schema.MultiAsset (MultiAsset, multiAssetEncoder, multiAssetTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Statement.Common (nextIdStmt)
 
 table :: Text
 table = tdName multiAssetTableDef
@@ -48,10 +49,7 @@ insertMultiAssetRowStmt =
 
 -- | Allocate a new id from the @multi_asset_id_seq@ sequence.
 nextMultiAssetIdStmt :: Stmt.Statement () MultiAssetId
-nextMultiAssetIdStmt =
-  Stmt.preparable sql E.noParams (D.singleRow $ idDecoder MultiAssetId)
-  where
-    sql = "SELECT nextval('" <> table <> "_id_seq')"
+nextMultiAssetIdStmt = nextIdStmt multiAssetTableDef MultiAssetId
 
 -- | Look up a 'MultiAssetId' by @(policy, name)@. The dedup key on
 -- the resolver side is the concatenation of policy + name as

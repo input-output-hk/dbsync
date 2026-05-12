@@ -15,6 +15,7 @@ module DbSync.Config.Node
 
 import Cardano.Prelude
 
+import Data.Aeson (FromJSON)
 import qualified Data.Yaml as Yaml
 
 import DbSync.Config.Types (ConfigError (..), DbSyncNodeConfig, NodeConfig)
@@ -23,18 +24,16 @@ import DbSync.Config.Types (ConfigError (..), DbSyncNodeConfig, NodeConfig)
 -- Ignores all iohk-monitoring keys and insert_options — only extracts
 -- NodeConfigFile, NetworkName, and PrometheusPort.
 parseDbSyncNodeConfig :: FilePath -> IO (Either ConfigError DbSyncNodeConfig)
-parseDbSyncNodeConfig fp = do
-  result <- Yaml.decodeFileEither fp
-  pure $ case result of
-    Left err  -> Left $ ConfigParseError (show err)
-    Right cfg -> Right cfg
+parseDbSyncNodeConfig = parseYamlConfig
 
 -- | Stage 2: Parse the cardano-node config.json.
 -- Extracts genesis file paths, hashes, network magic, and optional
 -- hard fork triggers. Ignores all logging/tracing/P2P keys.
 parseNodeConfig :: FilePath -> IO (Either ConfigError NodeConfig)
-parseNodeConfig fp = do
-  result <- Yaml.decodeFileEither fp
-  pure $ case result of
-    Left err  -> Left $ ConfigParseError (show err)
-    Right cfg -> Right cfg
+parseNodeConfig = parseYamlConfig
+
+-- | Decode a YAML/JSON file, wrapping any parse failure in
+-- 'ConfigParseError'.
+parseYamlConfig :: FromJSON a => FilePath -> IO (Either ConfigError a)
+parseYamlConfig fp =
+  first (ConfigParseError . show) <$> Yaml.decodeFileEither fp

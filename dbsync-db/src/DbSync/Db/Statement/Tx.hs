@@ -19,12 +19,12 @@ import Cardano.Prelude
 import Data.Functor.Contravariant ((>$<))
 import qualified Data.Text as T
 import qualified Hasql.Decoders as D
-import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
 import DbSync.Db.Schema.Core (Tx, txEncoder, txTableDef)
 import DbSync.Db.Schema.Ids (TxId (..), idDecoder, idEncoder)
 import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Statement.Common (LookupColumn (..), countRowsStmt, nextIdStmt, queryIdByColumnStmt)
 
 table :: Text
 table = tdName txTableDef
@@ -60,24 +60,12 @@ insertTxRowStmt =
 
 -- | Allocate a new id from the @tx_id_seq@ sequence.
 nextTxIdStmt :: Stmt.Statement () TxId
-nextTxIdStmt =
-  Stmt.preparable sql E.noParams (D.singleRow $ idDecoder TxId)
-  where
-    sql = "SELECT nextval('" <> table <> "_id_seq')"
+nextTxIdStmt = nextIdStmt txTableDef TxId
 
 -- | Look up a tx id by its hash.
 queryTxIdByHashStmt :: Stmt.Statement ByteString (Maybe TxId)
-queryTxIdByHashStmt =
-  Stmt.preparable sql
-    (E.param (E.nonNullable E.bytea))
-    (D.rowMaybe (idDecoder TxId))
-  where
-    sql = "SELECT id FROM " <> table <> " WHERE hash = $1"
+queryTxIdByHashStmt = queryIdByColumnStmt txTableDef ByHash TxId
 
 -- | Count rows in @tx@.
 queryTxCountStmt :: Stmt.Statement () Int64
-queryTxCountStmt =
-  Stmt.preparable sql E.noParams
-    (D.singleRow (D.column (D.nonNullable D.int8)))
-  where
-    sql = "SELECT COUNT(*) FROM " <> table
+queryTxCountStmt = countRowsStmt txTableDef

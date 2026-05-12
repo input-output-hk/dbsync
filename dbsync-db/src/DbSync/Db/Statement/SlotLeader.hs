@@ -22,12 +22,12 @@ import Cardano.Prelude
 import Data.Functor.Contravariant ((>$<))
 import qualified Data.Text as T
 import qualified Hasql.Decoders as D
-import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
 import DbSync.Db.Schema.Core (SlotLeader, slotLeaderEncoder, slotLeaderTableDef)
 import DbSync.Db.Schema.Ids (SlotLeaderId (..), idDecoder, idEncoder)
 import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Statement.Common (LookupColumn (..), countRowsStmt, nextIdStmt, queryIdByColumnStmt)
 
 table :: Text
 table = tdName slotLeaderTableDef
@@ -58,24 +58,12 @@ insertSlotLeaderRowStmt =
 
 -- | Allocate a new id from the @slot_leader_id_seq@ sequence.
 nextSlotLeaderIdStmt :: Stmt.Statement () SlotLeaderId
-nextSlotLeaderIdStmt =
-  Stmt.preparable sql E.noParams (D.singleRow $ idDecoder SlotLeaderId)
-  where
-    sql = "SELECT nextval('" <> table <> "_id_seq')"
+nextSlotLeaderIdStmt = nextIdStmt slotLeaderTableDef SlotLeaderId
 
 -- | Look up a slot_leader id by its 28-byte hash.
 querySlotLeaderIdStmt :: Stmt.Statement ByteString (Maybe SlotLeaderId)
-querySlotLeaderIdStmt =
-  Stmt.preparable sql
-    (E.param (E.nonNullable E.bytea))
-    (D.rowMaybe (idDecoder SlotLeaderId))
-  where
-    sql = "SELECT id FROM " <> table <> " WHERE hash = $1"
+querySlotLeaderIdStmt = queryIdByColumnStmt slotLeaderTableDef ByHash SlotLeaderId
 
 -- | Count rows in the @slot_leader@ table.
 querySlotLeaderCountStmt :: Stmt.Statement () Int64
-querySlotLeaderCountStmt =
-  Stmt.preparable sql E.noParams
-    (D.singleRow (D.column (D.nonNullable D.int8)))
-  where
-    sql = "SELECT COUNT(*) FROM " <> table
+querySlotLeaderCountStmt = countRowsStmt slotLeaderTableDef

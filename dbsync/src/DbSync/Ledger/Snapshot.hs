@@ -52,7 +52,6 @@ module DbSync.Ledger.Snapshot
 
     -- * Loading
   , loadSnapshotFromDisk
-  , findStateFromSnapshot
 
     -- * Deletion
   , safeDeleteSnapshot
@@ -295,22 +294,6 @@ loadSnapshotFromDisk ds = do
     case result of
       Left err           -> pure (Left err)
       Right consensusRef -> Right <$> fromConsensusStateRef ByronEpochBlockNo consensusRef
-
--- | Find a 'DiskSnapshot' at the given 'CardanoPoint' (or older) and
--- load it. Returns 'Right' on success, or 'Left' with the list of
--- candidate snapshots that were tried-and-rejected so the caller can
--- continue the search.
---
--- Currently __not implemented__: the resume-constraint (I2) and
--- newer-snapshot deletion logic from the ledger-state plan §7 Path B
--- live in the boot flow rather than here. This stub returns an empty
--- candidate list; the boot flow uses 'listDiskSnapshots' +
--- 'loadSnapshotFromDisk' + 'deleteNewerSnapshots' directly.
-findStateFromSnapshot
-  :: CardanoPoint
-  -> LedgerM (Either [DiskSnapshot] DbSyncStateRef)
-findStateFromSnapshot _point =
-  panic "DbSync.Ledger.Snapshot.findStateFromSnapshot: boot-flow ownership; wired alongside Path B"
 
 -- ---------------------------------------------------------------------------
 -- * Deletion

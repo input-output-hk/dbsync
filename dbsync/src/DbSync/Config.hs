@@ -17,16 +17,10 @@ import DbSync.Config.Types (ConfigError (..), SyncConfig)
 
 -- | Parse a db-sync YAML config file from a file path.
 parseConfig :: FilePath -> IO (Either ConfigError SyncConfig)
-parseConfig fp = do
-  result <- Yaml.decodeFileEither fp
-  pure $ case result of
-    Left err  -> Left $ ConfigParseError (show err)
-    Right cfg -> Right cfg
+parseConfig fp =
+  first (ConfigParseError . show) <$> Yaml.decodeFileEither fp
 
 -- | Parse a db-sync config from a raw ByteString.
 -- Useful for testing without disk I/O.
 parseConfigBS :: ByteString -> Either ConfigError SyncConfig
-parseConfigBS bs =
-  case Yaml.decodeEither' bs of
-    Left err  -> Left $ ConfigParseError (show err)
-    Right cfg -> Right cfg
+parseConfigBS = first (ConfigParseError . show) . Yaml.decodeEither'

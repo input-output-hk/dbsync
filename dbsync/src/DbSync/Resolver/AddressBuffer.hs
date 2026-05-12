@@ -30,18 +30,13 @@ module DbSync.Resolver.AddressBuffer
   , recordTxOut
   , recordCollateralTxOut
   , takeAndReset
-
-    -- * Introspection
-  , bufferAddressCount
-  , bufferTxOutCount
-  , bufferCollateralCount
   ) where
 
 import Cardano.Prelude
 
 import Data.ByteString.Short (ShortByteString)
 import qualified Data.ByteString.Short as SBS
-import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
+import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import qualified Data.Map.Strict as Map
 
 import DbSync.Db.Schema.Address (Address)
@@ -135,16 +130,3 @@ recordCollateralTxOut ref outId raw addr =
 takeAndReset :: AddressBufferRef -> IO EpochAddressBuffer
 takeAndReset ref =
   atomicModifyIORef' ref $ \buf -> (emptyEpochAddressBuffer, buf)
-
--- ---------------------------------------------------------------------------
--- * Introspection
--- ---------------------------------------------------------------------------
-
-bufferAddressCount :: AddressBufferRef -> IO Int
-bufferAddressCount ref = Map.size . eabAddresses <$> readIORef ref
-
-bufferTxOutCount :: AddressBufferRef -> IO Int
-bufferTxOutCount ref = length . eabTxOutAddresses <$> readIORef ref
-
-bufferCollateralCount :: AddressBufferRef -> IO Int
-bufferCollateralCount ref = length . eabCollateralTxOutAddresses <$> readIORef ref

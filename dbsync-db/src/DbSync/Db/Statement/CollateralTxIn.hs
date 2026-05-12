@@ -18,16 +18,16 @@ import Cardano.Prelude
 import Data.Functor.Contravariant ((>$<))
 import qualified Data.Text as T
 import qualified Hasql.Decoders as D
-import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
-import DbSync.Db.Schema.Ids (CollateralTxInId (..), idDecoder, idEncoder)
+import DbSync.Db.Schema.Ids (CollateralTxInId (..), idEncoder)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Schema.UTxO
   ( CollateralTxIn
   , collateralTxInEncoder
   , collateralTxInTableDef
   )
+import DbSync.Db.Statement.Common (nextIdStmt)
 
 table :: Text
 table = tdName collateralTxInTableDef
@@ -47,7 +47,4 @@ insertCollateralTxInRowStmt =
 
 -- | Allocate a new id from the @collateral_tx_in_id_seq@ sequence.
 nextCollateralTxInIdStmt :: Stmt.Statement () CollateralTxInId
-nextCollateralTxInIdStmt =
-  Stmt.preparable sql E.noParams (D.singleRow $ idDecoder CollateralTxInId)
-  where
-    sql = "SELECT nextval('" <> table <> "_id_seq')"
+nextCollateralTxInIdStmt = nextIdStmt collateralTxInTableDef CollateralTxInId

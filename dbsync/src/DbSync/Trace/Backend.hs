@@ -1,16 +1,13 @@
 -- | Tracer backend constructors.
 --
 -- Provides concrete tracer implementations: stderr (human-readable),
--- JSON (structured), null (silent), and test (capture to IORef).
--- All production tracers include UTC timestamps.
---
--- Production handle-based tracers ('mkStdErrTracer', 'mkJsonTracer')
--- serialise writes through a per-tracer 'MVar' lock so concurrent
--- threads can't interleave their bytes on the buffered handle.
+-- null (silent), and test (capture to IORef). The stderr tracer
+-- prepends a UTC timestamp and serialises writes through an 'MVar'
+-- lock so concurrent threads can't interleave their bytes on the
+-- buffered handle.
 module DbSync.Trace.Backend
   ( -- * Tracer constructors
     mkStdErrTracer
-  , mkJsonTracer
   , mkNullTracer
   , mkTestTracer
   ) where
@@ -35,15 +32,6 @@ mkStdErrTracer minSeverity = do
     when (lmSeverity msg >= minSeverity) $ do
       ts <- formatTimestamp
       writeLine lock stderr (ts <> " " <> formatLogMsg msg)
-
--- | JSON lines tracer to a file handle, filtered by minimum severity.
-mkJsonTracer :: Severity -> Handle -> IO AppTracer
-mkJsonTracer minSeverity h = do
-  lock <- newMVar ()
-  pure $ Tracer $ \msg ->
-    when (lmSeverity msg >= minSeverity) $ do
-      ts <- formatTimestamp
-      writeLine lock h (ts <> " " <> formatLogMsg msg)  -- TODO: proper JSON encoding
 
 -- | Silent tracer — discards all messages.
 mkNullTracer :: AppTracer

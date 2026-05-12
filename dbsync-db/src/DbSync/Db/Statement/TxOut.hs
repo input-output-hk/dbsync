@@ -27,9 +27,10 @@ import qualified Hasql.Decoders as D
 import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
-import DbSync.Db.Schema.Ids (AddressId (..), TxOutId (..), idDecoder, idEncoder)
+import DbSync.Db.Schema.Ids (AddressId (..), TxOutId (..), idEncoder)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Schema.UTxO (TxOut, txOutEncoder, txOutTableDef)
+import DbSync.Db.Statement.Common (arrayParam, nextIdStmt)
 import DbSync.Db.Types (DbLovelace, dbLovelaceValueDecoder)
 
 table :: Text
@@ -69,9 +70,8 @@ bulkUpdateTxOutAddressIdsStmt :: Stmt.Statement ([Int64], [Int64]) ()
 bulkUpdateTxOutAddressIdsStmt =
   Stmt.preparable sql encoder D.noResult
   where
-    int8Array = E.param (E.nonNullable (E.foldableArray (E.nonNullable E.int8)))
-    encoder = (fst >$< int8Array)    -- tx_out ids
-           <> (snd >$< int8Array)    -- address ids
+    encoder = (fst >$< arrayParam E.int8)    -- tx_out ids
+           <> (snd >$< arrayParam E.int8)    -- address ids
     sql = T.concat
       [ "UPDATE ", table, " SET address_id = u.aid"
       , " FROM unnest($1, $2) AS u(tx_out_id, aid)"
@@ -80,10 +80,7 @@ bulkUpdateTxOutAddressIdsStmt =
 
 -- | Allocate a new id from the @tx_out_id_seq@ sequence.
 nextTxOutIdStmt :: Stmt.Statement () TxOutId
-nextTxOutIdStmt =
-  Stmt.preparable sql E.noParams (D.singleRow $ idDecoder TxOutId)
-  where
-    sql = "SELECT nextval('" <> table <> "_id_seq')"
+nextTxOutIdStmt = nextIdStmt txOutTableDef TxOutId
 
 -- | Look up a 'tx_out.value' by the producing tx's hash and the
 -- output index. 'Nothing' when no such output exists in the DB.

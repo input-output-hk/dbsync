@@ -24,13 +24,14 @@ import qualified Hasql.Decoders as D
 import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
-import DbSync.Db.Schema.Ids (AddressId (..), CollateralTxOutId (..), idDecoder, idEncoder)
+import DbSync.Db.Schema.Ids (AddressId (..), CollateralTxOutId (..), idEncoder)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Schema.UTxO
   ( CollateralTxOut
   , collateralTxOutEncoder
   , collateralTxOutTableDef
   )
+import DbSync.Db.Statement.Common (arrayParam, nextIdStmt)
 
 table :: Text
 table = tdName collateralTxOutTableDef
@@ -64,9 +65,8 @@ bulkUpdateCollateralTxOutAddressIdsStmt :: Stmt.Statement ([Int64], [Int64]) ()
 bulkUpdateCollateralTxOutAddressIdsStmt =
   Stmt.preparable sql encoder D.noResult
   where
-    int8Array = E.param (E.nonNullable (E.foldableArray (E.nonNullable E.int8)))
-    encoder = (fst >$< int8Array)    -- collateral_tx_out ids
-           <> (snd >$< int8Array)    -- address ids
+    encoder = (fst >$< arrayParam E.int8)    -- collateral_tx_out ids
+           <> (snd >$< arrayParam E.int8)    -- address ids
     sql = T.concat
       [ "UPDATE ", table, " SET address_id = u.aid"
       , " FROM unnest($1, $2) AS u(out_id, aid)"
@@ -74,7 +74,4 @@ bulkUpdateCollateralTxOutAddressIdsStmt =
       ]
 
 nextCollateralTxOutIdStmt :: Stmt.Statement () CollateralTxOutId
-nextCollateralTxOutIdStmt =
-  Stmt.preparable sql E.noParams (D.singleRow $ idDecoder CollateralTxOutId)
-  where
-    sql = "SELECT nextval('" <> table <> "_id_seq')"
+nextCollateralTxOutIdStmt = nextIdStmt collateralTxOutTableDef CollateralTxOutId

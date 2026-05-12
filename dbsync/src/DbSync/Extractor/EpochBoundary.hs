@@ -42,7 +42,6 @@ module DbSync.Extractor.EpochBoundary
 import Cardano.Prelude
 
 import qualified Cardano.Ledger.Shelley.AdaPots as Shelley
-import Cardano.Ledger.Coin (Coin (..))
 import qualified Cardano.Ledger.State as Ledger
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import qualified Data.Strict.Maybe as Strict
@@ -50,11 +49,11 @@ import qualified Data.Strict.Maybe as Strict
 import qualified DbSync.Era.Shelley.Generic.EpochUpdate as Generic
 import DbSync.Db.Schema.AdaPots (AdaPots (..), adaPotsTableDef)
 import DbSync.Db.Schema.Ids (BlockId)
-import DbSync.Db.Types (DbLovelace (..))
 import DbSync.Extractor (ExtractorDef (..))
 import DbSync.Ledger.Types (ApplyResult (..))
 import DbSync.Resolver (IdResolver (..))
 import DbSync.StateQuery (SlotDetails (..))
+import DbSync.Util (coinToDbLovelace)
 import DbSync.Writer (Writer (..))
 
 -- ---------------------------------------------------------------------------
@@ -156,10 +155,7 @@ mkAdaPotsRow applyResult newEpoch blockId pots =
     , adaPotsRewards           = coinToDbLovelace (Shelley.rewardsAdaPot pots)
     , adaPotsUtxo              = coinToDbLovelace (Shelley.utxoAdaPot pots)
     , adaPotsDepositsStake     =
-        DbLovelace $
-          fromIntegral $
-            unCoin (Ledger.oblStake oblgs)
-              + unCoin (Ledger.oblPool oblgs)
+        coinToDbLovelace (Ledger.oblStake oblgs <> Ledger.oblPool oblgs)
     , adaPotsFees              = coinToDbLovelace (Shelley.feesAdaPot pots)
     , adaPotsBlockId           = blockId
     , adaPotsDepositsDrep      = coinToDbLovelace (Ledger.oblDRep oblgs)
@@ -169,13 +165,4 @@ mkAdaPotsRow applyResult newEpoch blockId pots =
     oblgs :: Ledger.Obligations
     oblgs = Shelley.obligationsPot pots
 
--- ---------------------------------------------------------------------------
--- * Internal helpers
--- ---------------------------------------------------------------------------
 
--- | Convert a ledger 'Coin' to a 'DbLovelace'.
---
--- 'Coin' is a signed @Integer@ at the type level but in practice
--- always non-negative for these fields, so 'fromIntegral' is safe.
-coinToDbLovelace :: Coin -> DbLovelace
-coinToDbLovelace = DbLovelace . fromIntegral . unCoin

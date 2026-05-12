@@ -355,13 +355,14 @@ main = do
       panic "Historic sync is complete (sync_complete = true); Follow phase is not yet implemented"
 
   -- 14. Build the ingest pipeline state
-  stRef         <- newIORef initialExtractState
-  copyWriter    <- mkCopyWriter connStr tableDefs
-  blockQueue    <- newTBQueueIO 500
-  receiverStats <- newReceiverStats
-  watchdog      <- newWatchdog
-  addrBuffer    <- newAddressBufferRef
-  addrResolver  <- mkAddressResolver tracer hasqlSettings initialAddressId
+  stRef          <- newIORef initialExtractState
+  copyWriter     <- mkCopyWriter connStr tableDefs
+  blockQueue     <- newTBQueueIO 500
+  receiverStats  <- newReceiverStats
+  watchdog       <- newWatchdog
+  addrBuffer     <- newAddressBufferRef
+  addrResolver   <- mkAddressResolver tracer hasqlSettings initialAddressId
+  latestPointRef <- newIORef Nothing
 
   let resolver = mkIngestResolver stRef dedupMaps addrBuffer
       writer   = mkCopyWriterAdapter copyWriter
@@ -384,6 +385,7 @@ main = do
         , ieLastCommittedSlotAtBoot = replayBoundary
         , ieReplayStartSlot         = replayStart
         , ieWatchdog                = watchdog
+        , ieLatestReceivedPoint     = latestPointRef
         }
 
   -- 13. Start block reception + consumer (+ ledger worker if enabled)

@@ -14,12 +14,12 @@ import Cardano.Prelude
 import Data.Functor.Contravariant ((>$<))
 import qualified Data.Text as T
 import qualified Hasql.Decoders as D
-import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
-import DbSync.Db.Schema.Ids (PoolUpdateId (..), idDecoder, idEncoder)
+import DbSync.Db.Schema.Ids (PoolUpdateId (..), idEncoder)
 import DbSync.Db.Schema.Pool (PoolUpdate, poolUpdateEncoder, poolUpdateTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Statement.Common (nextIdStmt)
 
 table :: Text
 table = tdName poolUpdateTableDef
@@ -39,7 +39,4 @@ insertPoolUpdateRowStmt =
       ]
 
 nextPoolUpdateIdStmt :: Stmt.Statement () PoolUpdateId
-nextPoolUpdateIdStmt =
-  Stmt.preparable sql E.noParams (D.singleRow $ idDecoder PoolUpdateId)
-  where
-    sql = "SELECT nextval('" <> table <> "_id_seq')"
+nextPoolUpdateIdStmt = nextIdStmt poolUpdateTableDef PoolUpdateId

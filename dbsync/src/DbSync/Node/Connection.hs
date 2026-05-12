@@ -31,6 +31,7 @@ import Control.Concurrent.STM (TBQueue, writeTBQueue)
 import Control.Concurrent.STM.TBQueue (isFullTBQueue)
 import Control.Tracer (contramap, nullTracer, traceWith)
 import qualified Data.ByteString.Lazy as BSL
+import Data.IORef (IORef, atomicWriteIORef, readIORef)
 import qualified Data.Text as Text
 import System.IO.Error (IOError, ioeGetErrorType, isDoesNotExistErrorType)
 import qualified Network.Mux as Mux
@@ -58,6 +59,7 @@ import Ouroboros.Network.Block
   , Point
   , Tip (..)
   , blockNo
+  , blockPoint
   , blockSlot
   , genesisPoint
   , getTipBlockNo
@@ -166,6 +168,7 @@ connectToNode iomgr topLevelCfg networkMagic socketPath intersect = do
   receiverStats  <- asks ieReceiverStats
   watchdog       <- asks ieWatchdog
   hasLedgerEnv   <- asks ieHasLedgerEnv
+  latestPointRef <- asks ieLatestReceivedPoint
   -- The ledger queue only exists in the enabled arm; pattern-matching
   -- it out here keeps blockFetchClient's optional second-target
   -- contract crisp (no LedgerDisabled-shaped sentinel queue).
@@ -182,7 +185,7 @@ connectToNode iomgr topLevelCfg networkMagic socketPath intersect = do
         (supportedNodeToClientVersions (Proxy @(CardanoBlock StandardCrypto)))
         (subscriptionTracers tracer)
         subscriptionParams
-        (nodeProtocols tracer codecConfig blockQueue mLedgerQueue receiverStats watchdog stateQueryVar intersect)
+        (nodeProtocols tracer codecConfig blockQueue mLedgerQueue receiverStats watchdog stateQueryVar latestPointRef intersect)
   where
     codecConfig :: CodecConfig (CardanoBlock StandardCrypto)
     codecConfig = configCodec topLevelCfg
@@ -248,6 +251,10 @@ classifyConnectError se = case fromException se :: Maybe IOError of
 
 -- | Build the NodeToClient protocols bundle.
 -- Only ChainSync is active — tx submission, state query, and tx monitor are null.
+--
+-- The @latestPointRef@ is read by 'blockFetchClient' on every
+-- (re)connection, so a mid-run reconnect resumes at our current
+-- position rather than the boot-time intersect.
 nodeProtocols
   :: AppTracer
   -> CodecConfig (CardanoBlock StandardCrypto)
@@ -256,11 +263,12 @@ nodeProtocols
   -> ReceiverStats
   -> Watchdog
   -> StateQueryVar
+  -> IORef (Maybe CardanoPoint)
   -> IntersectionRequirement
   -> Network.NodeToClientVersion
   -> BlockNodeToClientVersion (CardanoBlock StandardCrypto)
   -> NodeToClientProtocols 'Mux.InitiatorMode LocalAddress BSL.ByteString IO () Void
-nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats watchdog stateQueryVar intersect version blockVersion =
+nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats watchdog stateQueryVar latestPointRef intersect version blockVersion =
   NodeToClientProtocols
     { localChainSyncProtocol = chainSyncProtocol
     , localTxSubmissionProtocol = dummyTxSubmit
@@ -279,7 +287,7 @@ nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats watchd
             (cChainSyncCodec codecs)
             channel
             ( chainSyncClientPeerPipelined $
-                blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog intersect
+                blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latestPointRef intersect
             )
         pure ((), Nothing)
 
@@ -309,10 +317,26 @@ nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats watchd
 
 -- | Pipelined ChainSync client that writes blocks to a TQueue.
 --
+-- The intersection point is chosen at every (re)connection:
+--
+--   * If @latestPointRef@ holds a point, the receiver intersects
+--     there. This is the reconnection path: the node sends forward
+--     from where we last were, after a benign confirming rollback to
+--     the intersection point.
+--   * Otherwise it falls back to the boot-time @intersect@: either
+--     'IntersectGenesis' (first connection on a fresh DB) or
+--     'IntersectAt' (resume from snapshot candidates).
+--
+-- Without the IORef-tracked latest point, a @cardano-node@ restart
+-- mid-sync would re-use the boot-time intersect — for a fresh sync
+-- that is Origin, so the node rolls our chain pointer back to
+-- genesis and the LedgerWorker crashes when the genesis block
+-- arrives over its slot-N state.
+--
 -- 'IntersectGenesis' tolerates a not-found response (used on a fresh
--- start when the node also has no chain yet). 'IntersectAt' treats
--- not-found as fatal: the node's chain has diverged from every
--- candidate point we offered.
+-- start when the node also has no chain yet). 'IntersectAt' and the
+-- IORef-tracked resume both treat not-found as fatal: the node's
+-- chain has diverged from every candidate point we offered.
 --
 -- When @mLedgerQueue@ is 'Just', each block is also enqueued on it
 -- after the main queue write succeeds.
@@ -322,23 +346,32 @@ blockFetchClient
   -> Maybe (TBQueue (CardanoBlock StandardCrypto))    -- ^ Optional ledger worker queue
   -> ReceiverStats
   -> Watchdog
-  -> IntersectionRequirement
+  -> IORef (Maybe CardanoPoint)                       -- ^ Latest received point, updated on each forward / rollback
+  -> IntersectionRequirement                          -- ^ Boot-time fallback intersection
   -> ChainSyncClientPipelined
        (CardanoBlock StandardCrypto)
        (Point (CardanoBlock StandardCrypto))
        (Tip (CardanoBlock StandardCrypto))
        IO
        ()
-blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog intersect =
-  ChainSyncClientPipelined $ pure $
-    SendMsgFindIntersect
-      intersectPoints
-      ClientPipelinedStIntersect
-        { recvMsgIntersectFound    = onIntersectFound
-        , recvMsgIntersectNotFound = onIntersectNotFound
-        }
+blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latestPointRef intersect =
+  ChainSyncClientPipelined $ do
+    mLatest <- readIORef latestPointRef
+    let (intersectPoints, isResume) = case mLatest of
+          Just p  -> ([p], True)
+          Nothing -> (bootIntersectPoints, False)
+    when isResume $
+      traceWith appTracer $ LogMsg Info "ChainSync"
+        ("Reconnecting; intersecting at last received point " <> show mLatest) Nothing
+    pure $
+      SendMsgFindIntersect
+        intersectPoints
+        ClientPipelinedStIntersect
+          { recvMsgIntersectFound    = onIntersectFound
+          , recvMsgIntersectNotFound = onIntersectNotFound isResume
+          }
   where
-    intersectPoints = case intersect of
+    bootIntersectPoints = case intersect of
       IntersectGenesis -> [genesisPoint]
       IntersectAt ps   -> ps
 
@@ -350,18 +383,25 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog inters
         ("Intersected at " <> show chosen <> " (server tip " <> show tip <> ")") Nothing
       pure $ goTip policy Zero Origin tip
 
-    onIntersectNotFound tip = case intersect of
-      IntersectGenesis -> do
-        traceWith appTracer $ LogMsg Info "ChainSync"
-          "Node also has no chain yet; following from origin" Nothing
-        pure $ goTip policy Zero Origin tip
-      IntersectAt ps ->
-        throwNetwork $
-          "ChainSync intersection not found on node at any of "
-            <> show (length ps) <> " candidate points: " <> show ps
-            <> " — node DB may be older than dbsync's resume point, or its "
-            <> "chain has diverged from every known snapshot. "
-            <> "Server tip: " <> show tip
+    onIntersectNotFound isResume tip
+      | isResume =
+          throwNetwork $
+            "ChainSync reconnection: node could not intersect at our last "
+              <> "received point. The node's chain has diverged from our "
+              <> "current position while we were disconnected. "
+              <> "Server tip: " <> show tip
+      | otherwise = case intersect of
+          IntersectGenesis -> do
+            traceWith appTracer $ LogMsg Info "ChainSync"
+              "Node also has no chain yet; following from origin" Nothing
+            pure $ goTip policy Zero Origin tip
+          IntersectAt ps ->
+            throwNetwork $
+              "ChainSync intersection not found on node at any of "
+                <> show (length ps) <> " candidate points: " <> show ps
+                <> " — node DB may be older than dbsync's resume point, or its "
+                <> "chain has diverged from every known snapshot. "
+                <> "Server tip: " <> show tip
 
     -- Pipeline depth limits: start requesting at 10 in-flight,
     -- cap at 50 in-flight. Balances throughput with memory/backpressure.
@@ -440,9 +480,21 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog inters
             -- blocks silently.
             for_ mLedgerQueue $ \ledgerQueue ->
               atomically $ writeTBQueue ledgerQueue blk
+            -- Record the latest accepted point so a reconnect resumes
+            -- here instead of replaying from the boot-time intersect.
+            -- Written only after both queue writes succeed, so a
+            -- block we crash before delivering doesn't advance the
+            -- recorded position.
+            atomicWriteIORef latestPointRef (Just (blockPoint blk))
             pure $ goTip mkDecision n (At bn) tip
         , recvMsgRollBackward = \point tip -> do
             traceWith appTracer $ LogMsg Warning "ChainSync"
               ("Rollback to " <> show point) Nothing
+            -- Track the rollback target so a subsequent reconnect
+            -- doesn't re-use a stale forward point. After the
+            -- intersect handshake the node always sends a confirming
+            -- rollback to the chosen point, which is benign and
+            -- leaves the recorded position unchanged.
+            atomicWriteIORef latestPointRef (Just point)
             pure $ goTip mkDecision n Origin tip
         }

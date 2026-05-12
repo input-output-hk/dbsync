@@ -14,16 +14,16 @@ import Cardano.Prelude
 import Data.Functor.Contravariant ((>$<))
 import qualified Data.Text as T
 import qualified Hasql.Decoders as D
-import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
-import DbSync.Db.Schema.Ids (PoolMetadataRefId (..), idDecoder, idEncoder)
+import DbSync.Db.Schema.Ids (PoolMetadataRefId (..), idEncoder)
 import DbSync.Db.Schema.Pool
   ( PoolMetadataRef
   , poolMetadataRefEncoder
   , poolMetadataRefTableDef
   )
 import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Statement.Common (nextIdStmt)
 
 table :: Text
 table = tdName poolMetadataRefTableDef
@@ -40,7 +40,4 @@ insertPoolMetadataRefRowStmt =
       ]
 
 nextPoolMetadataRefIdStmt :: Stmt.Statement () PoolMetadataRefId
-nextPoolMetadataRefIdStmt =
-  Stmt.preparable sql E.noParams (D.singleRow $ idDecoder PoolMetadataRefId)
-  where
-    sql = "SELECT nextval('" <> table <> "_id_seq')"
+nextPoolMetadataRefIdStmt = nextIdStmt poolMetadataRefTableDef PoolMetadataRefId

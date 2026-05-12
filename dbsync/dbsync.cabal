@@ -70,7 +70,6 @@ library
     DbSync.Block.Parser.Block
     DbSync.Block.Parser.Byron
     DbSync.Block.Parser.Tx
-    DbSync.Block.Parser.Types
     DbSync.Block.Types
     DbSync.Extractor
     DbSync.Extractor.Core
@@ -79,13 +78,10 @@ library
     DbSync.Extractor.Metadata
     DbSync.Extractor.StakeDelegation
     DbSync.Extractor.Pool
-    DbSync.Extractor.ScriptsDatums
-    DbSync.Extractor.Governance
     DbSync.Extractor.SharedDedup
     DbSync.Extractor.Cbor
     DbSync.Extractor.EpochSyncStats
     DbSync.Extractor.EpochBoundary
-    DbSync.Extractor.CurrentState
     DbSync.Copy.Connection
     DbSync.Copy.Writer
     DbSync.Ingest.Consumer
@@ -267,6 +263,7 @@ test-suite dbsync-test
     DbSync.Config.GenesisSpec
     DbSync.Db.Statement.BlockSpec
     DbSync.Db.Statement.IndexesSpec
+    DbSync.Db.Statement.RoundTripSpec
     DbSync.Db.Statement.SequencesSpec
     DbSync.Db.Statement.SlotLeaderSpec
     DbSync.Db.Statement.SyncStateSpec
@@ -313,6 +310,7 @@ test-suite dbsync-test
     , dbsync-db
     , dbsync-mock
     , dbsync:dbsync-testlib
+    , hasql                           >= 1.9 && < 2
     , hspec
     , cardano-crypto-class
     , cardano-ledger-binary

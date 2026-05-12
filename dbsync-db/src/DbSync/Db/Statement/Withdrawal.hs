@@ -14,16 +14,16 @@ import Cardano.Prelude
 import Data.Functor.Contravariant ((>$<))
 import qualified Data.Text as T
 import qualified Hasql.Decoders as D
-import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
-import DbSync.Db.Schema.Ids (WithdrawalId (..), idDecoder, idEncoder)
+import DbSync.Db.Schema.Ids (WithdrawalId (..), idEncoder)
 import DbSync.Db.Schema.StakeDelegation
   ( Withdrawal
   , withdrawalEncoder
   , withdrawalTableDef
   )
 import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Statement.Common (nextIdStmt)
 
 table :: Text
 table = tdName withdrawalTableDef
@@ -41,7 +41,4 @@ insertWithdrawalRowStmt =
       ]
 
 nextWithdrawalIdStmt :: Stmt.Statement () WithdrawalId
-nextWithdrawalIdStmt =
-  Stmt.preparable sql E.noParams (D.singleRow $ idDecoder WithdrawalId)
-  where
-    sql = "SELECT nextval('" <> table <> "_id_seq')"
+nextWithdrawalIdStmt = nextIdStmt withdrawalTableDef WithdrawalId

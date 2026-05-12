@@ -42,6 +42,7 @@ import Cardano.Slotting.Slot (SlotNo)
 import Ouroboros.Consensus.BlockchainTime.WallClock.Types (SystemStart)
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
 
+import DbSync.Block.Types (CardanoPoint)
 import DbSync.Checkpoint.SyncState (ControlConnection)
 import DbSync.Config.Types (NodeConfig, SyncConfig)
 import DbSync.Copy.Writer (CopyWriter)
@@ -198,6 +199,16 @@ data IngestEnv = IngestEnv
     -- ledger worker bumps via the same handle, passed explicitly
     -- to 'DbSync.Ledger.Worker.runLedgerWorker' because the worker
     -- runs under 'LedgerEnv' (no 'IngestEnv' in scope).
+  , ieLatestReceivedPoint     :: !(IORef (Maybe CardanoPoint))
+    -- ^ The latest chain point the receiver has accepted (forward
+    -- or rollback). Read on every (re)connection so the chainsync
+    -- client resumes at our current position rather than the
+    -- boot-time intersect. Without this, a mid-run @cardano-node@
+    -- restart causes the node to intersect at the boot-time point
+    -- (Origin on a fresh sync) and roll our chain pointer back to
+    -- genesis; the LedgerWorker then crashes with a hash mismatch
+    -- when the genesis block arrives over our advanced state.
+    -- 'Nothing' on first connection (before any block is received).
   }
 
 -- | Environment for the 'FollowingChainTip' phase.

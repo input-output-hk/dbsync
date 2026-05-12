@@ -14,16 +14,16 @@ import Cardano.Prelude
 import Data.Functor.Contravariant ((>$<))
 import qualified Data.Text as T
 import qualified Hasql.Decoders as D
-import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
-import DbSync.Db.Schema.Ids (StakeDeregistrationId (..), idDecoder, idEncoder)
+import DbSync.Db.Schema.Ids (StakeDeregistrationId (..), idEncoder)
 import DbSync.Db.Schema.StakeDelegation
   ( StakeDeregistration
   , stakeDeregistrationEncoder
   , stakeDeregistrationTableDef
   )
 import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Statement.Common (nextIdStmt)
 
 table :: Text
 table = tdName stakeDeregistrationTableDef
@@ -42,7 +42,4 @@ insertStakeDeregistrationRowStmt =
       ]
 
 nextStakeDeregistrationIdStmt :: Stmt.Statement () StakeDeregistrationId
-nextStakeDeregistrationIdStmt =
-  Stmt.preparable sql E.noParams (D.singleRow $ idDecoder StakeDeregistrationId)
-  where
-    sql = "SELECT nextval('" <> table <> "_id_seq')"
+nextStakeDeregistrationIdStmt = nextIdStmt stakeDeregistrationTableDef StakeDeregistrationId

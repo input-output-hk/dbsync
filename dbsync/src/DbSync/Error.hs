@@ -24,7 +24,6 @@ module DbSync.Error
 
     -- * Throwing — generic
   , throwAppError
-  , captureCallSite
 
     -- * Throwing — per kind
   , throwDb
@@ -45,7 +44,7 @@ import qualified Control.Exception as Exception
 import Control.Monad.IO.Unlift (MonadUnliftIO, withRunInIO)
 import qualified Data.Text as Text
 
-import DbSync.Trace.Types (SrcInfo (..))
+import DbSync.Trace.Types (SrcInfo, captureCallSite)
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -74,24 +73,6 @@ instance Exception AppError
 -- naturally and pass the constructor for you.
 throwAppError :: (HasCallStack, MonadIO m) => (SrcInfo -> Text -> AppError) -> Text -> m a
 throwAppError ctor msg = liftIO $ throwIO (ctor (captureCallSite callStack) msg)
-
--- | Extract the caller's source location from the GHC call stack.
-captureCallSite :: CallStack -> SrcInfo
-captureCallSite cs = case getCallStack cs of
-  (_, loc) : _ ->
-    SrcInfo
-      { siFunction = show (srcLocStartLine loc)
-      , siModule   = toS (srcLocModule loc)
-      , siFile     = toS (srcLocFile loc)
-      , siLine     = srcLocStartLine loc
-      }
-  [] ->
-    SrcInfo
-      { siFunction = "<unknown>"
-      , siModule   = "<unknown>"
-      , siFile     = "<unknown>"
-      , siLine     = 0
-      }
 
 -- ---------------------------------------------------------------------------
 -- * Throwing — per kind

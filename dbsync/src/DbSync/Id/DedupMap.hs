@@ -29,17 +29,13 @@ module DbSync.Id.DedupMap
 
     -- * Operations
   , lookupOrInsert
-  , DbSync.Id.DedupMap.lookup
   , insertExisting
   , size
   , sizeApprox
   , dedupMapSizes
-
-    -- * Introspection (for future checkpoint serialisation)
-  , toList
   ) where
 
-import Cardano.Prelude hiding (toList)
+import Cardano.Prelude
 
 import Data.ByteString.Short (ShortByteString)
 import Data.HashTable.IO (BasicHashTable)
@@ -102,10 +98,6 @@ lookupOrInsert key dm = do
       HT.insert (dmTable dm) key newId
       pure (newId, True)
 
--- | Look up without inserting. Returns 'Nothing' if not seen before.
-lookup :: ShortByteString -> DedupMap -> IO (Maybe Int64)
-lookup key dm = HT.lookup (dmTable dm) key
-
 -- | Insert a (key, id) pair retaining the supplied id, and bump the
 -- counter to @max(currentCounter, id + 1)@ so that subsequent
 -- 'lookupOrInsert' allocations don't collide with rebuilt entries.
@@ -132,11 +124,6 @@ sizeApprox :: DedupMap -> IO Int
 sizeApprox dm = do
   cnt <- readIORef (dmCounter dm)
   pure $ max 0 (fromIntegral cnt - 1)
-
--- | Dump all entries for serialisation (e.g. checkpoint persistence).
--- The returned list is in arbitrary order.
-toList :: DedupMap -> IO [(ShortByteString, Int64)]
-toList dm = HT.toList (dmTable dm)
 
 -- | Approximate entry counts for every dedup map, named for log output.
 dedupMapSizes :: DedupMaps -> IO [(Text, Int)]

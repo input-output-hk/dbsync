@@ -14,12 +14,12 @@ import Cardano.Prelude
 import Data.Functor.Contravariant ((>$<))
 import qualified Data.Text as T
 import qualified Hasql.Decoders as D
-import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
 import DbSync.Db.Schema.CBOR (TxCbor, txCborEncoder, txCborTableDef)
-import DbSync.Db.Schema.Ids (TxCborId (..), idDecoder, idEncoder)
+import DbSync.Db.Schema.Ids (TxCborId (..), idEncoder)
 import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Statement.Common (nextIdStmt)
 
 table :: Text
 table = tdName txCborTableDef
@@ -36,7 +36,4 @@ insertTxCborRowStmt =
       ]
 
 nextTxCborIdStmt :: Stmt.Statement () TxCborId
-nextTxCborIdStmt =
-  Stmt.preparable sql E.noParams (D.singleRow $ idDecoder TxCborId)
-  where
-    sql = "SELECT nextval('" <> table <> "_id_seq')"
+nextTxCborIdStmt = nextIdStmt txCborTableDef TxCborId

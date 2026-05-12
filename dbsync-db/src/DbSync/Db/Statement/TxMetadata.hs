@@ -14,12 +14,12 @@ import Cardano.Prelude
 import Data.Functor.Contravariant ((>$<))
 import qualified Data.Text as T
 import qualified Hasql.Decoders as D
-import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
-import DbSync.Db.Schema.Ids (TxMetadataId (..), idDecoder, idEncoder)
+import DbSync.Db.Schema.Ids (TxMetadataId (..), idEncoder)
 import DbSync.Db.Schema.Metadata (TxMetadata, txMetadataEncoder, txMetadataTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Statement.Common (nextIdStmt)
 
 table :: Text
 table = tdName txMetadataTableDef
@@ -38,7 +38,4 @@ insertTxMetadataRowStmt =
 
 -- | Allocate a new id from the @tx_metadata_id_seq@ sequence.
 nextTxMetadataIdStmt :: Stmt.Statement () TxMetadataId
-nextTxMetadataIdStmt =
-  Stmt.preparable sql E.noParams (D.singleRow $ idDecoder TxMetadataId)
-  where
-    sql = "SELECT nextval('" <> table <> "_id_seq')"
+nextTxMetadataIdStmt = nextIdStmt txMetadataTableDef TxMetadataId

@@ -17,10 +17,6 @@ import Cardano.Prelude
 
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 
-import qualified Data.ByteString as BS
-
-import Cardano.Ledger.Coin (Coin (..))
-
 import DbSync.Block.Types
   ( GenericBlock (..)
   , GenericTx (..)
@@ -39,6 +35,7 @@ import DbSync.Extractor
   )
 import DbSync.Extractor.SharedDedup (resolveAndWritePoolHash, resolveAndWriteStakeAddress)
 import DbSync.Resolver (IdResolver (..))
+import DbSync.Util (coinToDbLovelace, rewardAddrCred)
 import DbSync.Writer (Writer (..))
 
 -- ---------------------------------------------------------------------------
@@ -172,11 +169,7 @@ processStakeDelegation resolver writer ctx = do
 
     -- 2. Process withdrawals
     forM_ (txWithdrawals gtx) $ \w -> do
-      let rewardAddr = txwRewardAddress w
-          -- Use last 28 bytes as credential hash (skip 1-byte header)
-          credHash = if BS.length rewardAddr > 1
-                       then BS.drop 1 rewardAddr
-                       else rewardAddr
+      let credHash = rewardAddrCred (txwRewardAddress w)
       saId <- resolveAndWriteStakeAddress network resolver writer credHash
       wId  <- assignWithdrawalId resolver
       let wd = Withdrawal
@@ -192,7 +185,4 @@ processStakeDelegation resolver writer ctx = do
     stakeDeposit :: Maybe Word64 -> Maybe DbLovelace
     stakeDeposit (Just d) = Just (DbLovelace d)
     stakeDeposit Nothing  = coinToDbLovelace <$> bldStakeKeyDeposit (bcLedgerData ctx)
-
-coinToDbLovelace :: Coin -> DbLovelace
-coinToDbLovelace (Coin n) = DbLovelace (fromInteger n)
 

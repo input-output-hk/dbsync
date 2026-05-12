@@ -63,6 +63,7 @@ library
     DbSync.Db.Statement.Backfill
     DbSync.Db.Statement.Block
     DbSync.Db.Statement.CollateralTxIn
+    DbSync.Db.Statement.Common
     DbSync.Db.Statement.CollateralTxOut
     DbSync.Db.Statement.Delegation
     DbSync.Db.Statement.Indexes

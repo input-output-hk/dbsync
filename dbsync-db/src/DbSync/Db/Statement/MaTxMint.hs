@@ -15,12 +15,12 @@ import Cardano.Prelude
 import Data.Functor.Contravariant ((>$<))
 import qualified Data.Text as T
 import qualified Hasql.Decoders as D
-import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
-import DbSync.Db.Schema.Ids (MaTxMintId (..), idDecoder, idEncoder)
+import DbSync.Db.Schema.Ids (MaTxMintId (..), idEncoder)
 import DbSync.Db.Schema.MultiAsset (MaTxMint, maTxMintEncoder, maTxMintTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Statement.Common (nextIdStmt)
 
 table :: Text
 table = tdName maTxMintTableDef
@@ -39,7 +39,4 @@ insertMaTxMintRowStmt =
 
 -- | Allocate a new id from the @ma_tx_mint_id_seq@ sequence.
 nextMaTxMintIdStmt :: Stmt.Statement () MaTxMintId
-nextMaTxMintIdStmt =
-  Stmt.preparable sql E.noParams (D.singleRow $ idDecoder MaTxMintId)
-  where
-    sql = "SELECT nextval('" <> table <> "_id_seq')"
+nextMaTxMintIdStmt = nextIdStmt maTxMintTableDef MaTxMintId

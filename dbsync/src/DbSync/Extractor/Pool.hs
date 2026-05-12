@@ -17,10 +17,6 @@ import Cardano.Prelude
 
 import Cardano.Slotting.Slot (EpochNo (..))
 
-import qualified Data.ByteString as BS
-
-import Cardano.Ledger.Coin (Coin (..))
-
 import DbSync.Block.Types
   ( GenericBlock (..)
   , GenericTx (..)
@@ -41,6 +37,7 @@ import DbSync.Extractor
   )
 import DbSync.Extractor.SharedDedup (resolveAndWritePoolHash, resolveAndWriteStakeAddress)
 import DbSync.Resolver (IdResolver (..))
+import DbSync.Util (coinToDbLovelace, rewardAddrCred)
 import DbSync.Writer (Writer (..))
 
 -- ---------------------------------------------------------------------------
@@ -103,10 +100,7 @@ processPool resolver writer ctx = do
               writePoolMetadataRef writer pmId pm
               pure (Just pmId)
 
-          let rewardAddr = prdRewardAddr prd
-              rewardCredHash = if BS.length rewardAddr > 1
-                                 then BS.drop 1 rewardAddr
-                                 else rewardAddr
+          let rewardCredHash = rewardAddrCred (prdRewardAddr prd)
           rewardAddrId <- resolveAndWriteStakeAddress network resolver writer rewardCredHash
 
           puId <- assignPoolUpdateId resolver
@@ -168,34 +162,23 @@ processPool resolver writer ctx = do
 -- * Helpers
 -- ---------------------------------------------------------------------------
 
--- | Build a 'PoolRelay' from relay data.
+-- | Build a 'PoolRelay' from relay data. Each variant only fills the
+-- fields it carries; everything else defaults to 'Nothing'.
 mkPoolRelay :: PoolUpdateId -> PoolRelayData -> PoolRelay
-mkPoolRelay puId (PoolRelaySingleAddr mPort mIpv4 mIpv6) = PoolRelay
-  { poolRelayUpdateId   = puId
-  , poolRelayIpv4       = mIpv4
-  , poolRelayIpv6       = mIpv6
-  , poolRelayDnsName    = Nothing
-  , poolRelayDnsSrvName = Nothing
-  , poolRelayPort       = mPort
-  }
-mkPoolRelay puId (PoolRelayDnsName mPort dnsName) = PoolRelay
-  { poolRelayUpdateId   = puId
-  , poolRelayIpv4       = Nothing
-  , poolRelayIpv6       = Nothing
-  , poolRelayDnsName    = Just dnsName
-  , poolRelayDnsSrvName = Nothing
-  , poolRelayPort       = mPort
-  }
-mkPoolRelay puId (PoolRelayDnsSrv srvName) = PoolRelay
-  { poolRelayUpdateId   = puId
-  , poolRelayIpv4       = Nothing
-  , poolRelayIpv6       = Nothing
-  , poolRelayDnsName    = Nothing
-  , poolRelayDnsSrvName = Just srvName
-  , poolRelayPort       = Nothing
-  }
-
--- | Project a 'Coin' deposit value into the schema's 'DbLovelace'.
-coinToDbLovelace :: Coin -> DbLovelace
-coinToDbLovelace (Coin n) = DbLovelace (fromInteger n)
+mkPoolRelay puId = \case
+  PoolRelaySingleAddr mPort mIpv4 mIpv6 ->
+    (emptyRelay puId) { poolRelayIpv4 = mIpv4, poolRelayIpv6 = mIpv6, poolRelayPort = mPort }
+  PoolRelayDnsName mPort dnsName ->
+    (emptyRelay puId) { poolRelayDnsName = Just dnsName, poolRelayPort = mPort }
+  PoolRelayDnsSrv srvName ->
+    (emptyRelay puId) { poolRelayDnsSrvName = Just srvName }
+  where
+    emptyRelay i = PoolRelay
+      { poolRelayUpdateId   = i
+      , poolRelayIpv4       = Nothing
+      , poolRelayIpv6       = Nothing
+      , poolRelayDnsName    = Nothing
+      , poolRelayDnsSrvName = Nothing
+      , poolRelayPort       = Nothing
+      }
 

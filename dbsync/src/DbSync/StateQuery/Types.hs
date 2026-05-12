@@ -39,7 +39,6 @@ import DbSync.StateQuery.ObservedSummary (ObservedSummary)
 -- ---------------------------------------------------------------------------
 
 -- | Slot details computed by the HardFork Interpreter.
--- Replaces the manual epoch\/slot math in 'EpochSlotInfo'.
 data SlotDetails = SlotDetails
   { sdSlotTime    :: !UTCTime
   , sdCurrentTime :: !UTCTime

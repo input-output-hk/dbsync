@@ -17,12 +17,12 @@ import Cardano.Prelude
 import Data.Functor.Contravariant ((>$<))
 import qualified Data.Text as T
 import qualified Hasql.Decoders as D
-import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
-import DbSync.Db.Schema.Ids (PoolHashId (..), idDecoder, idEncoder)
+import DbSync.Db.Schema.Ids (PoolHashId (..), idEncoder)
 import DbSync.Db.Schema.Pool (PoolHash, poolHashEncoder, poolHashTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Statement.Common (LookupColumn (..), nextIdStmt, queryIdByColumnStmt)
 
 table :: Text
 table = tdName poolHashTableDef
@@ -39,16 +39,8 @@ insertPoolHashRowStmt =
       ]
 
 nextPoolHashIdStmt :: Stmt.Statement () PoolHashId
-nextPoolHashIdStmt =
-  Stmt.preparable sql E.noParams (D.singleRow $ idDecoder PoolHashId)
-  where
-    sql = "SELECT nextval('" <> table <> "_id_seq')"
+nextPoolHashIdStmt = nextIdStmt poolHashTableDef PoolHashId
 
 -- | Look up an existing 'PoolHashId' by 28-byte pool key hash.
 queryPoolHashIdStmt :: Stmt.Statement ByteString (Maybe PoolHashId)
-queryPoolHashIdStmt =
-  Stmt.preparable sql
-    (E.param (E.nonNullable E.bytea))
-    (D.rowMaybe (idDecoder PoolHashId))
-  where
-    sql = "SELECT id FROM " <> table <> " WHERE hash_raw = $1"
+queryPoolHashIdStmt = queryIdByColumnStmt poolHashTableDef ByHashRaw PoolHashId

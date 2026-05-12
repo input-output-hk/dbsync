@@ -22,16 +22,16 @@ import Cardano.Prelude
 import Data.Functor.Contravariant ((>$<))
 import qualified Data.Text as T
 import qualified Hasql.Decoders as D
-import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
-import DbSync.Db.Schema.Ids (StakeAddressId (..), idDecoder, idEncoder)
+import DbSync.Db.Schema.Ids (StakeAddressId (..), idEncoder)
 import DbSync.Db.Schema.StakeDelegation
   ( StakeAddress
   , stakeAddressEncoder
   , stakeAddressTableDef
   )
 import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Statement.Common (LookupColumn (..), nextIdStmt, queryIdByColumnStmt)
 
 table :: Text
 table = tdName stakeAddressTableDef
@@ -48,16 +48,8 @@ insertStakeAddressRowStmt =
       ]
 
 nextStakeAddressIdStmt :: Stmt.Statement () StakeAddressId
-nextStakeAddressIdStmt =
-  Stmt.preparable sql E.noParams (D.singleRow $ idDecoder StakeAddressId)
-  where
-    sql = "SELECT nextval('" <> table <> "_id_seq')"
+nextStakeAddressIdStmt = nextIdStmt stakeAddressTableDef StakeAddressId
 
 -- | Look up an existing 'StakeAddressId' by 28-byte credential hash.
 queryStakeAddressIdStmt :: Stmt.Statement ByteString (Maybe StakeAddressId)
-queryStakeAddressIdStmt =
-  Stmt.preparable sql
-    (E.param (E.nonNullable E.bytea))
-    (D.rowMaybe (idDecoder StakeAddressId))
-  where
-    sql = "SELECT id FROM " <> table <> " WHERE hash_raw = $1"
+queryStakeAddressIdStmt = queryIdByColumnStmt stakeAddressTableDef ByHashRaw StakeAddressId

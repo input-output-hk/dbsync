@@ -32,6 +32,7 @@ import qualified Hasql.Statement as Stmt
 import DbSync.Db.Schema.Core (Block, blockEncoder, blockTableDef)
 import DbSync.Db.Schema.Ids (BlockId (..), idDecoder, idEncoder)
 import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Statement.Common (LookupColumn (..), countRowsStmt, nextIdStmt, queryIdByColumnStmt)
 
 table :: Text
 table = tdName blockTableDef
@@ -69,27 +70,15 @@ insertBlockRowStmt =
 
 -- | Allocate a new id from the @block_id_seq@ sequence.
 nextBlockIdStmt :: Stmt.Statement () BlockId
-nextBlockIdStmt =
-  Stmt.preparable sql E.noParams (D.singleRow $ idDecoder BlockId)
-  where
-    sql = "SELECT nextval('" <> table <> "_id_seq')"
+nextBlockIdStmt = nextIdStmt blockTableDef BlockId
 
 -- | Look up a block id by its hash.
 queryBlockIdByHashStmt :: Stmt.Statement ByteString (Maybe BlockId)
-queryBlockIdByHashStmt =
-  Stmt.preparable sql
-    (E.param (E.nonNullable E.bytea))
-    (D.rowMaybe (idDecoder BlockId))
-  where
-    sql = "SELECT id FROM " <> table <> " WHERE hash = $1"
+queryBlockIdByHashStmt = queryIdByColumnStmt blockTableDef ByHash BlockId
 
 -- | Count rows in @block@.
 queryBlockCountStmt :: Stmt.Statement () Int64
-queryBlockCountStmt =
-  Stmt.preparable sql E.noParams
-    (D.singleRow (D.column (D.nonNullable D.int8)))
-  where
-    sql = "SELECT COUNT(*) FROM " <> table
+queryBlockCountStmt = countRowsStmt blockTableDef
 
 -- | The largest @block_no@ stored. 'Nothing' if the table is empty
 -- or every row has a NULL @block_no@ (Byron EBBs).

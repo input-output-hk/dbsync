@@ -14,12 +14,12 @@ import Cardano.Prelude
 import Data.Functor.Contravariant ((>$<))
 import qualified Data.Text as T
 import qualified Hasql.Decoders as D
-import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
-import DbSync.Db.Schema.Ids (PoolRetireId (..), idDecoder, idEncoder)
+import DbSync.Db.Schema.Ids (PoolRetireId (..), idEncoder)
 import DbSync.Db.Schema.Pool (PoolRetire, poolRetireEncoder, poolRetireTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Statement.Common (nextIdStmt)
 
 table :: Text
 table = tdName poolRetireTableDef
@@ -37,7 +37,4 @@ insertPoolRetireRowStmt =
       ]
 
 nextPoolRetireIdStmt :: Stmt.Statement () PoolRetireId
-nextPoolRetireIdStmt =
-  Stmt.preparable sql E.noParams (D.singleRow $ idDecoder PoolRetireId)
-  where
-    sql = "SELECT nextval('" <> table <> "_id_seq')"
+nextPoolRetireIdStmt = nextIdStmt poolRetireTableDef PoolRetireId

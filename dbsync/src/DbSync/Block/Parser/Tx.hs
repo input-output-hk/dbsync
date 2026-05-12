@@ -78,6 +78,7 @@ import qualified Data.Text.Encoding as Text
 import Lens.Micro ((^.))
 
 import qualified DbSync.Block.Metadata as Metadata
+import DbSync.Util (coinToWord64)
 import DbSync.Util.Bech32 (serialiseShelleyAddrToBech32)
 
 import Ouroboros.Consensus.Cardano.Block
@@ -421,10 +422,6 @@ credToBytes (Ledger.ScriptHashObj (Core.ScriptHash h)) = Crypto.hashToBytes h
 -- | Serialise a KeyHash to raw bytes.
 keyHashToBytes :: Ledger.KeyHash r -> ByteString
 keyHashToBytes (Ledger.KeyHash h) = Crypto.hashToBytes h
-
--- | Coin to Word64.
-coinToWord64 :: Coin -> Word64
-coinToWord64 (Coin c) = fromIntegral c
 
 -- | Project the era-specific auxiliary data, if present.
 -- Per-era 'from*Metadata' helpers consume this to recover the

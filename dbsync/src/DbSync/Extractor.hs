@@ -99,7 +99,7 @@ data BlockContext = BlockContext
   , bcLedgerData   :: !BlockLedgerData
       -- ^ Worker output for this block. Empty when ledger is OFF.
   , bcSyncPhase    :: !SyncPhase
-      -- ^ Drives Ingest vs Follow dispatch in 'mkTx'.
+      -- ^ Drives Ingest vs Follow tx-row construction inside the core extractor.
   }
 
 -- | A transaction with pre-assigned shared IDs.

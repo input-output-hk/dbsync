@@ -11,15 +11,12 @@
 module DbSync.Extractor.Core
   ( coreExtractor
 
-    -- * Internal helpers (exported for testing and Pipeline)
-  , mkBlock
-  , mkTx
+    -- * Slot-leader construction (used by 'DbSync.Ingest.Pipeline').
   , mkSlotLeader
   ) where
 
 import Cardano.Prelude
 
-import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 
@@ -47,6 +44,7 @@ import DbSync.Extractor
 import DbSync.Ledger.Types (lookupDepositsMap)
 import DbSync.Phase (SyncPhase (..))
 import DbSync.Resolver (IdResolver (..))
+import DbSync.Util (coinToInt64)
 import DbSync.Writer (Writer (..))
 
 -- ---------------------------------------------------------------------------
@@ -150,9 +148,6 @@ computeTxFinancials resolver ctx gtx
                    - fromIntegral donation :: Int64
       pure (parserFee, Just dep)
     valid _ _ = pure (parserFee, Nothing)
-
-coinToInt64 :: Coin -> Int64
-coinToInt64 (Coin n) = fromInteger n
 
 -- ---------------------------------------------------------------------------
 -- * Record builders (pure, shared across phases)

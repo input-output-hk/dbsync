@@ -42,6 +42,7 @@ import DbSync.Db.Schema.Address
   )
 import DbSync.Db.Schema.Ids (AddressId (..), idDecoder, idEncoder)
 import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Statement.Common (LookupColumn (..), arrayParam, nextIdStmt, nullArrayParam, queryIdByColumnStmt)
 
 table :: Text
 table = tdName addressTableDef
@@ -59,19 +60,11 @@ insertAddressRowStmt =
       ]
 
 nextAddressIdStmt :: Stmt.Statement () AddressId
-nextAddressIdStmt =
-  Stmt.preparable sql E.noParams (D.singleRow $ idDecoder AddressId)
-  where
-    sql = "SELECT nextval('" <> table <> "_id_seq')"
+nextAddressIdStmt = nextIdStmt addressTableDef AddressId
 
 -- | Look up an existing 'AddressId' by raw address bytes.
 queryAddressIdStmt :: Stmt.Statement ByteString (Maybe AddressId)
-queryAddressIdStmt =
-  Stmt.preparable sql
-    (E.param (E.nonNullable E.bytea))
-    (D.rowMaybe (idDecoder AddressId))
-  where
-    sql = "SELECT id FROM " <> table <> " WHERE raw = $1"
+queryAddressIdStmt = queryIdByColumnStmt addressTableDef ByRaw AddressId
 
 -- ---------------------------------------------------------------------------
 -- * Bulk operations
@@ -96,9 +89,8 @@ data BulkAddressInsert = BulkAddressInsert
 -- One round-trip regardless of input size.
 bulkSelectAddressIdsStmt :: Stmt.Statement [ByteString] [(ByteString, AddressId)]
 bulkSelectAddressIdsStmt =
-  Stmt.preparable sql encoder decoder
+  Stmt.preparable sql (arrayParam E.bytea) decoder
   where
-    encoder = E.param (E.nonNullable (E.foldableArray (E.nonNullable E.bytea)))
     decoder = D.rowList $ (,)
       <$> D.column (D.nonNullable D.bytea)
       <*> idDecoder AddressId
@@ -115,19 +107,13 @@ bulkInsertAddressesStmt :: Stmt.Statement BulkAddressInsert ()
 bulkInsertAddressesStmt =
   Stmt.preparable sql encoder D.noResult
   where
-    int8Array       = E.param (E.nonNullable (E.foldableArray (E.nonNullable E.int8)))
-    textArray       = E.param (E.nonNullable (E.foldableArray (E.nonNullable E.text)))
-    byteaArray      = E.param (E.nonNullable (E.foldableArray (E.nonNullable E.bytea)))
-    boolArray       = E.param (E.nonNullable (E.foldableArray (E.nonNullable E.bool)))
-    nullByteaArray  = E.param (E.nonNullable (E.foldableArray (E.nullable    E.bytea)))
-    nullInt8Array   = E.param (E.nonNullable (E.foldableArray (E.nullable    E.int8)))
     encoder =
-         (baiIds            >$< int8Array)
-      <> (baiAddresses      >$< textArray)
-      <> (baiRaws           >$< byteaArray)
-      <> (baiHasScript      >$< boolArray)
-      <> (baiPaymentCreds   >$< nullByteaArray)
-      <> (baiStakeAddressId >$< nullInt8Array)
+         (baiIds            >$< arrayParam     E.int8)
+      <> (baiAddresses      >$< arrayParam     E.text)
+      <> (baiRaws           >$< arrayParam     E.bytea)
+      <> (baiHasScript      >$< arrayParam     E.bool)
+      <> (baiPaymentCreds   >$< nullArrayParam E.bytea)
+      <> (baiStakeAddressId >$< nullArrayParam E.int8)
     sql = T.concat
       [ "INSERT INTO ", table
       , " (id, address, raw, has_script, payment_cred, stake_address_id)"

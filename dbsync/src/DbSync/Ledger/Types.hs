@@ -76,6 +76,8 @@ import Cardano.Slotting.Slot (EpochNo (..))
 import Control.Concurrent.Class.MonadSTM.Strict (StrictTMVar, StrictTVar, newTVarIO)
 import Control.Concurrent.STM.TBQueue (TBQueue)
 import qualified Data.Map.Strict as Map
+
+import DbSync.Ledger.DepositAccumulator (EpochParamsRef)
 import Data.SOP.Functors (Flip (..))
 import Data.SOP.Strict (NP (..), fn, hap, type (-.->))
 import Data.Sequence.Strict (StrictSeq)
@@ -219,12 +221,14 @@ data LedgerEnv = LedgerEnv
     -- 'LedgerWorker'. The consumer reads this at epoch boundaries
     -- (Phase 7) to drive the EpochBoundary extractor; the worker
     -- writes it on every successful 'applyBlock'.
-  , leAppliedQueue         :: !(TBQueue ApplyResult)
-    -- ^ @LedgerWorker → Consumer@ — per-block apply results in
-    -- order. The consumer pops one per block to populate
-    -- @bcLedgerData@; the worker pushes after each successful
-    -- @applyBlock@. Bounded so a slow consumer back-pressures the
-    -- worker rather than memory-growing the queue.
+  , leDepositAccumulator   :: !EpochParamsRef
+    -- ^ Per-epoch protocol-param deposit values (stake_key /
+    -- pool). The worker writes to this on every applied non-replay
+    -- block via
+    -- 'DbSync.Ledger.DepositAccumulator.recordEpochParams'; the
+    -- consumer drains completed epochs at each epoch boundary and
+    -- flushes them to @epoch_param_pending@ before advancing
+    -- @dbsync_sync_state.last_committed_slot@.
   , leControlConnection    :: !ControlConnection
     -- ^ PG connection used by the snapshot-writer thread to record
     -- successful snapshot completions in

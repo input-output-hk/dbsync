@@ -10,7 +10,7 @@
 -- diagnostic line:
 --
 -- @
--- recv=slot:50312000 blk:83205 (+1311) note=ok | worker=slot:50312000 blk:83205 (+1311) note=applyBlockAndSnapshot | consumer=slot:50284917 blk:83000 (+0) note=processBlock [STALL] | qd block=0 ledger=4 applied=0
+-- recv=slot:50312000 blk:83205 (+1311) note=ok | worker=slot:50312000 blk:83205 (+1311) note=applyBlockAndSnapshot | consumer=slot:50284917 blk:83000 (+0) note=processBlock [STALL] | qd block=0 ledger=4
 -- @
 --
 -- When any of @recv@, @worker@, @consumer@ shows @(+0)@ — no
@@ -141,8 +141,8 @@ watchdogInterval = 5
 -- whole line is upgraded to 'Warning' severity with a @[STALL]@
 -- marker.
 --
--- The block queue is mandatory; the ledger / applied queues are
--- only present when the ledger feature is enabled.
+-- The block queue is mandatory; the ledger queue is only present
+-- when the ledger feature is enabled.
 runWatchdog
   :: AppTracer
   -> Watchdog
@@ -150,10 +150,8 @@ runWatchdog
   -- ^ block queue (receiver → consumer)
   -> Maybe (TBQueue b)
   -- ^ ledger queue (receiver → worker), or 'Nothing' when ledger disabled
-  -> Maybe (TBQueue c)
-  -- ^ applied queue (worker → consumer), or 'Nothing' when ledger disabled
   -> IO ()
-runWatchdog tracer wd blockQ mLedgerQ mAppliedQ = do
+runWatchdog tracer wd blockQ mLedgerQ = do
   -- Seed: capture the initial counter values so the first interval
   -- reports a real delta rather than the lifetime total.
   initConsumerB <- readIORef (wdConsumerBlocks wd)
@@ -176,7 +174,6 @@ runWatchdog tracer wd blockQ mLedgerQ mAppliedQ = do
 
       qBlock   <- atomically $ STM.lengthTBQueue blockQ
       qLedger  <- traverse (atomically . STM.lengthTBQueue) mLedgerQ
-      qApplied <- traverse (atomically . STM.lengthTBQueue) mAppliedQ
 
       let dConsumer = consumerB - prevConsumerB
           dWorker   = workerB   - prevWorkerB
@@ -206,8 +203,6 @@ runWatchdog tracer wd blockQ mLedgerQ mAppliedQ = do
               <> renderQ "block" (Just qBlock)
               <> " "
               <> renderQ "ledger" qLedger
-              <> " "
-              <> renderQ "applied" qApplied
               <> marker
 
       traceWith tracer $ LogMsg severity "Watchdog" msg Nothing

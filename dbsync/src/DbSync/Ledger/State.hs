@@ -103,7 +103,7 @@ import Control.Concurrent.Class.MonadSTM.Strict
   , writeTVar
   )
 import qualified Control.Concurrent.Class.MonadSTM.Strict as STM
-import Control.Concurrent.STM.TBQueue (newTBQueueIO, writeTBQueue)
+import Control.Concurrent.STM.TBQueue (newTBQueueIO)
 import qualified Data.ByteString.Short as SBS
 import qualified Data.Map.Strict as Map
 import qualified Data.Sequence.Strict as StrictSeq
@@ -147,9 +147,15 @@ import System.Random (genWord64, newStdGen)
 import DbSync.AppM (LedgerM, runAppM)
 import DbSync.Checkpoint.SyncState (ControlConnection)
 import DbSync.Config.Types (LedgerBackend (..))
+import DbSync.Db.Types (DbLovelace (..))
 import qualified DbSync.Era.Shelley.Generic.EpochUpdate as Generic
 import qualified DbSync.Era.Shelley.Generic.ProtoParams as Generic
 import qualified DbSync.Era.Shelley.Generic.StakeDist as Generic
+import DbSync.Ledger.DepositAccumulator
+  ( EpochParams (..)
+  , newEpochParamsRef
+  , recordEpochParams
+  )
 import DbSync.Ledger.Event
   ( LedgerEvent (..)
   , convertAuxLedgerEvent
@@ -303,7 +309,7 @@ mkHasLedgerEnv
     stateVar        <- newTVarIO Strict.Nothing
     latestApplyVar  <- newTVarIO Strict.Nothing
     ledgerQueue     <- newTBQueueIO ledgerQueueBound
-    appliedQueue    <- newTBQueueIO appliedQueueBound
+    depositAccumRef <- newEpochParamsRef
     epochReady      <- newEmptyTMVarIO
     epochWait       <- newEmptyTMVarIO
     snapshotQueue   <- newTBQueueIO snapshotQueueBound
@@ -398,7 +404,7 @@ mkHasLedgerEnv
           , leLoadSnapshot         = loadSnap
           , leClose                = closeBackend
           , leLatestApplyResult    = latestApplyVar
-          , leAppliedQueue         = appliedQueue
+          , leDepositAccumulator   = depositAccumRef
           , leControlConnection    = ctrlConn
           }
   where
@@ -406,13 +412,6 @@ mkHasLedgerEnv
     -- back-pressure into the receiver as soon as it falls behind.
     ledgerQueueBound :: Natural
     ledgerQueueBound = 100
-
-    -- Shallow bound: each entry retains heavy per-block payloads
-    -- (events, stake slices, gov state) held in reserve for future
-    -- extractor wiring. A 10-deep queue caps memory while keeping
-    -- enough decoupling for short consumer pauses.
-    appliedQueueBound :: Natural
-    appliedQueueBound = 10
 
     -- One slot per retained snapshot (the manager keeps three) plus
     -- a little slack so a mid-write snapshot doesn't block the worker.
@@ -605,9 +604,8 @@ applyBlock blk slotDetails = do
               , apGovActionState  = getGovState finalState
               , apDepositsMap     = DepositsMap deposits
               }
-      liftIO $ atomically $ do
+      liftIO $ atomically $
         writeTVar (leLatestApplyResult env) (Strict.Just appResult)
-        writeTBQueue (leAppliedQueue env) appResult
       pure (oldRef, appResult, pruned)
 
 -- | 'applyBlock' plus the snapshot-cadence decision and pruning of
@@ -634,6 +632,12 @@ applyBlockAndSnapshot blk slotDetails consistent mReplayBoundary = do
   (oldRef, appResult, pruned) <- applyBlock blk slotDetails
   let nearTip        = isSyncedNearTip slotDetails
       inReplayWindow = maybe False (blockSlot blk <=) mReplayBoundary
+  -- Record this block's epoch params in the in-memory accumulator
+  -- so the consumer can flush them at the next epoch boundary.
+  -- Skipped inside the replay window: those epochs are already in
+  -- @epoch_param_pending@ from the previous run.
+  unless inReplayWindow $
+    liftIO $ accumulateEpochParams env appResult
   tookSnapshot <-
     if not inReplayWindow
        && shouldSnapshotAtEpoch appResult consistent nearTip (leSnapshotNearTipEpoch env)
@@ -645,6 +649,25 @@ applyBlockAndSnapshot blk slotDetails consistent mReplayBoundary = do
     atomically $ readTVar (srCanClose sr) >>= STM.check
     Consensus.close (srTables sr)
   pure (appResult, tookSnapshot)
+
+-- | Project the 'ApplyResult'\'s deposit data into the per-epoch
+-- accumulator. Byron blocks (no @apDeposits@) and pre-Shelley
+-- blocks are skipped — there are no protocol-param deposits to
+-- record. Multiple writes for the same epoch are idempotent
+-- because protocol params are constant within an epoch.
+accumulateEpochParams :: LedgerEnv -> ApplyResult -> IO ()
+accumulateEpochParams env result =
+  case apDeposits result of
+    Strict.Nothing -> pure ()
+    Strict.Just d  -> do
+      let !ep = EpochParams
+            { epStakeKeyDeposit = DbLovelace (fromIntegral (unCoin (Generic.stakeKeyDeposit d)))
+            , epPoolDeposit     = DbLovelace (fromIntegral (unCoin (Generic.poolDeposit d)))
+            }
+      recordEpochParams
+        (leDepositAccumulator env)
+        (sdEpochNo (apSlotDetails result))
+        ep
 
 -- ---------------------------------------------------------------------------
 -- * Helpers used by block application

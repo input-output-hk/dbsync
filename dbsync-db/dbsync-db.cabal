@@ -54,6 +54,7 @@ library
     DbSync.Db.Schema.EpochSyncStats
     DbSync.Db.Schema.AdaPots
     DbSync.Db.Schema.SyncState
+    DbSync.Db.Schema.EpochParamPending
     DbSync.Db.Schema.Generate
     DbSync.Db.Schema.Init
     DbSync.Db.Schema.Version
@@ -66,6 +67,7 @@ library
     DbSync.Db.Statement.Common
     DbSync.Db.Statement.CollateralTxOut
     DbSync.Db.Statement.Delegation
+    DbSync.Db.Statement.EpochParamPending
     DbSync.Db.Statement.Indexes
     DbSync.Db.Statement.MaTxMint
     DbSync.Db.Statement.MaTxOut

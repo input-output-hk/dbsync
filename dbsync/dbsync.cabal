@@ -111,6 +111,7 @@ library
     DbSync.Era.Shelley.Generic.ProtoParams
     DbSync.Era.Shelley.Generic.Rewards
     DbSync.Era.Shelley.Generic.StakeDist
+    DbSync.Ledger.DepositAccumulator
     DbSync.Ledger.Event
     DbSync.Ledger.Keys
     DbSync.Ledger.Snapshot

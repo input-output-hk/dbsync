@@ -47,6 +47,10 @@ import qualified Data.Text as T
 import System.IO.Error (userError)
 import System.Process (readProcessWithExitCode)
 
+import DbSync.Db.Schema.EpochParamPending
+  ( epochParamPendingTableDef
+  , epochParamPendingTableName
+  )
 import DbSync.Db.Schema.Generate (generateCreateTable)
 import DbSync.Db.Schema.SyncState (syncStateTableDef, syncStateTableName)
 import DbSync.Db.Schema.Types (TableDef (..), TableMode (..))
@@ -118,8 +122,12 @@ data SchemaAction
 -- 1. Creates the @schema_version@ table.
 -- 2. Creates the @dbsync_sync_state@ singleton metadata table
 --    (LOGGED, constrained; see 'DbSync.Db.Schema.SyncState').
--- 3. Creates all data tables from the 'TableDef's via 'generateCreateTable'.
--- 4. Records extractor versions in @schema_version@.
+-- 3. Creates the @epoch_param_pending@ system table used by the
+--    ledger worker → PreparingForChainTip deposit-flush handshake
+--    (LOGGED so it survives a crash between flush and sync-state
+--    advance; truncated at end of 'PreparingForChainTip').
+-- 4. Creates all data tables from the 'TableDef's via 'generateCreateTable'.
+-- 5. Records extractor versions in @schema_version@.
 --
 -- __Not idempotent__: this function expects the database to be empty (no
 -- @schema_version@ table). Callers that want to re-run on a populated DB
@@ -139,6 +147,11 @@ initSchema tableDefs extractorVersions connStr = do
   -- the extractor tables, so it picks up the same column-ordering
   -- golden as the rest of the schema.
   execPsql connStr (generateCreateTable syncStateTableDef)
+
+  -- System table for the ledger worker's per-epoch deposit-param
+  -- snapshot. Always created; stays empty when the ledger feature
+  -- is disabled.
+  execPsql connStr (generateCreateTable epochParamPendingTableDef)
 
   -- Create all data tables
   let ddlStatements = map generateCreateTable tableDefs
@@ -169,6 +182,10 @@ dropSchema tableDefs _extractorVersions connStr = do
   -- Drop the sync-state table too so tests / resync-from-genesis start fresh
   execPsql connStr $
     "DROP TABLE IF EXISTS " <> quoteIdent syncStateTableName <> " CASCADE;"
+
+  -- Drop the system temp table used by the ledger-worker deposit flush.
+  execPsql connStr $
+    "DROP TABLE IF EXISTS " <> quoteIdent epochParamPendingTableName <> " CASCADE;"
 
   -- Drop the schema_version table itself (not just its rows). Dropping the
   -- table is the only way to recover from a stale shape (e.g. left over from

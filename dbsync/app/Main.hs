@@ -434,11 +434,8 @@ main = do
   let mLedgerQueue = case hasLedgerEnv of
         LedgerEnabled lenv -> Just (leLedgerQueue lenv)
         LedgerDisabled _   -> Nothing
-      mAppliedQueue = case hasLedgerEnv of
-        LedgerEnabled lenv -> Just (leAppliedQueue lenv)
-        LedgerDisabled _   -> Nothing
   withIOManager $ \iomgr ->
-    withAsync (runWatchdog tracer watchdog blockQueue mLedgerQueue mAppliedQueue) $ \watchdogThread -> do
+    withAsync (runWatchdog tracer watchdog blockQueue mLedgerQueue) $ \watchdogThread -> do
       link watchdogThread
       withAsync (runAppM ingestEnv $ connectToNode iomgr topLevelCfg networkMagic (caSocketPath args) intersectReq) $ \nodeThread -> do
         link nodeThread

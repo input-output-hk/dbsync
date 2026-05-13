@@ -38,7 +38,6 @@ module DbSync.Ingest.Consumer
 
     -- * Queue utilities
   , drainTBQueue
-  , drainAppliedQueue
 
     -- * Replay-progress logging (exported for tests)
   , ReplayLogState (..)
@@ -69,7 +68,7 @@ import DbSync.AppM (IngestM)
 import DbSync.Block.Parser (parseBlock)
 import DbSync.Block.Types (GenericBlock (..))
 import DbSync.Checkpoint.Manager (mkBoundarySyncStateRow)
-import DbSync.Checkpoint.SyncState (writeSyncState)
+import DbSync.Checkpoint.SyncState (ControlConnection (..), writeSyncState)
 import DbSync.Config.Types (LedgerConfig (..), SyncConfig (..))
 import DbSync.Copy.Writer (CopyWriter (..))
 import DbSync.Db.Schema.EpochSyncStats (EpochSyncStats (..), SyncPhase (..))
@@ -80,6 +79,7 @@ import DbSync.Extractor.EpochBoundary (runEpochBoundary)
 import DbSync.Id.DedupMap (dedupMapSizes)
 import DbSync.Ingest.Pipeline (processBlock)
 import DbSync.Ingest.ReceiverStats (EpochSnapshot (..), readAndResetEpoch)
+import DbSync.Ledger.DepositAccumulator (drainCompletedEpochs, flushEpochParams)
 import DbSync.Ledger.Types
   ( ApplyResult (..)
   , HasLedgerEnv (..)
@@ -447,12 +447,6 @@ runConsumer = do
               <> " blocks in " <> fmtF2 (realToFrac elapsed :: Double)
               <> "s, resuming COPY at slot " <> show (unSlotNo slot)
 
-      -- Drain one leAppliedQueue entry per replayed block; otherwise
-      -- the bounded queue fills and the worker deadlocks.
-      when isReplay $ case hasLedger of
-        LedgerEnabled lenv -> liftIO $ drainAppliedQueue (leAppliedQueue lenv)
-        LedgerDisabled _   -> pure ()
-
       -- Replayed blocks are already in PG; skip processBlock.
       unless isReplay $ do
         -- Update the observed summary before 'getSlotDetails' so
@@ -543,7 +537,14 @@ runConsumer = do
               setConsumerNote watchdog "consumer: awaitDrained (address resolver)"
               awaitDrained addressResolver
 
-              -- 4. Safe to advance sync_state: COPY data is durable AND
+              -- 4. Flush the ledger worker's per-epoch protocol-param
+              --    deposit data to epoch_param_pending. Must happen
+              --    before sync_state advances so a crash after this
+              --    point still finds the data when Prep runs.
+              setConsumerNote watchdog "consumer: flushEpochParams"
+              flushPendingDeposits hasLedger prev slot ctrlConn
+
+              -- 5. Safe to advance sync_state: COPY data is durable AND
               --    address_id FKs are resolved. The address counter is
               --    read from the resolver (not 'counters') because the
               --    worker is its sole allocator.
@@ -558,7 +559,7 @@ runConsumer = do
                   writeSyncState ctrlConn row
                 Nothing -> pure ()
 
-              -- 5. Reopen COPY streams for the next epoch.
+              -- 6. Reopen COPY streams for the next epoch.
               setConsumerNote watchdog "consumer: cwReopen"
               cwReopen copyWriter
               setConsumerNote watchdog "consumer: post-commit"
@@ -734,6 +735,23 @@ waitForApplyResultAt lenv targetSlot = Strict.atomically $ do
       | sdSlotNo (apSlotDetails ar) >= targetSlot -> pure ar
     _ -> retry
 
+-- | Wait for the worker to catch up to the boundary block, then
+-- drain every accumulated deposit-param entry at or before the
+-- just-completed epoch and flush them to @epoch_param_pending@.
+-- A no-op when the ledger feature is disabled.
+flushPendingDeposits
+  :: HasLedgerEnv
+  -> EpochNo            -- ^ just-completed epoch (drain watermark)
+  -> SlotNo             -- ^ boundary block slot (worker catch-up target)
+  -> ControlConnection
+  -> IO ()
+flushPendingDeposits hasLedger prev slot ctrl = case hasLedger of
+  LedgerDisabled _   -> pure ()
+  LedgerEnabled lenv -> do
+    _ <- waitForApplyResultAt lenv slot
+    completed <- drainCompletedEpochs (leDepositAccumulator lenv) prev
+    flushEpochParams (unControlConnection ctrl) completed
+
 -- ---------------------------------------------------------------------------
 -- * Queue utilities
 -- ---------------------------------------------------------------------------
@@ -754,7 +772,3 @@ drainTBQueue q maxN = atomically $ do
       case mVal of
         Nothing  -> pure []
         Just val -> (val :) <$> go (n - 1)
-
--- | Pop and discard one entry from the worker → consumer apply-result queue.
-drainAppliedQueue :: TBQueue ApplyResult -> IO ()
-drainAppliedQueue q = atomically $ void $ readTBQueue q

@@ -113,6 +113,7 @@ test-suite dbsync-test
     DbSync.Ingest.PipelineSpec
     DbSync.Schema.InitSpec
     DbSync.Copy.WriterSpec
+    DbSync.Ledger.DepositAccumulatorSpec
     DbSync.Ledger.StateSpec
     DbSync.Ledger.TypesSpec
     DbSync.Ledger.WorkerSpec

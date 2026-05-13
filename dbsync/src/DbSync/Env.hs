@@ -33,8 +33,6 @@ module DbSync.Env
 import Cardano.Prelude
 
 import Control.Concurrent.STM (TBQueue, TVar)
-import Control.Concurrent.STM.TBQueue (readTBQueue)
-import qualified Data.Strict.Maybe as Strict
 import Data.IORef (IORef)
 
 import Cardano.Ledger.BaseTypes (Network)
@@ -46,10 +44,8 @@ import DbSync.Block.Types (CardanoPoint)
 import DbSync.Checkpoint.SyncState (ControlConnection)
 import DbSync.Config.Types (NodeConfig, SyncConfig)
 import DbSync.Copy.Writer (CopyWriter)
-import qualified DbSync.Era.Shelley.Generic.ProtoParams as Generic
 import DbSync.Extractor
-  ( BlockLedgerData (..)
-  , ExtractState
+  ( ExtractState
   , ExtractorDef
   , HasExtractors (..)
   , HasLedgerData (..)
@@ -58,11 +54,7 @@ import DbSync.Extractor
   )
 import DbSync.Id.DedupMap (DedupMaps)
 import DbSync.Ingest.ReceiverStats (ReceiverStats)
-import DbSync.Ledger.Types
-  ( ApplyResult (..)
-  , HasLedgerEnv (..)
-  , LedgerEnv (..)
-  )
+import DbSync.Ledger.Types (HasLedgerEnv, LedgerEnv (..))
 import DbSync.Metrics (HasMetrics (..), Metrics)
 import DbSync.Phase (SyncPhase (..))
 import DbSync.Resolver (HasResolver (..), IdResolver)
@@ -310,27 +302,14 @@ instance HasWriter IngestEnv where
 -- * HasLedgerData / HasSyncPhase instances
 -- ---------------------------------------------------------------------------
 
--- | Pop the per-block apply result from the worker's
--- 'leAppliedQueue' and project the deposit data into a
--- 'BlockLedgerData'. Returns 'emptyBlockLedgerData' when the
--- ledger feature is disabled.
---
--- The block argument is unused: the queue's order matches the
--- consumer's order by construction.
+-- | During 'IngestChainHistory' extractors never see ledger output
+-- per block: the worker accumulates protocol-param deposits into
+-- @epoch_param_pending@ at epoch boundaries and
+-- 'PreparingForChainTip' backfills the affected columns once
+-- ingest exits. Keeping this 'emptyBlockLedgerData' decouples the
+-- worker from the consumer's hot path.
 instance HasLedgerData IngestEnv where
-  getLedgerData env _block = case ieHasLedgerEnv env of
-    LedgerDisabled _ -> pure emptyBlockLedgerData
-    LedgerEnabled lenv -> do
-      ar <- atomically $ readTBQueue (leAppliedQueue lenv)
-      let mDeposits = case apDeposits ar of
-            Strict.Just d  -> Just d
-            Strict.Nothing -> Nothing
-      pure BlockLedgerData
-        { bldLedgerEnabled   = True
-        , bldDepositsMap     = apDepositsMap ar
-        , bldStakeKeyDeposit = Generic.stakeKeyDeposit <$> mDeposits
-        , bldPoolDeposit     = Generic.poolDeposit <$> mDeposits
-        }
+  getLedgerData _env _block = pure emptyBlockLedgerData
 
 instance HasSyncPhase IngestEnv where
   getSyncPhase _ = IngestChainHistory

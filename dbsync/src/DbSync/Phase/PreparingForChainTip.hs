@@ -50,12 +50,16 @@ import qualified DbSync.Phase.PreparingForChainTip.Sequences as Sequences
 --   2. Backfill @tx.fee@ on phase-2 failures, then @tx.deposit@ on
 --      both phase-2 failures and valid-contract txs (the
 --      ledger-disabled fallback).
---   3. Flip every UNLOGGED table to LOGGED and attach an
+--   3. Apply the per-epoch protocol-param deposits accumulated
+--      during ingest to @pool_update.deposit@ (first registrations)
+--      and @stake_registration.deposit@ (Shelley-Babbage rows);
+--      then TRUNCATE the staging table.
+--   4. Flip every UNLOGGED table to LOGGED and attach an
 --      @<table>_id_seq@.
---   4. @CREATE INDEX CONCURRENTLY@ for every PK and unique
+--   5. @CREATE INDEX CONCURRENTLY@ for every PK and unique
 --      constraint declared on the schema.
---   5. @ANALYZE@ each table so the planner picks up the new shape.
---   6. @setval@ each @<table>_id_seq@ to @MAX(id) + 1@.
+--   6. @ANALYZE@ each table so the planner picks up the new shape.
+--   7. @setval@ each @<table>_id_seq@ to @MAX(id) + 1@.
 --
 -- Each step is a single SQL operation per table or per concern;
 -- there is no application-level batching or per-epoch chunking
@@ -65,6 +69,8 @@ run :: Conn.Connection -> [TableDef] -> IO ()
 run conn tables = do
   _ <- Resolve.resolveForeignKeys conn
   _ <- Backfill.backfillTxColumns conn
+  _ <- Backfill.applyDepositPending conn
+  Backfill.truncateDepositPending conn
   for_ (prepareSchemaForFollowTipSql tables) (runDdl conn)
   Indexes.createIndexes conn tables
   for_ tables $ \td -> runDdl conn (analyzeSql (tdName td))

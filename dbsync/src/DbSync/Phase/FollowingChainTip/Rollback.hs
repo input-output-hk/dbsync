@@ -1,0 +1,167 @@
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
+
+-- | Rollback cascade for 'FollowingChainTip'.
+--
+-- 'rollbackToPoint' resolves the target to a @block_id@, computes
+-- the per-FK-family minimum ids that mark the threshold past which
+-- rows are to be deleted, then runs the cascade and the sync-state
+-- advance inside one PG transaction. Mirrors the original
+-- cardano-db-sync's @deleteBlocksBlockId@ — slow path only.
+--
+-- The cascade tables come from each 'TableDef'\'s 'tdForeignKeys' so
+-- the rollback automatically picks up new dependent tables when they
+-- declare the right FK; no hand-maintained list to drift.
+module DbSync.Phase.FollowingChainTip.Rollback
+  ( rollbackToPoint
+
+    -- * Schema-walk helpers (exported for tests)
+  , childrenOf
+  ) where
+
+import Cardano.Prelude
+
+import qualified Hasql.Connection as Conn
+import qualified Hasql.Session as Sess
+import qualified Hasql.Statement as Stmt
+import Ouroboros.Consensus.Block.Abstract (toRawHash)
+import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
+import Ouroboros.Consensus.Cardano.Node ()                       -- CanHardFork orphan
+import Ouroboros.Consensus.Shelley.HFEras ()                     -- per-era HFC instances
+import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()    -- LedgerSupportsProtocol orphans
+import Ouroboros.Network.Block (pattern BlockPoint, pattern GenesisPoint)
+import Cardano.Slotting.Slot (SlotNo (..))
+
+import DbSync.Block.Types (CardanoPoint)
+import qualified DbSync.Db.Schema.Core as Core
+import DbSync.Db.Schema.Ids (getPoolUpdateId, getTxId, getTxOutId)
+import qualified DbSync.Db.Schema.Pool as Pool
+import DbSync.Db.Schema.Types (ForeignKey (..), TableDef (..))
+import qualified DbSync.Db.Schema.UTxO as UTxO
+import DbSync.Db.Statement.Rollback
+  ( deleteBlockAfterIdStmt
+  , deleteWhereGteStmt
+  , queryBlockAtPointStmt
+  , queryMinPoolUpdateIdAfterTxStmt
+  , queryMinTxIdAfterBlockStmt
+  , queryMinTxOutIdAfterBlockStmt
+  )
+import DbSync.Db.Statement.SyncState (writeSyncStateSlotStmt)
+import DbSync.Db.Transaction (withTransaction)
+
+-- | Delete every row past the rollback target and advance
+-- @dbsync_sync_state.last_committed_*@ to match.
+--
+-- The supplied 'TableDef' list scopes the cascade: only declared
+-- tables are considered, and a table's outgoing FKs (the parent
+-- table referenced by 'fkParentTable') decide which family it
+-- belongs to. Tables that don't reference @tx@ / @tx_out@ /
+-- @pool_update@ are silently skipped.
+--
+-- Refuses to roll back to 'GenesisPoint' — that would empty the DB
+-- and is almost always a protocol bug rather than a real rollback.
+-- Panics on a target the @block@ table doesn't know about (the node
+-- sent us a point we never received).
+rollbackToPoint :: [TableDef] -> Conn.Connection -> CardanoPoint -> IO ()
+rollbackToPoint tableDefs conn point = case point of
+  GenesisPoint ->
+    panic "rollbackToPoint: rollback to genesis is not supported"
+  BlockPoint slotNo hash -> do
+    let rawHash = toRawHash (Proxy @(CardanoBlock StandardCrypto)) hash
+        rawSlot = unSlotNo slotNo
+
+    mTarget <- runSess conn "queryBlockAtPointStmt"
+      ((rawSlot, rawHash), queryBlockAtPointStmt)
+    (targetBlockId, targetBlockNo) <- case mTarget of
+      Just t  -> pure t
+      Nothing -> panic $
+        "rollbackToPoint: no block in PG at slot " <> show rawSlot
+          <> " — node sent a rollback target we never received"
+
+    -- Single-threaded Follow loop guarantees no concurrent inserts
+    -- shift these thresholds between the reads and the deletes, so
+    -- caching them outside the transaction is safe.
+    mMinTxId <- runSess conn "queryMinTxIdAfterBlockStmt"
+      (targetBlockId, queryMinTxIdAfterBlockStmt)
+    mMinTxOutId <- case mMinTxId of
+      Nothing      -> pure Nothing
+      Just minTxId -> runSess conn "queryMinTxOutIdAfterBlockStmt"
+        (minTxId, queryMinTxOutIdAfterBlockStmt)
+    mMinPoolUpdateId <- case mMinTxId of
+      Nothing      -> pure Nothing
+      Just minTxId -> runSess conn "queryMinPoolUpdateIdAfterTxStmt"
+        (minTxId, queryMinPoolUpdateIdAfterTxStmt)
+
+    -- Pre-compute per-family delete lists from the schema. Each entry
+    -- is @(this-table, this-table's FK column to the parent)@. The
+    -- parent table itself is deleted separately at the end.
+    let txKeyed         = childrenOf tableDefs (tdName Core.txTableDef)
+        txOutKeyed      = childrenOf tableDefs (tdName UTxO.txOutTableDef)
+        poolUpdateKeyed = childrenOf tableDefs (tdName Pool.poolUpdateTableDef)
+
+    withTransaction conn $ do
+      -- Tx-keyed cascade.
+      for_ mMinTxId $ \minTxId -> do
+        let !i = getTxId minTxId
+        for_ txKeyed $ \(tbl, col) ->
+          void $ runSess conn ("delete " <> tbl)
+            (i, deleteWhereGteStmt tbl col)
+
+      -- TxOut-keyed cascade.
+      for_ mMinTxOutId $ \minTxOutId -> do
+        let !i = getTxOutId minTxOutId
+        for_ txOutKeyed $ \(tbl, col) ->
+          void $ runSess conn ("delete " <> tbl)
+            (i, deleteWhereGteStmt tbl col)
+
+      -- PoolUpdate-keyed cascade. The pool_update parent itself is
+      -- also deleted here because removing the children first lets
+      -- the parent delete proceed without violating any future FK
+      -- constraint additions.
+      for_ mMinPoolUpdateId $ \minPoolUpdateId -> do
+        let !i      = getPoolUpdateId minPoolUpdateId
+            poolTbl = tdName Pool.poolUpdateTableDef
+        for_ poolUpdateKeyed $ \(tbl, col) ->
+          void $ runSess conn ("delete " <> tbl)
+            (i, deleteWhereGteStmt tbl col)
+        void $ runSess conn ("delete " <> poolTbl)
+          (i, deleteWhereGteStmt poolTbl "id")
+
+      -- Finally tx and block themselves.
+      let txTbl = tdName Core.txTableDef
+      for_ mMinTxId $ \minTxId ->
+        void $ runSess conn ("delete " <> txTbl)
+          (getTxId minTxId, deleteWhereGteStmt txTbl "id")
+      void $ runSess conn ("delete " <> tdName Core.blockTableDef)
+        (targetBlockId, deleteBlockAfterIdStmt)
+
+      -- Sync-state advance. The target block is the new chain tip.
+      void $ runSess conn "writeSyncStateSlotStmt"
+        ((rawSlot, targetBlockNo, rawHash), writeSyncStateSlotStmt)
+
+-- | All tables that declare an outgoing FK to @parentTable@, paired
+-- with the FK column name. Walks every supplied 'TableDef' and pulls
+-- out the matching entries from 'tdForeignKeys'.
+childrenOf :: [TableDef] -> Text -> [(Text, Text)]
+childrenOf tableDefs parentTable =
+  [ (tdName td, fkColumn fk)
+  | td <- tableDefs
+  , fk <- tdForeignKeys td
+  , fkParentTable fk == parentTable
+  ]
+
+-- | Run a single 'Stmt.Statement' through 'Sess.statement' on the
+-- supplied connection. Panics with the caller-supplied label on a
+-- session error so the rollback's stack trace stays legible.
+runSess
+  :: Conn.Connection
+  -> Text                                       -- ^ caller label
+  -> (a, Stmt.Statement a b)
+  -> IO b
+runSess conn label (params, stmt) = do
+  r <- Conn.use conn (Sess.statement params stmt)
+  case r of
+    Right b -> pure b
+    Left e  -> panic $ "rollbackToPoint: " <> label <> ": " <> show e

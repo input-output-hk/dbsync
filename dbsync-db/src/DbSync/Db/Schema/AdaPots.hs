@@ -102,6 +102,7 @@ adaPotsTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 -- ---------------------------------------------------------------------------

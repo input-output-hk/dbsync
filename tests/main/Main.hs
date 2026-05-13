@@ -67,6 +67,7 @@ import qualified DbSync.Db.Statement.BlockSpec as DbStatementBlockSpec
 import qualified DbSync.Db.Statement.RoundTripSpec as DbStatementRoundTripSpec
 import qualified DbSync.Db.Statement.SlotLeaderSpec as DbStatementSlotLeaderSpec
 import qualified DbSync.Db.Statement.SyncStateSpec as DbStatementSyncStateSpec
+import qualified DbSync.Phase.FollowingChainTip.RollbackSpec as PhaseRollbackSpec
 import qualified DbSync.Phase.FollowingChainTipSpec as PhaseFollowingChainTipSpec
 import qualified DbSync.Phase.MockChainSpec as PhaseMockChainSpec
 import qualified DbSync.Phase.PreparingForChainTipSpec as PhasePreparingForChainTipSpec
@@ -109,6 +110,7 @@ main = hspec $ do
     UtilDedupHashSpec.spec
     BlockMetadataSpec.spec
     AddressWorkerSpec.spec
+    PhaseRollbackSpec.schemaWalkSpec
 
   describe "Property tests" $
     PropertySpec.spec
@@ -125,4 +127,5 @@ main = hspec $ do
     PhaseFollowingChainTipSpec.spec
     PhaseMockChainSpec.spec
     PhasePreparingForChainTipSpec.spec
+    PhaseRollbackSpec.cascadeSpec
     SchemaInitSpec.spec

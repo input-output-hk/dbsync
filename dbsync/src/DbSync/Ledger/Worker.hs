@@ -56,6 +56,7 @@ import DbSync.AppM (LedgerM, runAppM)
 import qualified DbSync.Era.Shelley.Generic.EpochUpdate as Generic
 import DbSync.Ledger.State (applyBlockAndSnapshot, getTopLevelConfig, readCurrentStateUnsafe)
 import DbSync.Ledger.Types (ApplyResult (..), LedgerEnv (..))
+import DbSync.Node.ChainSyncMsg (ChainSyncMsg (..))
 import DbSync.StateQuery
   ( SlotDetails
   , StateQueryVar
@@ -144,11 +145,39 @@ runLedgerWorker mReplayBoundary sqv wd = do
       "starting (draining ledger queue)" Nothing
     runLedgerWorkerWith
       (Just (leTracer env))
-      (realWorkerHooks env sqv wd mReplayBoundary)
+      (liftHooksForChainSync (realWorkerHooks env sqv wd mReplayBoundary))
       (Just wd)
       (leLedgerQueue env)
       (leEpochReady env)
       (leEpochWait env)
+
+-- | Adapt block-level hooks to the chainsync message queue.
+--
+-- Forward blocks delegate to the underlying hooks unchanged. Rollback
+-- markers panic — the worker keeps an LSM-backed ledger that does not
+-- yet support an in-RAM rollback path. The Ingest phase guarantees we
+-- never see one (the consumer exits at the @chain_tip − k@ boundary
+-- before any volatile block reaches the worker); Follow phases that
+-- need ledger-aware rollback will replace this panic with a call into
+-- 'loadLedgerAtPoint'.
+liftHooksForChainSync
+  :: WorkerHooks (CardanoBlock StandardCrypto)
+  -> WorkerHooks ChainSyncMsg
+liftHooksForChainSync rawHooks =
+  WorkerHooks
+    { whGetSlotDetails = \case
+        MsgForward blk -> whGetSlotDetails rawHooks blk
+        MsgRollback p  ->
+          panic $
+            "LedgerWorker: in-RAM rollback at " <> show p
+              <> " not implemented"
+    , whApplyAndSnapshot = \msg sd -> case msg of
+        MsgForward blk -> whApplyAndSnapshot rawHooks blk sd
+        MsgRollback p  ->
+          panic $
+            "LedgerWorker: in-RAM rollback at " <> show p
+              <> " not implemented"
+    }
 
 -- | Generic worker loop, parameterised by the per-block hooks. The
 -- production path uses 'realWorkerHooks'; tests inject a fake hook

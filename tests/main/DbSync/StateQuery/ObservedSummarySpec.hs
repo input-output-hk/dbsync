@@ -43,15 +43,17 @@ import Test.Hspec (Expectation, Spec, describe, expectationFailure, it, shouldBe
 -- * Mainnet configuration fixture
 -- ---------------------------------------------------------------------------
 
--- | Directory containing the real mainnet genesis files.
-testnetDir :: FilePath
-testnetDir = "/Volumes/Cmdv4TB/Code/IOG/testnet"
+-- | Directory containing a verbatim snapshot of the real mainnet
+-- node config + genesis files. Lets the test run anywhere without
+-- depending on a developer's local cardano-node deployment.
+mainnetDir :: FilePath
+mainnetDir = "fixtures/mainnet"
 
 -- | Build a fresh 'ObservedSummary' from real mainnet genesis files.
 mkInitialMainnetObservedSummary :: IO ObservedSummary
 mkInitialMainnetObservedSummary = do
-  Right nc <- parseNodeConfig (testnetDir <> "/config.json")
-  Right gc <- readCardanoGenesisConfig nc testnetDir
+  Right nc <- parseNodeConfig (mainnetDir <> "/config.json")
+  Right gc <- readCardanoGenesisConfig nc mainnetDir
   pure $ initObservedSummary (mkTopLevelConfig nc gc)
 
 -- | Mainnet's well-known historical era-transition slot for each

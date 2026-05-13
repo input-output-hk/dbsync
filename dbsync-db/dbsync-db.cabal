@@ -81,6 +81,7 @@ library
     DbSync.Db.Statement.ReferenceTxIn
     DbSync.Db.Statement.Resolve
     DbSync.Db.Statement.Resume
+    DbSync.Db.Statement.Rollback
     DbSync.Db.Statement.Sequences
     DbSync.Db.Statement.SlotLeader
     DbSync.Db.Statement.StakeAddress

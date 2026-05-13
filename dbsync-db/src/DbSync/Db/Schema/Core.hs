@@ -90,6 +90,7 @@ import DbSync.Db.Schema.Ids
   )
 import DbSync.Db.Schema.Types
   ( ColumnDef (..)
+  , ForeignKey (..)
   , PgType (..)
   , TableDef (..)
   , TableMode (..)
@@ -222,6 +223,7 @@ blockTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 -- | Table definition for the @tx@ table.
@@ -247,8 +249,14 @@ txTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
-  , tdUniqueConstraints = []
+    -- Unique by protocol. Indexed so post-load UPDATEs that join
+    -- tx_in / collateral_tx_in / reference_tx_in to tx on hash
+    -- use a lookup instead of seq-scanning the whole tx heap.
+  , tdUniqueConstraints = [pure "hash"]
   , tdGeneratedColumns = []
+  , tdForeignKeys =
+      [ ForeignKey "block_id" "block" "id"
+      ]
   }
 
 -- | Table definition for the @slot_leader@ table.
@@ -267,6 +275,7 @@ slotLeaderTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 -- | Table definition for the @meta@ table. Unique on @start_time@.
@@ -285,6 +294,7 @@ metaTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = [pure "start_time"]
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 -- | Table definition for the @reverse_index@ table.
@@ -302,6 +312,7 @@ reverseIndexTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 -- ---------------------------------------------------------------------------

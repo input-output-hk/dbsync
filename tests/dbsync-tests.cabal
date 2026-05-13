@@ -122,6 +122,7 @@ test-suite dbsync-test
     DbSync.Checkpoint.SyncStateSpec
     DbSync.Phase.BootSpec
     DbSync.Phase.FollowingChainTipSpec
+    DbSync.Phase.FollowingChainTip.RollbackSpec
     DbSync.Phase.MockChainSpec
     DbSync.Phase.PreparingForChainTipSpec
     DbSync.StateQuery.ObservedSummarySpec

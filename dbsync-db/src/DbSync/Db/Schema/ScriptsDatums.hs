@@ -170,6 +170,7 @@ datumTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = [pure "hash"]
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 scriptTableDef :: TableDef
@@ -190,6 +191,7 @@ scriptTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = [pure "hash"]
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 redeemerTableDef :: TableDef
@@ -212,6 +214,7 @@ redeemerTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 redeemerDataTableDef :: TableDef
@@ -230,6 +233,7 @@ redeemerDataTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = [pure "hash"]
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 extraKeyWitnessTableDef :: TableDef
@@ -246,6 +250,7 @@ extraKeyWitnessTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 -- ---------------------------------------------------------------------------

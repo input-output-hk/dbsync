@@ -153,6 +153,7 @@ syncStateTableDef = TableDef
         : map (\c -> (c, "1")) syncStateCounterColumns
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 -- ---------------------------------------------------------------------------

@@ -73,7 +73,9 @@ import DbSync.Extractor.MultiAsset (multiAssetExtractor)
 import DbSync.Extractor.Pool (poolExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Extractor.UTxO (utxoExtractor)
-import qualified DbSync.Phase.FollowingChainTip as Follow
+import DbSync.Ingest.Pipeline (processBlock)
+import DbSync.Phase (SyncPhase (..))
+import DbSync.Resolver.Follow (mkFollowResolver)
 import DbSync.Test.Database
   ( queryTestDb
   , setupFollowTipSchema
@@ -81,6 +83,9 @@ import DbSync.Test.Database
   , truncateAllTables
   )
 import DbSync.Test.Hasql (withTestConnection)
+import DbSync.Test.PipelineEnv (mkTestPipelineEnvWith)
+import DbSync.Extractor (emptyBlockLedgerData)
+import DbSync.Writer.InsertAdapter (mkInsertWriter)
 
 tables :: [TableDef]
 tables =
@@ -420,8 +425,18 @@ spec = describe "DbSync.Phase.FollowingChainTip" $
 
 runFollow :: [GenericBlock] -> IO ()
 runFollow blocks =
-  withTestConnection $ \conn ->
-    Follow.processBlocks conn Mainnet extractors blocks
+  withTestConnection $ \conn -> do
+    resolver <- mkFollowResolver conn
+    let writer = mkInsertWriter conn
+        env    =
+          mkTestPipelineEnvWith
+            Mainnet
+            resolver
+            writer
+            extractors
+            (\_ -> pure emptyBlockLedgerData)
+            FollowingChainTip
+    for_ blocks $ \blk -> runReaderT (processBlock blk) env
 
 -- ---------------------------------------------------------------------------
 -- Fixtures (same shape as Copy.WriterSpec)

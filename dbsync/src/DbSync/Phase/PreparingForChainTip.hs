@@ -18,9 +18,12 @@
 --     indexes — the COPY pipeline ran flat-out.
 --
 -- 'run' walks all of that in a single pass against an open hasql
--- connection. The order matters: FK resolution must come before the
--- backfill UPDATEs that rely on @tx_in.tx_out_id@ being populated,
--- and the schema-mode flip must come before sequence reset (the
+-- connection. The order matters: the pre-resolve index build must
+-- run first so the subsequent join-on-hash UPDATEs use index
+-- lookups rather than hash-joining the @tx@ and @tx_out@ heaps in
+-- their entirety; foreign-key resolution must come before the
+-- backfill UPDATEs that rely on @tx_in.tx_out_id@ being populated;
+-- the schema-mode flip must come before sequence reset (the
 -- sequence has to exist before we can @setval@ it).
 module DbSync.Phase.PreparingForChainTip
   ( run
@@ -38,6 +41,7 @@ import DbSync.Db.Schema.Init
 import DbSync.Db.Schema.Types (TableDef (..))
 import qualified DbSync.Phase.PreparingForChainTip.Backfill as Backfill
 import qualified DbSync.Phase.PreparingForChainTip.Indexes as Indexes
+import qualified DbSync.Phase.PreparingForChainTip.PreResolveIndexes as PreResolveIndexes
 import qualified DbSync.Phase.PreparingForChainTip.Resolve as Resolve
 import qualified DbSync.Phase.PreparingForChainTip.Sequences as Sequences
 
@@ -45,21 +49,28 @@ import qualified DbSync.Phase.PreparingForChainTip.Sequences as Sequences
 --
 -- Steps, in order:
 --
---   1. Resolve @tx_in@ / @collateral_tx_in@ / @reference_tx_in@'s
---      @tx_out_id@ FKs and @tx_out.consumed_by_tx_id@.
---   2. Backfill @tx.fee@ on phase-2 failures, then @tx.deposit@ on
+--   1. Build the minimum index set on @tx (hash)@, @tx_out (tx_id,
+--      index)@ and @tx_in (tx_out_id, tx_out_index)@. Done
+--      non-@CONCURRENTLY@ while the tables are still UNLOGGED so the
+--      build is one-pass and WAL-free.
+--   2. Resolve @tx_in@ / @collateral_tx_in@ / @reference_tx_in@'s
+--      @tx_out_id@ columns and @tx_out.consumed_by_tx_id@ — these
+--      are the joins the step-1 indexes accelerate.
+--   3. Backfill @tx.fee@ on phase-2 failures, then @tx.deposit@ on
 --      both phase-2 failures and valid-contract txs (the
---      ledger-disabled fallback).
---   3. Apply the per-epoch protocol-param deposits accumulated
+--      ledger-disabled fallback). The CTE-driven shape of the
+--      deposit fallback also benefits from the step-1 indexes.
+--   4. Apply the per-epoch protocol-param deposits accumulated
 --      during ingest to @pool_update.deposit@ (first registrations)
 --      and @stake_registration.deposit@ (Shelley-Babbage rows);
 --      then TRUNCATE the staging table.
---   4. Flip every UNLOGGED table to LOGGED and attach an
+--   5. Flip every UNLOGGED table to LOGGED and attach an
 --      @<table>_id_seq@.
---   5. @CREATE INDEX CONCURRENTLY@ for every PK and unique
---      constraint declared on the schema.
---   6. @ANALYZE@ each table so the planner picks up the new shape.
---   7. @setval@ each @<table>_id_seq@ to @MAX(id) + 1@.
+--   6. @CREATE INDEX CONCURRENTLY@ for every PK and unique
+--      constraint declared on the schema. The step-1 indexes are
+--      deduped here via @IF NOT EXISTS@ on a matching name.
+--   7. @ANALYZE@ each table so the planner picks up the new shape.
+--   8. @setval@ each @<table>_id_seq@ to @MAX(id) + 1@.
 --
 -- Each step is a single SQL operation per table or per concern;
 -- there is no application-level batching or per-epoch chunking
@@ -67,6 +78,12 @@ import qualified DbSync.Phase.PreparingForChainTip.Sequences as Sequences
 -- flag.
 run :: Conn.Connection -> [TableDef] -> IO ()
 run conn tables = do
+  -- The four UPDATEs and two CTE backfills that follow all join
+  -- through tx.hash or tx_out (tx_id, index). Building those indexes
+  -- here, before any UPDATE runs, lets PG pick Nested Loop / Index
+  -- Scan plans instead of hash-joining the whole heaps.
+  PreResolveIndexes.createPreResolveIndexes conn
+
   _ <- Resolve.resolveForeignKeys conn
   _ <- Backfill.backfillTxColumns conn
   _ <- Backfill.applyDepositPending conn

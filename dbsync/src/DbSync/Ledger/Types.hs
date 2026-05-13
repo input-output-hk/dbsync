@@ -78,6 +78,7 @@ import Control.Concurrent.STM.TBQueue (TBQueue)
 import qualified Data.Map.Strict as Map
 
 import DbSync.Ledger.DepositAccumulator (EpochParamsRef)
+import DbSync.Node.ChainSyncMsg (ChainSyncMsg)
 import Data.SOP.Functors (Flip (..))
 import Data.SOP.Strict (NP (..), fn, hap, type (-.->))
 import Data.Sequence.Strict (StrictSeq)
@@ -188,12 +189,13 @@ data LedgerEnv = LedgerEnv
   , leInterpreter          :: !(StrictTVar IO (Strict.Maybe CardanoInterpreter))
   , leStateVar             :: !(StrictTVar IO (Strict.Maybe LedgerDB))
     -- * Inter-thread coordination queues and TMVars
-  , leLedgerQueue          :: !(TBQueue (CardanoBlock StandardCrypto))
-    -- ^ @BlockReceiver → LedgerWorker@ — raw blocks to apply
-    -- against the LSM-backed ledger. (Raw 'CardanoBlock' rather
-    -- than parsed 'GenericBlock' because 'applyBlock' calls
-    -- 'tickThenReapplyLedgerResult' which needs the consensus
-    -- block shape.)
+  , leLedgerQueue          :: !(TBQueue ChainSyncMsg)
+    -- ^ @BlockReceiver → LedgerWorker@ — forward blocks to apply
+    -- against the LSM-backed ledger and rollback markers to apply
+    -- against the in-RAM 'LedgerDB' checkpoint buffer. 'MsgForward'
+    -- carries raw 'CardanoBlock' rather than parsed 'GenericBlock'
+    -- because 'applyBlock' calls 'tickThenReapplyLedgerResult'
+    -- which needs the consensus block shape.
   , leEpochReady           :: !(StrictTMVar IO EpochNo)
     -- ^ @LedgerWorker → Main@ — \"epoch N's ledger data is ready\".
   , leEpochWait            :: !(StrictTMVar IO EpochNo)

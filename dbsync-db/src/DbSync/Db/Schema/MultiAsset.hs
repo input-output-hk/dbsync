@@ -103,6 +103,7 @@ multiAssetTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 maTxMintTableDef :: TableDef
@@ -120,6 +121,9 @@ maTxMintTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys =
+      [ ForeignKey "tx_id" "tx" "id"
+      ]
   }
 
 maTxOutTableDef :: TableDef
@@ -137,6 +141,9 @@ maTxOutTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys =
+      [ ForeignKey "tx_out_id" "tx_out" "id"
+      ]
   }
 
 -- ---------------------------------------------------------------------------

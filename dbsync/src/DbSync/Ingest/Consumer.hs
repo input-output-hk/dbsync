@@ -4,10 +4,14 @@
 
 -- | Block consumer for 'IngestChainHistory'.
 --
--- Reads 'CardanoBlock' values from the 'TBQueue' on the env, parses them
--- into 'GenericBlock', runs the enabled extractors, and writes rows to
--- PostgreSQL via the 'CopyWriter'. Detects epoch boundaries via
--- 'sdEpochNo' comparison and triggers commit + reopen cycles.
+-- Reads 'ChainSyncMsg' values from the 'TBQueue' on the env. Forward
+-- blocks are parsed into 'GenericBlock', then the enabled extractors
+-- run and rows are written to PostgreSQL via the 'CopyWriter'. Epoch
+-- boundaries are detected via 'sdEpochNo' comparison and trigger
+-- commit + reopen cycles. Rollback markers are unreachable in this
+-- phase (the receiver only enqueues rollbacks for blocks above the
+-- @chain_tip − k@ boundary, and the consumer exits at the boundary);
+-- if one slips through, panic.
 --
 -- == Pipeline diagnostics
 --
@@ -46,6 +50,12 @@ module DbSync.Ingest.Consumer
   , ReplayLog (..)
   , advanceReplay
   , progressLogInterval
+
+    -- * Rollback-boundary predicate (exported for tests)
+  , rollbackBoundaryReached
+
+    -- * Ingest-time rollback panic (exported for tests)
+  , ingestRollbackPanicMessage
   ) where
 
 import Cardano.Prelude
@@ -54,7 +64,7 @@ import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 
 import qualified Control.Concurrent.Class.MonadSTM.Strict as Strict
-import Control.Concurrent.STM (TBQueue, readTBQueue, tryReadTBQueue)
+import Control.Concurrent.STM (TBQueue, TVar, readTBQueue, readTVarIO, tryReadTBQueue)
 import Control.Tracer (traceWith)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import qualified Data.Strict.Maybe as SMaybe
@@ -85,6 +95,7 @@ import DbSync.Ledger.Types
   , HasLedgerEnv (..)
   , LedgerEnv (..)
   )
+import DbSync.Node.ChainSyncMsg (ChainSyncMsg (..))
 import DbSync.Resolver (IdResolver (..))
 import DbSync.Resolver.AddressBuffer (takeAndReset)
 import DbSync.Resolver.AddressWorker
@@ -102,12 +113,11 @@ import DbSync.StateQuery
   , observeBlockSTM
   )
 import DbSync.Trace (HasTracer (..))
-import DbSync.Trace.Types (LogMsg (..), Severity (..))
+import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 import DbSync.Watchdog (bumpConsumer, setConsumerNote)
 import DbSync.Writer (Writer (..))
 
 import Ouroboros.Consensus.Block (blockSlot)
-import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
 import Ouroboros.Consensus.Shelley.HFEras ()                -- per-era HFC instances
 import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()  -- 'LedgerSupportsProtocol' orphans
 
@@ -354,13 +364,17 @@ runConsumer = do
   replayRef     <- liftIO $ newIORef $ case bootSlot of
                      Just _  -> ReplayPending
                      Nothing -> NoReplay
-  loop prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef
+  tracer        <- asks getTracer
+  boundaryVar   <- asks ieRollbackBoundary
+  loop tracer boundaryVar prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef
   where
     batchSize :: Int
     batchSize = 100
 
     loop
-      :: IORef (Maybe EpochNo)
+      :: AppTracer
+      -> TVar (Maybe BlockNo)
+      -> IORef (Maybe EpochNo)
       -> IORef Word64
       -> IORef UTCTime
       -> IORef PipelineStats
@@ -368,7 +382,7 @@ runConsumer = do
       -> IORef (Maybe (Word64, Word64, ByteString))
       -> IORef ReplayLogState
       -> IngestM ()
-    loop prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef = do
+    loop tracer boundaryVar prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef = do
       queue <- asks ieBlockQueue
 
       -- 1. Drain a batch of blocks (no timing — just count)
@@ -384,11 +398,29 @@ runConsumer = do
         , psFullDrains   = psFullDrains ps + if drainSize >= batchSize then 1 else 0
         }
 
-      -- 2. Process batch (releases each CardanoBlock after parsing)
+      -- 2. Process batch (releases each forward block after parsing)
       processBatch prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef blocks
 
-      -- 3. Loop
-      loop prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef
+      -- 3. Exit cleanly when the last processed block has reached
+      --    the rollback boundary; the caller then runs Prep and
+      --    transitions to FollowingChainTip.
+      reached <- liftIO $ rollbackBoundaryReached lastBlockRef boundaryVar
+      if reached
+        then do
+          mLast <- liftIO $ readIORef lastBlockRef
+          liftIO $ traceWith tracer $ LogMsg Info "Ingest"
+            ( "reached rollback boundary at "
+                <> renderLastBlock mLast
+                <> "; exiting consumer loop"
+            ) Nothing
+        else
+          loop tracer boundaryVar prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef
+
+    renderLastBlock :: Maybe (Word64, Word64, ByteString) -> Text
+    renderLastBlock = \case
+      Nothing                -> "(no block processed yet)"
+      Just (slot, blk, _hash) ->
+        "block " <> show blk <> " (slot " <> show slot <> ")"
 
     processBatch
       :: IORef (Maybe EpochNo)
@@ -398,10 +430,15 @@ runConsumer = do
       -> IORef (Maybe BaselineRef)
       -> IORef (Maybe (Word64, Word64, ByteString))
       -> IORef ReplayLogState
-      -> [CardanoBlock StandardCrypto]
+      -> [ChainSyncMsg]
       -> IngestM ()
     processBatch _ _ _ _ _ _ _ [] = pure ()
-    processBatch prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef (cardanoBlock : rest) = do
+    processBatch _ _ _ _ _ _ _ (MsgRollback point : _) =
+      -- Reaching this branch would mean the node sent a rollback for
+      -- a block below the @chain_tip − k@ boundary, violating
+      -- k-safety. Crash loudly so the operator can investigate.
+      panic (ingestRollbackPanicMessage point)
+    processBatch prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef (MsgForward cardanoBlock : rest) = do
       tracer        <- asks getTracer
       sqv           <- asks ieStateQueryVar
       resolver      <- asks ieResolver
@@ -772,3 +809,34 @@ drainTBQueue q maxN = atomically $ do
       case mVal of
         Nothing  -> pure []
         Just val -> (val :) <$> go (n - 1)
+
+-- ---------------------------------------------------------------------------
+-- * Rollback-boundary predicate
+-- ---------------------------------------------------------------------------
+
+-- | 'True' when the most recently processed block has reached the
+-- finalised-tip boundary (@nodeTip − k@). Returns 'False' if either
+-- ref is unset — we haven't seen a block yet, or the receiver
+-- hasn't observed a tip at or above @k@.
+rollbackBoundaryReached
+  :: IORef (Maybe (Word64, Word64, ByteString))  -- ^ Last processed (slot, blockNo, hash)
+  -> TVar  (Maybe BlockNo)                       -- ^ Latest @nodeTip − k@
+  -> IO Bool
+rollbackBoundaryReached lastRef boundaryVar = do
+  mLast     <- readIORef lastRef
+  mBoundary <- readTVarIO boundaryVar
+  pure $ case (mLast, mBoundary) of
+    (Just (_slot, lastBlock, _hash), Just (BlockNo b)) -> lastBlock >= b
+    _                                                  -> False
+
+-- | The panic message issued when 'IngestChainHistory' receives a
+-- 'MsgRollback'. Should be unreachable in practice — the receiver
+-- only enqueues rollback markers for blocks above the @chain_tip − k@
+-- boundary, and the consumer exits before draining anything above
+-- it. Exposed as a pure helper so the test suite can pin the
+-- message shape.
+ingestRollbackPanicMessage :: Show point => point -> Text
+ingestRollbackPanicMessage point =
+  "IngestChainHistory: received MsgRollback at "
+    <> show point
+    <> "; this should be impossible (k-safety violation)."

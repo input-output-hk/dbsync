@@ -61,9 +61,11 @@ library
     DbSync.Phase.PreparingForChainTip
     DbSync.Phase.PreparingForChainTip.Backfill
     DbSync.Phase.PreparingForChainTip.Indexes
+    DbSync.Phase.PreparingForChainTip.PreResolveIndexes
     DbSync.Phase.PreparingForChainTip.Resolve
     DbSync.Phase.PreparingForChainTip.Sequences
     DbSync.Phase.FollowingChainTip
+    DbSync.Phase.FollowingChainTip.Rollback
     DbSync.Block.Receiver
     DbSync.Block.Metadata
     DbSync.Block.Parser
@@ -84,6 +86,7 @@ library
     DbSync.Extractor.EpochBoundary
     DbSync.Copy.Connection
     DbSync.Copy.Writer
+    DbSync.Db.Transaction
     DbSync.Ingest.Consumer
     DbSync.Ingest.Pipeline
     DbSync.Ingest.ReceiverStats
@@ -118,6 +121,7 @@ library
     DbSync.Ledger.State
     DbSync.Ledger.Types
     DbSync.Ledger.Worker
+    DbSync.Node.ChainSyncMsg
     DbSync.Node.Connection
     DbSync.Util
     DbSync.Watchdog
@@ -245,5 +249,6 @@ executable dbsync
     , hasql
     , ouroboros-consensus
     , ouroboros-consensus:cardano
+    , ouroboros-network:api
     , stm
     , text

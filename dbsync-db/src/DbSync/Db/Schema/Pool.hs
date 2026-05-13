@@ -223,6 +223,7 @@ poolHashTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 poolUpdateTableDef :: TableDef
@@ -248,6 +249,9 @@ poolUpdateTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys =
+      [ ForeignKey "registered_tx_id" "tx" "id"
+      ]
   }
 
 poolMetadataRefTableDef :: TableDef
@@ -266,6 +270,9 @@ poolMetadataRefTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys =
+      [ ForeignKey "registered_tx_id" "tx" "id"
+      ]
   }
 
 poolOwnerTableDef :: TableDef
@@ -282,6 +289,9 @@ poolOwnerTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys =
+      [ ForeignKey "pool_update_id" "pool_update" "id"
+      ]
   }
 
 poolRetireTableDef :: TableDef
@@ -300,6 +310,9 @@ poolRetireTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys =
+      [ ForeignKey "announced_tx_id" "tx" "id"
+      ]
   }
 
 poolRelayTableDef :: TableDef
@@ -320,6 +333,9 @@ poolRelayTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys =
+      [ ForeignKey "update_id" "pool_update" "id"
+      ]
   }
 
 poolStatTableDef :: TableDef
@@ -340,6 +356,7 @@ poolStatTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 delistedPoolTableDef :: TableDef
@@ -355,6 +372,7 @@ delistedPoolTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = [pure "hash_raw"]
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 reservedPoolTickerTableDef :: TableDef
@@ -371,6 +389,7 @@ reservedPoolTickerTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = [pure "name"]
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 -- ---------------------------------------------------------------------------

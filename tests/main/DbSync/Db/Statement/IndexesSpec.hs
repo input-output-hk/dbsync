@@ -1,21 +1,28 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Unit tests for 'tableIndexStatements'.
+-- | Unit tests for 'tableIndexStatements', 'preResolveIndexStatements',
+-- and the helpers they share ('columnRef', 'uniqueConstraintIndexName').
 module DbSync.Db.Statement.IndexesSpec (spec) where
 
 import Cardano.Prelude
 
 import qualified Data.List.NonEmpty as NE
 
-import Test.Hspec (Spec, describe, it, shouldBe)
+import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldThrow)
 
+import DbSync.Db.Schema.Core (txTableDef)
 import DbSync.Db.Schema.Types
   ( ColumnDef (..)
   , PgType (..)
   , TableDef (..)
   , TableMode (..)
   )
-import DbSync.Db.Statement.Indexes (tableIndexStatements)
+import DbSync.Db.Statement.Indexes
+  ( columnRef
+  , preResolveIndexStatements
+  , tableIndexStatements
+  , uniqueConstraintIndexName
+  )
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -33,6 +40,7 @@ plainTable = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns  = []
+  , tdForeignKeys       = []
   }
 
 -- | Table with a primary key only.
@@ -103,3 +111,38 @@ spec = describe "DbSync.Db.Statement.Indexes" $ do
         , "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"many_unique_2_idx\""
             <> " ON \"many\" (\"policy\", \"asset_name\")"
         ]
+
+  describe "uniqueConstraintIndexName" $ do
+    it "matches the name pattern tableIndexStatements emits" $
+      uniqueConstraintIndexName uniqueOneCol 1 `shouldBe` "uniq_one_unique_1_idx"
+
+    it "uses 1-based indexing across multiple constraints" $ do
+      uniqueConstraintIndexName pkAndUniques 1 `shouldBe` "many_unique_1_idx"
+      uniqueConstraintIndexName pkAndUniques 2 `shouldBe` "many_unique_2_idx"
+
+  describe "columnRef" $ do
+    it "returns the column name when declared on the table" $
+      columnRef pkAndUniques "id" `shouldBe` "id"
+
+    it "panics at evaluation time on an unknown column" $
+      -- 'panic' from cardano-prelude raises FatalError; any exception
+      -- from the eval is enough to confirm the guard fires.
+      evaluate (columnRef pkAndUniques "not_a_column" :: Text)
+        `shouldThrow` anyException
+
+  describe "preResolveIndexStatements" $ do
+    it "is exactly the three indexes the post-load resolves probe" $
+      preResolveIndexStatements `shouldBe`
+        [ "CREATE UNIQUE INDEX IF NOT EXISTS \"tx_unique_1_idx\""
+            <> " ON \"tx\" (\"hash\")"
+        , "CREATE INDEX IF NOT EXISTS \"tx_out_tx_id_index_idx\""
+            <> " ON \"tx_out\" (\"tx_id\", \"index\")"
+        , "CREATE INDEX IF NOT EXISTS \"tx_in_tx_out_idx\""
+            <> " ON \"tx_in\" (\"tx_out_id\", \"tx_out_index\")"
+        ]
+
+    it "names the tx-hash index to match the later concurrent rebuild" $
+      -- Both passes route through 'uniqueConstraintIndexName txTableDef 1',
+      -- so a matching name here is what makes the later
+      -- 'tableIndexStatements' build a no-op via @IF NOT EXISTS@.
+      uniqueConstraintIndexName txTableDef 1 `shouldBe` "tx_unique_1_idx"

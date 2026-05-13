@@ -86,6 +86,7 @@ addressTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = [pure "raw"]
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 -- ---------------------------------------------------------------------------

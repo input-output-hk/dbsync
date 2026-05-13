@@ -243,6 +243,7 @@ stakeAddressTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 stakeRegistrationTableDef :: TableDef
@@ -262,6 +263,9 @@ stakeRegistrationTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys =
+      [ ForeignKey "tx_id" "tx" "id"
+      ]
   }
 
 stakeDeregistrationTableDef :: TableDef
@@ -281,6 +285,9 @@ stakeDeregistrationTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys =
+      [ ForeignKey "tx_id" "tx" "id"
+      ]
   }
 
 delegationTableDef :: TableDef
@@ -302,6 +309,9 @@ delegationTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys =
+      [ ForeignKey "tx_id" "tx" "id"
+      ]
   }
 
 withdrawalTableDef :: TableDef
@@ -320,6 +330,9 @@ withdrawalTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys =
+      [ ForeignKey "tx_id" "tx" "id"
+      ]
   }
 
 -- | @reward.earned_epoch@ derives from @spendable_epoch@ and the
@@ -350,6 +363,7 @@ rewardTableDef = TableDef
           \then spendable_epoch-2 else 0 end) end)"
         )
       ]
+  , tdForeignKeys = []
   }
 
 -- | @reward_rest.earned_epoch@ is one epoch behind
@@ -376,6 +390,7 @@ rewardRestTableDef = TableDef
           \then spendable_epoch-1 else 0 end)"
         )
       ]
+  , tdForeignKeys = []
   }
 
 -- | The @epoch_stake@ table. The triple (addr_id, pool_id,
@@ -397,6 +412,7 @@ epochStakeTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = ["addr_id" :| ["pool_id", "epoch_no"]]
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 -- | The @epoch_stake_progress@ table. Unique on @epoch_no@.
@@ -414,6 +430,7 @@ epochStakeProgressTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = [pure "epoch_no"]
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 -- ---------------------------------------------------------------------------

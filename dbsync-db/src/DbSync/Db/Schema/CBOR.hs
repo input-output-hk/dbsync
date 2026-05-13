@@ -68,6 +68,9 @@ txCborTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys =
+      [ ForeignKey "tx_id" "tx" "id"
+      ]
   }
 
 -- ---------------------------------------------------------------------------

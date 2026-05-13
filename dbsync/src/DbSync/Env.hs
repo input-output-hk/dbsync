@@ -22,25 +22,28 @@ module DbSync.Env
   , IngestEnv (..)
   , FollowEnv (..)
 
-    -- * Placeholder types
-  , LedgerState
+    -- * Follow construction
+  , mkFollowEnvFromIngest
 
     -- * Accessor classes
   , HasConfig (..)
   , HasNetwork (..)
+  , HasReceiverChannels (..)
   ) where
 
 import Cardano.Prelude
 
 import Control.Concurrent.STM (TBQueue, TVar)
 import Data.IORef (IORef)
+import qualified Hasql.Connection as Conn
 
 import Cardano.Ledger.BaseTypes (Network)
+import Cardano.Slotting.Block (BlockNo)
 import Cardano.Slotting.Slot (SlotNo)
 import Ouroboros.Consensus.BlockchainTime.WallClock.Types (SystemStart)
-import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
 
 import DbSync.Block.Types (CardanoPoint)
+import DbSync.Node.ChainSyncMsg (ChainSyncMsg)
 import DbSync.Checkpoint.SyncState (ControlConnection)
 import DbSync.Config.Types (NodeConfig, SyncConfig)
 import DbSync.Copy.Writer (CopyWriter)
@@ -54,7 +57,7 @@ import DbSync.Extractor
   )
 import DbSync.Id.DedupMap (DedupMaps)
 import DbSync.Ingest.ReceiverStats (ReceiverStats)
-import DbSync.Ledger.Types (HasLedgerEnv, LedgerEnv (..))
+import DbSync.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..))
 import DbSync.Metrics (HasMetrics (..), Metrics)
 import DbSync.Phase (SyncPhase (..))
 import DbSync.Resolver (HasResolver (..), IdResolver)
@@ -70,17 +73,6 @@ import DbSync.Writer (HasWriter (..), Writer)
 -- No IORef wrapper needed — the hash tables are mutated in-place.
 
 -- ---------------------------------------------------------------------------
--- * Placeholder types
--- ---------------------------------------------------------------------------
-
--- | Placeholder for the 'FollowingChainTip' ledger state.
---
--- This will be replaced with a proper
--- 'DbSync.Ledger.Types.DbSyncStateRef' reference once the FCT
--- transition wires the inline-apply path.
-type LedgerState = ()
-
--- ---------------------------------------------------------------------------
 -- * Accessor classes
 -- ---------------------------------------------------------------------------
 
@@ -93,6 +85,23 @@ class HasConfig env where
 -- never changes for the lifetime of a sync.
 class HasNetwork env where
   getNetwork :: env -> Network
+
+-- | The state the chainsync receiver needs from whichever phase
+-- owns it. Both 'IngestEnv' and 'FollowEnv' provide it, so
+-- 'DbSync.Node.Connection.connectToNode' can run against either.
+--
+-- These fields are always used together — the receiver writes into
+-- the queues, bumps the watchdog, and publishes the rollback
+-- boundary on every observed tip. Bundling rather than 7 single-field
+-- classes keeps call-site noise down without hiding any field.
+class HasReceiverChannels env where
+  getBlockQueue       :: env -> TBQueue ChainSyncMsg
+  getLedgerQueue      :: env -> Maybe (TBQueue ChainSyncMsg)
+  getStateQueryVar    :: env -> StateQueryVar
+  getReceiverStats    :: env -> ReceiverStats
+  getWatchdog         :: env -> Watchdog
+  getLatestPoint      :: env -> IORef (Maybe CardanoPoint)
+  getRollbackBoundary :: env -> TVar (Maybe BlockNo)
 
 -- ---------------------------------------------------------------------------
 -- * Environment types
@@ -121,22 +130,27 @@ data CoreEnv = CoreEnv
 -- | Environment for the 'IngestChainHistory' phase.
 --
 -- Extends 'CoreEnv' with the runtime state needed for bulk COPY
--- ingestion: the raw block queue, COPY connections, ID counters,
--- mutable dedup hash tables, the resolver and writer adapters,
--- the state-query interpreter handle, the system start, and the
--- ledger subsystem 'HasLedgerEnv' which is either
+-- ingestion: the chainsync message queue, COPY connections, ID
+-- counters, mutable dedup hash tables, the resolver and writer
+-- adapters, the state-query interpreter handle, the system start,
+-- and the ledger subsystem 'HasLedgerEnv' which is either
 -- @LedgerEnabled !LedgerEnv@ (carrying its own block queue +
 -- epoch-coordination 'TMVar's + snapshot queue) or
 -- @LedgerDisabled !NoLedgerEnv@ (allocating nothing ledger-stateful).
 --
--- The block queue carries raw 'CardanoBlock' values; parsing into
--- 'DbSync.Block.Types.GenericBlock' happens inside the consumer so
--- the receiver thread doesn't pay parsing cost on the hot path.
+-- The block queue carries raw 'CardanoBlock' values inside
+-- 'MsgForward'; parsing into 'DbSync.Block.Types.GenericBlock'
+-- happens inside the consumer so the receiver thread doesn't pay
+-- parsing cost on the hot path.
 data IngestEnv = IngestEnv
   { ieCore          :: !CoreEnv
     -- ^ Shared core environment
-  , ieBlockQueue    :: !(TBQueue (CardanoBlock StandardCrypto))
-    -- ^ Blocks received from the node, awaiting parse + extraction
+  , ieBlockQueue    :: !(TBQueue ChainSyncMsg)
+    -- ^ Forward blocks and rollback markers received from the node,
+    -- awaiting parse + extraction. Rollback markers are unreachable
+    -- on this queue during 'IngestChainHistory' (the consumer exits
+    -- at the rollback boundary, so no volatile block ever arrives);
+    -- the consumer panics if one slips through.
   , ieCopyWriter    :: !CopyWriter
     -- ^ Multi-threaded COPY writer (per-table TBQueues + worker threads)
   , ieDedupMaps     :: !DedupMaps
@@ -201,18 +215,94 @@ data IngestEnv = IngestEnv
     -- genesis; the LedgerWorker then crashes with a hash mismatch
     -- when the genesis block arrives over our advanced state.
     -- 'Nothing' on first connection (before any block is received).
+  , ieRollbackBoundary        :: !(TVar (Maybe BlockNo))
+    -- ^ Latest @nodeTip − k@ observed by the receiver, where @k@ is
+    -- the protocol security parameter. Below this block number the
+    -- chain is finalised and immune to rollback. 'Nothing' until the
+    -- first 'MsgRollForward' arrives, and while the chain is still
+    -- shorter than @k@ blocks (everything is volatile in that case).
+    -- The consumer compares each processed block against this and
+    -- exits 'IngestChainHistory' cleanly once it crosses, so the
+    -- caller can run 'PreparingForChainTip' before handing off to
+    -- 'FollowingChainTip'.
   }
 
 -- | Environment for the 'FollowingChainTip' phase.
 --
--- Lighter than 'IngestEnv' — no COPY connections or dedup maps.
--- Uses per-block INSERT with rollback support.
+-- Lighter than 'IngestEnv' — no COPY connections, no dedup maps, no
+-- background address resolver. Reads from the same chainsync message
+-- queue as the Ingest consumer did and runs per-block INSERTs with
+-- rollback support against a single hasql connection.
 data FollowEnv = FollowEnv
-  { feCore        :: !CoreEnv
+  { feCore                :: !CoreEnv
     -- ^ Shared core environment
-  , feLedgerState :: !(TVar LedgerState)
-    -- ^ Current ledger state (placeholder until the inline-apply path lands).
+  , feBlockQueue          :: !(TBQueue ChainSyncMsg)
+    -- ^ Forward blocks and rollback markers from the chainsync
+    -- receiver. The Follow loop processes one message per
+    -- per-block PG transaction.
+  , feHasLedgerEnv        :: !HasLedgerEnv
+    -- ^ Carried over so the LSM-backed worker keeps producing
+    -- 'ApplyResult's while Follow runs.
+  , feStateQueryVar       :: !StateQueryVar
+    -- ^ Slot-to-time interpreter, used by 'parseBlock'.
+  , feSystemStart         :: !SystemStart
+  , feReceiverStats       :: !ReceiverStats
+  , feWatchdog            :: !Watchdog
+  , feLatestReceivedPoint :: !(IORef (Maybe CardanoPoint))
+  , feHasqlConnection     :: !Conn.Connection
+    -- ^ Dedicated Follow connection — drives the resolver and writer
+    -- (INSERTs) and the per-block @BEGIN@/@COMMIT@ envelope. Distinct
+    -- from 'feControlConnection' so the rollback cascade and the
+    -- 'sync_state' advance don't fight for the same handle.
+  , feResolver            :: !(IdResolver IO)
+    -- ^ Sequence-driven resolver: @nextval@ for non-dedup, SELECT
+    -- then @nextval@ for dedup tables.
+  , feWriter              :: !(Writer IO)
+    -- ^ INSERT writer over 'feHasqlConnection'.
+  , feControlConnection   :: !ControlConnection
+    -- ^ PG connection used by 'sync_state' advances at each
+    -- per-block commit.
+  , feRollbackBoundary    :: !(TVar (Maybe BlockNo))
+    -- ^ Tip-derived rollback boundary kept up to date by the
+    -- receiver. Unused by the Follow consumer (every block in
+    -- Follow is volatile by definition); held only so the receiver
+    -- has somewhere to publish it.
   }
+
+-- ---------------------------------------------------------------------------
+-- * Follow construction
+-- ---------------------------------------------------------------------------
+
+-- | Build a 'FollowEnv' by reusing receiver-side state from the
+-- 'IngestEnv'. The block queue, watchdog, state-query interpreter,
+-- and latest-point ref are shared so the receiver keeps producing
+-- into the same FIFO across the phase boundary.
+--
+-- The caller supplies the new Follow-only resources: a fresh hasql
+-- connection (drives resolver + writer + per-block transactions) and
+-- the resolver/writer pair built over it.
+mkFollowEnvFromIngest
+  :: IngestEnv
+  -> Conn.Connection
+  -> IdResolver IO
+  -> Writer IO
+  -> FollowEnv
+mkFollowEnvFromIngest ie conn resolver writer =
+  FollowEnv
+    { feCore                = ieCore ie
+    , feBlockQueue          = ieBlockQueue ie
+    , feHasLedgerEnv        = ieHasLedgerEnv ie
+    , feStateQueryVar       = ieStateQueryVar ie
+    , feSystemStart         = ieSystemStart ie
+    , feReceiverStats       = ieReceiverStats ie
+    , feWatchdog            = ieWatchdog ie
+    , feLatestReceivedPoint = ieLatestReceivedPoint ie
+    , feHasqlConnection     = conn
+    , feResolver            = resolver
+    , feWriter              = writer
+    , feControlConnection   = ieControlConnection ie
+    , feRollbackBoundary    = ieRollbackBoundary ie
+    }
 
 -- ---------------------------------------------------------------------------
 -- * HasTracer instances (orphan — class defined in DbSync.Trace)
@@ -266,6 +356,32 @@ instance HasNetwork FollowEnv where
   getNetwork = getNetwork . feCore
 
 -- ---------------------------------------------------------------------------
+-- * HasReceiverChannels instances
+-- ---------------------------------------------------------------------------
+
+instance HasReceiverChannels IngestEnv where
+  getBlockQueue       = ieBlockQueue
+  getLedgerQueue ie   = case ieHasLedgerEnv ie of
+    LedgerEnabled lenv -> Just (leLedgerQueue lenv)
+    LedgerDisabled _   -> Nothing
+  getStateQueryVar    = ieStateQueryVar
+  getReceiverStats    = ieReceiverStats
+  getWatchdog         = ieWatchdog
+  getLatestPoint      = ieLatestReceivedPoint
+  getRollbackBoundary = ieRollbackBoundary
+
+instance HasReceiverChannels FollowEnv where
+  getBlockQueue       = feBlockQueue
+  getLedgerQueue fe   = case feHasLedgerEnv fe of
+    LedgerEnabled lenv -> Just (leLedgerQueue lenv)
+    LedgerDisabled _   -> Nothing
+  getStateQueryVar    = feStateQueryVar
+  getReceiverStats    = feReceiverStats
+  getWatchdog         = feWatchdog
+  getLatestPoint      = feLatestReceivedPoint
+  getRollbackBoundary = feRollbackBoundary
+
+-- ---------------------------------------------------------------------------
 -- * HasExtractors instances (orphan — class defined in DbSync.Extractor)
 -- ---------------------------------------------------------------------------
 
@@ -285,8 +401,8 @@ instance HasExtractors FollowEnv where
 instance HasResolver IngestEnv where
   getResolver = ieResolver
 
--- NOTE: 'FollowEnv' will gain a 'HasResolver' instance once the
--- 'FollowingChainTip' SELECT/INSERT resolver lands.
+instance HasResolver FollowEnv where
+  getResolver = feResolver
 
 -- ---------------------------------------------------------------------------
 -- * HasWriter instances (orphan — class defined in DbSync.Writer)
@@ -295,8 +411,8 @@ instance HasResolver IngestEnv where
 instance HasWriter IngestEnv where
   getWriter = ieWriter
 
--- NOTE: 'FollowEnv' will gain a 'HasWriter' instance once the
--- 'FollowingChainTip' INSERT writer lands.
+instance HasWriter FollowEnv where
+  getWriter = feWriter
 
 -- ---------------------------------------------------------------------------
 -- * HasLedgerData / HasSyncPhase instances

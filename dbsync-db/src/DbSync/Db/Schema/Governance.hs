@@ -423,7 +423,8 @@ drepHashTableDef = TableDef
   , tdChecks            = []
   , tdColumnDefaults    = []
   , tdUniqueConstraints = ["raw" :| ["has_script"]]
-  , tdGeneratedColumns  = []
+  , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 drepRegistrationTableDef :: TableDef
@@ -442,7 +443,8 @@ drepRegistrationTableDef = TableDef
   , tdChecks            = []
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
-  , tdGeneratedColumns  = []
+  , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 drepDistrTableDef :: TableDef
@@ -460,7 +462,8 @@ drepDistrTableDef = TableDef
   , tdChecks            = []
   , tdColumnDefaults    = []
   , tdUniqueConstraints = ["hash_id" :| ["epoch_no"]]
-  , tdGeneratedColumns  = []
+  , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 delegationVoteTableDef :: TableDef
@@ -479,7 +482,8 @@ delegationVoteTableDef = TableDef
   , tdChecks            = []
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
-  , tdGeneratedColumns  = []
+  , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 govActionProposalTableDef :: TableDef
@@ -507,7 +511,8 @@ govActionProposalTableDef = TableDef
   , tdChecks            = []
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
-  , tdGeneratedColumns  = []
+  , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 votingProcedureTableDef :: TableDef
@@ -531,7 +536,8 @@ votingProcedureTableDef = TableDef
   , tdChecks            = []
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
-  , tdGeneratedColumns  = []
+  , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 votingAnchorTableDef :: TableDef
@@ -549,7 +555,8 @@ votingAnchorTableDef = TableDef
   , tdChecks            = []
   , tdColumnDefaults    = []
   , tdUniqueConstraints = ["data_hash" :| ["url", "type"]]
-  , tdGeneratedColumns  = []
+  , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 constitutionTableDef :: TableDef
@@ -566,7 +573,8 @@ constitutionTableDef = TableDef
   , tdChecks            = []
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
-  , tdGeneratedColumns  = []
+  , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 committeeTableDef :: TableDef
@@ -583,7 +591,8 @@ committeeTableDef = TableDef
   , tdChecks            = []
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
-  , tdGeneratedColumns  = []
+  , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 committeeHashTableDef :: TableDef
@@ -599,7 +608,8 @@ committeeHashTableDef = TableDef
   , tdChecks            = []
   , tdColumnDefaults    = []
   , tdUniqueConstraints = ["raw" :| ["has_script"]]
-  , tdGeneratedColumns  = []
+  , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 committeeMemberTableDef :: TableDef
@@ -616,7 +626,8 @@ committeeMemberTableDef = TableDef
   , tdChecks            = []
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
-  , tdGeneratedColumns  = []
+  , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 committeeRegistrationTableDef :: TableDef
@@ -634,7 +645,8 @@ committeeRegistrationTableDef = TableDef
   , tdChecks            = []
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
-  , tdGeneratedColumns  = []
+  , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 committeeDeRegistrationTableDef :: TableDef
@@ -652,7 +664,8 @@ committeeDeRegistrationTableDef = TableDef
   , tdChecks            = []
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
-  , tdGeneratedColumns  = []
+  , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 -- | 53 column metadata for @param_proposal@. Doubles ride a TEXT
@@ -726,7 +739,8 @@ paramProposalTableDef = TableDef
   , tdChecks            = []
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
-  , tdGeneratedColumns  = []
+  , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 treasuryWithdrawalTableDef :: TableDef
@@ -743,7 +757,8 @@ treasuryWithdrawalTableDef = TableDef
   , tdChecks            = []
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
-  , tdGeneratedColumns  = []
+  , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 eventInfoTableDef :: TableDef
@@ -761,7 +776,8 @@ eventInfoTableDef = TableDef
   , tdChecks            = []
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
-  , tdGeneratedColumns  = []
+  , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 -- ---------------------------------------------------------------------------

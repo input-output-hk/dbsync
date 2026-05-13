@@ -9,6 +9,7 @@ module DbSync.Db.Schema.Types
   ( -- * Types
     TableDef (..)
   , ColumnDef (..)
+  , ForeignKey (..)
   , PgType (..)
   , TableMode (..)
   ) where
@@ -53,6 +54,22 @@ data ColumnDef = ColumnDef
   }
   deriving stock (Eq, Show)
 
+-- | An outgoing foreign-key reference from one table to another.
+--
+-- Declared per 'TableDef' so the rollback cascade can derive its
+-- per-FK-family delete lists from the schema rather than maintaining
+-- parallel hand-coded tables. No PG-level @REFERENCES@ constraint is
+-- emitted from this — it's purely metadata for code that walks the
+-- schema. Column names stay strings; that mirrors 'ColumnDef' and
+-- avoids dragging in a typed-column abstraction we don't have
+-- anywhere else.
+data ForeignKey = ForeignKey
+  { fkColumn       :: !Text  -- ^ This table's FK column.
+  , fkParentTable  :: !Text  -- ^ Parent table's name.
+  , fkParentColumn :: !Text  -- ^ Parent table's column (usually @"id"@).
+  }
+  deriving stock (Eq, Show)
+
 -- | Definition of a database table.
 -- Used by 'DbSync.Schema.Generate' to produce CREATE TABLE DDL.
 --
@@ -94,5 +111,10 @@ data TableDef = TableDef
       -- keyed by column name. Listed columns are excluded from the
       -- COPY column list in 'DbSync.Copy.Connection.beginCopy' so
       -- PostgreSQL computes them on insert.
+  , tdForeignKeys       :: ![ForeignKey]
+      -- ^ Outgoing FK references. Consumed by the
+      -- 'FollowingChainTip' rollback cascade to compute per-FK-family
+      -- delete lists. Empty for tables with no incoming references to
+      -- the rollback's parent tables (block, tx, tx_out, pool_update).
   }
   deriving stock (Eq, Show)

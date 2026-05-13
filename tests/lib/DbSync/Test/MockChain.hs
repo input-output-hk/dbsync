@@ -81,7 +81,12 @@ import DbSync.Config.Genesis
 import DbSync.Config.Node (parseNodeConfig)
 import DbSync.Config.Types (NodeConfig (..))
 import DbSync.Extractor (ExtractorDef)
-import qualified DbSync.Phase.FollowingChainTip as Follow
+import DbSync.Extractor (emptyBlockLedgerData)
+import DbSync.Ingest.Pipeline (processBlock)
+import DbSync.Phase (SyncPhase (..))
+import DbSync.Resolver.Follow (mkFollowResolver)
+import DbSync.Test.PipelineEnv (mkTestPipelineEnvWith)
+import DbSync.Writer.InsertAdapter (mkInsertWriter)
 import DbSync.StateQuery
   ( StateQueryVar
   , getSlotDetailsIO
@@ -221,7 +226,17 @@ parseAndProcess
   -> IO ()
 parseAndProcess conn mc extractors blocks = do
   genericBlocks <- traverse toGeneric blocks
-  Follow.processBlocks conn (mcNetwork mc) extractors genericBlocks
+  resolver <- mkFollowResolver conn
+  let writer = mkInsertWriter conn
+      env    =
+        mkTestPipelineEnvWith
+          (mcNetwork mc)
+          resolver
+          writer
+          extractors
+          (\_ -> pure emptyBlockLedgerData)
+          FollowingChainTip
+  for_ genericBlocks $ \gb -> runReaderT (processBlock gb) env
   where
     toGeneric blk = do
       latest <- Mock.getCurrentLedgerState (mcInterpreter mc)

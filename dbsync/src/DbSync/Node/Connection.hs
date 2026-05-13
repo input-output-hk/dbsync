@@ -27,20 +27,22 @@ import Cardano.Client.Subscription
   , subscribe
   )
 import Control.Concurrent.Async (AsyncCancelled (..))
-import Control.Concurrent.STM (TBQueue, writeTBQueue)
+import Control.Concurrent.STM (TBQueue, TVar, writeTBQueue, writeTVar)
 import Control.Concurrent.STM.TBQueue (isFullTBQueue)
 import Control.Tracer (contramap, nullTracer, traceWith)
 import qualified Data.ByteString.Lazy as BSL
-import Data.IORef (IORef, atomicWriteIORef, readIORef)
+import Data.IORef (IORef, atomicModifyIORef', atomicWriteIORef, newIORef, readIORef)
 import qualified Data.Text as Text
 import System.IO.Error (IOError, ioeGetErrorType, isDoesNotExistErrorType)
 import qualified Network.Mux as Mux
 import Network.TypedProtocol.Peer (Nat (..))
 
+import Cardano.Ledger.BaseTypes (unNonZero)
 import Ouroboros.Consensus.Block.Abstract (CodecConfig)
 import Ouroboros.Consensus.Byron.Node ()
 import Ouroboros.Consensus.Cardano.Node ()
-import Ouroboros.Consensus.Config (TopLevelConfig, configCodec)
+import Ouroboros.Consensus.Config (TopLevelConfig, configCodec, configSecurityParam)
+import Ouroboros.Consensus.Protocol.Abstract (maxRollbacks)
 import Ouroboros.Consensus.Cardano.Block
   ( CardanoBlock
   , StandardCrypto
@@ -100,13 +102,12 @@ import qualified Ouroboros.Network.Snocket as Snocket
 
 import Cardano.Slotting.Slot (WithOrigin (..))
 
-import DbSync.AppM (IngestM)
 import DbSync.Block.Types (CardanoPoint)
 import DbSync.Config.Genesis (GenesisConfig (..), ShelleyConfig (..))
-import DbSync.Env (IngestEnv (..))
+import DbSync.Env (HasReceiverChannels (..))
 import DbSync.Error (throwNetwork)
 import DbSync.Ingest.ReceiverStats (ReceiverStats, recordBlockReceived, recordWriteBlocked)
-import DbSync.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..))
+import DbSync.Node.ChainSyncMsg (ChainSyncMsg (..))
 import DbSync.StateQuery (StateQueryVar, localStateQueryHandler)
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
@@ -147,35 +148,32 @@ getNetworkMagic gc = NetworkMagic $ sgNetworkMagic (scConfig $ gcShelley gc)
 
 -- | Connect to a cardano-node and run the ChainSync protocol.
 --
--- Received blocks are written to the env's 'ieBlockQueue'. This function
--- blocks indefinitely (reconnects on failure).
+-- Received blocks are written to the env's block queue. Blocks
+-- indefinitely (reconnects on failure).
 --
--- The arguments that aren't on 'IngestEnv' ('IOManager', the
--- 'TopLevelConfig', the 'NetworkMagic', and the socket path) are
--- network-wiring concerns supplied by 'Main' once 'withIOManager' has
--- allocated the manager and the genesis config has been read.
+-- Polymorphic over the env so the same call drives Ingest and Follow.
+-- Both 'IngestEnv' and 'FollowEnv' have 'HasTracer' and
+-- 'HasReceiverChannels' instances, so the consumer-side env at each
+-- phase boundary is the only thing that changes.
 connectToNode
-  :: IOManager
+  :: ( MonadReader env m, MonadIO m
+     , HasTracer env, HasReceiverChannels env
+     )
+  => IOManager
   -> TopLevelConfig (CardanoBlock StandardCrypto)
   -> NetworkMagic
   -> FilePath                                    -- ^ Node socket path
   -> IntersectionRequirement
-  -> IngestM ()
+  -> m ()
 connectToNode iomgr topLevelCfg networkMagic socketPath intersect = do
-  tracer         <- asks getTracer
-  blockQueue     <- asks ieBlockQueue
-  stateQueryVar  <- asks ieStateQueryVar
-  receiverStats  <- asks ieReceiverStats
-  watchdog       <- asks ieWatchdog
-  hasLedgerEnv   <- asks ieHasLedgerEnv
-  latestPointRef <- asks ieLatestReceivedPoint
-  -- The ledger queue only exists in the enabled arm; pattern-matching
-  -- it out here keeps blockFetchClient's optional second-target
-  -- contract crisp (no LedgerDisabled-shaped sentinel queue).
-  let mLedgerQueue =
-        case hasLedgerEnv of
-          LedgerEnabled lenv -> Just (leLedgerQueue lenv)
-          LedgerDisabled _   -> Nothing
+  tracer            <- asks getTracer
+  blockQueue        <- asks getBlockQueue
+  mLedgerQueue      <- asks getLedgerQueue
+  stateQueryVar     <- asks getStateQueryVar
+  receiverStats     <- asks getReceiverStats
+  watchdog          <- asks getWatchdog
+  latestPointRef    <- asks getLatestPoint
+  rollbackBoundary  <- asks getRollbackBoundary
   liftIO $ do
     traceWith tracer $ LogMsg Info "Connection" ("Connecting to node via " <> toS socketPath) Nothing
     void $
@@ -185,10 +183,15 @@ connectToNode iomgr topLevelCfg networkMagic socketPath intersect = do
         (supportedNodeToClientVersions (Proxy @(CardanoBlock StandardCrypto)))
         (subscriptionTracers tracer)
         subscriptionParams
-        (nodeProtocols tracer codecConfig blockQueue mLedgerQueue receiverStats watchdog stateQueryVar latestPointRef intersect)
+        (nodeProtocols tracer codecConfig blockQueue mLedgerQueue receiverStats watchdog stateQueryVar latestPointRef rollbackBoundary kBlocks intersect)
   where
     codecConfig :: CodecConfig (CardanoBlock StandardCrypto)
     codecConfig = configCodec topLevelCfg
+
+    -- Protocol security parameter — the largest possible rollback
+    -- depth. Cardano mainnet has k = 2160; testnets vary.
+    kBlocks :: Word64
+    kBlocks = unNonZero (maxRollbacks (configSecurityParam topLevelCfg))
 
     subscriptionParams :: SubscriptionParams ()
     subscriptionParams =
@@ -258,17 +261,19 @@ classifyConnectError se = case fromException se :: Maybe IOError of
 nodeProtocols
   :: AppTracer
   -> CodecConfig (CardanoBlock StandardCrypto)
-  -> TBQueue (CardanoBlock StandardCrypto)
-  -> Maybe (TBQueue (CardanoBlock StandardCrypto))
+  -> TBQueue ChainSyncMsg
+  -> Maybe (TBQueue ChainSyncMsg)
   -> ReceiverStats
   -> Watchdog
   -> StateQueryVar
   -> IORef (Maybe CardanoPoint)
+  -> TVar (Maybe BlockNo)
+  -> Word64
   -> IntersectionRequirement
   -> Network.NodeToClientVersion
   -> BlockNodeToClientVersion (CardanoBlock StandardCrypto)
   -> NodeToClientProtocols 'Mux.InitiatorMode LocalAddress BSL.ByteString IO () Void
-nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats watchdog stateQueryVar latestPointRef intersect version blockVersion =
+nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats watchdog stateQueryVar latestPointRef rollbackBoundary kBlocks intersect version blockVersion =
   NodeToClientProtocols
     { localChainSyncProtocol = chainSyncProtocol
     , localTxSubmissionProtocol = dummyTxSubmit
@@ -287,7 +292,7 @@ nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats watchd
             (cChainSyncCodec codecs)
             channel
             ( chainSyncClientPeerPipelined $
-                blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latestPointRef intersect
+                blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latestPointRef rollbackBoundary kBlocks intersect
             )
         pure ((), Nothing)
 
@@ -342,11 +347,13 @@ nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats watchd
 -- after the main queue write succeeds.
 blockFetchClient
   :: AppTracer
-  -> TBQueue (CardanoBlock StandardCrypto)            -- ^ Main pipeline queue
-  -> Maybe (TBQueue (CardanoBlock StandardCrypto))    -- ^ Optional ledger worker queue
+  -> TBQueue ChainSyncMsg                             -- ^ Main pipeline queue
+  -> Maybe (TBQueue ChainSyncMsg)                     -- ^ Optional ledger worker queue
   -> ReceiverStats
   -> Watchdog
   -> IORef (Maybe CardanoPoint)                       -- ^ Latest received point, updated on each forward / rollback
+  -> TVar (Maybe BlockNo)                             -- ^ Rollback boundary, updated on every tip observation
+  -> Word64                                           -- ^ Protocol security parameter @k@
   -> IntersectionRequirement                          -- ^ Boot-time fallback intersection
   -> ChainSyncClientPipelined
        (CardanoBlock StandardCrypto)
@@ -354,8 +361,15 @@ blockFetchClient
        (Tip (CardanoBlock StandardCrypto))
        IO
        ()
-blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latestPointRef intersect =
+blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latestPointRef rollbackBoundary kBlocks intersect =
   ChainSyncClientPipelined $ do
+    -- Per-session flag: 'False' until the first forward block arrives
+    -- after an intersect handshake. The node always sends a confirming
+    -- 'MsgRollBackward' to the chosen intersection point right after
+    -- 'MsgIntersectFound'; that rollback is a protocol artefact, not
+    -- a real chain reorganisation, so it must not propagate as a
+    -- 'MsgRollback' to downstream consumers.
+    haveSeenBlock <- newIORef False
     mLatest <- readIORef latestPointRef
     let (intersectPoints, isResume) = case mLatest of
           Just p  -> ([p], True)
@@ -367,8 +381,8 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
       SendMsgFindIntersect
         intersectPoints
         ClientPipelinedStIntersect
-          { recvMsgIntersectFound    = onIntersectFound
-          , recvMsgIntersectNotFound = onIntersectNotFound isResume
+          { recvMsgIntersectFound    = onIntersectFound haveSeenBlock
+          , recvMsgIntersectNotFound = onIntersectNotFound isResume haveSeenBlock
           }
   where
     bootIntersectPoints = case intersect of
@@ -378,12 +392,13 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
     -- Log the chosen candidate so the operator can see which
     -- snapshot point the node selected — useful when the candidate
     -- list contains fallbacks beyond the newest snapshot.
-    onIntersectFound chosen tip = do
+    onIntersectFound haveSeenBlock chosen tip = do
       traceWith appTracer $ LogMsg Info "ChainSync"
         ("Intersected at " <> show chosen <> " (server tip " <> show tip <> ")") Nothing
-      pure $ goTip policy Zero Origin tip
+      atomicWriteIORef haveSeenBlock False
+      pure $ goTip haveSeenBlock policy Zero Origin tip
 
-    onIntersectNotFound isResume tip
+    onIntersectNotFound isResume haveSeenBlock tip
       | isResume =
           throwNetwork $
             "ChainSync reconnection: node could not intersect at our last "
@@ -394,7 +409,8 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
           IntersectGenesis -> do
             traceWith appTracer $ LogMsg Info "ChainSync"
               "Node also has no chain yet; following from origin" Nothing
-            pure $ goTip policy Zero Origin tip
+            atomicWriteIORef haveSeenBlock False
+            pure $ goTip haveSeenBlock policy Zero Origin tip
           IntersectAt ps ->
             throwNetwork $
               "ChainSync intersection not found on node at any of "
@@ -410,42 +426,45 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
     policy = pipelineDecisionLowHighMark 10 50
 
     goTip
-      :: MkPipelineDecision
+      :: IORef Bool
+      -> MkPipelineDecision
       -> Nat n
       -> WithOrigin BlockNo
       -> Tip (CardanoBlock StandardCrypto)
       -> ClientPipelinedStIdle n (CardanoBlock StandardCrypto) CardanoPoint (Tip (CardanoBlock StandardCrypto)) IO ()
-    goTip mkDecision n clientTip serverTip =
-      go mkDecision n clientTip (getTipBlockNo serverTip)
+    goTip haveSeenBlock mkDecision n clientTip serverTip =
+      go haveSeenBlock mkDecision n clientTip (getTipBlockNo serverTip)
 
     go
-      :: MkPipelineDecision
+      :: IORef Bool
+      -> MkPipelineDecision
       -> Nat n
       -> WithOrigin BlockNo
       -> WithOrigin BlockNo
       -> ClientPipelinedStIdle n (CardanoBlock StandardCrypto) CardanoPoint (Tip (CardanoBlock StandardCrypto)) IO ()
-    go mkDecision n clientTip serverTip =
+    go haveSeenBlock mkDecision n clientTip serverTip =
       case (n, runPipelineDecision mkDecision n clientTip serverTip) of
         (_Zero, (Request, mkDecision')) ->
-          SendMsgRequestNext (pure ()) (mkClientStNext mkDecision' n)
+          SendMsgRequestNext (pure ()) (mkClientStNext haveSeenBlock mkDecision' n)
         (_, (Pipeline, mkDecision')) ->
           SendMsgRequestNextPipelined
             (pure ())
-            (go mkDecision' (Succ n) clientTip serverTip)
+            (go haveSeenBlock mkDecision' (Succ n) clientTip serverTip)
         (Succ n', (CollectOrPipeline, mkDecision')) ->
           CollectResponse
-            (Just . pure $ SendMsgRequestNextPipelined (pure ()) $ go mkDecision' (Succ n) clientTip serverTip)
-            (mkClientStNext mkDecision' n')
+            (Just . pure $ SendMsgRequestNextPipelined (pure ()) $ go haveSeenBlock mkDecision' (Succ n) clientTip serverTip)
+            (mkClientStNext haveSeenBlock mkDecision' n')
         (Succ n', (Collect, mkDecision')) ->
           CollectResponse
             Nothing
-            (mkClientStNext mkDecision' n')
+            (mkClientStNext haveSeenBlock mkDecision' n')
 
     mkClientStNext
-      :: MkPipelineDecision
+      :: IORef Bool
+      -> MkPipelineDecision
       -> Nat n
       -> ClientStNext n (CardanoBlock StandardCrypto) CardanoPoint (Tip (CardanoBlock StandardCrypto)) IO ()
-    mkClientStNext mkDecision n =
+    mkClientStNext haveSeenBlock mkDecision n =
       ClientStNext
         { recvMsgRollForward = \blk tip -> do
             let bn@(BlockNo bnRaw) = blockNo blk
@@ -458,6 +477,13 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
               traceWith appTracer $ LogMsg Info "ChainSync" "Receiving blocks" Nothing
             recordBlockReceived receiverStats
             bumpReceiver watchdog (blockSlot blk)
+            -- Mark the post-intersect handshake as complete; any
+            -- subsequent rollback is a real chain reorganisation.
+            atomicWriteIORef haveSeenBlock True
+            -- The rollback boundary moves with the node tip; publish
+            -- it before enqueuing so a slow consumer never sees a
+            -- block whose ancestor has already passed the boundary.
+            publishRollbackBoundary tip
             -- Try a non-blocking write first so we can tell whether the
             -- queue was full at the moment of arrival. A non-zero
             -- 'rsWritesBlocked' means the consumer is the bottleneck;
@@ -465,36 +491,59 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
             -- node is. ('stm' has 'tryReadTBQueue' but no 'tryWriteTBQueue',
             -- so we synthesise the same semantics from 'isFullTBQueue' +
             -- 'writeTBQueue' inside a single STM transaction.)
+            let msg = MsgForward blk
             ok <- atomically $ do
               full <- isFullTBQueue blockQueue
               if full
                 then pure False
-                else writeTBQueue blockQueue blk >> pure True
+                else writeTBQueue blockQueue msg >> pure True
             unless ok $ do
               recordWriteBlocked receiverStats
-              atomically $ writeTBQueue blockQueue blk
+              atomically $ writeTBQueue blockQueue msg
             -- Fan-out to the ledger worker (when enabled). The
             -- worker is a single consumer with a shallower queue, so
             -- we accept that the receiver may block here if the
             -- worker has fallen behind — preferable to dropping
             -- blocks silently.
             for_ mLedgerQueue $ \ledgerQueue ->
-              atomically $ writeTBQueue ledgerQueue blk
+              atomically $ writeTBQueue ledgerQueue msg
             -- Record the latest accepted point so a reconnect resumes
             -- here instead of replaying from the boot-time intersect.
             -- Written only after both queue writes succeed, so a
             -- block we crash before delivering doesn't advance the
             -- recorded position.
             atomicWriteIORef latestPointRef (Just (blockPoint blk))
-            pure $ goTip mkDecision n (At bn) tip
+            pure $ goTip haveSeenBlock mkDecision n (At bn) tip
         , recvMsgRollBackward = \point tip -> do
+            -- The first MsgRollBackward after MsgIntersectFound is the
+            -- node's confirming rollback to the chosen intersection
+            -- point — a protocol artefact, not a chain reorganisation.
+            -- Don't surface it to downstream consumers; just record
+            -- the position and continue.
+            isConfirmingRollback <- atomicModifyIORef' haveSeenBlock
+              (\seen -> (True, not seen))
             traceWith appTracer $ LogMsg Warning "ChainSync"
-              ("Rollback to " <> show point) Nothing
-            -- Track the rollback target so a subsequent reconnect
-            -- doesn't re-use a stale forward point. After the
-            -- intersect handshake the node always sends a confirming
-            -- rollback to the chosen point, which is benign and
-            -- leaves the recorded position unchanged.
+              ( "Rollback to " <> show point
+                  <> (if isConfirmingRollback then " (confirming intersect; not propagated)" else "")
+              ) Nothing
             atomicWriteIORef latestPointRef (Just point)
-            pure $ goTip mkDecision n Origin tip
+            publishRollbackBoundary tip
+            unless isConfirmingRollback $ do
+              let msg = MsgRollback point
+              atomically $ writeTBQueue blockQueue msg
+              for_ mLedgerQueue $ \ledgerQueue ->
+                atomically $ writeTBQueue ledgerQueue msg
+            pure $ goTip haveSeenBlock mkDecision n Origin tip
         }
+
+    -- Compute @tipBlock − k@ from a server tip and publish it on the
+    -- shared boundary TVar. 'Nothing' while the chain is still shorter
+    -- than @k@ blocks — everything is volatile in that case.
+    publishRollbackBoundary :: Tip (CardanoBlock StandardCrypto) -> IO ()
+    publishRollbackBoundary tip = do
+      let boundary = case getTipBlockNo tip of
+            Origin -> Nothing
+            At (BlockNo n)
+              | n >= kBlocks -> Just (BlockNo (n - kBlocks))
+              | otherwise    -> Nothing
+      atomically $ writeTVar rollbackBoundary boundary

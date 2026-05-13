@@ -285,13 +285,45 @@ spec = describe "DbSync.Phase.PreparingForChainTip" $
             ])
         result `shouldBe` "10"
 
-    describe "indexes" $
+    describe "indexes" $ do
       it "the address.raw unique index is created" $ do
         result <- T.strip <$> queryTestDb
           (T.unwords
             [ "SELECT count(*) FROM pg_indexes"
             , "WHERE tablename = 'address'"
             , "AND indexname = 'address_unique_1_idx'"
+            ])
+        result `shouldBe` "1"
+
+      -- The next three assertions confirm the pre-resolve index build
+      -- runs before the resolves: each index name must exist on disk
+      -- after Prep.run returns. The unique tx.hash index is also
+      -- emitted by the later concurrent pass under the same name; the
+      -- IF NOT EXISTS guard makes the second emission a no-op.
+      it "tx (hash) is indexed for the post-load join-on-hash UPDATEs" $ do
+        result <- T.strip <$> queryTestDb
+          (T.unwords
+            [ "SELECT count(*) FROM pg_indexes"
+            , "WHERE tablename = 'tx'"
+            , "AND indexname = 'tx_unique_1_idx'"
+            ])
+        result `shouldBe` "1"
+
+      it "tx_out (tx_id, index) is indexed for consumed-by + backfill JOINs" $ do
+        result <- T.strip <$> queryTestDb
+          (T.unwords
+            [ "SELECT count(*) FROM pg_indexes"
+            , "WHERE tablename = 'tx_out'"
+            , "AND indexname = 'tx_out_tx_id_index_idx'"
+            ])
+        result `shouldBe` "1"
+
+      it "tx_in (tx_out_id, tx_out_index) is indexed for the merge-join inner" $ do
+        result <- T.strip <$> queryTestDb
+          (T.unwords
+            [ "SELECT count(*) FROM pg_indexes"
+            , "WHERE tablename = 'tx_in'"
+            , "AND indexname = 'tx_in_tx_out_idx'"
             ])
         result `shouldBe` "1"
 

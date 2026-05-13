@@ -96,6 +96,7 @@ epochSyncStatsTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = [pure "epoch_no"]
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 epochSyncTimeTableDef :: TableDef
@@ -113,6 +114,7 @@ epochSyncTimeTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = [pure "no"]
   , tdGeneratedColumns = []
+  , tdForeignKeys = []
   }
 
 -- ---------------------------------------------------------------------------

@@ -96,6 +96,7 @@ spec = do
             , tdColumnDefaults = []
             , tdUniqueConstraints = []
             , tdGeneratedColumns = []
+            , tdForeignKeys = []
             }
           sql = generateCreateTable simpleDef
       sql `shouldBe` T.unlines
@@ -121,6 +122,7 @@ spec = do
                 ]
             , tdUniqueConstraints = []
             , tdGeneratedColumns = []
+            , tdForeignKeys = []
             }
           sql = generateCreateTable defDef
       sql `shouldBe` T.unlines
@@ -141,6 +143,7 @@ spec = do
             , tdColumnDefaults = []
             , tdUniqueConstraints = []
             , tdGeneratedColumns = []
+            , tdForeignKeys = []
             }
           sql = generateCreateTable pkDef
       sql `shouldBe` T.unlines
@@ -161,6 +164,7 @@ spec = do
             , tdColumnDefaults = []
             , tdUniqueConstraints = []
             , tdGeneratedColumns = []
+            , tdForeignKeys = []
             }
           sql = generateCreateTable checkDef
       sql `shouldBe` T.unlines

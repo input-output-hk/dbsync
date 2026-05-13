@@ -178,6 +178,9 @@ txOutTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys =
+      [ ForeignKey "tx_id" "tx" "id"
+      ]
   }
 
 txInTableDef :: TableDef
@@ -197,6 +200,9 @@ txInTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys =
+      [ ForeignKey "tx_in_id" "tx" "id"
+      ]
   }
 
 collateralTxInTableDef :: TableDef
@@ -215,6 +221,9 @@ collateralTxInTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys =
+      [ ForeignKey "tx_in_id" "tx" "id"
+      ]
   }
 
 referenceTxInTableDef :: TableDef
@@ -233,6 +242,9 @@ referenceTxInTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys =
+      [ ForeignKey "tx_in_id" "tx" "id"
+      ]
   }
 
 collateralTxOutTableDef :: TableDef
@@ -257,6 +269,9 @@ collateralTxOutTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdForeignKeys =
+      [ ForeignKey "tx_id" "tx" "id"
+      ]
   }
 
 -- ---------------------------------------------------------------------------

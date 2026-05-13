@@ -34,8 +34,12 @@ spec = describe "DbSync.Config.Node" $ do
         Right dsc ->
           dscNetworkName dsc `shouldBe` Just "mainnet"
 
-    it "parses the real db-sync-config.json" $ do
-      result <- parseDbSyncNodeConfig "/Volumes/Cmdv4TB/Code/IOG/testnet/db-sync-config.json"
+    -- Verbatim snapshot of a real mainnet db-sync-config.json,
+    -- captured from a running deployment. Exercises the full
+    -- field set our parser sees in production, not the trimmed
+    -- shape of 'fixtures/db-sync-config.json'.
+    it "parses a real production db-sync-config.json" $ do
+      result <- parseDbSyncNodeConfig "fixtures/db-sync-config-real-mainnet.json"
       case result of
         Left err -> panic $ "Parse failed: " <> show err
         Right dsc ->
@@ -103,8 +107,12 @@ spec = describe "DbSync.Config.Node" $ do
           ncTestConwayHardForkAtEpoch nc `shouldBe` Just 6
 
   describe "parseNodeConfig (real production config)" $ do
-    it "parses the actual testnet node config" $ do
-      result <- parseNodeConfig "/Volumes/Cmdv4TB/Code/IOG/testnet/config.json"
+    -- Verbatim snapshot of a real mainnet config.json (LedgerDB,
+    -- TraceOptions, the full field set the node emits). Catches
+    -- parser regressions against shapes the hand-trimmed
+    -- 'fixtures/node-config.json' doesn't exercise.
+    it "parses a real production mainnet node config" $ do
+      result <- parseNodeConfig "fixtures/node-config-real-mainnet.json"
       case result of
         Left err -> panic $ "Parse failed: " <> show err
         Right nc -> do

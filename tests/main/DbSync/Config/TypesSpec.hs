@@ -1,6 +1,6 @@
 -- | Tests for profile JSON parsing.
 --
--- Tests read from actual JSON files in @test-fixtures/@, so the fixtures
+-- Tests read from actual JSON files in @tests/fixtures/@, so the fixtures
 -- double as documentation and examples of valid configs.
 module DbSync.Config.TypesSpec
   ( spec
@@ -31,7 +31,7 @@ spec :: Spec
 spec = describe "DbSync.Config" $ do
   describe "parseConfig (full-config.json)" $ do
     it "parses all fields correctly" $ do
-      result <- parseConfig "test-fixtures/full-config.json"
+      result <- parseConfig "fixtures/full-config.json"
       case result of
         Left err -> panic $ "Parse failed: " <> show err
         Right cfg -> do
@@ -65,7 +65,7 @@ spec = describe "DbSync.Config" $ do
 
   describe "parseConfig (minimal-config.json)" $ do
     it "uses defaults for all optional fields" $ do
-      result <- parseConfig "test-fixtures/minimal-config.json"
+      result <- parseConfig "fixtures/minimal-config.json"
       case result of
         Left err -> panic $ "Parse failed: " <> show err
         Right cfg -> do
@@ -100,12 +100,12 @@ spec = describe "DbSync.Config" $ do
 
   describe "parseConfig (no-database.json)" $ do
     it "fails with a config error" $ do
-      result <- parseConfig "test-fixtures/no-database.json"
+      result <- parseConfig "fixtures/no-database.json"
       result `shouldSatisfy` isLeft
 
   describe "parseConfig (override-options.json)" $ do
     it "enables only the listed options; everything else stays off" $ do
-      result <- parseConfig "test-fixtures/override-options.json"
+      result <- parseConfig "fixtures/override-options.json"
       case result of
         Left err -> panic $ "Parse failed: " <> show err
         Right cfg -> do
@@ -119,7 +119,7 @@ spec = describe "DbSync.Config" $ do
 
   describe "parseConfig (ingest-mode.json)" $ do
     it "parses ingest sync mode" $ do
-      result <- parseConfig "test-fixtures/ingest-mode.json"
+      result <- parseConfig "fixtures/ingest-mode.json"
       case result of
         Left err -> panic $ "Parse failed: " <> show err
         Right cfg ->
@@ -127,7 +127,7 @@ spec = describe "DbSync.Config" $ do
 
   describe "parseConfig (json-logging.json)" $ do
     it "parses json log format and debug level" $ do
-      result <- parseConfig "test-fixtures/json-logging.json"
+      result <- parseConfig "fixtures/json-logging.json"
       case result of
         Left err -> panic $ "Parse failed: " <> show err
         Right cfg -> do
@@ -137,21 +137,21 @@ spec = describe "DbSync.Config" $ do
   -- LSM is the only supported backend.
   describe "ledger.backend parsing" $ do
     it "defaults to LSM when backend is omitted (minimal-config.json)" $ do
-      result <- parseConfig "test-fixtures/minimal-config.json"
+      result <- parseConfig "fixtures/minimal-config.json"
       case result of
         Left err -> panic $ "Parse failed: " <> show err
         Right cfg ->
           lcBackend (scLedger cfg) `shouldBe` defaultLedgerBackend
 
     it "accepts \"lsm\" explicitly (ledger-backend-lsm.json)" $ do
-      result <- parseConfig "test-fixtures/ledger-backend-lsm.json"
+      result <- parseConfig "fixtures/ledger-backend-lsm.json"
       case result of
         Left err -> panic $ "Parse failed: " <> show err
         Right cfg ->
           lcBackend (scLedger cfg) `shouldBe` LedgerBackendLSM Nothing
 
     it "rejects \"inmemory\" with a clear D1 error (ledger-backend-inmemory.json)" $ do
-      result <- parseConfig "test-fixtures/ledger-backend-inmemory.json"
+      result <- parseConfig "fixtures/ledger-backend-inmemory.json"
       case result of
         Right _ ->
           panic "Expected parse failure for ledger.backend = \"inmemory\""

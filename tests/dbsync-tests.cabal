@@ -1,0 +1,158 @@
+cabal-version: 3.6
+name:          dbsync-tests
+version:       0.1.0.0
+synopsis:      Test suite and shared test helpers for dbsync
+description:   Houses every test for the dbsync workspace. Contains the
+               @dbsync-testlib@ sub-library (mock-chain harness, hasql
+               helpers, hspec fixtures) and the @dbsync-test@ runner that
+               drives the hspec specs against the dbsync library.
+license:       Apache-2.0
+author:        IOHK Engineering Team
+maintainer:    operations@iohk.io
+copyright:     2020-2025 Input Output Global Inc (IOG).
+category:      Cryptocurrency
+build-type:    Simple
+
+common warnings
+  ghc-options:
+    -Wall
+    -Wcompat
+    -Wredundant-constraints
+    -Wincomplete-record-updates
+    -Wincomplete-uni-patterns
+    -Wmissing-deriving-strategies
+    -Wpartial-fields
+    -Widentities
+    -Wunused-packages
+    -Werror
+
+common defaults
+  default-language:   GHC2021
+  default-extensions:
+    NoImplicitPrelude
+    OverloadedStrings
+    DerivingStrategies
+    GeneralizedNewtypeDeriving
+    LambdaCase
+
+-- ---------------------------------------------------------------------------
+-- Test helper library
+-- ---------------------------------------------------------------------------
+library dbsync-testlib
+  import:         warnings, defaults
+  hs-source-dirs: lib
+  exposed-modules:
+    DbSync.Test.Database
+    DbSync.Test.Fixtures
+    DbSync.Test.Generators
+    DbSync.Test.Hasql
+    DbSync.Test.Helpers
+    DbSync.Test.MockChain
+    DbSync.Test.PipelineEnv
+    DbSync.Test.Property.Invariants
+  build-depends:
+      base
+    , cardano-crypto-class
+    , cardano-ledger-core
+    , cardano-node
+    , cardano-prelude
+    , cardano-slotting
+    , dbsync
+    , dbsync-db
+    , dbsync-mock
+    , filepath
+    , hasql                           >= 1.9 && < 2
+    , ouroboros-consensus
+    , ouroboros-consensus:cardano
+    , ouroboros-network:api
+    , process
+    , text
+    , time
+
+-- ---------------------------------------------------------------------------
+-- Test runner
+-- ---------------------------------------------------------------------------
+test-suite dbsync-test
+  import:         warnings, defaults
+  type:           exitcode-stdio-1.0
+  hs-source-dirs: main
+  main-is:        Main.hs
+  other-modules:
+    DbSync.AppSpec
+    DbSync.CliSpec
+    DbSync.Config.TypesSpec
+    DbSync.Config.ValidationSpec
+    DbSync.Config.NodeSpec
+    DbSync.Config.GenesisSpec
+    DbSync.Db.Statement.BlockSpec
+    DbSync.Db.Statement.IndexesSpec
+    DbSync.Db.Statement.RoundTripSpec
+    DbSync.Db.Statement.SequencesSpec
+    DbSync.Db.Statement.SlotLeaderSpec
+    DbSync.Db.Statement.SyncStateSpec
+    DbSync.Db.TypesSpec
+    DbSync.PropertySpec
+    DbSync.Resolver.AddressWorkerSpec
+    DbSync.Schema.AdaPotsSpec
+    DbSync.Schema.AddressSpec
+    DbSync.Schema.CoreSpec
+    DbSync.Schema.GenerateSpec
+    DbSync.Schema.GovernanceSpec
+    DbSync.Schema.RewardSpec
+    DbSync.Schema.ScriptsDatumsSpec
+    DbSync.Schema.SyncStateSpec
+    DbSync.Util.Bech32Spec
+    DbSync.Util.DedupHashSpec
+    DbSync.Block.MetadataSpec
+    DbSync.Extractor.CoreSpec
+    DbSync.Extractor.EpochBoundarySpec
+    DbSync.Extractor.PoolSpec
+    DbSync.Extractor.StakeDelegationSpec
+    DbSync.Extractor.UTxOSpec
+    DbSync.Ingest.ConsumerSpec
+    DbSync.Ingest.PipelineSpec
+    DbSync.Schema.InitSpec
+    DbSync.Copy.WriterSpec
+    DbSync.Ledger.StateSpec
+    DbSync.Ledger.TypesSpec
+    DbSync.Ledger.WorkerSpec
+    DbSync.Checkpoint.ManagerSpec
+    DbSync.Checkpoint.ResumeSpec
+    DbSync.Checkpoint.SyncStateSpec
+    DbSync.Phase.BootSpec
+    DbSync.Phase.FollowingChainTipSpec
+    DbSync.Phase.MockChainSpec
+    DbSync.Phase.PreparingForChainTipSpec
+    DbSync.StateQuery.ObservedSummarySpec
+  build-depends:
+      base
+    , aeson
+    , base16-bytestring
+    , bech32
+    , dbsync
+    , dbsync-db
+    , dbsync-mock
+    , dbsync-tests:dbsync-testlib
+    , hasql                           >= 1.9 && < 2
+    , hspec
+    , cardano-crypto-class
+    , cardano-ledger-binary
+    , cardano-ledger-core
+    , cardano-prelude
+    , cardano-slotting
+    , cardano-strict-containers
+    , bytestring
+    , containers
+    , io-classes:strict-stm
+    , optparse-applicative
+    , ouroboros-consensus
+    , ouroboros-consensus:cardano
+    , ouroboros-consensus:unstable-cardano-testlib
+    , process
+    , QuickCheck
+    , scientific
+    , stm
+    , strict
+    , text
+    , time
+    , wide-word

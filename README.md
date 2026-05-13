@@ -221,11 +221,16 @@ Env vars used by the helper script: `CARDANO_NODE_DIR`, `TESTNET_DIR`, `PROFILE`
 ├── scripts/          # mithril-bootstrap.sh + run-everything-zellij.sh
 ├── cabal.project     # Workspace + CHaP + cardano-node fork pin
 │
+├── tests/            # All tests live here
+│   ├── dbsync-tests.cabal   # Test-suite package (library dbsync-testlib + test-suite dbsync-test)
+│   ├── lib/                 # Shared test helpers (dbsync-testlib)
+│   ├── main/                # hspec test runner + *Spec.hs modules
+│   ├── fixtures/            # Sample configs / golden files
+│   ├── data/                # Larger test data (Conway mock-chain config)
+│   └── dbsync-mock/         # Vendored Cardano.Mock forging primitives (separate cabal package)
+│
 └── dbsync/           # The sync engine
     ├── app/          # Executable entrypoint (Main.hs)
-    ├── test/         # Shared test helpers (dbsync-testlib)
-    ├── test-main/    # hspec test suite
-    ├── test-fixtures/# Sample configs / golden files used by tests
     └── src/DbSync/
         ├── App.hs / AppM.hs / Cli.hs / Env.hs / Error.hs   # Top-level wiring & CLI
         ├── Phase.hs + Phase/        # Phase orchestration: Boot, Ingest, Preparing, Following

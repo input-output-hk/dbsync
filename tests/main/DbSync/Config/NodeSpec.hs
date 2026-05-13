@@ -21,14 +21,14 @@ spec :: Spec
 spec = describe "DbSync.Config.Node" $ do
   describe "parseDbSyncNodeConfig" $ do
     it "extracts NodeConfigFile from db-sync-config.json" $ do
-      result <- parseDbSyncNodeConfig "test-fixtures/db-sync-config.json"
+      result <- parseDbSyncNodeConfig "fixtures/db-sync-config.json"
       case result of
         Left err -> panic $ "Parse failed: " <> show err
         Right dsc ->
           dscNodeConfigFile dsc `shouldBe` "config.json"
 
     it "extracts optional NetworkName" $ do
-      result <- parseDbSyncNodeConfig "test-fixtures/db-sync-config.json"
+      result <- parseDbSyncNodeConfig "fixtures/db-sync-config.json"
       case result of
         Left err -> panic $ "Parse failed: " <> show err
         Right dsc ->
@@ -43,7 +43,7 @@ spec = describe "DbSync.Config.Node" $ do
 
   describe "parseNodeConfig (mainnet-style)" $ do
     it "extracts genesis file paths" $ do
-      result <- parseNodeConfig "test-fixtures/node-config.json"
+      result <- parseNodeConfig "fixtures/node-config.json"
       case result of
         Left err -> panic $ "Parse failed: " <> show err
         Right nc -> do
@@ -53,7 +53,7 @@ spec = describe "DbSync.Config.Node" $ do
           ncConwayGenesisFile nc `shouldBe` "conway-genesis.json"
 
     it "extracts genesis hashes" $ do
-      result <- parseNodeConfig "test-fixtures/node-config.json"
+      result <- parseNodeConfig "fixtures/node-config.json"
       case result of
         Left err -> panic $ "Parse failed: " <> show err
         Right nc -> do
@@ -65,14 +65,14 @@ spec = describe "DbSync.Config.Node" $ do
             Just "15a199f895e461ec0ffc6dd4e4028af28a492ab4e806d39cb674c88f7643ef62"
 
     it "extracts RequiresNoMagic for mainnet" $ do
-      result <- parseNodeConfig "test-fixtures/node-config.json"
+      result <- parseNodeConfig "fixtures/node-config.json"
       case result of
         Left err -> panic $ "Parse failed: " <> show err
         Right nc ->
           ncRequiresNetworkMagic nc `shouldBe` RequiresNoMagic
 
     it "defaults hard fork triggers to Nothing on mainnet" $ do
-      result <- parseNodeConfig "test-fixtures/node-config.json"
+      result <- parseNodeConfig "fixtures/node-config.json"
       case result of
         Left err -> panic $ "Parse failed: " <> show err
         Right nc ->
@@ -80,21 +80,21 @@ spec = describe "DbSync.Config.Node" $ do
 
   describe "parseNodeConfig (testnet-style)" $ do
     it "extracts RequiresMagic for testnets" $ do
-      result <- parseNodeConfig "test-fixtures/node-config-testnet.json"
+      result <- parseNodeConfig "fixtures/node-config-testnet.json"
       case result of
         Left err -> panic $ "Parse failed: " <> show err
         Right nc ->
           ncRequiresNetworkMagic nc `shouldBe` RequiresMagic
 
     it "handles optional ConwayGenesisHash" $ do
-      result <- parseNodeConfig "test-fixtures/node-config-testnet.json"
+      result <- parseNodeConfig "fixtures/node-config-testnet.json"
       case result of
         Left err -> panic $ "Parse failed: " <> show err
         Right nc ->
           ncConwayGenesisHash nc `shouldBe` Nothing
 
     it "parses testnet hard fork trigger epochs" $ do
-      result <- parseNodeConfig "test-fixtures/node-config-testnet.json"
+      result <- parseNodeConfig "fixtures/node-config-testnet.json"
       case result of
         Left err -> panic $ "Parse failed: " <> show err
         Right nc -> do

@@ -25,19 +25,19 @@ spec :: Spec
 spec = describe "DbSync.Config.Validation" $ do
   describe "validateConfig" $ do
     it "accepts a full valid config" $ do
-      result <- parseAndValidate "test-fixtures/full-config.json"
+      result <- parseAndValidate "fixtures/full-config.json"
       result `shouldSatisfy` isRight
 
     it "accepts minimal config (defaults are valid)" $ do
-      result <- parseAndValidate "test-fixtures/minimal-config.json"
+      result <- parseAndValidate "fixtures/minimal-config.json"
       result `shouldSatisfy` isRight
 
     it "accepts ledger disabled when epoch_boundary also disabled" $ do
-      result <- parseAndValidate "test-fixtures/valid-ledger-disabled.json"
+      result <- parseAndValidate "fixtures/valid-ledger-disabled.json"
       result `shouldSatisfy` isRight
 
     it "rejects epoch_boundary enabled without ledger" $ do
-      result <- parseAndValidate "test-fixtures/invalid-epoch-no-ledger.json"
+      result <- parseAndValidate "fixtures/invalid-epoch-no-ledger.json"
       result `shouldSatisfy` isLeft
       case result of
         Left errs -> do
@@ -48,7 +48,7 @@ spec = describe "DbSync.Config.Validation" $ do
         Right _ -> panic "Expected validation error"
 
     it "rejects multi_asset enabled without utxo" $ do
-      result <- parseAndValidate "test-fixtures/invalid-multi-asset-no-utxo.json"
+      result <- parseAndValidate "fixtures/invalid-multi-asset-no-utxo.json"
       result `shouldSatisfy` isLeft
       case result of
         Left errs -> do
@@ -61,7 +61,7 @@ spec = describe "DbSync.Config.Validation" $ do
       -- Verifies the error-accumulation mechanism. We currently only
       -- have one fixture that triggers multiple errors at once; if
       -- more rules land, extend or add a fixture and assert >= 2.
-      result <- parseAndValidate "test-fixtures/invalid-epoch-no-ledger.json"
+      result <- parseAndValidate "fixtures/invalid-epoch-no-ledger.json"
       case result of
         Left errs -> length errs `shouldSatisfy` (>= 1)
         Right _ -> panic "Expected validation error"

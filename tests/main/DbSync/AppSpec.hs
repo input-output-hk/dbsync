@@ -35,9 +35,9 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 -- | Load a valid SyncConfig + NodeConfig for testing.
 loadTestConfigs :: IO (SyncConfig, NodeConfig)
 loadTestConfigs = do
-  Right syncCfg <- parseConfig "test-fixtures/full-config.json"
+  Right syncCfg <- parseConfig "fixtures/full-config.json"
   Right validCfg <- pure $ validateConfig syncCfg
-  Right nodeCfg <- parseNodeConfig "test-fixtures/node-config.json"
+  Right nodeCfg <- parseNodeConfig "fixtures/node-config.json"
   pure (validCfg, nodeCfg)
 
 -- | Build SyncOptions with selected extractors enabled.

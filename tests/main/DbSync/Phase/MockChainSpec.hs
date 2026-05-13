@@ -61,6 +61,6 @@ spec = describe "DbSync.Test.MockChain" $ do
 
 -- | Path to the vendored Conway test fixtures (genesis files,
 -- @test-config.json@, and @pools/bulk1.creds@). Lives under
--- @dbsync/test-data/config-conway/@.
+-- @tests/data/config-conway/@.
 conwayConfigDir :: FilePath
-conwayConfigDir = "test-data/config-conway"
+conwayConfigDir = "data/config-conway"

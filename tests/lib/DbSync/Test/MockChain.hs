@@ -116,7 +116,7 @@ data MockChain = MockChain
 -- once we add the socket layer.
 --
 -- The vendored @config-conway@ fixtures (in
--- @dbsync/test-data/config-conway@) supply this; tests just pass
+-- @tests/data/config-conway@) supply this; tests just pass
 -- that path.
 withMockChain :: FilePath -> (MockChain -> IO a) -> IO a
 withMockChain configDir action = do

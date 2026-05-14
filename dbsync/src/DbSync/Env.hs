@@ -65,8 +65,8 @@ import DbSync.Resolver.AddressBuffer (AddressBufferRef)
 import DbSync.Resolver.AddressWorker (AddressResolver)
 import DbSync.StateQuery.Types (StateQueryVar)
 import DbSync.Trace (HasTracer (..))
-import DbSync.Trace.Types (AppTracer)
-import DbSync.Watchdog (Watchdog)
+import DbSync.Trace.Types (AppTracer, Severity)
+import DbSync.Trace.Watchdog (Watchdog)
 import DbSync.Writer (HasWriter (..), Writer)
 
 -- NOTE: DedupMaps is internally mutable (BasicHashTable + IORef counters).
@@ -112,17 +112,23 @@ class HasReceiverChannels env where
 -- Contains the tracer, metrics handles, configuration, and the list
 -- of active extractors. Constructed once at startup.
 data CoreEnv = CoreEnv
-  { ceTracer     :: !AppTracer
+  { ceTracer      :: !AppTracer
     -- ^ Structured logging tracer (contra-tracer)
-  , ceMetrics    :: !Metrics
+  , ceMinSeverity :: !Severity
+    -- ^ The same minimum severity the tracer was built with — kept
+    --   here so subsystems that gate work on the log level (the
+    --   liveness watchdog, the per-epoch dedup/RAM diagnostic) can
+    --   decide whether to allocate state at all instead of just
+    --   doing the work and filtering at trace time.
+  , ceMetrics     :: !Metrics
     -- ^ Prometheus metrics handles
-  , ceConfig     :: !SyncConfig
+  , ceConfig      :: !SyncConfig
     -- ^ Parsed db-sync configuration
-  , ceNodeConfig :: !NodeConfig
+  , ceNodeConfig  :: !NodeConfig
     -- ^ Extracted cardano-node configuration
-  , ceExtractors :: ![ExtractorDef]
+  , ceExtractors  :: ![ExtractorDef]
     -- ^ Active extractor definitions
-  , ceNetwork    :: !Network
+  , ceNetwork     :: !Network
     -- ^ Chain network ID, sourced from the Shelley genesis.
     --   Drives the HRP for stake / reward Bech32 encodings.
   }

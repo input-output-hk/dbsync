@@ -42,12 +42,14 @@ library dbsync-testlib
   import:         warnings, defaults
   hs-source-dirs: lib
   exposed-modules:
+    DbSync.Test.AppHarness
     DbSync.Test.Database
     DbSync.Test.Fixtures
     DbSync.Test.Generators
     DbSync.Test.Hasql
     DbSync.Test.Helpers
     DbSync.Test.MockChain
+    DbSync.Test.MockNode
     DbSync.Test.PipelineEnv
     DbSync.Test.Property.Invariants
   build-depends:
@@ -60,6 +62,7 @@ library dbsync-testlib
     , dbsync
     , dbsync-db
     , dbsync-mock
+    , directory
     , filepath
     , hasql                           >= 1.9 && < 2
     , ouroboros-consensus
@@ -123,7 +126,9 @@ test-suite dbsync-test
     DbSync.Phase.BootSpec
     DbSync.Phase.FollowingChainTipSpec
     DbSync.Phase.FollowingChainTip.RollbackSpec
+    DbSync.Phase.IngestPrepFollowSpec
     DbSync.Phase.MockChainSpec
+    DbSync.Phase.MockNodeSpec
     DbSync.Phase.PreparingForChainTipSpec
     DbSync.StateQuery.ObservedSummarySpec
   build-depends:
@@ -145,11 +150,13 @@ test-suite dbsync-test
     , cardano-strict-containers
     , bytestring
     , containers
+    , directory
     , io-classes:strict-stm
     , optparse-applicative
     , ouroboros-consensus
     , ouroboros-consensus:cardano
     , ouroboros-consensus:unstable-cardano-testlib
+    , ouroboros-network:api
     , process
     , QuickCheck
     , scientific

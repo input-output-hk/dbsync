@@ -36,7 +36,7 @@ import qualified DbSync.Phase.FollowingChainTip.Rollback as Rollback
 import DbSync.StateQuery (getSlotDetailsIO, observeBlockSTM)
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (LogMsg (..), Severity (..))
-import DbSync.Watchdog (bumpConsumer, setConsumerNote)
+import DbSync.Trace.Watchdog (bumpConsumer, setConsumerNote)
 
 -- | Drain the chainsync queue forever.
 --

@@ -65,7 +65,7 @@ import DbSync.StateQuery
   )
 import DbSync.StateQuery.Types (sdSlotNo)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
-import DbSync.Watchdog (Watchdog, bumpWorker, setWorkerNote)
+import DbSync.Trace.Watchdog (Watchdog, bumpWorker, setWorkerNote)
 
 -- ---------------------------------------------------------------------------
 -- * Hooks

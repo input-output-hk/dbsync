@@ -11,11 +11,16 @@ module DbSync.Trace.Types
   , SrcInfo (..)
   , AppTracer
 
+    -- * Severity parsing
+  , severityFromText
+
     -- * Source-location capture
   , captureCallSite
   ) where
 
 import Cardano.Prelude
+
+import qualified Data.Text as Text
 
 import Control.Tracer (Tracer)
 
@@ -50,6 +55,18 @@ data LogMsg = LogMsg
 
 -- | The tracer type used throughout the application — contra-tracer.
 type AppTracer = Tracer IO LogMsg
+
+-- | Parse the profile's @logging.level@ string. Case-insensitive;
+-- unrecognised values fall back to 'Info' so a typo doesn't break
+-- the boot.
+severityFromText :: Text -> Severity
+severityFromText t = case Text.toLower (Text.strip t) of
+  "debug"   -> Debug
+  "info"    -> Info
+  "warning" -> Warning
+  "warn"    -> Warning
+  "error"   -> Error
+  _         -> Info
 
 -- | Extract the top frame of a 'CallStack' into 'SrcInfo'.
 --

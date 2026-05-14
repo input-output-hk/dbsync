@@ -111,6 +111,7 @@ import DbSync.Test.Database
   )
 import DbSync.Test.Hasql (withTestConnection)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
+import DbSync.Trace.Backend (mkNullTracer)
 import DbSync.Writer.CopyAdapter (mkCopyWriterAdapter)
 
 -- ---------------------------------------------------------------------------
@@ -189,7 +190,7 @@ runPipelineThenPrepare blocks = do
   for_ blocks $ \blk -> runReaderT (processBlock blk) env
   cwCommit cw
   closeCopyWriter cw
-  withTestConnection $ \conn -> Prep.run conn tables
+  withTestConnection $ \conn -> Prep.run mkNullTracer conn tables
 
 -- ---------------------------------------------------------------------------
 -- * Setup / teardown

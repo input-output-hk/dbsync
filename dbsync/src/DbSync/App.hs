@@ -26,7 +26,8 @@ import qualified Data.Text as Text
 import qualified Data.Tree as Tree
 
 import DbSync.Config.Types
-  ( NodeConfig
+  ( LoggingConfig (..)
+  , NodeConfig
   , SyncOption (..)
   , SyncOptions (..)
   , SyncConfig (..)
@@ -44,7 +45,7 @@ import DbSync.Extractor.Pool (poolExtractor)
 import DbSync.Extractor.Cbor (cborExtractor)
 import DbSync.Extractor.EpochBoundary (epochBoundaryExtractor)
 import DbSync.Extractor.EpochSyncStats (epochSyncStatsExtractor)
-import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
+import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..), severityFromText)
 import DbSync.AppM (CoreM)
 
 -- ---------------------------------------------------------------------------
@@ -52,19 +53,16 @@ import DbSync.AppM (CoreM)
 -- ---------------------------------------------------------------------------
 
 -- | Build the shared core environment from parsed configs.
---
--- Aborts startup via 'throwInternal' if 'buildExtractors' returns
--- 'Left' (missing dependency, version mismatch, or cycle) — these
--- mean the profile is misconfigured and the run cannot proceed.
+-- Throws via 'throwInternal' if 'buildExtractors' rejects the profile.
 buildCoreEnv :: AppTracer -> SyncConfig -> NodeConfig -> Network -> IO CoreEnv
 buildCoreEnv tracer syncCfg nodeCfg network = do
   extractors <- case buildExtractors (scOptions syncCfg) of
     Left err  -> throwInternal err
     Right xs  -> pure xs
-  let metrics = placeholderMetrics
   pure CoreEnv
     { ceTracer      = tracer
-    , ceMetrics     = metrics
+    , ceMinSeverity = severityFromText (lgLevel (scLogging syncCfg))
+    , ceMetrics     = placeholderMetrics
     , ceConfig      = syncCfg
     , ceNodeConfig  = nodeCfg
     , ceExtractors  = extractors

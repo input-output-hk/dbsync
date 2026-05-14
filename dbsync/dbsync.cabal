@@ -43,6 +43,8 @@ library
   exposed-modules:
     -- Modules
     DbSync.App
+    DbSync.App.Args
+    DbSync.App.Run
     DbSync.AppM
     DbSync.Cli
     DbSync.Config
@@ -55,6 +57,8 @@ library
     DbSync.Trace
     DbSync.Trace.Types
     DbSync.Trace.Backend
+    DbSync.Trace.Timing
+    DbSync.Trace.Watchdog
     DbSync.Phase
     DbSync.Phase.Boot
     DbSync.Phase.IngestChainHistory
@@ -124,7 +128,6 @@ library
     DbSync.Node.ChainSyncMsg
     DbSync.Node.Connection
     DbSync.Util
-    DbSync.Watchdog
     DbSync.OffChain.Types
     DbSync.OffChain.Fetcher
     DbSync.OffChain.Pool
@@ -237,18 +240,7 @@ executable dbsync
   -- PLANS/MEMORY_INVESTIGATION.md (Slice A).
   ghc-options:    -threaded -rtsopts "-with-rtsopts=-A64m -N6 -T"
   build-depends:
-      base
-    , dbsync
-    , dbsync-db
+      dbsync
     , cardano-prelude
-    , cardano-slotting
     , contra-tracer
-    , directory
     , filepath
-    , cardano-diffusion
-    , hasql
-    , ouroboros-consensus
-    , ouroboros-consensus:cardano
-    , ouroboros-network:api
-    , stm
-    , text

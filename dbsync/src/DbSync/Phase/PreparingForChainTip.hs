@@ -25,12 +25,19 @@
 -- backfill UPDATEs that rely on @tx_in.tx_out_id@ being populated;
 -- the schema-mode flip must come before sequence reset (the
 -- sequence has to exist before we can @setval@ it).
+--
+-- Per-step timings are emitted at 'Debug' severity via
+-- 'DbSync.Trace.Timing'. Operators that need to see which step is
+-- running raise their profile's @logging.level@ to @debug@; the
+-- production default of @info@ shows only the outer "started" and
+-- "complete" markers.
 module DbSync.Phase.PreparingForChainTip
   ( run
   ) where
 
 import Cardano.Prelude
 
+import Control.Tracer (traceWith)
 import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 
@@ -44,6 +51,13 @@ import qualified DbSync.Phase.PreparingForChainTip.Indexes as Indexes
 import qualified DbSync.Phase.PreparingForChainTip.PreResolveIndexes as PreResolveIndexes
 import qualified DbSync.Phase.PreparingForChainTip.Resolve as Resolve
 import qualified DbSync.Phase.PreparingForChainTip.Sequences as Sequences
+import DbSync.Trace.Timing (timedTrace_)
+import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
+
+-- | Component name used in trace lines emitted by this module and
+-- its sub-modules.
+prepComponent :: Text
+prepComponent = "PreparingForChainTip"
 
 -- | Run the full post-load sequence against the supplied connection.
 --
@@ -76,22 +90,35 @@ import qualified DbSync.Phase.PreparingForChainTip.Sequences as Sequences
 -- there is no application-level batching or per-epoch chunking
 -- here. The per-epoch variant is a future option behind a feature
 -- flag.
-run :: Conn.Connection -> [TableDef] -> IO ()
-run conn tables = do
+run :: AppTracer -> Conn.Connection -> [TableDef] -> IO ()
+run tracer conn tables = do
+  traceWith tracer $ LogMsg Info prepComponent "post-load pass: started" Nothing
+
   -- The four UPDATEs and two CTE backfills that follow all join
   -- through tx.hash or tx_out (tx_id, index). Building those indexes
   -- here, before any UPDATE runs, lets PG pick Nested Loop / Index
   -- Scan plans instead of hash-joining the whole heaps.
-  PreResolveIndexes.createPreResolveIndexes conn
+  timedTrace_ tracer prepComponent "pre-resolve indexes" $
+    PreResolveIndexes.createPreResolveIndexes tracer conn
 
-  _ <- Resolve.resolveForeignKeys conn
-  _ <- Backfill.backfillTxColumns conn
-  _ <- Backfill.applyDepositPending conn
-  Backfill.truncateDepositPending conn
-  for_ (prepareSchemaForFollowTipSql tables) (runDdl conn)
-  Indexes.createIndexes conn tables
-  for_ tables $ \td -> runDdl conn (analyzeSql (tdName td))
-  Sequences.resetSequences conn tables
+  _ <- Resolve.resolveForeignKeys tracer conn
+  _ <- Backfill.backfillTxColumns tracer conn
+  _ <- Backfill.applyDepositPending tracer conn
+  timedTrace_ tracer prepComponent "truncate epoch_param_pending" $
+    Backfill.truncateDepositPending conn
+
+  timedTrace_ tracer prepComponent "flip UNLOGGED \x2192 LOGGED + attach sequences" $
+    for_ (prepareSchemaForFollowTipSql tables) (runDdl conn)
+
+  Indexes.createIndexes tracer conn tables
+
+  timedTrace_ tracer prepComponent "ANALYZE per table" $
+    for_ tables $ \td -> runDdl conn (analyzeSql (tdName td))
+
+  timedTrace_ tracer prepComponent "reset sequences" $
+    Sequences.resetSequences conn tables
+
+  traceWith tracer $ LogMsg Info prepComponent "post-load pass: complete" Nothing
 
 runDdl :: Conn.Connection -> Text -> IO ()
 runDdl conn ddl = do

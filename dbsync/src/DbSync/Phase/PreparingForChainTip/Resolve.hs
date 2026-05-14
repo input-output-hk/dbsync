@@ -1,10 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Run the post-load FK resolution UPDATEs against an open hasql
--- connection.
---
--- The SQL lives in 'DbSync.Db.Statement.Resolve'; this module is the
--- thin connection-side runner.
+-- connection. SQL lives in 'DbSync.Db.Statement.Resolve'.
 module DbSync.Phase.PreparingForChainTip.Resolve
   ( resolveForeignKeys
   ) where
@@ -21,16 +18,21 @@ import DbSync.Db.Statement.Resolve
   , resolveReferenceTxInStmt
   , resolveTxInStmt
   )
+import DbSync.Trace.Timing (timedTrace)
+import DbSync.Trace.Types (AppTracer)
 
--- | Execute the four resolution UPDATEs in dependency order.
--- Returns the total rows touched. Panics on session error so the
--- top-level orchestrator can convert to the project's 'AppError'.
-resolveForeignKeys :: Conn.Connection -> IO Int64
-resolveForeignKeys conn = do
-  n1 <- runStmt conn resolveTxInStmt
-  n2 <- runStmt conn resolveCollateralTxInStmt
-  n3 <- runStmt conn resolveReferenceTxInStmt
-  n4 <- runStmt conn resolveConsumedByTxIdStmt
+-- | Execute the four resolution UPDATEs in dependency order. Each is
+-- timed and logged separately. Returns the total rows touched.
+resolveForeignKeys :: AppTracer -> Conn.Connection -> IO Int64
+resolveForeignKeys tracer conn = do
+  n1 <- timedTrace tracer "PreparingForChainTip" "resolve tx_in.tx_out_id" $
+          runStmt conn resolveTxInStmt
+  n2 <- timedTrace tracer "PreparingForChainTip" "resolve collateral_tx_in.tx_out_id" $
+          runStmt conn resolveCollateralTxInStmt
+  n3 <- timedTrace tracer "PreparingForChainTip" "resolve reference_tx_in.tx_out_id" $
+          runStmt conn resolveReferenceTxInStmt
+  n4 <- timedTrace tracer "PreparingForChainTip" "resolve tx_out.consumed_by_tx_id" $
+          runStmt conn resolveConsumedByTxIdStmt
   pure (n1 + n2 + n3 + n4)
 
 runStmt :: Conn.Connection -> Stmt.Statement () Int64 -> IO Int64

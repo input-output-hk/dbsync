@@ -111,7 +111,7 @@ import DbSync.Node.ChainSyncMsg (ChainSyncMsg (..))
 import DbSync.StateQuery (StateQueryVar, localStateQueryHandler)
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
-import DbSync.Watchdog (Watchdog, bumpReceiver)
+import DbSync.Trace.Watchdog (Watchdog, bumpReceiver)
 
 -- ---------------------------------------------------------------------------
 -- * Types

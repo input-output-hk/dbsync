@@ -41,6 +41,7 @@ module DbSync.Test.MockChain
 
     -- * Pipeline integration
   , parseAndProcess
+  , reseedStateQueryFromLedger
 
     -- * Helpers
   , currentEpochNo
@@ -108,6 +109,8 @@ import DbSync.Trace.Backend (mkNullTracer)
 -- time) without round-tripping to a node.
 data MockChain = MockChain
   { mcInterpreter    :: !Mock.Interpreter
+  , mcNodeConfig     :: !NodeConfig
+  , mcGenesisConfig  :: !GenesisConfig
   , mcTopLevelConfig :: !(TopLevelConfig (CardanoBlock StandardCrypto))
   , mcSystemStart    :: !Slot.SystemStart
   , mcStateQueryVar  :: !StateQueryVar
@@ -160,6 +163,8 @@ withMockChain configDir action = do
 
   action MockChain
     { mcInterpreter    = interpreter
+    , mcNodeConfig     = nodeCfg
+    , mcGenesisConfig  = genesisCfg
     , mcTopLevelConfig = topLevelCfg
     , mcSystemStart    = systemStart
     , mcStateQueryVar  = sqv
@@ -247,6 +252,16 @@ parseAndProcess conn mc extractors blocks = do
         (mcSystemStart mc)
         (Network.blockSlot blk)
       pure (parseBlock slotDetails blk)
+
+-- | Re-seed 'mcStateQueryVar' from the interpreter's current ledger
+-- state. The seeded interpreter forecast only covers a bounded
+-- window of future slots; call this after a batch of forging to
+-- ensure later 'parseBlock' calls don't fall outside that window.
+reseedStateQueryFromLedger :: MockChain -> IO ()
+reseedStateQueryFromLedger mc = do
+  latest <- Mock.getCurrentLedgerState (mcInterpreter mc)
+  seedInterpreterFromLedgerState
+    (mcTopLevelConfig mc) latest (mcStateQueryVar mc)
 
 -- ---------------------------------------------------------------------------
 -- * Helpers

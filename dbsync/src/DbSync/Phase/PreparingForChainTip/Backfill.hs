@@ -1,11 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Run the post-load tx-column backfill UPDATEs against an open
--- hasql connection.
---
--- The SQL lives in 'DbSync.Db.Statement.Backfill' and
--- 'DbSync.Db.Statement.EpochParamPending'; this module is the thin
--- connection-side runner.
+-- | Post-load tx-column backfill UPDATEs and deposit-pending flush.
+-- SQL lives in 'DbSync.Db.Statement.Backfill' /
+-- 'DbSync.Db.Statement.EpochParamPending'.
 module DbSync.Phase.PreparingForChainTip.Backfill
   ( backfillTxColumns
   , applyDepositPending
@@ -29,37 +26,39 @@ import DbSync.Db.Statement.EpochParamPending
   , applyStakeRegistrationDepositStmt
   , truncateEpochParamPendingStmt
   )
+import DbSync.Trace.Timing (timedTrace)
+import DbSync.Trace.Types (AppTracer)
 
 -- | Execute the four backfill UPDATEs. Must run after
 -- 'DbSync.Phase.PreparingForChainTip.Resolve.resolveForeignKeys' so
--- that @tx_in.tx_out_id@ and @collateral_tx_in.tx_out_id@ are
--- populated. Returns the total rows touched.
-backfillTxColumns :: Conn.Connection -> IO Int64
-backfillTxColumns conn = do
-  n1 <- runRowsAffected conn backfillPhaseTwoFeeStmt
-  n2 <- runRowsAffected conn backfillByronFeeStmt
-  n3 <- runRowsAffected conn backfillPhaseTwoDepositStmt
-  n4 <- runRowsAffected conn backfillValidContractDepositStmt
+-- that @tx_in.tx_out_id@ / @collateral_tx_in.tx_out_id@ are
+-- populated.
+backfillTxColumns :: AppTracer -> Conn.Connection -> IO Int64
+backfillTxColumns tracer conn = do
+  n1 <- timedTrace tracer "PreparingForChainTip" "backfill phase-2 tx.fee" $
+          runRowsAffected conn backfillPhaseTwoFeeStmt
+  n2 <- timedTrace tracer "PreparingForChainTip" "backfill Byron tx.fee" $
+          runRowsAffected conn backfillByronFeeStmt
+  n3 <- timedTrace tracer "PreparingForChainTip" "backfill phase-2 tx.deposit" $
+          runRowsAffected conn backfillPhaseTwoDepositStmt
+  n4 <- timedTrace tracer "PreparingForChainTip" "backfill valid-contract tx.deposit" $
+          runRowsAffected conn backfillValidContractDepositStmt
   pure (n1 + n2 + n3 + n4)
 
 -- | Fill the two ledger-derived deposit columns from
--- @epoch_param_pending@. The table is populated by the ledger
--- worker through 'DbSync.Ingest.Consumer.flushPendingDeposits' at
--- each epoch boundary during Ingest.
---
--- Both UPDATEs filter on @deposit IS NULL@ so they are idempotent
--- and never overwrite a value the extractor already wrote (Conway+
--- inline stake-registration deposits, which are not in the
--- pending table at all).
-applyDepositPending :: Conn.Connection -> IO Int64
-applyDepositPending conn = do
-  n1 <- runRowsAffected conn applyPoolUpdateDepositStmt
-  n2 <- runRowsAffected conn applyStakeRegistrationDepositStmt
+-- @epoch_param_pending@. Both UPDATEs filter on @deposit IS NULL@
+-- so they never overwrite an extractor-written value (Conway+
+-- inline stake-registration deposits).
+applyDepositPending :: AppTracer -> Conn.Connection -> IO Int64
+applyDepositPending tracer conn = do
+  n1 <- timedTrace tracer "PreparingForChainTip" "apply pool_update.deposit" $
+          runRowsAffected conn applyPoolUpdateDepositStmt
+  n2 <- timedTrace tracer "PreparingForChainTip" "apply stake_registration.deposit" $
+          runRowsAffected conn applyStakeRegistrationDepositStmt
   pure (n1 + n2)
 
--- | @TRUNCATE epoch_param_pending@. Called once the two
--- 'applyDepositPending' UPDATEs have run. The table stays in the
--- schema for a future Follow → Ingest re-entry.
+-- | @TRUNCATE epoch_param_pending@ once the two 'applyDepositPending'
+-- UPDATEs have run.
 truncateDepositPending :: Conn.Connection -> IO ()
 truncateDepositPending conn = do
   result <- Conn.use conn (Sess.statement () truncateEpochParamPendingStmt)

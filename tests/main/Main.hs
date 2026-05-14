@@ -69,7 +69,9 @@ import qualified DbSync.Db.Statement.SlotLeaderSpec as DbStatementSlotLeaderSpec
 import qualified DbSync.Db.Statement.SyncStateSpec as DbStatementSyncStateSpec
 import qualified DbSync.Phase.FollowingChainTip.RollbackSpec as PhaseRollbackSpec
 import qualified DbSync.Phase.FollowingChainTipSpec as PhaseFollowingChainTipSpec
+import qualified DbSync.Phase.IngestPrepFollowSpec as PhaseIngestPrepFollowSpec
 import qualified DbSync.Phase.MockChainSpec as PhaseMockChainSpec
+import qualified DbSync.Phase.MockNodeSpec as PhaseMockNodeSpec
 import qualified DbSync.Phase.PreparingForChainTipSpec as PhasePreparingForChainTipSpec
 import qualified DbSync.Schema.InitSpec as SchemaInitSpec
 
@@ -125,7 +127,9 @@ main = hspec $ do
     DbStatementSlotLeaderSpec.spec
     DbStatementSyncStateSpec.spec
     PhaseFollowingChainTipSpec.spec
+    PhaseIngestPrepFollowSpec.spec
     PhaseMockChainSpec.spec
+    PhaseMockNodeSpec.spec
     PhasePreparingForChainTipSpec.spec
     PhaseRollbackSpec.cascadeSpec
     SchemaInitSpec.spec

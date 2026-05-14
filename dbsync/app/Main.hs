@@ -4,634 +4,113 @@ module Main
 
 import Cardano.Prelude
 
-import Control.Concurrent.STM (newTBQueueIO, newTVarIO)
 import Control.Tracer (traceWith)
-import Data.IORef (newIORef)
-import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory, (</>))
 
-import DbSync.App (buildCoreEnv, runStartup)
-import DbSync.AppM (runAppM)
-import DbSync.Block.Types (CardanoPoint)
-import DbSync.Checkpoint.Manager (mkResumeExtractState)
-import DbSync.Checkpoint.Resume (deleteRowsPastSlot)
-import DbSync.Checkpoint.SyncState
-  ( ControlConnection (..)
-  , SyncStateRow (..)
-  , closeControlConnection
-  , fetchBlockHashAtSlot
-  , markSyncComplete
-  , openControlConnection
-  , readSyncState
-  , rebuildDedupMaps
-  , seedSyncState
-  )
-import DbSync.Cli (parseCliArgs, CliArgs (..))
+import DbSync.App.Args (AppArgs (..))
+import DbSync.App.Run (runApp)
+import DbSync.Cli (CliArgs (..), parseCliArgs)
 import DbSync.Config (parseConfig)
-import DbSync.Config.Genesis (readCardanoGenesisConfig, mkProtocolInfoCardano, mkTopLevelConfig, GenesisConfig (..), ShelleyConfig (..))
-import Ouroboros.Consensus.BlockchainTime.WallClock.Types (SystemStart (..))
-import Ouroboros.Consensus.Shelley.Node (ShelleyGenesis (..))
+import DbSync.Config.Genesis (GenesisConfig, readCardanoGenesisConfig)
 import DbSync.Config.Node (parseDbSyncNodeConfig, parseNodeConfig)
 import DbSync.Config.Types
-  ( DatabaseConfig (..)
-  , DbSyncNodeConfig (..)
-  , LedgerConfig (..)
+  ( DbSyncNodeConfig (..)
+  , LoggingConfig (..)
+  , NodeConfig
   , SyncConfig (..)
   )
-import qualified Hasql.Connection.Settings as HasqlSettings
 import DbSync.Config.Validation (validateConfig)
-import DbSync.Copy.Writer (CopyWriter (..), mkCopyWriter, closeCopyWriter)
-import DbSync.Db.Schema.Init
-  ( SchemaAction (..)
-  , checkSchemaVersions
-  , decideSchemaAction
-  , dropSchema
-  , initSchema
-  , renderSchemaMismatch
-  )
-import DbSync.Env (CoreEnv (..), FollowEnv (..), IngestEnv (..))
-import DbSync.Extractor (ExtractState, ExtractorDef (..), freshExtractState)
-import DbSync.Id.DedupMap (newMaps)
-import DbSync.Ingest.Consumer (runConsumer)
-import DbSync.Ingest.ReceiverStats (newReceiverStats)
-import DbSync.Ledger.Snapshot (runLedgerStateWriteThread)
-import DbSync.Ledger.State
-  ( dropLedgerStateDir
-  , initLedgerDbFromGenesis
-  , initLedgerDbFromSnapshot
-  , mkHasLedgerEnv
-  , readCurrentStateUnsafe
-  )
-import DbSync.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..), mkNoLedgerEnv)
-import DbSync.Ledger.Worker (runLedgerWorker)
-import DbSync.Node.Connection (IntersectionRequirement (..), connectToNode, getNetworkMagic)
-import qualified DbSync.Phase.FollowingChainTip as Follow
-import qualified DbSync.Phase.PreparingForChainTip as Prep
-import DbSync.Phase.Boot
-  ( BootDecision (..)
-  , ResumeContext (..)
-  , ResumeIntersection (..)
-  , decideBoot
-  , mkCardanoPoint
-  , renderBootError
-  )
-import DbSync.Resolver.AddressBuffer (newAddressBufferRef)
-import DbSync.Resolver.AddressWorker (awaitDrained, closeAddressResolver, mkAddressResolver)
-import DbSync.Resolver.Follow (mkFollowResolver)
-import DbSync.Resolver.Ingest (mkIngestResolver)
-import DbSync.StateQuery (StateQueryVar, newStateQueryVar, seedInterpreterFromLedgerState)
 import DbSync.Trace.Backend (mkStdErrTracer)
-import DbSync.Trace.Types (LogMsg (..), Severity (..))
-import DbSync.Watchdog (newWatchdog, runWatchdog)
-import DbSync.Writer.CopyAdapter (mkCopyWriterAdapter)
-import DbSync.Writer.InsertAdapter (mkInsertWriter)
-
-import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
-
-import Cardano.Network.NodeToClient (withIOManager)
-
-import Cardano.Slotting.Slot (SlotNo (..))
-import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
-import Ouroboros.Consensus.Config (TopLevelConfig)
-import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..), listSnapshots)
-import Ouroboros.Network.Magic (NetworkMagic)
+import DbSync.Trace.Types (LogMsg (..), Severity (..), severityFromText)
 
 main :: IO ()
 main = do
-  -- 1. Parse CLI + create tracer immediately
-  args <- parseCliArgs
-  tracer <- mkStdErrTracer Info
+  -- Bootstrap tracer (Info) so profile-parse errors surface before
+  -- the profile-configured tracer is built.
+  args       <- parseCliArgs
+  bootTracer <- mkStdErrTracer Info
+  let bootLogError msg = traceWith bootTracer $ LogMsg Error "App" msg Nothing
 
+  -- 1. Profile (database, sync options, ledger flag, logging).
+  validProfile <- loadProfile bootLogError (caProfile args)
+
+  -- 2. Rebuild the tracer at the profile-configured severity. The
+  --    watchdog + per-epoch diagnostics gate on the same value via
+  --    'ceMinSeverity'.
+  let minSeverity = severityFromText (lgLevel (scLogging validProfile))
+  tracer <- mkStdErrTracer minSeverity
   let logError msg = traceWith tracer $ LogMsg Error "App" msg Nothing
-      logInfo msg  = traceWith tracer $ LogMsg Info "App" msg Nothing
+      logInfo  msg = traceWith tracer $ LogMsg Info  "App" msg Nothing
 
-  -- 2. Parse profile (database, sync options, logging)
-  profileResult <- parseConfig (caProfile args)
+  -- 3. db-sync-config (cardano-book shape: pulls out NodeConfigFile).
+  dbSyncCfg <- loadDbSyncConfig logError (caDbSyncConfig args)
+
+  -- 4. cardano-node config (era boundaries, genesis hashes).
+  let configDir = takeDirectory (caDbSyncConfig args)
+      nodePath  = configDir </> dscNodeConfigFile dbSyncCfg
+  nodeCfg <- loadNodeConfig logError nodePath
+
+  -- 5. Genesis files (all eras).
+  genesisCfg <- loadGenesis logError logInfo nodeCfg configDir
+
+  runApp tracer AppArgs
+    { aaProfile           = validProfile
+    , aaNodeConfig        = nodeCfg
+    , aaGenesisConfig     = genesisCfg
+    , aaSocketPath        = caSocketPath args
+    , aaLedgerStateDir    = caLedgerStateDir args
+    , aaResyncFromGenesis = caResyncFromGenesis args
+    , aaShutdownSignal    = Nothing
+    , aaStateQueryVar     = Nothing
+    }
+
+-- ---------------------------------------------------------------------------
+-- * Config loading helpers
+-- ---------------------------------------------------------------------------
+
+loadProfile :: (Text -> IO ()) -> FilePath -> IO SyncConfig
+loadProfile logError path = do
+  profileResult <- parseConfig path
   profile <- case profileResult of
-    Left err -> do
-      logError $ "Error parsing profile: " <> show err
-      exitFailure
+    Left err -> logError ("Error parsing profile: " <> show err) >> exitFailure
     Right cfg -> pure cfg
-
-  -- 3. Validate profile
-  validProfile <- case validateConfig profile of
+  case validateConfig profile of
     Left errs -> do
       logError "Profile validation errors:"
       for_ errs $ \err -> logError $ "  - " <> show err
       exitFailure
     Right cfg -> pure cfg
 
-  -- 4. Parse db-sync-config.json → extract NodeConfigFile → parse node config
-  dbSyncCfgResult <- parseDbSyncNodeConfig (caDbSyncConfig args)
-  dbSyncCfg <- case dbSyncCfgResult of
+loadDbSyncConfig :: (Text -> IO ()) -> FilePath -> IO DbSyncNodeConfig
+loadDbSyncConfig logError path = do
+  result <- parseDbSyncNodeConfig path
+  case result of
     Left err -> do
       logError $ "Error parsing db-sync-config.json: " <> show err
       exitFailure
     Right cfg -> pure cfg
 
-  -- 5. Resolve NodeConfigFile relative to db-sync-config.json directory, then parse
-  let configDir = takeDirectory (caDbSyncConfig args)
-      nodeConfigPath = configDir </> dscNodeConfigFile dbSyncCfg
-  nodeCfgResult <- parseNodeConfig nodeConfigPath
-  nodeCfg <- case nodeCfgResult of
+loadNodeConfig :: (Text -> IO ()) -> FilePath -> IO NodeConfig
+loadNodeConfig logError path = do
+  result <- parseNodeConfig path
+  case result of
     Left err -> do
-      logError $ "Error parsing node config (" <> toS nodeConfigPath <> "): " <> show err
+      logError $ "Error parsing node config (" <> toS path <> "): " <> show err
       exitFailure
     Right cfg -> pure cfg
 
-  -- 6. Read genesis files → TopLevelConfig.
-  --    Done before buildCoreEnv so the chain's Network can be sourced
-  --    from the Shelley genesis and stored on CoreEnv.
-  genesisResult <- readCardanoGenesisConfig nodeCfg configDir
-  genesisCfg <- case genesisResult of
+loadGenesis
+  :: (Text -> IO ())
+  -> (Text -> IO ())
+  -> NodeConfig
+  -> FilePath
+  -> IO GenesisConfig
+loadGenesis logError logInfo nodeCfg configDir = do
+  result <- readCardanoGenesisConfig nodeCfg configDir
+  case result of
     Left err -> do
       logError $ "Error reading genesis files: " <> show err
       exitFailure
     Right gc -> do
       logInfo "Genesis files loaded successfully"
       pure gc
-
-  let topLevelCfg = mkTopLevelConfig nodeCfg genesisCfg
-      networkMagic = getNetworkMagic genesisCfg
-      network      = sgNetworkId (scConfig (gcShelley genesisCfg))
-
-  -- 7. Build the shared core environment
-  coreEnv <- buildCoreEnv tracer validProfile nodeCfg network
-
-  -- 8. Startup logging
-  runAppM coreEnv runStartup
-
-  -- LSM session lives in <--ledger-state-dir>/dbsync-ledger/.
-  let ledgerStateDir = caLedgerStateDir args </> "dbsync-ledger"
-  logInfo $ "Ledger state dir: " <> toS ledgerStateDir
-  logInfo $ "Socket: " <> toS (caSocketPath args)
-
-  -- 9. Build StateQueryVar for epoch/slot computation via HardFork Interpreter.
-  -- The TopLevelConfig is passed in so the locally-observed fallback
-  -- summary can extract per-era 'EraParams' from consensus rather than
-  -- shipping its own copy.
-  stateQueryVar <- newStateQueryVar topLevelCfg
-
-  -- 10. Database connection settings from profile. libpq for COPY
-  -- streaming, hasql for control-plane queries.
-  let dbCfg = scDatabase validProfile
-      connStr = TE.encodeUtf8 $ "dbname=" <> dcName dbCfg
-      hasqlSettings =
-        mconcat
-          [ HasqlSettings.hostAndPort (dcHost dbCfg) (fromIntegral (dcPort dbCfg))
-          , HasqlSettings.user (dcUser dbCfg)
-          , HasqlSettings.password (dcPassword dbCfg)
-          , HasqlSettings.dbname (dcName dbCfg)
-          ]
-
-  -- 11. Schema check + (re)init
-  --
-  -- Decision matrix:
-  --   --resync-from-genesis → wipe everything and re-init.
-  --   schema_version absent → fresh DB, run init.
-  --   schema_version matches → skip init, resume.
-  --   schema_version mismatched → abort with operator-facing diagnostics.
-  let extractors = ceExtractors coreEnv
-      tableDefs  = concatMap pdTables extractors
-      versions   = map (\e -> (pdName e, pdVersion e)) extractors
-      connStrTxt = TE.decodeUtf8 connStr
-      schemaVersion = 1 :: Int
-      ledgerEnabledCfg = lcEnabled (scLedger validProfile)
-  schemaState <- checkSchemaVersions versions connStrTxt
-  needsSeed <- case decideSchemaAction (caResyncFromGenesis args) schemaState of
-    ActionSkipInit -> do
-      logInfo "Schema present and matches expected versions; skipping init"
-      pure False
-    ActionRunInit -> do
-      logInfo "Fresh database detected; creating schema"
-      initSchema tableDefs versions connStrTxt
-      logInfo "Schema ready"
-      pure True
-    ActionForceReinit -> do
-      logInfo "--resync-from-genesis: dropping existing schema and re-initialising"
-      dropSchema tableDefs versions connStrTxt
-      when (lcEnabled (scLedger validProfile)) $ do
-        logInfo $ "--resync-from-genesis: wiping ledger state directory " <> toS ledgerStateDir
-        dropLedgerStateDir ledgerStateDir
-      initSchema tableDefs versions connStrTxt
-      logInfo "Schema ready"
-      pure True
-    ActionAbort errs -> do
-      logError "Schema mismatch — refusing to start. Use --resync-from-genesis to wipe and re-sync."
-      for_ errs $ \err -> logError $ "  - " <> renderSchemaMismatch err
-      exitFailure
-
-  -- 12. Open the consumer's control connection. Closed in the
-  -- shutdown finally after the COPY writer has drained.
-  consumerCtrlConn <- openControlConnection hasqlSettings
-
-  -- Seed dbsync_sync_state on freshly-created schemas.
-  when needsSeed $ do
-    seedSyncState consumerCtrlConn schemaVersion ledgerEnabledCfg
-    logInfo "Sync-state seeded"
-
-  -- 13. SystemStart and ledger plumbing.
-  let systemStart = SystemStart (sgSystemStart $ scConfig $ gcShelley genesisCfg)
-      pinfo       = mkProtocolInfoCardano nodeCfg genesisCfg
-
-  -- Ledger is opt-in via profile (ledger.enabled = true). The LSM
-  -- session is opened here so the boot decision can list disk
-  -- snapshots via the snapshot manager.
-  let ledgerCfg = scLedger validProfile
-  hasLedgerEnv <-
-    if lcEnabled ledgerCfg
-      then do
-        createDirectoryIfMissing True ledgerStateDir
-        logInfo $
-          "Ledger feature enabled; opening LSM session under "
-            <> toS ledgerStateDir
-        -- PG connection used by the snapshot-writer thread.
-        snapCtrlConn <- openControlConnection hasqlSettings
-        mkHasLedgerEnv
-          tracer
-          pinfo
-          ledgerStateDir
-          network
-          (sgMaxLovelaceSupply (scConfig (gcShelley genesisCfg)))
-          systemStart
-          580                                              -- snapshot near-tip-epoch threshold
-          True                                             -- has rewards
-          False                                            -- abort on panic
-          (lcBackend ledgerCfg)
-          snapCtrlConn
-      else do
-        logInfo "Ledger feature disabled (set ledger.enabled = true in profile to opt in); skipping LSM session"
-        LedgerDisabled <$> mkNoLedgerEnv tracer pinfo systemStart network
-
-  -- Compute the boot decision.
-  bootDecision <-
-    if needsSeed
-      then pure BootFresh
-      else do
-        mRow <- readSyncState consumerCtrlConn
-        snapshots <- case hasLedgerEnv of
-          LedgerEnabled lenv -> listSnapshots (leSnapshotManager lenv)
-          LedgerDisabled _   -> pure []
-        case decideBoot mRow snapshots ledgerEnabledCfg of
-          Left bootErr -> do
-            for_ (T.lines (renderBootError bootErr)) $ \line ->
-              logError line
-            exitFailure
-          Right d -> pure d
-
-  -- Resolve the boot decision into the initial extract state, dedup
-  -- maps, the receiver's intersection requirement, and the
-  -- last-committed-slot the consumer should treat as a replay
-  -- boundary. The latter is only meaningful for ledger-enabled
-  -- resumes, where the receiver intersects at the snapshot slot
-  -- (≤ last_committed_slot) and the consumer must skip the replay
-  -- window.
-  (initialExtractState, dedupMaps, intersectReq, replayBoundary, replayStart, initialAddressId) <- case bootDecision of
-    BootFresh -> do
-      case hasLedgerEnv of
-        LedgerEnabled lenv -> do
-          logInfo "Seeding ledger DB from genesis"
-          initLedgerDbFromGenesis lenv
-        LedgerDisabled _ -> pure ()
-      maps <- newMaps
-      pure (mkInitState, maps, IntersectGenesis, Nothing, Nothing, 1)
-
-    BootResume rc -> do
-      let row = rcSyncState rc
-      logInfo $
-        "Resuming from slot "
-          <> show (ssrLastCommittedSlot row)
-          <> ", block "
-          <> show (ssrLastCommittedBlockNo row)
-      deleted <- deleteRowsPastSlot consumerCtrlConn tableDefs row
-      when (deleted > 0) $
-        logInfo $
-          "Cleaned up " <> show deleted
-            <> " rows past last_committed_slot from a prior crash"
-      logInfo "Rebuilding dedup maps from PG..."
-      maps <- rebuildDedupMaps consumerCtrlConn tableDefs
-
-      -- Ledger-enabled resume: load the snapshot, seed the cached
-      -- HFC interpreter from it, announce the replay window.
-      -- Ledger-disabled resume: nothing to do here.
-      (replayBs, replaySt) <- case (hasLedgerEnv, rcChosenSnapshot rc) of
-        (LedgerDisabled _, _) -> pure (Nothing, Nothing)
-        (LedgerEnabled lenv, Just snap) -> do
-          logInfo $ "Loading ledger snapshot at slot " <> show (dsNumber snap)
-          loadResult <- initLedgerDbFromSnapshot lenv snap
-          case loadResult of
-            Left err -> panic $ "Failed to load ledger snapshot: " <> err
-            Right () -> do
-              loadedExt <- runAppM lenv readCurrentStateUnsafe
-              seedInterpreterFromLedgerState topLevelCfg loadedExt stateQueryVar
-              let startSlot = dsNumber snap
-              for_ (ssrLastCommittedSlot row) $ \endSlot ->
-                when (endSlot > startSlot) $
-                  logInfo $
-                    "Resume replay window: applying ledger from slot "
-                      <> show startSlot <> " forward to last-committed slot "
-                      <> show endSlot <> " ("
-                      <> show (endSlot - startSlot)
-                      <> " slots). Consumer COPY paused; ledger worker"
-                      <> " applying. Snapshot writes suppressed inside"
-                      <> " the window."
-              pure
-                ( fmap SlotNo (ssrLastCommittedSlot row)
-                , Just (SlotNo startSlot)
-                )
-        (LedgerEnabled _, Nothing) ->
-          -- 'decideBoot' only reaches this branch with a chosen snapshot.
-          panic "BootResume (ledger enabled) returned without a chosen snapshot"
-
-      intersectReq <- resolveIntersection logInfo logError consumerCtrlConn rc
-
-      pure
-        ( mkResumeExtractState row
-        , maps
-        , intersectReq
-        , replayBs
-        , replaySt
-        , ssrAddressIdCounter row
-        )
-
-    BootFollowingFastPath rc -> do
-      -- @sync_complete = true@: skip Ingest entirely and start Follow
-      -- directly. The helper blocks on 'Follow.run' forever, so the
-      -- tuple-returning case never observes a return — the trailing
-      -- 'panic' is dead code that only satisfies the type checker.
-      runFollowFastPath
-        logInfo logError hasqlSettings coreEnv topLevelCfg networkMagic
-        (caSocketPath args) systemStart stateQueryVar hasLedgerEnv
-        consumerCtrlConn rc
-      panic "BootFollowingFastPath: runFollowFastPath returned"
-
-  -- 14. Build the ingest pipeline state
-  stRef            <- newIORef initialExtractState
-  copyWriter       <- mkCopyWriter connStr tableDefs
-  blockQueue       <- newTBQueueIO 500
-  receiverStats    <- newReceiverStats
-  watchdog         <- newWatchdog
-  addrBuffer       <- newAddressBufferRef
-  addrResolver     <- mkAddressResolver tracer hasqlSettings initialAddressId
-  latestPointRef   <- newIORef Nothing
-  rollbackBoundary <- newTVarIO Nothing
-
-  let resolver = mkIngestResolver stRef dedupMaps addrBuffer
-      writer   = mkCopyWriterAdapter copyWriter
-
-  let ingestEnv = IngestEnv
-        { ieCore                    = coreEnv
-        , ieBlockQueue              = blockQueue
-        , ieCopyWriter              = copyWriter
-        , ieDedupMaps               = dedupMaps
-        , ieAddressBuffer           = addrBuffer
-        , ieAddressResolver         = addrResolver
-        , ieHasLedgerEnv            = hasLedgerEnv
-        , ieStateQueryVar           = stateQueryVar
-        , ieSystemStart             = systemStart
-        , ieResolver                = resolver
-        , ieWriter                  = writer
-        , ieExtractState            = stRef
-        , ieReceiverStats           = receiverStats
-        , ieControlConnection       = consumerCtrlConn
-        , ieLastCommittedSlotAtBoot = replayBoundary
-        , ieReplayStartSlot         = replayStart
-        , ieWatchdog                = watchdog
-        , ieLatestReceivedPoint     = latestPointRef
-        , ieRollbackBoundary        = rollbackBoundary
-        }
-
-  -- 13. Start block reception + consumer (+ ledger worker if enabled)
-  logInfo "Starting block ingestion..."
-
-  -- Cleanup of Ingest-only resources. Runs whether the consumer exits
-  -- cleanly at the rollback boundary or aborts with an exception, so
-  -- the COPY pipeline is always flushed and the address resolver
-  -- always drained before we either run Prep or surface an error.
-  let shutdownIngest = do
-        logInfo "Shutting down COPY writer..."
-        cwCommit copyWriter `catch` \(e :: SomeException) ->
-          logError $ "Error during final commit: " <> show e
-        closeCopyWriter copyWriter
-        logInfo "Draining address resolver..."
-        awaitDrained addrResolver `catch` \(e :: SomeException) ->
-          logError $ "Error draining address resolver: " <> show e
-        logInfo "Stopping address resolver..."
-        closeAddressResolver addrResolver
-          `catch` \(e :: SomeException) ->
-            logError $ "Error closing address resolver: " <> show e
-
-      ingestAction = runAppM ingestEnv runConsumer `finally` shutdownIngest
-
-      -- Resources kept open across the Ingest → Prep transition (the
-      -- consumer control connection is reused for 'markSyncComplete',
-      -- and the LSM session is needed by Follow once it lands).
-      shutdownPostIngest = do
-        logInfo "Closing consumer control connection..."
-        closeControlConnection consumerCtrlConn
-          `catch` \(e :: SomeException) ->
-            logError $ "Error closing consumer control connection: " <> show e
-        case hasLedgerEnv of
-          LedgerEnabled lenv -> do
-            logInfo "Closing LSM session..."
-            leClose lenv `catch` \(e :: SomeException) ->
-              logError $ "Error closing LSM session: " <> show e
-            logInfo "Closing snapshot-writer control connection..."
-            closeControlConnection (leControlConnection lenv)
-              `catch` \(e :: SomeException) ->
-                logError $ "Error closing snapshot control connection: " <> show e
-          LedgerDisabled _ -> pure ()
-
-      -- One-shot post-load pass. Builds indexes, flips tables LOGGED,
-      -- resets sequences, runs ANALYZE, then flips @sync_complete@ so
-      -- subsequent boots take the fast path straight into
-      -- 'FollowingChainTip'.
-      runPrepAndMarkComplete = do
-        logInfo "PreparingForChainTip: starting post-load pass"
-        bracket (openControlConnection hasqlSettings) closeControlConnection $ \prepConn -> do
-          Prep.run (unControlConnection prepConn) tableDefs
-          markSyncComplete prepConn
-        logInfo "PreparingForChainTip: complete"
-
-  -- Every spawned 'Async' is 'link'ed to the main thread: a child crash
-  -- propagates here and brings the app down with a visible stack trace,
-  -- instead of leaving us hung on a queue while the worker has died
-  -- silently.
-  --
-  -- The watchdog is started under every case so it can flag a hang
-  -- regardless of which sub-thread is stuck. It only logs (no
-  -- side-effects on the pipeline), so a crash inside it should be
-  -- visible but recoverable; 'link'ing it means a watchdog bug would
-  -- bring the app down loudly rather than silently degrading visibility.
-  let mLedgerQueue = case hasLedgerEnv of
-        LedgerEnabled lenv -> Just (leLedgerQueue lenv)
-        LedgerDisabled _   -> Nothing
-  (withIOManager $ \iomgr ->
-    withAsync (runWatchdog tracer watchdog blockQueue mLedgerQueue) $ \watchdogThread -> do
-      link watchdogThread
-      withAsync (runAppM ingestEnv $ connectToNode iomgr topLevelCfg networkMagic (caSocketPath args) intersectReq) $ \nodeThread -> do
-        link nodeThread
-        case hasLedgerEnv of
-          LedgerEnabled lenv ->
-            withAsync (runAppM lenv (runLedgerWorker replayBoundary stateQueryVar watchdog)) $ \workerThread -> do
-              link workerThread
-              withAsync (runLedgerStateWriteThread hasLedgerEnv) $ \snapWriter -> do
-                link snapWriter
-                ingestAction
-                -- Consumer hit the rollback boundary. Stop the
-                -- sibling threads so Prep doesn't compete for the
-                -- node socket, LSM session, or snapshot writer.
-                cancel snapWriter
-                cancel workerThread
-                cancel nodeThread
-                runPrepAndMarkComplete
-          LedgerDisabled _ -> do
-            ingestAction
-            cancel nodeThread
-            runPrepAndMarkComplete) `finally` shutdownPostIngest
-
--- | Turn a 'ResumeContext' into the receiver's intersection
--- requirement. Mirrors upstream cardano-db-sync's
--- @verifySnapshotPoint@: the snapshot supplies /the slot/, PG\'s
--- @block@ table is the oracle for /the hash/. Orphaned candidates
--- (no PG row at the slot) are dropped silently. Panics when /every/
--- candidate is orphaned — recovery is operator-driven (restore PG
--- from a backup covering one of these slots, or
--- @--resync-from-genesis@).
-resolveIntersection
-  :: (Text -> IO ())
-  -> (Text -> IO ())
-  -> ControlConnection
-  -> ResumeContext
-  -> IO IntersectionRequirement
-resolveIntersection logInfo logError ctrl rc = case rcIntersection rc of
-  ReadyPoint p ->
-    pure (IntersectAt [p])
-  NeedsPgHashes slots -> do
-    candidates <- catMaybes <$> for slots (resolveSlot logInfo ctrl)
-    case candidates of
-      [] -> do
-        logError $
-          "All " <> show (length slots) <> " snapshot intersection candidates "
-            <> "are orphaned in PG (no matching row in the block table). "
-            <> "Snapshot slots tried: " <> show slots <> ". "
-            <> "Recovery: restore PG from a backup that covers one of these "
-            <> "slots, or restart with --resync-from-genesis."
-        panic "resolveIntersection: no usable snapshot intersection points"
-      _ ->
-        pure (IntersectAt candidates)
-
--- | 'Just' the canonical @(slot, hash)@ point for a snapshot slot,
--- or 'Nothing' when PG has no matching block (orphaned snapshot).
-resolveSlot
-  :: (Text -> IO ())
-  -> ControlConnection
-  -> Word64
-  -> IO (Maybe CardanoPoint)
-resolveSlot logInfo ctrl slot = do
-  mHash <- fetchBlockHashAtSlot ctrl slot
-  case mHash of
-    Nothing -> do
-      logInfo $
-        "Snapshot at slot " <> show slot
-          <> " has no matching row in the block table; "
-          <> "skipping as a chainsync intersection candidate."
-      pure Nothing
-    Just h ->
-      pure (Just (mkCardanoPoint slot h))
-
--- | Initial extraction state for IngestChainHistory.
--- Dedup maps are created separately via 'newMaps' (mutable hash tables).
-mkInitState :: ExtractState
-mkInitState = freshExtractState
-
--- | Boot directly into 'FollowingChainTip', skipping
--- 'IngestChainHistory' / 'PreparingForChainTip'. Reached when the
--- sync-state row already has @sync_complete = true@.
---
--- Allocates its own Follow-side resources (hasql connection,
--- resolver, writer, watchdog, queues) and reuses the existing
--- consumer control connection and ledger environment from main.
--- Blocks forever on 'Follow.run'; the only paths back out are an
--- uncaught exception (linked async crash) or process termination.
-runFollowFastPath
-  :: (Text -> IO ())                                 -- ^ logInfo
-  -> (Text -> IO ())                                 -- ^ logError
-  -> HasqlSettings.Settings
-  -> CoreEnv
-  -> TopLevelConfig (CardanoBlock StandardCrypto)
-  -> NetworkMagic
-  -> FilePath                                        -- ^ node socket path
-  -> SystemStart
-  -> StateQueryVar
-  -> HasLedgerEnv
-  -> ControlConnection                               -- ^ consumer ctrl conn (reused)
-  -> ResumeContext
-  -> IO ()
-runFollowFastPath
-  logInfo logError hasqlSettings coreEnv topLevelCfg networkMagic socketPath
-  systemStart stateQueryVar hasLedgerEnv consumerCtrlConn rc = do
-
-    logInfo "Boot: sync_complete=true; starting FollowingChainTip"
-
-    -- A crash between Follow's INSERT-commit and 'sync_state' advance
-    -- can leave rows past 'last_committed_slot'; clean them up before
-    -- the receiver starts.
-    let row = rcSyncState rc
-        tableDefs = concatMap pdTables (ceExtractors coreEnv)
-    deleted <- deleteRowsPastSlot consumerCtrlConn tableDefs row
-    when (deleted > 0) $
-      logInfo $
-        "Cleaned up " <> show deleted
-          <> " rows past last_committed_slot from a prior Follow crash"
-
-    followCtrl <- openControlConnection hasqlSettings
-    let followConn = unControlConnection followCtrl
-
-    blockQueue       <- newTBQueueIO 500
-    receiverStats    <- newReceiverStats
-    watchdog         <- newWatchdog
-    latestPointRef   <- newIORef Nothing
-    rollbackBoundary <- newTVarIO Nothing
-
-    resolver <- mkFollowResolver followConn
-    let writer    = mkInsertWriter followConn
-        followEnv =
-          FollowEnv
-            { feCore                = coreEnv
-            , feBlockQueue          = blockQueue
-            , feHasLedgerEnv        = hasLedgerEnv
-            , feStateQueryVar       = stateQueryVar
-            , feSystemStart         = systemStart
-            , feReceiverStats       = receiverStats
-            , feWatchdog            = watchdog
-            , feLatestReceivedPoint = latestPointRef
-            , feHasqlConnection     = followConn
-            , feResolver            = resolver
-            , feWriter              = writer
-            , feControlConnection   = consumerCtrlConn
-            , feRollbackBoundary    = rollbackBoundary
-            }
-
-    intersectReq <- resolveIntersection logInfo logError consumerCtrlConn rc
-
-    let mLedgerQueue = case hasLedgerEnv of
-          LedgerEnabled lenv -> Just (leLedgerQueue lenv)
-          LedgerDisabled _   -> Nothing
-        tracer = ceTracer coreEnv
-
-    let followAction =
-          runAppM followEnv Follow.run
-            `finally` do
-              logInfo "Closing Follow hasql connection..."
-              closeControlConnection followCtrl
-                `catch` \(e :: SomeException) ->
-                  logError $ "Error closing Follow connection: " <> show e
-
-    withIOManager $ \iomgr ->
-      withAsync (runWatchdog tracer watchdog blockQueue mLedgerQueue) $ \watchdogThread -> do
-        link watchdogThread
-        withAsync (runAppM followEnv $ connectToNode iomgr topLevelCfg networkMagic socketPath intersectReq) $ \nodeThread -> do
-          link nodeThread
-          followAction

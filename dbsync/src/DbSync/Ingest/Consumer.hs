@@ -83,7 +83,7 @@ import DbSync.Config.Types (LedgerConfig (..), SyncConfig (..))
 import DbSync.Copy.Writer (CopyWriter (..))
 import DbSync.Db.Schema.EpochSyncStats (EpochSyncStats (..), SyncPhase (..))
 import DbSync.Db.Schema.Ids (BlockId (..))
-import DbSync.Env (HasConfig (..), IngestEnv (..))
+import DbSync.Env (CoreEnv (..), HasConfig (..), IngestEnv (..))
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Extractor.EpochBoundary (runEpochBoundary)
 import DbSync.Id.DedupMap (dedupMapSizes)
@@ -114,7 +114,7 @@ import DbSync.StateQuery
   )
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
-import DbSync.Watchdog (bumpConsumer, setConsumerNote)
+import DbSync.Trace.Watchdog (bumpConsumer, setConsumerNote)
 import DbSync.Writer (Writer (..))
 
 import Ouroboros.Consensus.Block (blockSlot)
@@ -187,152 +187,6 @@ data ReplayLog
   | ReplayLogComplete !Word64 !NominalDiffTime
     -- ^ Emit a completion line — \"@N@ blocks replayed in @T@s\".
   deriving stock (Eq, Show)
-
--- | Wall-clock cadence between progress lines. Five seconds keeps
--- short replays silent while still flagging liveness on long ones.
-progressLogInterval :: NominalDiffTime
-progressLogInterval = 5
-
--- | Render a slot-progress percentage of the form @\" (~37%)\"@.
--- Empty string when bounds are missing or the window has zero
--- width. Uses /slot/ progress, not /block/ progress, since Cardano
--- slots can be empty so the total block count is unknown up front.
-renderReplayPercent :: Maybe SlotNo -> Maybe SlotNo -> SlotNo -> Text
-renderReplayPercent (Just (SlotNo start)) (Just (SlotNo endBound)) (SlotNo cur)
-  | endBound > start =
-      let span'   = endBound - start
-          done    = if cur > endBound then span'
-                    else if cur > start then cur - start
-                                        else 0
-          pct     = (done * 100) `div` span'
-      in " (~" <> show pct <> "%)"
-renderReplayPercent _ _ _ = ""
-
--- | Advance the replay-log state machine given the just-arrived
--- block\'s slot, the resume boundary (@'Nothing'@ = no replay) and
--- the current wall-clock time. Pure; the caller mutates the IORef
--- and emits any indicated trace.
-advanceReplay
-  :: SlotNo
-  -> Maybe SlotNo
-  -> UTCTime
-  -> ReplayLogState
-  -> ReplayAdvance
-advanceReplay _    Nothing  _   s =
-  ReplayAdvance s ReplayLogNothing
-advanceReplay slot (Just bs) now s =
-  let inReplay = slot <= bs
-  in case s of
-       NoReplay ->
-         ReplayAdvance NoReplay ReplayLogNothing
-       ReplayPending
-         | inReplay  ->
-             let p = ReplayProgress
-                       { rpStartTime     = now
-                       , rpBlocksApplied = 1
-                       , rpLastLogTime   = now
-                       }
-             in ReplayAdvance (InReplay p) ReplayLogNothing
-         | otherwise ->
-             -- First block already past the boundary — degenerate
-             -- replay window of zero blocks. Skip straight to
-             -- 'NoReplay' without firing any log.
-             ReplayAdvance NoReplay ReplayLogNothing
-       InReplay p
-         | inReplay ->
-             let p' = p { rpBlocksApplied = rpBlocksApplied p + 1 }
-                 elapsedSinceLog = diffUTCTime now (rpLastLogTime p)
-             in if elapsedSinceLog >= progressLogInterval
-                  then ReplayAdvance
-                         (InReplay p' { rpLastLogTime = now })
-                         (ReplayLogProgress (rpBlocksApplied p'))
-                  else ReplayAdvance (InReplay p') ReplayLogNothing
-         | otherwise ->
-             let totalElapsed = diffUTCTime now (rpStartTime p)
-             in ReplayAdvance NoReplay
-                  (ReplayLogComplete (rpBlocksApplied p) totalElapsed)
-
--- ---------------------------------------------------------------------------
--- * Number formatting
--- ---------------------------------------------------------------------------
-
--- | Format a Double with 2 decimal places, no scientific notation.
-fmtF2 :: Double -> Text
-fmtF2 d = toS (printf "%.2f" d :: [Char])
-
--- | Format a large integer with comma separators.
-fmtInt :: Word64 -> Text
-fmtInt n
-  | n < 1000  = show n
-  | otherwise =
-      let s :: [Char]
-          s = toS (show n :: Text)
-          len = length s
-          (prefix, rest) = splitAt (len `mod` 3) s
-          groups = chunksOf3 rest
-          allGroups = if null prefix then groups else prefix : groups
-      in toS (commaJoin allGroups)
-  where
-    chunksOf3 :: [a] -> [[a]]
-    chunksOf3 [] = []
-    chunksOf3 xs = let (h, tl) = splitAt 3 xs in h : chunksOf3 tl
-
-    commaJoin :: [[Char]] -> [Char]
-    commaJoin [] = []
-    commaJoin [x] = x
-    commaJoin (x:xs) = x ++ "," ++ commaJoin xs
-
--- | Format a @(name, count)@ list as @"name=N1,234 …"@ for log lines.
-renderDedupCounts :: [(Text, Int)] -> Text
-renderDedupCounts = Text.intercalate " " . map one
-  where
-    one (n, c) = n <> "=" <> fmtInt (fromIntegral c)
-
--- | Sample the GHC runtime's view of memory usage at the moment of call.
---
--- Returns @(liveBytes, totalCommittedBytes)@, where:
---
---   * @liveBytes@ is the live data after the most recent GC (the
---     working set GHC actually retains)
---   * @totalCommittedBytes@ is the largest amount of memory GHC has
---     committed during the run (closest approximation to peak RSS
---     attributable to the Haskell heap)
---
--- Requires @+RTS -T -RTS@; safe to call from any thread. Returns
--- 'Nothing' if RTS stats aren't enabled.
-sampleHeapBytes :: IO (Maybe (Word64, Word64))
-sampleHeapBytes = do
-  enabled <- getRTSStatsEnabled
-  if enabled
-    then do
-      s <- getRTSStats
-      pure $ Just (gcdetails_live_bytes (gc s), max_mem_in_use_bytes s)
-    else pure Nothing
-
--- | Render a byte count as a short human-readable string, e.g.
--- @123MB@, @1.4GB@.
-fmtBytes :: Word64 -> Text
-fmtBytes b
-  | b >= gib = Text.pack (printf "%.1fGB" (fromIntegral b / fromIntegral gib :: Double))
-  | b >= mib = Text.pack (printf "%dMB"   (b `div` mib))
-  | b >= kib = Text.pack (printf "%dKB"   (b `div` kib))
-  | otherwise = show b <> "B"
-  where
-    kib, mib, gib :: Word64
-    kib = 1024
-    mib = 1024 * 1024
-    gib = 1024 * 1024 * 1024
-
--- | Format seconds as human-readable duration.
-fmtDuration :: Double -> Text
-fmtDuration secs
-  | secs < 60 = show (round secs :: Int) <> "s"
-  | secs < 3600 =
-      let t = round secs :: Int
-      in show (t `div` 60) <> "m " <> show (t `mod` 60) <> "s"
-  | otherwise =
-      let t = round secs :: Int
-      in show (t `div` 3600) <> "h " <> show ((t `mod` 3600) `div` 60) <> "m"
 
 -- ---------------------------------------------------------------------------
 -- * Running
@@ -637,23 +491,23 @@ runConsumer = do
                 <> " | " <> status
               ) Nothing
 
-            -- Dedup-map size + heap-usage trace: helps diagnose RAM
-            -- growth driven by per-entity hash-table accumulation
-            -- (address, multi_asset, …). 'heap=' is live bytes after
-            -- the most recent GC; 'peak=' is the high-water mark of
-            -- memory GHC has committed (≈ peak heap-attributed RSS,
-            -- once @--disable-delayed-os-memory-return@ is off).
-            dedupCounts <- liftIO $ dedupMapSizes dedupMaps
-            heapInfo    <- liftIO sampleHeapBytes
-            let heapText = case heapInfo of
-                  Just (live, peak) ->
-                    " | heap=" <> fmtBytes live <> " peak=" <> fmtBytes peak
-                  Nothing -> ""
-            liftIO $ traceWith tracer $ LogMsg Info "Dedup"
-              ( "Epoch " <> show (unEpochNo prev)
-                <> " | " <> renderDedupCounts dedupCounts
-                <> heapText
-              ) Nothing
+            -- Dedup-map size + heap-usage trace: diagnostic only.
+            -- 'dedupMapSizes' iterates every hash table and
+            -- 'sampleHeapBytes' calls 'getRTSStats', so the whole
+            -- block is gated on 'Debug' to keep production runs free
+            -- of the overhead.
+            minSev <- asks (ceMinSeverity . ieCore)
+            when (minSev <= Debug) $ do
+              dedupCounts <- liftIO $ dedupMapSizes dedupMaps
+              heapInfo    <- liftIO sampleHeapBytes
+              let heapText = case heapInfo of
+                    Just live -> " | heap=" <> fmtBytes live
+                    Nothing   -> ""
+              liftIO $ traceWith tracer $ LogMsg Debug "Dedup"
+                ( "Epoch " <> show (unEpochNo prev)
+                  <> " | " <> renderDedupCounts dedupCounts
+                  <> heapText
+                ) Nothing
 
             -- Reset for next epoch
             liftIO $ writeIORef statsRef emptyPipelineStats
@@ -840,3 +694,142 @@ ingestRollbackPanicMessage point =
   "IngestChainHistory: received MsgRollback at "
     <> show point
     <> "; this should be impossible (k-safety violation)."
+
+
+-- | Wall-clock cadence between progress lines. Five seconds keeps
+-- short replays silent while still flagging liveness on long ones.
+progressLogInterval :: NominalDiffTime
+progressLogInterval = 5
+
+-- | Render a slot-progress percentage of the form @\" (~37%)\"@.
+-- Empty string when bounds are missing or the window has zero
+-- width. Uses /slot/ progress, not /block/ progress, since Cardano
+-- slots can be empty so the total block count is unknown up front.
+renderReplayPercent :: Maybe SlotNo -> Maybe SlotNo -> SlotNo -> Text
+renderReplayPercent (Just (SlotNo start)) (Just (SlotNo endBound)) (SlotNo cur)
+  | endBound > start =
+      let span'   = endBound - start
+          done
+            | cur > endBound = span'
+            | cur > start = cur - start
+            | otherwise = 0
+          pct     = (done * 100) `div` span'
+      in " (~" <> show pct <> "%)"
+renderReplayPercent _ _ _ = ""
+
+-- | Advance the replay-log state machine given the just-arrived
+-- block\'s slot, the resume boundary (@'Nothing'@ = no replay) and
+-- the current wall-clock time. Pure; the caller mutates the IORef
+-- and emits any indicated trace.
+advanceReplay
+  :: SlotNo
+  -> Maybe SlotNo
+  -> UTCTime
+  -> ReplayLogState
+  -> ReplayAdvance
+advanceReplay _    Nothing  _   s =
+  ReplayAdvance s ReplayLogNothing
+advanceReplay slot (Just bs) now s =
+  let inReplay = slot <= bs
+  in case s of
+       NoReplay ->
+         ReplayAdvance NoReplay ReplayLogNothing
+       ReplayPending
+         | inReplay  ->
+             let p = ReplayProgress
+                       { rpStartTime     = now
+                       , rpBlocksApplied = 1
+                       , rpLastLogTime   = now
+                       }
+             in ReplayAdvance (InReplay p) ReplayLogNothing
+         | otherwise ->
+             -- First block already past the boundary — degenerate
+             -- replay window of zero blocks. Skip straight to
+             -- 'NoReplay' without firing any log.
+             ReplayAdvance NoReplay ReplayLogNothing
+       InReplay p
+         | inReplay ->
+             let p' = p { rpBlocksApplied = rpBlocksApplied p + 1 }
+                 elapsedSinceLog = diffUTCTime now (rpLastLogTime p)
+             in if elapsedSinceLog >= progressLogInterval
+                  then ReplayAdvance
+                         (InReplay p' { rpLastLogTime = now })
+                         (ReplayLogProgress (rpBlocksApplied p'))
+                  else ReplayAdvance (InReplay p') ReplayLogNothing
+         | otherwise ->
+             let totalElapsed = diffUTCTime now (rpStartTime p)
+             in ReplayAdvance NoReplay
+                  (ReplayLogComplete (rpBlocksApplied p) totalElapsed)
+
+-- ---------------------------------------------------------------------------
+-- * Number formatting
+-- ---------------------------------------------------------------------------
+
+-- | Format a Double with 2 decimal places, no scientific notation.
+fmtF2 :: Double -> Text
+fmtF2 d = toS (printf "%.2f" d :: [Char])
+
+-- | Format a large integer with comma separators.
+fmtInt :: Word64 -> Text
+fmtInt n
+  | n < 1000  = show n
+  | otherwise =
+      let s :: [Char]
+          s = toS (show n :: Text)
+          len = length s
+          (prefix, rest) = splitAt (len `mod` 3) s
+          groups = chunksOf3 rest
+          allGroups = if null prefix then groups else prefix : groups
+      in toS (commaJoin allGroups)
+  where
+    chunksOf3 :: [a] -> [[a]]
+    chunksOf3 [] = []
+    chunksOf3 xs = let (h, tl) = splitAt 3 xs in h : chunksOf3 tl
+
+    commaJoin :: [[Char]] -> [Char]
+    commaJoin [] = []
+    commaJoin [x] = x
+    commaJoin (x:xs) = x ++ "," ++ commaJoin xs
+
+-- | Format a @(name, count)@ list as @"name=N1,234 …"@ for log lines.
+renderDedupCounts :: [(Text, Int)] -> Text
+renderDedupCounts = Text.intercalate " " . map one
+  where
+    one (n, c) = n <> "=" <> fmtInt (fromIntegral c)
+
+-- | Live data after the most recent GC. Sampled at epoch boundaries
+-- so the value reflects the heap working set at the end of that
+-- epoch, not the cumulative lifetime peak. Requires @+RTS -T -RTS@;
+-- returns 'Nothing' otherwise.
+sampleHeapBytes :: IO (Maybe Word64)
+sampleHeapBytes = do
+  enabled <- getRTSStatsEnabled
+  if enabled
+    then do
+      Just . gcdetails_live_bytes . gc <$> getRTSStats
+    else pure Nothing
+
+-- | Render a byte count as a short human-readable string, e.g.
+-- @123MB@, @1.4GB@.
+fmtBytes :: Word64 -> Text
+fmtBytes b
+  | b >= gib = Text.pack (printf "%.1fGB" (fromIntegral b / fromIntegral gib :: Double))
+  | b >= mib = Text.pack (printf "%dMB"   (b `div` mib))
+  | b >= kib = Text.pack (printf "%dKB"   (b `div` kib))
+  | otherwise = show b <> "B"
+  where
+    kib, mib, gib :: Word64
+    kib = 1024
+    mib = 1024 * 1024
+    gib = 1024 * 1024 * 1024
+
+-- | Format seconds as human-readable duration.
+fmtDuration :: Double -> Text
+fmtDuration secs
+  | secs < 60 = show (round secs :: Int) <> "s"
+  | secs < 3600 =
+      let t = round secs :: Int
+      in show (t `div` 60) <> "m " <> show (t `mod` 60) <> "s"
+  | otherwise =
+      let t = round secs :: Int
+      in show (t `div` 3600) <> "h " <> show ((t `mod` 3600) `div` 60) <> "m"

@@ -131,7 +131,7 @@ spec = describe "DbSync.Db.Statement.Indexes" $ do
         `shouldThrow` anyException
 
   describe "preResolveIndexStatements" $ do
-    it "is exactly the three indexes the post-load resolves probe" $
+    it "covers tx.hash plus the four per-tx-id lookups the backfills probe" $
       preResolveIndexStatements `shouldBe`
         [ "CREATE UNIQUE INDEX IF NOT EXISTS \"tx_unique_1_idx\""
             <> " ON \"tx\" (\"hash\")"
@@ -139,6 +139,14 @@ spec = describe "DbSync.Db.Statement.Indexes" $ do
             <> " ON \"tx_out\" (\"tx_id\", \"index\")"
         , "CREATE INDEX IF NOT EXISTS \"tx_in_tx_out_idx\""
             <> " ON \"tx_in\" (\"tx_out_id\", \"tx_out_index\")"
+        , "CREATE INDEX IF NOT EXISTS \"collateral_tx_in_tx_in_id_idx\""
+            <> " ON \"collateral_tx_in\" (\"tx_in_id\")"
+        , "CREATE INDEX IF NOT EXISTS \"collateral_tx_out_tx_id_idx\""
+            <> " ON \"collateral_tx_out\" (\"tx_id\")"
+        , "CREATE INDEX IF NOT EXISTS \"tx_in_tx_in_id_idx\""
+            <> " ON \"tx_in\" (\"tx_in_id\")"
+        , "CREATE INDEX IF NOT EXISTS \"withdrawal_tx_id_idx\""
+            <> " ON \"withdrawal\" (\"tx_id\")"
         ]
 
     it "names the tx-hash index to match the later concurrent rebuild" $

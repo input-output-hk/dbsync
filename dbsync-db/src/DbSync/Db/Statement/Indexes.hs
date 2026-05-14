@@ -24,8 +24,7 @@
 -- Performance-only indexes (lookup speedups that aren't enforcing
 -- uniqueness) are not produced by 'tableIndexStatements'; they will
 -- be added in a follow-up that extends 'TableDef' with explicit
--- index metadata. The pre-resolve set hand-rolls two such indexes
--- in the meantime.
+-- index metadata. The pre-resolve set hand-rolls them in the meantime.
 module DbSync.Db.Statement.Indexes
   ( tableIndexStatements
   , preResolveIndexStatements
@@ -39,9 +38,16 @@ import qualified Data.List.NonEmpty as NE
 import qualified Data.Text as T
 
 import DbSync.Db.Schema.Core (txTableDef)
-import DbSync.Db.Schema.Types (ColumnDef (..), TableDef (..))
-import DbSync.Db.Schema.UTxO (txInTableDef, txOutTableDef)
+import DbSync.Db.Schema.StakeDelegation (withdrawalTableDef)
+import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Schema.UTxO
+  ( collateralTxInTableDef
+  , collateralTxOutTableDef
+  , txInTableDef
+  , txOutTableDef
+  )
 import DbSync.Db.Sql (quoteIdent)
+import DbSync.Db.Sql.Refs (columnRef)
 
 -- | Produce the @CREATE INDEX CONCURRENTLY@ statements that should
 -- be run for the given table. One element per index. Empty list
@@ -73,18 +79,6 @@ uniqueConstraintIndexName :: TableDef -> Int -> Text
 uniqueConstraintIndexName td n =
   tdName td <> "_unique_" <> show n <> "_idx"
 
--- | Look up a column by name on a 'TableDef'. Returns the name if
--- the column is declared; panics at evaluation time if not. Lets
--- hand-rolled SQL fragments refer to columns through the schema so
--- a rename of 'cdName' in a 'ColumnDef' surfaces as a load-time
--- error rather than a silent runtime query failure.
-columnRef :: TableDef -> Text -> Text
-columnRef td name
-  | name `elem` map cdName (tdColumns td) = name
-  | otherwise = panic $
-      "DbSync.Db.Statement.Indexes.columnRef: column "
-        <> name <> " not declared on table " <> tdName td
-
 -- | Indexes built before the post-load resolves and CTE backfills.
 -- Non-@CONCURRENTLY@ because the tables are still UNLOGGED at this
 -- point: a one-pass build skips both the WAL writes and the
@@ -93,8 +87,15 @@ columnRef td name
 -- The first entry is named to match what 'tableIndexStatements'
 -- will later emit from @txTableDef.tdUniqueConstraints@, so the
 -- post-flip concurrent re-build becomes an @IF NOT EXISTS@ no-op.
--- The other two are non-unique perf indexes with no schema-level
+-- The others are non-unique perf indexes with no schema-level
 -- declaration; only this pass emits them.
+--
+-- The four @_id_idx@ entries support the rewritten post-load
+-- backfill UPDATEs: each backfill drives off a small (or at least
+-- bounded) filtered set of @tx@ rows and looks up each row's
+-- collateral / inputs / withdrawals via these indexes, replacing
+-- the previous "aggregate everything, then filter to a handful"
+-- pattern that scaled with input count rather than output count.
 preResolveIndexStatements :: [Text]
 preResolveIndexStatements =
   [ renderIndex NonConcurrent Unique
@@ -113,6 +114,22 @@ preResolveIndexStatements =
       [ columnRef txInTableDef "tx_out_id"
       , columnRef txInTableDef "tx_out_index"
       ]
+  , renderIndex NonConcurrent NonUnique
+      "collateral_tx_in_tx_in_id_idx"
+      (tdName collateralTxInTableDef)
+      [columnRef collateralTxInTableDef "tx_in_id"]
+  , renderIndex NonConcurrent NonUnique
+      "collateral_tx_out_tx_id_idx"
+      (tdName collateralTxOutTableDef)
+      [columnRef collateralTxOutTableDef "tx_id"]
+  , renderIndex NonConcurrent NonUnique
+      "tx_in_tx_in_id_idx"
+      (tdName txInTableDef)
+      [columnRef txInTableDef "tx_in_id"]
+  , renderIndex NonConcurrent NonUnique
+      "withdrawal_tx_id_idx"
+      (tdName withdrawalTableDef)
+      [columnRef withdrawalTableDef "tx_id"]
   ]
 
 -- ---------------------------------------------------------------------------

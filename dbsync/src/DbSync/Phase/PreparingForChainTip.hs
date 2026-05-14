@@ -41,11 +41,19 @@ import Control.Tracer (traceWith)
 import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 
+import DbSync.Db.Schema.Core (blockTableDef, txTableDef)
 import DbSync.Db.Schema.Init
   ( analyzeSql
   , prepareSchemaForFollowTipSql
   )
+import DbSync.Db.Schema.StakeDelegation (withdrawalTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Schema.UTxO
+  ( collateralTxInTableDef
+  , collateralTxOutTableDef
+  , txInTableDef
+  , txOutTableDef
+  )
 import qualified DbSync.Phase.PreparingForChainTip.Backfill as Backfill
 import qualified DbSync.Phase.PreparingForChainTip.Indexes as Indexes
 import qualified DbSync.Phase.PreparingForChainTip.PreResolveIndexes as PreResolveIndexes
@@ -63,28 +71,35 @@ prepComponent = "PreparingForChainTip"
 --
 -- Steps, in order:
 --
---   1. Build the minimum index set on @tx (hash)@, @tx_out (tx_id,
---      index)@ and @tx_in (tx_out_id, tx_out_index)@. Done
---      non-@CONCURRENTLY@ while the tables are still UNLOGGED so the
---      build is one-pass and WAL-free.
+--   1. Build the minimum index set on the tables the backfill UPDATEs
+--      probe (tx, tx_out, tx_in, collateral_tx_in, collateral_tx_out,
+--      withdrawal). Done non-@CONCURRENTLY@ while the tables are still
+--      UNLOGGED so the build is one-pass and WAL-free.
 --   2. Resolve @tx_in@ / @collateral_tx_in@ / @reference_tx_in@'s
 --      @tx_out_id@ columns and @tx_out.consumed_by_tx_id@ — these
 --      are the joins the step-1 indexes accelerate.
---   3. Backfill @tx.fee@ on phase-2 failures, then @tx.deposit@ on
---      both phase-2 failures and valid-contract txs (the
---      ledger-disabled fallback). The CTE-driven shape of the
---      deposit fallback also benefits from the step-1 indexes.
---   4. Apply the per-epoch protocol-param deposits accumulated
+--   3. @ANALYZE@ the tables touched by step 2 so the backfill UPDATEs
+--      see post-resolve cardinalities. Stale stats here mean the
+--      planner picks Nested Loop with a tiny outer estimate and the
+--      UPDATEs take hours.
+--   4. Backfill @tx.fee@ on phase-2 failures and Byron txs, then
+--      @tx.deposit@ on both phase-2 failures and valid-contract txs
+--      (the ledger-disabled fallback). Phase-2 fee and Byron fee
+--      drive off the small filtered set and look up inputs via the
+--      step-1 indexes; the valid-contract deposit retains the
+--      aggregate-then-join shape because every valid tx needs the
+--      computation in ledger-disabled mode.
+--   5. Apply the per-epoch protocol-param deposits accumulated
 --      during ingest to @pool_update.deposit@ (first registrations)
 --      and @stake_registration.deposit@ (Shelley-Babbage rows);
 --      then TRUNCATE the staging table.
---   5. Flip every UNLOGGED table to LOGGED and attach an
+--   6. Flip every UNLOGGED table to LOGGED and attach an
 --      @<table>_id_seq@.
---   6. @CREATE INDEX CONCURRENTLY@ for every PK and unique
+--   7. @CREATE INDEX CONCURRENTLY@ for every PK and unique
 --      constraint declared on the schema. The step-1 indexes are
 --      deduped here via @IF NOT EXISTS@ on a matching name.
---   7. @ANALYZE@ each table so the planner picks up the new shape.
---   8. @setval@ each @<table>_id_seq@ to @MAX(id) + 1@.
+--   8. @ANALYZE@ each table so the planner picks up the new shape.
+--   9. @setval@ each @<table>_id_seq@ to @MAX(id) + 1@.
 --
 -- Each step is a single SQL operation per table or per concern;
 -- there is no application-level batching or per-epoch chunking
@@ -102,6 +117,18 @@ run tracer conn tables = do
     PreResolveIndexes.createPreResolveIndexes tracer conn
 
   _ <- Resolve.resolveForeignKeys tracer conn
+
+  -- Refresh planner statistics for every table the backfills read.
+  -- Autovacuum runs on UNLOGGED tables but its last sample was
+  -- taken mid-ingest, before the four resolve UPDATEs each rewrote
+  -- tens of millions of rows. Without this pass the planner sees
+  -- pre-resolve cardinalities for tx_out / tx_in / collateral_tx_in
+  -- and picks Nested Loop plans whose outer-side estimate is off by
+  -- orders of magnitude, which translates into hour-scale UPDATEs.
+  timedTrace_ tracer prepComponent "ANALYZE for backfill planner stats" $
+    for_ backfillAnalyzeTables $ \td ->
+      runDdl conn (analyzeSql (tdName td))
+
   _ <- Backfill.backfillTxColumns tracer conn
   _ <- Backfill.applyDepositPending tracer conn
   timedTrace_ tracer prepComponent "truncate epoch_param_pending" $
@@ -119,6 +146,20 @@ run tracer conn tables = do
     Sequences.resetSequences conn tables
 
   traceWith tracer $ LogMsg Info prepComponent "post-load pass: complete" Nothing
+
+-- | Tables the four backfill UPDATEs read or write. Listed once
+-- here so the post-resolve ANALYZE pass and the backfill writers
+-- agree on which tables need fresh statistics.
+backfillAnalyzeTables :: [TableDef]
+backfillAnalyzeTables =
+  [ blockTableDef
+  , txTableDef
+  , txInTableDef
+  , txOutTableDef
+  , collateralTxInTableDef
+  , collateralTxOutTableDef
+  , withdrawalTableDef
+  ]
 
 runDdl :: Conn.Connection -> Text -> IO ()
 runDdl conn ddl = do

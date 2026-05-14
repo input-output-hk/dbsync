@@ -54,6 +54,7 @@ library dbsync-testlib
     DbSync.Test.Property.Invariants
   build-depends:
       base
+    , bytestring
     , cardano-crypto-class
     , cardano-ledger-core
     , cardano-node
@@ -87,6 +88,7 @@ test-suite dbsync-test
     DbSync.Config.ValidationSpec
     DbSync.Config.NodeSpec
     DbSync.Config.GenesisSpec
+    DbSync.Db.Statement.BackfillSpec
     DbSync.Db.Statement.BlockSpec
     DbSync.Db.Statement.IndexesSpec
     DbSync.Db.Statement.RoundTripSpec

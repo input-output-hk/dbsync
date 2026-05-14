@@ -32,13 +32,8 @@ module DbSync.Phase.PreparingForChainTipSpec (spec) where
 
 import Cardano.Prelude
 
-import Cardano.Slotting.Block (BlockNo (..))
-import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import Data.IORef (newIORef)
-import Data.Time.Calendar (fromGregorian)
-import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 
-import qualified Data.ByteString as BS
 import qualified Data.Text as T
 
 import Test.Hspec
@@ -50,13 +45,7 @@ import Test.Hspec
   , shouldBe
   )
 
-import DbSync.Block.Types
-  ( BlockEra (..)
-  , GenericBlock (..)
-  , GenericTx (..)
-  , GenericTxIn (..)
-  , GenericTxOut (..)
-  )
+import DbSync.Block.Types (GenericBlock)
 import DbSync.Copy.Writer (CopyWriter (..), closeCopyWriter, mkCopyWriter)
 import DbSync.Db.Schema.Address (addressTableDef)
 import DbSync.Db.Schema.CBOR (txCborTableDef)
@@ -109,6 +98,7 @@ import DbSync.Test.Database
   , testConnBs
   , testConnStr
   )
+import DbSync.Test.Fixtures (byronBlock, producerBlock, spendingBlock)
 import DbSync.Test.Hasql (withTestConnection)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import DbSync.Trace.Backend (mkNullTracer)
@@ -328,6 +318,45 @@ spec = describe "DbSync.Phase.PreparingForChainTip" $
             ])
         result `shouldBe` "1"
 
+      -- The four perf indexes that support the rewritten backfill
+      -- UPDATEs. A missing entry here means a backfill regresses to
+      -- aggregate-then-filter and the post-load pass hangs at scale.
+      it "collateral_tx_in (tx_in_id) is indexed for phase-2 fee lookup" $ do
+        result <- T.strip <$> queryTestDb
+          (T.unwords
+            [ "SELECT count(*) FROM pg_indexes"
+            , "WHERE tablename = 'collateral_tx_in'"
+            , "AND indexname = 'collateral_tx_in_tx_in_id_idx'"
+            ])
+        result `shouldBe` "1"
+
+      it "collateral_tx_out (tx_id) is indexed for phase-2 fee lookup" $ do
+        result <- T.strip <$> queryTestDb
+          (T.unwords
+            [ "SELECT count(*) FROM pg_indexes"
+            , "WHERE tablename = 'collateral_tx_out'"
+            , "AND indexname = 'collateral_tx_out_tx_id_idx'"
+            ])
+        result `shouldBe` "1"
+
+      it "tx_in (tx_in_id) is indexed for Byron fee + deposit lookup" $ do
+        result <- T.strip <$> queryTestDb
+          (T.unwords
+            [ "SELECT count(*) FROM pg_indexes"
+            , "WHERE tablename = 'tx_in'"
+            , "AND indexname = 'tx_in_tx_in_id_idx'"
+            ])
+        result `shouldBe` "1"
+
+      it "withdrawal (tx_id) is indexed for deposit lookup" $ do
+        result <- T.strip <$> queryTestDb
+          (T.unwords
+            [ "SELECT count(*) FROM pg_indexes"
+            , "WHERE tablename = 'withdrawal'"
+            , "AND indexname = 'withdrawal_tx_id_idx'"
+            ])
+        result `shouldBe` "1"
+
     describe "sequence reset" $ do
       it "tx_id_seq's next value is MAX(id) + 1" $ do
         -- Four txs landed: producer, valid-contract spender, phase-2
@@ -354,164 +383,4 @@ spec = describe "DbSync.Phase.PreparingForChainTip" $
         result `shouldBe` "1"
 
 -- ---------------------------------------------------------------------------
--- * GenericBlock fixtures
--- ---------------------------------------------------------------------------
-
-sampleTime :: UTCTime
-sampleTime = UTCTime (fromGregorian 2024 1 15) (secondsToDiffTime 43200)
-
--- | Shelley-shaped raw address. Header byte 0x00 (BasePaymentKey
--- StakeKey) + 56 padding bytes — well-formed enough for the UTxO
--- extractor's stake-credential parser.
-sampleAddrRaw :: ByteString
-sampleAddrRaw = BS.pack (0x00 : replicate 56 0x11)
-
--- | Common output shape used in every fixture.
-mkOut :: Word16 -> Word64 -> GenericTxOut
-mkOut idx value = GenericTxOut
-  { txOutIndex       = idx
-  , txOutAddress     = "addr_test1xyz"
-  , txOutAddressRaw  = sampleAddrRaw
-  , txOutValue       = value
-  , txOutDataHash    = Nothing
-  , txOutInlineDatum = Nothing
-  , txOutRefScript   = Nothing
-  , txOutMultiAssets = []
-  }
-
--- | An empty Shelley GenericTx. Field shapes are the same as every
--- other test in the suite.
-emptyTx :: ByteString -> GenericTx
-emptyTx hash = GenericTx
-  { txHash             = hash
-  , txBlockIndex       = 0
-  , txSize             = 200
-  , txFee              = 0
-  , txOutSum           = 0
-  , txValidContract    = True
-  , txScriptSize       = 0
-  , txTreasuryDonation = 0
-  , txInvalidBefore    = Nothing
-  , txInvalidHereafter = Nothing
-  , txInputs           = []
-  , txOutputs          = []
-  , txCollateralInputs = []
-  , txReferenceInputs  = []
-  , txCollateralOutput = Nothing
-  , txCertificates     = []
-  , txWithdrawals      = []
-  , txMetadata         = Nothing
-  , txMint             = []
-  , txCborRaw          = Nothing
-  }
-
--- | Pad a short ByteString to 32 bytes — the canonical hash length
--- the parser hands the rest of the pipeline.
-padHash32 :: ByteString -> ByteString
-padHash32 bs = bs <> BS.replicate (max 0 (32 - BS.length bs)) 0
-
--- | The producing tx. Three outputs at known values; the consumer
--- and the phase-2 failure both reference its hash.
-producerHash :: ByteString
-producerHash = padHash32 "PROD"
-
-producerTx :: GenericTx
-producerTx = (emptyTx producerHash)
-  { txBlockIndex = 0
-  , txSize       = 100
-  , txFee        = 170000
-  , txOutSum     = 12000000
-  , txOutputs    = [mkOut 0 5000000, mkOut 1 5000000, mkOut 2 2000000]
-  }
-
--- | Block carrying just the producer.
-producerBlock :: GenericBlock
-producerBlock = GenericBlock
-  { blkEra           = Shelley
-  , blkHash          = padHash32 "BLK1"
-  , blkPreviousHash  = ""
-  , blkSlotNo        = SlotNo 100
-  , blkBlockNo       = BlockNo 1
-  , blkEpochNo       = EpochNo 0
-  , blkEpochSlotNo   = 100
-  , blkSize          = 512
-  , blkTime          = sampleTime
-  , blkSlotLeader    = BS.replicate 28 0xab
-  , blkProtoMajor    = 9
-  , blkProtoMinor    = 0
-  , blkVrfKey        = Just "vrf_vk1test"
-  , blkOpCert        = Just (BS.replicate 32 0)
-  , blkOpCertCounter = Just 0
-  , blkIsEBB         = False
-  , blkTxs           = [producerTx]
-  }
-
--- | The valid-contract consumer. Spends @(producerHash, 0)@ for a
--- 5 000 000 input; one output for 4 500 000; fee 200 000. The
--- ledger-disabled deposit fallback should compute @300_000@.
-consumerTx :: GenericTx
-consumerTx = (emptyTx (padHash32 "VALID"))
-  { txBlockIndex = 0
-  , txSize       = 200
-  , txFee        = 200000
-  , txOutSum     = 4500000
-  , txInputs     = [GenericTxIn producerHash 0]
-  , txOutputs    = [mkOut 0 4500000]
-  }
-
--- | The phase-2 failure. Mirrors what the parser writes after
--- Slice 6: @txFee = 0@ sentinel, no inputs/outputs/withdrawals,
--- just the collateral input and return.
-phase2Tx :: GenericTx
-phase2Tx = (emptyTx (padHash32 "FAIL"))
-  { txBlockIndex       = 1
-  , txSize             = 300
-  , txValidContract    = False
-  , txCollateralInputs = [GenericTxIn producerHash 1]
-  , txCollateralOutput = Just (mkOut 0 2000000)
-  }
-
--- | Block carrying the consumer and the phase-2 failure.
-spendingBlock :: GenericBlock
-spendingBlock = producerBlock
-  { blkHash         = padHash32 "BLK2"
-  , blkPreviousHash = blkHash producerBlock
-  , blkSlotNo       = SlotNo 120
-  , blkBlockNo      = BlockNo 2
-  , blkEpochSlotNo  = 120
-  , blkTxs          = [consumerTx, phase2Tx]
-  }
-
--- | A Byron-era tx spending the producer's third output. Fee is the
--- @0@ sentinel; the post-load pass should replace it with the
--- @inputs - outputs@ difference (500 000).
-byronTx :: GenericTx
-byronTx = (emptyTx (padHash32 "BYRON"))
-  { txBlockIndex = 0
-  , txSize       = 150
-  , txOutSum     = 1500000
-  , txInputs     = [GenericTxIn producerHash 2]
-  , txOutputs    = [mkOut 0 1500000]
-  }
-
--- | Byron block. Era and proto-major flag drive the fee backfill's
--- @block.proto_major < 2@ filter; everything else mirrors the
--- shape used by the Byron parser. Slot leader is a different hash
--- so the dedup map allocates a new @slot_leader@ row, and Byron
--- blocks deliberately skip the @pool_hash@ write.
-byronBlock :: GenericBlock
-byronBlock = producerBlock
-  { blkEra           = Byron
-  , blkHash          = padHash32 "BLK3"
-  , blkPreviousHash  = blkHash spendingBlock
-  , blkSlotNo        = SlotNo 200
-  , blkBlockNo       = BlockNo 3
-  , blkEpochSlotNo   = 200
-  , blkSlotLeader    = BS.replicate 28 0xcd
-  , blkProtoMajor    = 1
-  , blkProtoMinor    = 0
-  , blkVrfKey        = Nothing
-  , blkOpCert        = Nothing
-  , blkOpCertCounter = Nothing
-  , blkTxs           = [byronTx]
-  }
+-- Fixtures live in 'DbSync.Test.Fixtures'; shared with 'BackfillSpec'.

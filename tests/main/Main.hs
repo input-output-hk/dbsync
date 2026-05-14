@@ -63,6 +63,7 @@ import qualified DbSync.Checkpoint.ManagerSpec as CheckpointManagerSpec
 import qualified DbSync.Checkpoint.ResumeSpec as CheckpointResumeSpec
 import qualified DbSync.Checkpoint.SyncStateSpec as CheckpointSyncStateSpec
 import qualified DbSync.Copy.WriterSpec as CopyWriterSpec
+import qualified DbSync.Db.Statement.BackfillSpec as DbStatementBackfillSpec
 import qualified DbSync.Db.Statement.BlockSpec as DbStatementBlockSpec
 import qualified DbSync.Db.Statement.RoundTripSpec as DbStatementRoundTripSpec
 import qualified DbSync.Db.Statement.SlotLeaderSpec as DbStatementSlotLeaderSpec
@@ -122,6 +123,7 @@ main = hspec $ do
     CheckpointResumeSpec.spec
     CheckpointSyncStateSpec.spec
     CopyWriterSpec.spec
+    DbStatementBackfillSpec.spec
     DbStatementBlockSpec.spec
     DbStatementRoundTripSpec.spec
     DbStatementSlotLeaderSpec.spec

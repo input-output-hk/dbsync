@@ -71,6 +71,7 @@ import DbSync.Db.Schema.Init
   , dropSchema
   , initSchema
   , renderSchemaMismatch
+  , showWalLevel
   )
 import DbSync.Env (CoreEnv (..), FollowEnv (..), IngestEnv (..))
 import DbSync.Extractor (ExtractState, ExtractorDef (..), freshExtractState)
@@ -98,11 +99,13 @@ import DbSync.Phase.Boot
   , renderBootError
   )
 import qualified DbSync.Phase.PreparingForChainTip as Prep
+import DbSync.Phase.PreparingForChainTip.Tuning (defaultPrepTuning)
 import DbSync.Resolver.AddressBuffer (newAddressBufferRef)
 import DbSync.Resolver.AddressWorker (awaitDrained, closeAddressResolver, mkAddressResolver)
 import DbSync.Resolver.Follow (mkFollowResolver)
 import DbSync.Resolver.Ingest (mkIngestResolver)
 import DbSync.StateQuery (StateQueryVar, newStateQueryVar, seedInterpreterFromLedgerState)
+import DbSync.Trace.Timing (withHeartbeat)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 import DbSync.Trace.Watchdog (newWatchdog, runWatchdog)
 import DbSync.Writer.CopyAdapter (mkCopyWriterAdapter)
@@ -123,8 +126,9 @@ runApp tracer args = do
       genesisCfg   = aaGenesisConfig args
       socketPath   = aaSocketPath args
       mShutdown    = aaShutdownSignal args
-      logError msg = traceWith tracer $ LogMsg Error "App" msg Nothing
-      logInfo  msg = traceWith tracer $ LogMsg Info  "App" msg Nothing
+      logError msg = traceWith tracer $ LogMsg Error   "App" msg Nothing
+      logWarn  msg = traceWith tracer $ LogMsg Warning "App" msg Nothing
+      logInfo  msg = traceWith tracer $ LogMsg Info    "App" msg Nothing
       topLevelCfg  = mkTopLevelConfig nodeCfg genesisCfg
       networkMagic = getNetworkMagic genesisCfg
       network      = sgNetworkId (scConfig (gcShelley genesisCfg))
@@ -190,6 +194,23 @@ runApp tracer args = do
   when needsSeed $ do
     seedSyncState consumerCtrlConn schemaVersion ledgerEnabledCfg
     logInfo "Sync-state seeded"
+    -- Fresh sync only: surface a misconfigured wal_level so the
+    -- operator can flip it before Ingest starts. wal_level=minimal
+    -- skips WAL on the UNLOGGED→LOGGED flip in PreparingForChainTip
+    -- for tables over wal_skip_threshold. Not a blocker — managed
+    -- PG operators may not control this GUC.
+    walLevel <- showWalLevel connStrTxt
+    unless (walLevel == "minimal") $
+      logWarn $ T.unlines
+        [ "Postgres wal_level is '" <> walLevel <> "'. For fastest bulk-load,"
+        , "set the following in postgresql.conf and restart the server:"
+        , "  wal_level = minimal"
+        , "  max_wal_senders = 0"
+        , "  archive_mode = off"
+        , "See profiles/postgres-tuning.conf for the full snippet."
+        , "Note: replicas will need a full re-base after reverting to"
+        , "wal_level = replica. Acceptable on a one-time fresh sync."
+        ]
 
   -- 6. SystemStart and ledger plumbing.
   let systemStart = SystemStart (sgSystemStart $ scConfig $ gcShelley genesisCfg)
@@ -258,13 +279,17 @@ runApp tracer args = do
             "Cleaned up " <> show deleted
               <> " rows past last_committed_slot from a prior crash"
         logInfo "Rebuilding dedup maps from PG..."
-        maps <- rebuildDedupMaps consumerCtrlConn tableDefs
+        maps <- rebuildDedupMaps tracer consumerCtrlConn tableDefs
 
         (replayBs, replaySt) <- case (hasLedgerEnv, rcChosenSnapshot rc) of
           (LedgerDisabled _, _) -> pure (Nothing, Nothing)
           (LedgerEnabled lenv, Just snap) -> do
             logInfo $ "Loading ledger snapshot at slot " <> show (dsNumber snap)
-            loadResult <- initLedgerDbFromSnapshot lenv snap
+            loadResult <-
+              withHeartbeat tracer "LedgerSnapshot"
+                ("still loading snapshot at slot " <> show (dsNumber snap))
+                snapshotHeartbeatSeconds $
+                initLedgerDbFromSnapshot lenv snap
             case loadResult of
               Left err -> panic $ "Failed to load ledger snapshot: " <> err
               Right () -> do
@@ -382,7 +407,7 @@ runApp tracer args = do
 
       runPrepAndMarkComplete =
         bracket (openControlConnection hasqlSettings) closeControlConnection $ \prepConn -> do
-          Prep.run tracer (unControlConnection prepConn) tableDefs
+          Prep.run tracer (unControlConnection prepConn) hasqlSettings defaultPrepTuning tableDefs
           markSyncComplete prepConn
 
   let mLedgerQueue = case hasLedgerEnv of
@@ -553,3 +578,9 @@ runFollowFastPath
         withAsync (runAppM followEnv $ connectToNode iomgr topLevelCfg networkMagic socketPath intersectReq) $ \nodeThread -> do
           link nodeThread
           racedFollow
+
+-- | Cadence between snapshot-load heartbeat lines. Tuned so a fast
+-- load doesn't emit any heartbeats while a slow one still gives the
+-- operator visibility within the first minute.
+snapshotHeartbeatSeconds :: Int
+snapshotHeartbeatSeconds = 15

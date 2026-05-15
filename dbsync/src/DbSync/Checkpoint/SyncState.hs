@@ -33,10 +33,13 @@ module DbSync.Checkpoint.SyncState
 import Cardano.Prelude
 
 import qualified Data.ByteString.Short as SBS
+import Data.Time.Clock (diffUTCTime, getCurrentTime)
 import qualified Hasql.Connection as Conn
 import qualified Hasql.Connection.Settings as Settings
 import qualified Hasql.Session as Sess
 import qualified Hasql.Statement as Stmt
+
+import Control.Tracer (traceWith)
 
 import DbSync.Db.Schema.SyncState (SyncStateRow (..))
 import DbSync.Db.Schema.Types (TableDef (..))
@@ -45,6 +48,8 @@ import DbSync.Db.Statement.Resume
   , selectDedupSingleStmt
   , selectMultiAssetDedupStmt
   )
+import DbSync.Trace.Timing (fmtDuration, fmtRows)
+import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 import DbSync.Db.Statement.SyncState
   ( markSnapshotCompleteStmt
   , markSyncCompleteStmt
@@ -162,40 +167,61 @@ fetchBlockHashAtSlot ctrl slot =
 -- The supplied 'TableDef' list determines which tables are queried —
 -- a dedup table absent from the active schema (e.g. @script@) is
 -- silently skipped, leaving its map empty.
-rebuildDedupMaps :: HasCallStack => ControlConnection -> [TableDef] -> IO DedupMaps
-rebuildDedupMaps ctrl tableDefs = do
+rebuildDedupMaps :: HasCallStack => AppTracer -> ControlConnection -> [TableDef] -> IO DedupMaps
+rebuildDedupMaps tracer ctrl tableDefs = do
   maps <- newMaps
   let tableNames = map tdName tableDefs
       whenPresent name action =
         when (name `elem` tableNames) action
   whenPresent "slot_leader" $
-    populateSingle ctrl "slot_leader" "hash" (dmsSlotLeader maps)
+    populateSingle tracer ctrl "slot_leader" "hash" (dmsSlotLeader maps)
   whenPresent "stake_address" $
-    populateSingle ctrl "stake_address" "hash_raw" (dmsStakeAddress maps)
+    populateSingle tracer ctrl "stake_address" "hash_raw" (dmsStakeAddress maps)
   whenPresent "pool_hash" $
-    populateSingle ctrl "pool_hash" "hash_raw" (dmsPoolHash maps)
+    populateSingle tracer ctrl "pool_hash" "hash_raw" (dmsPoolHash maps)
   whenPresent "multi_asset" $
-    populateMultiAsset ctrl (dmsMultiAsset maps)
+    populateMultiAsset tracer ctrl (dmsMultiAsset maps)
   pure maps
 
 -- | Populate a dedup map whose natural key is a single column.
-populateSingle :: HasCallStack => ControlConnection -> Text -> Text -> DedupMap -> IO ()
-populateSingle ctrl tableName keyCol dm = do
-  rows <- runStmt ("rebuildDedupMaps[" <> tableName <> "]") ctrl ()
-            (selectDedupSingleStmt tableName keyCol)
-  forM_ rows $ \(rowId, key) ->
-    insertExisting (SBS.toShort key) rowId dm
+populateSingle :: HasCallStack => AppTracer -> ControlConnection -> Text -> Text -> DedupMap -> IO ()
+populateSingle tracer ctrl tableName keyCol dm =
+  timedRebuild tracer tableName $ do
+    rows <- runStmt ("rebuildDedupMaps[" <> tableName <> "]") ctrl ()
+              (selectDedupSingleStmt tableName keyCol)
+    forM_ rows $ \(rowId, key) ->
+      insertExisting (SBS.toShort key) rowId dm
+    pure (fromIntegral (length rows))
 
 -- | Populate the multi-asset dedup map. Keys must match the form
 -- written by 'DbSync.Extractor.SharedDedup.resolveAndWriteMultiAsset'
 -- (Blake2b-224 of @policy ++ name@), otherwise a resumed run will
 -- allocate fresh ids for already-known assets.
-populateMultiAsset :: HasCallStack => ControlConnection -> DedupMap -> IO ()
-populateMultiAsset ctrl dm = do
-  rows <- runStmt "rebuildDedupMaps[multi_asset]" ctrl ()
-            selectMultiAssetDedupStmt
-  forM_ rows $ \(rowId, policy, name) ->
-    insertExisting (hashDedupKey (policy <> name)) rowId dm
+populateMultiAsset :: HasCallStack => AppTracer -> ControlConnection -> DedupMap -> IO ()
+populateMultiAsset tracer ctrl dm =
+  timedRebuild tracer "multi_asset" $ do
+    rows <- runStmt "rebuildDedupMaps[multi_asset]" ctrl ()
+              selectMultiAssetDedupStmt
+    forM_ rows $ \(rowId, policy, name) ->
+      insertExisting (hashDedupKey (policy <> name)) rowId dm
+    pure (fromIntegral (length rows))
+
+-- | Wrap one table's dedup-map repopulation in start/end trace lines
+-- so the operator can see which table is in flight and how long each
+-- took. The action returns the number of rows loaded; the @SELECT@
+-- itself is the slow part, so the timer captures fetch + insert
+-- together rather than splitting them.
+timedRebuild :: AppTracer -> Text -> IO Int64 -> IO ()
+timedRebuild tracer tableName action = do
+  traceWith tracer $ LogMsg Info "DedupRebuild"
+    (tableName <> ": loading") Nothing
+  start <- getCurrentTime
+  rows  <- action
+  end   <- getCurrentTime
+  traceWith tracer $ LogMsg Info "DedupRebuild" (
+      tableName <> ": " <> fmtRows rows <> " rows in "
+        <> fmtDuration (realToFrac (diffUTCTime end start))
+    ) Nothing
 
 -- ---------------------------------------------------------------------------
 -- * Internal: statement runner

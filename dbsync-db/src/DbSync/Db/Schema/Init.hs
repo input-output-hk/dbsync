@@ -28,14 +28,19 @@ module DbSync.Db.Schema.Init
 
     -- * Schema-flip DDL builders (pure)
   , prepareSchemaForFollowTipSql
+  , perTableSchemaForFollowTipSql
   , setLoggedSql
   , createIdSequenceSql
   , attachIdDefaultSql
   , analyzeSql
+  , vacuumSql
 
     -- * psql helpers (exported for tests)
   , execPsql
   , queryPsql
+
+    -- * Server probes
+  , showWalLevel
   ) where
 
 import Cardano.Prelude
@@ -205,14 +210,20 @@ prepareSchemaForFollowTip tables connStr =
 -- already LOGGED contribute nothing.
 prepareSchemaForFollowTipSql :: [TableDef] -> [Text]
 prepareSchemaForFollowTipSql tables =
-  concatMap perTable (filter ((== TableUnlogged) . tdMode) tables)
-  where
-    perTable td =
-      let name = tdName td
-      in [ setLoggedSql name
-         , createIdSequenceSql name
-         , attachIdDefaultSql name
-         ]
+  concatMap perTableSchemaForFollowTipSql
+    (filter ((== TableUnlogged) . tdMode) tables)
+
+-- | The three flip statements (@SET LOGGED@, @CREATE SEQUENCE@,
+-- @ALTER … SET DEFAULT@) for a single table, ready to be run as a
+-- per-table unit by a parallel worker. The caller is responsible
+-- for filtering on 'tdMode'; this function does no filtering.
+perTableSchemaForFollowTipSql :: TableDef -> [Text]
+perTableSchemaForFollowTipSql td =
+  let name = tdName td
+  in [ setLoggedSql name
+     , createIdSequenceSql name
+     , attachIdDefaultSql name
+     ]
 
 -- | @ALTER TABLE … SET LOGGED@ DDL for a single table.
 setLoggedSql :: Text -> Text
@@ -246,6 +257,13 @@ attachIdDefaultSql tableName =
 analyzeSql :: Text -> Text
 analyzeSql tableName =
   "ANALYZE " <> quoteIdent tableName
+
+-- | @VACUUM@ on a single table. Used between resolve and the LOGGED
+-- flip to reclaim dead tuples left by the resolve UPDATEs, so the
+-- subsequent heap rewrite doesn't drag them along.
+vacuumSql :: Text -> Text
+vacuumSql tableName =
+  "VACUUM " <> quoteIdent tableName
 
 -- ---------------------------------------------------------------------------
 -- * Version checking
@@ -386,6 +404,15 @@ execPsql connStr sql = do
           "psql failed: " <> err <> "\nSQL: " <> T.unpack sql
   where
     notInfixOf needle haystack = not (needle `isInfixOf` haystack)
+
+-- | Probe @wal_level@ via @SHOW@. Returns the value as 'Text', e.g.
+-- @"minimal"@, @"replica"@, or @"logical"@. Used at boot to warn
+-- when the server isn't on @wal_level = minimal@ — at minimal,
+-- @ALTER TABLE … SET LOGGED@ skips WAL for tables larger than
+-- @wal_skip_threshold@.
+showWalLevel :: Text -> IO Text
+showWalLevel connStr =
+  T.strip <$> queryPsql connStr "SHOW wal_level;"
 
 -- | Run a query via @psql@ and return the output as 'Text'.
 --

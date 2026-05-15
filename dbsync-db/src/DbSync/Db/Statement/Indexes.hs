@@ -14,12 +14,17 @@
 --     would force. Without these, the resolves and CTE backfills
 --     hash-join the @tx@ / @tx_out@ / @tx_in@ heaps in their entirety.
 --
---   * 'tableIndexStatements': the full schema-driven set, emitted as
---     @CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS@ once the
---     tables have been flipped to LOGGED. Driven by 'tdPrimaryKey'
---     and 'tdUniqueConstraints' on each 'TableDef'. The @IF NOT
---     EXISTS@ clause makes any index already built by the pre-resolve
---     pass a no-op here.
+--   * 'tableIndexStatements': the full schema-driven set, driven by
+--     'tdPrimaryKey' and 'tdUniqueConstraints' on each 'TableDef'.
+--     The caller chooses 'NonConcurrent' or 'Concurrent' via the
+--     'Concurrency' argument. Prep runs while no other session is
+--     touching the DB and so passes 'NonConcurrent' — this unlocks
+--     @max_parallel_maintenance_workers@ (which @CONCURRENTLY@
+--     effectively disables for the validation scan) and avoids the
+--     second heap scan. A future Follow-time path that adds indexes
+--     against a live database can call the same builder with
+--     'Concurrent'. The @IF NOT EXISTS@ clause makes any index
+--     already built by the pre-resolve pass a no-op here.
 --
 -- Performance-only indexes (lookup speedups that aren't enforcing
 -- uniqueness) are not produced by 'tableIndexStatements'; they will
@@ -30,6 +35,7 @@ module DbSync.Db.Statement.Indexes
   , preResolveIndexStatements
   , uniqueConstraintIndexName
   , columnRef
+  , Concurrency (..)
   ) where
 
 import Cardano.Prelude
@@ -49,22 +55,26 @@ import DbSync.Db.Schema.UTxO
 import DbSync.Db.Sql (quoteIdent)
 import DbSync.Db.Sql.Refs (columnRef)
 
--- | Produce the @CREATE INDEX CONCURRENTLY@ statements that should
--- be run for the given table. One element per index. Empty list
--- if the table declares no PK and no unique constraints.
-tableIndexStatements :: TableDef -> [Text]
-tableIndexStatements td =
+-- | Produce the @CREATE INDEX@ statements for the given table. One
+-- element per index. Empty list if the table declares no PK and no
+-- unique constraints. The 'Concurrency' argument chooses between
+-- @CREATE INDEX@ (callers with no concurrent writers; full parallel
+-- maintenance worker support) and @CREATE INDEX CONCURRENTLY@
+-- (callers running against a live database that cannot tolerate
+-- @ShareLock@).
+tableIndexStatements :: Concurrency -> TableDef -> [Text]
+tableIndexStatements conc td =
   pkStatement <> uniqueStatements
   where
     pkStatement = case tdPrimaryKey td of
       Nothing   -> []
       Just cols ->
-        [renderIndex Concurrent Unique (tdName td <> "_pkey_idx") (tdName td) cols]
+        [renderIndex conc Unique (tdName td <> "_pkey_idx") (tdName td) cols]
 
     uniqueStatements =
       zipWith
         (\n cols ->
-           renderIndex Concurrent Unique
+           renderIndex conc Unique
              (uniqueConstraintIndexName td n)
              (tdName td)
              (NE.toList cols))
@@ -138,9 +148,10 @@ preResolveIndexStatements =
 
 -- | Whether the index DDL should use @CONCURRENTLY@. Concurrent
 -- builds are required when the table is LOGGED and being written
--- to; non-concurrent builds are dramatically faster when neither
--- of those holds (UNLOGGED tables, or LOGGED tables with no
--- concurrent writers).
+-- to. Non-concurrent builds avoid the second validation scan and
+-- get full @max_parallel_maintenance_workers@ parallelism, so they
+-- are preferred when neither of those constraints holds (UNLOGGED
+-- tables, or LOGGED tables with no concurrent writers).
 data Concurrency = Concurrent | NonConcurrent
 
 -- | Whether the index enforces uniqueness.

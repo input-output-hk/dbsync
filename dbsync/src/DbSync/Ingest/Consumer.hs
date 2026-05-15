@@ -79,6 +79,7 @@ import DbSync.Block.Parser (parseBlock)
 import DbSync.Block.Types (GenericBlock (..))
 import DbSync.Checkpoint.Manager (mkBoundarySyncStateRow)
 import DbSync.Checkpoint.SyncState (ControlConnection (..), writeSyncState)
+import DbSync.Id.Counter (IdCounters)
 import DbSync.Config.Types (LedgerConfig (..), SyncConfig (..))
 import DbSync.Copy.Writer (CopyWriter (..))
 import DbSync.Db.Schema.EpochSyncStats (EpochSyncStats (..), SyncPhase (..))
@@ -143,6 +144,22 @@ emptyPipelineStats = PipelineStats 0 0 0 0 0
 data BaselineRef = BaselineRef
   { brBlocksPerSec :: !Double  -- ^ Baseline throughput
   , brEpoch        :: !Word64  -- ^ Which epoch the baseline was captured from
+  }
+
+-- | Snapshot of the data a @sync_state@ row will eventually carry
+-- for one finished epoch, held until the resolver has caught up to
+-- that epoch. Pipelined-boundary semantics: a job for epoch @N@ is
+-- enqueued at the boundary between @N@ and @N+1@, but @sync_state@
+-- for @N@ only advances at the *next* boundary (@N+1@ → @N+2@), once
+-- the worker has resolved every @tx_out.address_id@ FK for @N@. On a
+-- clean exit at the rollback boundary the consumer drains the final
+-- queued job and writes the snapshot held here.
+data PendingBoundary = PendingBoundary
+  { pbEpoch       :: !EpochNo
+  , pbLastSlot    :: !Word64
+  , pbLastBlockNo :: !Word64
+  , pbLastHash    :: !ByteString
+  , pbCounters    :: !IdCounters
   }
 
 -- ---------------------------------------------------------------------------
@@ -212,6 +229,9 @@ runConsumer = do
   -- (slot, blockNo, hash) of the most recently processed block;
   -- the resume point captured by 'commitEpoch' at each boundary.
   lastBlockRef  <- liftIO $ newIORef (Nothing :: Maybe (Word64, Word64, ByteString))
+  -- Snapshot of the previous epoch's boundary state, held until the
+  -- resolver has resolved that epoch. See 'PendingBoundary'.
+  pendingBoundaryRef <- liftIO $ newIORef (Nothing :: Maybe PendingBoundary)
   -- Replay-progress state machine. Seeded as 'ReplayPending' iff a
   -- replay boundary was supplied at boot; otherwise 'NoReplay'.
   bootSlot      <- asks ieLastCommittedSlotAtBoot
@@ -220,7 +240,7 @@ runConsumer = do
                      Nothing -> NoReplay
   tracer        <- asks getTracer
   boundaryVar   <- asks ieRollbackBoundary
-  loop tracer boundaryVar prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef
+  loop tracer boundaryVar prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef pendingBoundaryRef replayRef
   where
     batchSize :: Int
     batchSize = 100
@@ -234,9 +254,10 @@ runConsumer = do
       -> IORef PipelineStats
       -> IORef (Maybe BaselineRef)
       -> IORef (Maybe (Word64, Word64, ByteString))
+      -> IORef (Maybe PendingBoundary)
       -> IORef ReplayLogState
       -> IngestM ()
-    loop tracer boundaryVar prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef = do
+    loop tracer boundaryVar prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef pendingBoundaryRef replayRef = do
       queue <- asks ieBlockQueue
 
       -- 1. Drain a batch of blocks (no timing — just count)
@@ -253,7 +274,7 @@ runConsumer = do
         }
 
       -- 2. Process batch (releases each forward block after parsing)
-      processBatch prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef blocks
+      processBatch prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef pendingBoundaryRef replayRef blocks
 
       -- 3. Exit cleanly when the last processed block has reached
       --    the rollback boundary; the caller then runs Prep and
@@ -261,6 +282,7 @@ runConsumer = do
       reached <- liftIO $ rollbackBoundaryReached lastBlockRef boundaryVar
       if reached
         then do
+          finalFlushSyncState pendingBoundaryRef
           mLast <- liftIO $ readIORef lastBlockRef
           liftIO $ traceWith tracer $ LogMsg Info "Ingest"
             ( "reached rollback boundary at "
@@ -268,13 +290,40 @@ runConsumer = do
                 <> "; exiting consumer loop"
             ) Nothing
         else
-          loop tracer boundaryVar prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef
+          loop tracer boundaryVar prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef pendingBoundaryRef replayRef
 
     renderLastBlock :: Maybe (Word64, Word64, ByteString) -> Text
     renderLastBlock = \case
       Nothing                -> "(no block processed yet)"
       Just (slot, blk, _hash) ->
         "block " <> show blk <> " (slot " <> show slot <> ")"
+
+    -- Drain the final queued resolve job and advance @sync_state@ to
+    -- the last fully-completed epoch. Pipelined-boundary semantics:
+    -- during normal operation @sync_state@ lags by one epoch behind
+    -- the consumer; at the rollback boundary the consumer exits
+    -- mid-epoch so the previous epoch becomes the last commit point.
+    -- A no-op when the pipeline never crossed a boundary
+    -- ('pendingBoundaryRef' = 'Nothing').
+    finalFlushSyncState :: IORef (Maybe PendingBoundary) -> IngestM ()
+    finalFlushSyncState pendingBoundaryRef = do
+      addressResolver <- asks ieAddressResolver
+      ctrlConn        <- asks ieControlConnection
+      watchdog        <- asks ieWatchdog
+      cfg             <- asks getConfig
+      let ledgerEnabledCfg = lcEnabled (scLedger cfg)
+          schemaVersion    = 1 :: Int
+      liftIO $ do
+        setConsumerNote watchdog "consumer: final awaitDrained"
+        awaitDrained addressResolver
+        addressIdCounter <- readAddressIdCounter addressResolver
+        mPending <- readIORef pendingBoundaryRef
+        for_ mPending $ \pb ->
+          writeSyncState ctrlConn $
+            mkBoundarySyncStateRow
+              (pbLastSlot pb) (pbLastBlockNo pb) (pbLastHash pb)
+              (pbCounters pb) addressIdCounter
+              schemaVersion ledgerEnabledCfg
 
     processBatch
       :: IORef (Maybe EpochNo)
@@ -283,16 +332,17 @@ runConsumer = do
       -> IORef PipelineStats
       -> IORef (Maybe BaselineRef)
       -> IORef (Maybe (Word64, Word64, ByteString))
+      -> IORef (Maybe PendingBoundary)
       -> IORef ReplayLogState
       -> [ChainSyncMsg]
       -> IngestM ()
-    processBatch _ _ _ _ _ _ _ [] = pure ()
-    processBatch _ _ _ _ _ _ _ (MsgRollback point : _) =
+    processBatch _ _ _ _ _ _ _ _ [] = pure ()
+    processBatch _ _ _ _ _ _ _ _ (MsgRollback point : _) =
       -- Reaching this branch would mean the node sent a rollback for
       -- a block below the @chain_tip − k@ boundary, violating
       -- k-safety. Crash loudly so the operator can investigate.
       panic (ingestRollbackPanicMessage point)
-    processBatch prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef (MsgForward cardanoBlock : rest) = do
+    processBatch prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef pendingBoundaryRef replayRef (MsgForward cardanoBlock : rest) = do
       tracer        <- asks getTracer
       sqv           <- asks ieStateQueryVar
       resolver      <- asks ieResolver
@@ -397,60 +447,89 @@ runConsumer = do
                   }
             liftIO $ writeEpochSyncStats writer essId ess
 
-            -- Build the resume row from the last fully-extracted
-            -- block of this epoch and the current ID counters.
+            -- Snapshot the last fully-extracted block + ID counters
+            -- of the just-finished epoch. Persisted to
+            -- 'pendingBoundaryRef' at the end of this block so that
+            -- the *next* boundary writes @sync_state@ for it once the
+            -- resolver has caught up.
             mLastBlock      <- liftIO $ readIORef lastBlockRef
             extractState    <- liftIO $ readIORef extractStRef
             let counters    = esIdCounters extractState
 
-            -- Atomic epoch boundary: flush COPY → enqueue + await the
-            -- address resolver → advance sync_state → reopen streams.
-            -- The order matters: sync_state only advances after the
-            -- worker has resolved every @tx_out.address_id@ FK for
-            -- this epoch, so a crash after this point leaves the DB
-            -- in a fully-resolved state up to @last_committed_slot@.
+            -- Pipelined epoch boundary: flush COPY for the
+            -- just-finished epoch, advance @sync_state@ for the
+            -- *previously* queued epoch (the resolver is guaranteed
+            -- idle here), enqueue the just-finished epoch, reopen
+            -- streams. The worker then resolves the just-finished
+            -- epoch in parallel with the consumer's ingest of the
+            -- next one — see the @PendingBoundary@ Haddock for the
+            -- crash-safety reasoning.
             commitStart <- liftIO getCurrentTime
             liftIO $ do
               -- 1. Flush COPY streams — tx_outs durable, address_id = NULL.
               setConsumerNote watchdog "consumer: cwCommit (flushing COPY)"
               cwCommit copyWriter
 
-              -- 2. Hand the per-epoch address-resolution buffer to the worker.
-              --    'enqueueResolveJob' blocks if the worker queue is at its
-              --    bound, back-pressuring the main pipeline.
-              setConsumerNote watchdog "consumer: enqueueResolveJob"
+              -- 2. Snapshot the just-finished epoch's address-resolution
+              --    buffer; it will be handed to the worker once the
+              --    previous boundary's job is committed below.
+              setConsumerNote watchdog "consumer: takeAndReset addressBuffer"
               buf <- takeAndReset addressBuffer
-              enqueueResolveJob addressResolver (ResolveJob prev buf)
 
-              -- 3. Block until the worker has processed all queued jobs.
-              --    After this, every tx_out / collateral_tx_out through
-              --    this epoch has its address_id populated.
-              setConsumerNote watchdog "consumer: awaitDrained (address resolver)"
+              -- 3. Wait for the worker to finish the job queued at the
+              --    *previous* boundary (epoch N-1). On the first boundary
+              --    the queue is empty and this returns immediately.
+              setConsumerNote watchdog "consumer: awaitDrained (epoch N-1)"
               awaitDrained addressResolver
 
               -- 4. Flush the ledger worker's per-epoch protocol-param
-              --    deposit data to epoch_param_pending. Must happen
-              --    before sync_state advances so a crash after this
-              --    point still finds the data when Prep runs.
+              --    deposit data for the just-finished epoch.
+              --    'epoch_param_pending' INSERTs are idempotent
+              --    (@ON CONFLICT DO NOTHING@), so flushing eagerly here
+              --    is safe even though @sync_state@ will only advance
+              --    to the previous epoch a step later.
               setConsumerNote watchdog "consumer: flushEpochParams"
               flushPendingDeposits hasLedger prev slot ctrlConn
 
-              -- 5. Safe to advance sync_state: COPY data is durable AND
-              --    address_id FKs are resolved. The address counter is
-              --    read from the resolver (not 'counters') because the
-              --    worker is its sole allocator.
-              setConsumerNote watchdog "consumer: writeSyncState"
+              -- 5. Advance @sync_state@ for the previously snapshotted
+              --    epoch — its tx_out / collateral_tx_out FKs are now
+              --    fully resolved. The address counter is read from
+              --    the resolver (its sole allocator) right after the
+              --    drain so it reflects exactly the rows it inserted
+              --    for that epoch.
+              setConsumerNote watchdog "consumer: writeSyncState (lagging)"
               addressIdCounter <- readAddressIdCounter addressResolver
-              case mLastBlock of
-                Just (lastSlot, lastBlockNo, lastHash) -> do
-                  let row = mkBoundarySyncStateRow
-                              lastSlot lastBlockNo lastHash
-                              counters addressIdCounter
-                              schemaVersion ledgerEnabledCfg
-                  writeSyncState ctrlConn row
-                Nothing -> pure ()
+              mPending <- readIORef pendingBoundaryRef
+              for_ mPending $ \pb ->
+                writeSyncState ctrlConn $
+                  mkBoundarySyncStateRow
+                    (pbLastSlot pb) (pbLastBlockNo pb) (pbLastHash pb)
+                    (pbCounters pb) addressIdCounter
+                    schemaVersion ledgerEnabledCfg
 
-              -- 6. Reopen COPY streams for the next epoch.
+              -- 6. Queue the just-finished epoch's resolve job. The
+              --    worker now runs in parallel with the consumer's
+              --    ingest of the next epoch. 'enqueueResolveJob'
+              --    blocks if the worker queue is at its bound,
+              --    back-pressuring the main pipeline.
+              setConsumerNote watchdog "consumer: enqueueResolveJob"
+              enqueueResolveJob addressResolver (ResolveJob prev buf)
+
+              -- 7. Save the snapshot that the *next* boundary will use
+              --    to advance @sync_state@ once this epoch's job is
+              --    resolved. 'mLastBlock' should never be 'Nothing'
+              --    here — the boundary detection requires at least one
+              --    processed block — but skip cleanly just in case.
+              for_ mLastBlock $ \(lastSlot, lastBlockNo, lastHash) ->
+                writeIORef pendingBoundaryRef $ Just PendingBoundary
+                  { pbEpoch       = prev
+                  , pbLastSlot    = lastSlot
+                  , pbLastBlockNo = lastBlockNo
+                  , pbLastHash    = lastHash
+                  , pbCounters    = counters
+                  }
+
+              -- 8. Reopen COPY streams for the next epoch.
               setConsumerNote watchdog "consumer: cwReopen"
               cwReopen copyWriter
               setConsumerNote watchdog "consumer: post-commit"
@@ -553,7 +632,7 @@ runConsumer = do
       liftIO $ bumpConsumer watchdog slot
 
       -- Recurse, whether the block was processed or skipped.
-      processBatch prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef replayRef rest
+      processBatch prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef pendingBoundaryRef replayRef rest
 
 -- ---------------------------------------------------------------------------
 -- * Diagnosis

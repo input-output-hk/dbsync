@@ -68,6 +68,8 @@ library
     DbSync.Phase.PreparingForChainTip.PreResolveIndexes
     DbSync.Phase.PreparingForChainTip.Resolve
     DbSync.Phase.PreparingForChainTip.Sequences
+    DbSync.Phase.PreparingForChainTip.Tuning
+    DbSync.Db.Pool
     DbSync.Phase.FollowingChainTip
     DbSync.Phase.FollowingChainTip.Rollback
     DbSync.Block.Receiver
@@ -188,7 +190,8 @@ library
 
     -- Database
     , postgresql-libpq
-    , hasql                           >= 1.9 && < 2
+    , hasql
+    , hasql-pool
 
     -- Data / serialisation
     , aeson

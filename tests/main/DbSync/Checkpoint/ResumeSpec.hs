@@ -24,6 +24,7 @@ import Test.Hspec (Spec, afterAll_, beforeAll_, before_, describe, it, shouldBe)
 import qualified Data.ByteString.Short as SBS
 
 import DbSync.Checkpoint.Resume (deleteRowsPastSlot)
+import DbSync.Trace.Backend (mkNullTracer)
 import DbSync.Checkpoint.SyncState
   ( ControlConnection
   , SyncStateRow (..)
@@ -293,7 +294,7 @@ rebuildDedupMapsSpec = describe "DbSync.Checkpoint.SyncState.rebuildDedupMaps" $
     it "returns empty maps when no rows exist" $
       withControlConnection $ \ctrl -> do
         seedSyncState ctrl 1 False
-        maps <- rebuildDedupMaps ctrl coreTables
+        maps <- rebuildDedupMaps mkNullTracer ctrl coreTables
         size (dmsSlotLeader maps)   >>= (`shouldBe` 0)
         size (dmsStakeAddress maps) >>= (`shouldBe` 0)
         size (dmsPoolHash maps)     >>= (`shouldBe` 0)
@@ -307,7 +308,7 @@ rebuildDedupMapsSpec = describe "DbSync.Checkpoint.SyncState.rebuildDedupMaps" $
         cwCommit cw
         closeCopyWriter cw
 
-        maps <- rebuildDedupMaps ctrl coreTables
+        maps <- rebuildDedupMaps mkNullTracer ctrl coreTables
         size (dmsSlotLeader maps) >>= (`shouldBe` 3)
 
         -- Looking up a known key returns the existing id, doesn't
@@ -326,7 +327,7 @@ rebuildDedupMapsSpec = describe "DbSync.Checkpoint.SyncState.rebuildDedupMaps" $
         cwCommit cw
         closeCopyWriter cw
 
-        maps <- rebuildDedupMaps ctrl coreTables
+        maps <- rebuildDedupMaps mkNullTracer ctrl coreTables
         let unseenKey = SBS.toShort (BS.replicate 28 0xff)
         (rowId, isNew) <- lookupOrInsert unseenKey (dmsSlotLeader maps)
         isNew `shouldBe` True
@@ -342,7 +343,7 @@ rebuildDedupMapsSpec = describe "DbSync.Checkpoint.SyncState.rebuildDedupMaps" $
         cwCommit cw
         closeCopyWriter cw
 
-        maps <- rebuildDedupMaps ctrl [blockTableDef, txTableDef]
+        maps <- rebuildDedupMaps mkNullTracer ctrl [blockTableDef, txTableDef]
         size (dmsSlotLeader maps) >>= (`shouldBe` 0)
 
 -- ---------------------------------------------------------------------------

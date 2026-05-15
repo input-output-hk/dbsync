@@ -18,7 +18,8 @@ import DbSync.Db.Schema.Types
   , TableMode (..)
   )
 import DbSync.Db.Statement.Indexes
-  ( columnRef
+  ( Concurrency (..)
+  , columnRef
   , preResolveIndexStatements
   , tableIndexStatements
   , uniqueConstraintIndexName
@@ -80,35 +81,46 @@ pkAndUniques = plainTable
 spec :: Spec
 spec = describe "DbSync.Db.Statement.Indexes" $ do
 
-  describe "tableIndexStatements" $ do
+  describe "tableIndexStatements Concurrent" $ do
     it "emits no statements for a table with no PK and no UNIQUE" $
-      tableIndexStatements plainTable `shouldBe` []
+      tableIndexStatements Concurrent plainTable `shouldBe` []
 
     it "emits a single PK index for a PK-only table" $
-      tableIndexStatements pkTable `shouldBe`
+      tableIndexStatements Concurrent pkTable `shouldBe`
         [ "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"pk_only_pkey_idx\""
             <> " ON \"pk_only\" (\"id\")"
         ]
 
     it "emits one UNIQUE INDEX per single-column constraint" $
-      tableIndexStatements uniqueOneCol `shouldBe`
+      tableIndexStatements Concurrent uniqueOneCol `shouldBe`
         [ "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"uniq_one_unique_1_idx\""
             <> " ON \"uniq_one\" (\"hash\")"
         ]
 
     it "lists every column of a multi-column UNIQUE in order" $
-      tableIndexStatements uniqueMultiCol `shouldBe`
+      tableIndexStatements Concurrent uniqueMultiCol `shouldBe`
         [ "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"uniq_multi_unique_1_idx\""
             <> " ON \"uniq_multi\" (\"addr_id\", \"pool_id\", \"epoch_no\")"
         ]
 
     it "emits PK first, then numbered UNIQUE indexes" $
-      tableIndexStatements pkAndUniques `shouldBe`
+      tableIndexStatements Concurrent pkAndUniques `shouldBe`
         [ "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"many_pkey_idx\""
             <> " ON \"many\" (\"id\")"
         , "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"many_unique_1_idx\""
             <> " ON \"many\" (\"name\")"
         , "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"many_unique_2_idx\""
+            <> " ON \"many\" (\"policy\", \"asset_name\")"
+        ]
+
+  describe "tableIndexStatements NonConcurrent" $
+    it "drops the CONCURRENTLY keyword across every emission path" $
+      tableIndexStatements NonConcurrent pkAndUniques `shouldBe`
+        [ "CREATE UNIQUE INDEX IF NOT EXISTS \"many_pkey_idx\""
+            <> " ON \"many\" (\"id\")"
+        , "CREATE UNIQUE INDEX IF NOT EXISTS \"many_unique_1_idx\""
+            <> " ON \"many\" (\"name\")"
+        , "CREATE UNIQUE INDEX IF NOT EXISTS \"many_unique_2_idx\""
             <> " ON \"many\" (\"policy\", \"asset_name\")"
         ]
 

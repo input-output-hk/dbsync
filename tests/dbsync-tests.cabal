@@ -65,7 +65,7 @@ library dbsync-testlib
     , dbsync-mock
     , directory
     , filepath
-    , hasql                           >= 1.9 && < 2
+    , hasql
     , ouroboros-consensus
     , ouroboros-consensus:cardano
     , ouroboros-network:api
@@ -81,6 +81,7 @@ test-suite dbsync-test
   type:           exitcode-stdio-1.0
   hs-source-dirs: main
   main-is:        Main.hs
+  ghc-options:    -threaded
   other-modules:
     DbSync.AppSpec
     DbSync.CliSpec
@@ -142,7 +143,7 @@ test-suite dbsync-test
     , dbsync-db
     , dbsync-mock
     , dbsync-tests:dbsync-testlib
-    , hasql                           >= 1.9 && < 2
+    , hasql
     , hspec
     , cardano-crypto-class
     , cardano-ledger-binary

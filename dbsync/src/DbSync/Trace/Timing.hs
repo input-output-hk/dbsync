@@ -13,6 +13,7 @@
 module DbSync.Trace.Timing
   ( timedTrace
   , timedTrace_
+  , withHeartbeat
 
     -- * Formatting helpers
   , fmtDuration
@@ -27,6 +28,34 @@ import Data.Time.Clock (diffUTCTime, getCurrentTime)
 import Text.Printf (printf)
 
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
+
+-- | Run an action while a sidecar thread emits a heartbeat trace on
+-- the supplied component every @intervalSeconds@ until the action
+-- returns. Each heartbeat appends the elapsed wall-clock so a stalled
+-- operation reads as a stalled timer.
+--
+-- Use for opaque long-running calls with no internal progress hook
+-- — e.g. the boot-time LSM snapshot load or any DDL that may take
+-- minutes on a mainnet-shaped DB. The heartbeat runs at 'Info' so
+-- it's visible at the default log level.
+withHeartbeat
+  :: AppTracer
+  -> Text   -- ^ Component label (the @[Info] <Component>:@ tag)
+  -> Text   -- ^ Message prefix; the elapsed-time suffix is appended
+  -> Int    -- ^ Seconds between heartbeats
+  -> IO a
+  -> IO a
+withHeartbeat tracer component prefix intervalSeconds action = do
+  start <- getCurrentTime
+  withAsync (heartbeat start) $ \_ -> action
+  where
+    heartbeat start = forever $ do
+      threadDelay (intervalSeconds * 1_000_000)
+      now <- getCurrentTime
+      traceWith tracer $ LogMsg Info component
+        ( prefix <> " (" <> fmtDuration (realToFrac (diffUTCTime now start))
+            <> " elapsed)"
+        ) Nothing
 
 -- | Run an action returning a row count; emit @"<label>: starting"@
 -- before and @"<label>: <N> rows in <T>"@ after.

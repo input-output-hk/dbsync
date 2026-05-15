@@ -91,12 +91,14 @@ import DbSync.Extractor.UTxO (utxoExtractor)
 import DbSync.Id.DedupMap (newMaps)
 import DbSync.Ingest.Pipeline (processBlock)
 import qualified DbSync.Phase.PreparingForChainTip as Prep
+import DbSync.Phase.PreparingForChainTip.Tuning (defaultPrepTuning)
 import DbSync.Resolver.AddressBuffer (newAddressBufferRef)
 import DbSync.Resolver.Ingest (mkIngestResolver)
 import DbSync.Test.Database
   ( queryTestDb
   , testConnBs
   , testConnStr
+  , testHasqlSettings
   )
 import DbSync.Test.Fixtures (byronBlock, producerBlock, spendingBlock)
 import DbSync.Test.Hasql (withTestConnection)
@@ -180,7 +182,8 @@ runPipelineThenPrepare blocks = do
   for_ blocks $ \blk -> runReaderT (processBlock blk) env
   cwCommit cw
   closeCopyWriter cw
-  withTestConnection $ \conn -> Prep.run mkNullTracer conn tables
+  withTestConnection $ \conn ->
+    Prep.run mkNullTracer conn testHasqlSettings defaultPrepTuning tables
 
 -- ---------------------------------------------------------------------------
 -- * Setup / teardown

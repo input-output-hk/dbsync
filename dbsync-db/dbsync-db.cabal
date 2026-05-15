@@ -116,7 +116,7 @@ library
 
     -- Database (control-plane queries via hasql; the COPY-streaming
     -- path lives in `dbsync` and uses postgresql-libpq directly).
-    , hasql                 >= 1.9 && < 2
+    , hasql
 
     -- System
     , process

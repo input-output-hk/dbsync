@@ -78,7 +78,7 @@ data AdaPots = AdaPots
 --
 -- UNLOGGED during 'IngestChainHistory' (matches the rest of the
 -- extractor tables). The PK and FK to @block@ are added later in
--- 'PreparingForChainTip' alongside indexes.
+-- 'PreparingForVolatileTail' alongside indexes.
 adaPotsTableDef :: TableDef
 adaPotsTableDef = TableDef
   { tdName    = "ada_pots"

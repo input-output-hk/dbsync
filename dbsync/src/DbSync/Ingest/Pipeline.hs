@@ -24,7 +24,6 @@ import DbSync.Extractor
   , ExtractorDef (..)
   , HasExtractors (..)
   , HasLedgerData (..)
-  , HasSyncPhase (..)
   , TxContext (..)
   )
 import DbSync.Extractor.Core (mkSlotLeader)
@@ -34,7 +33,8 @@ import DbSync.Extractor.SharedDedup
   )
 import DbSync.Extractor.UTxO (extractStakeCred)
 import DbSync.Db.Schema.Ids (PoolHashId, StakeAddressId)
-import DbSync.Phase (SyncPhase)
+import DbSync.Db.Phase (SyncPhase)
+import DbSync.Phase.Ref (HasSyncPhase (..))
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
 import DbSync.Writer (HasWriter (..), Writer)
 
@@ -73,9 +73,9 @@ processBlock block = do
   writer     <- asks getWriter
   extractors <- asks getExtractors
   network    <- asks getNetwork
-  phase      <- asks getSyncPhase
   env        <- ask
   liftIO $ do
+    phase      <- getSyncPhase env
     ledgerData <- getLedgerData env block
     runProcessBlock resolver writer extractors network phase ledgerData block
 

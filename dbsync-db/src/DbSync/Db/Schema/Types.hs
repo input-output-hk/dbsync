@@ -76,11 +76,11 @@ data ForeignKey = ForeignKey
 -- The optional-shaped fields — 'tdPrimaryKey', 'tdChecks',
 -- 'tdColumnDefaults', 'tdUniqueConstraints', 'tdGeneratedColumns' —
 -- are empty for the extractor data tables (which are UNLOGGED,
--- constraint-free, and get indexes only in 'PreparingForChainTip').
+-- constraint-free, and get indexes only in 'PreparingForVolatileTail').
 -- They exist for the small number of tables that need
 -- LOGGED-from-day-one semantics with constraints — currently
 -- @dbsync_sync_state@ — and to carry per-table metadata that is
--- consumed later (unique constraints in 'PreparingForChainTip',
+-- consumed later (unique constraints in 'PreparingForVolatileTail',
 -- generated-column expressions in DDL emission).
 data TableDef = TableDef
   { tdName              :: !Text
@@ -92,7 +92,7 @@ data TableDef = TableDef
   , tdPrimaryKey        :: !(Maybe [Text])
       -- ^ Optional primary key. 'Just cols' emits @PRIMARY KEY (col1, …)@
       -- as a table-level constraint. 'Nothing' for extractor tables
-      -- (PK added later in 'PreparingForChainTip').
+      -- (PK added later in 'PreparingForVolatileTail').
   , tdChecks            :: ![Text]
       -- ^ Zero or more table-level @CHECK@ constraint expressions,
       -- each emitted verbatim as @CHECK (expr)@.
@@ -105,7 +105,7 @@ data TableDef = TableDef
       -- ^ Table-level @UNIQUE (col1, …)@ constraints, each a
       -- non-empty list of column names. Not emitted at
       -- @CREATE TABLE@ time during 'IngestChainHistory'; consumed by
-      -- 'PreparingForChainTip' indexing.
+      -- 'PreparingForVolatileTail' indexing.
   , tdGeneratedColumns  :: ![(Text, Text)]
       -- ^ Per-column @GENERATED ALWAYS AS (expr) STORED@ definitions,
       -- keyed by column name. Listed columns are excluded from the

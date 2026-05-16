@@ -104,7 +104,7 @@ drainCompletedEpochs ref completedThrough =
   atomicModifyIORef' ref $ partitionCompleted completedThrough
 
 -- | Atomically take every entry, regardless of epoch. Used at the
--- 'IngestChainHistory' → 'PreparingForChainTip' handoff to flush
+-- 'IngestChainHistory' → 'PreparingForVolatileTail' handoff to flush
 -- the final in-progress epoch.
 takeAllEpochs :: EpochParamsRef -> IO (Map EpochNo EpochParams)
 takeAllEpochs ref = atomicModifyIORef' ref $ \m -> (Map.empty, m)

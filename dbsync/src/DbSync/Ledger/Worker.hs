@@ -4,30 +4,26 @@
 
 {- |
 Module      : DbSync.Ledger.Worker
-Description : Background thread that drains the ledger queue and applies blocks.
+Description : Background thread that drains the ledger queue.
 
-The 'IngestChainHistory' phase has two parallel block consumers:
+Reads 'ChainSyncMsg' values off 'leLedgerQueue':
 
-  * The /main pipeline/ (parser → extractors → COPY) — consumes
-    @ieBlockQueue@.
-  * The /ledger worker/ (this module) — consumes 'leLedgerQueue',
-    applies each block to the LSM-backed ledger via
-    'applyBlockAndSnapshot', writes the latest 'ApplyResult' into
-    @leLatestApplyResult@, and signals epoch boundaries via
-    'leEpochReady'.
-
-The two consumers are intentionally not lock-stepped: the worker can
-fall a few blocks behind without back-pressuring the main pipeline,
-and the main pipeline does not block on the worker's progress until
-the Ingest→Follow transition (Phase 7).
+  * 'MsgForward' — apply the block via 'applyBlockAndSnapshot', write
+    the latest 'ApplyResult' into @leLatestApplyResult@, and signal
+    epoch boundaries via 'leEpochReady'.
+  * 'MsgRollback' — call 'loadLedgerAtPoint' to walk the in-memory
+    buffer back to the target. Rollbacks deeper than the buffer
+    (~100 blocks) panic with an operator-actionable message — the
+    recovery path is to restart dbsync so the disk snapshot can be
+    reloaded at the rollback point.
 
 == Hook-based factoring
 
 'runLedgerWorkerWith' separates the queue-draining loop from the
-LSM-backed apply call. The production entry point
-'runLedgerWorker' supplies the real hooks; tests can supply a fake
-@whApplyAndSnapshot@ to exercise the coordination primitives without
-needing an LSM session.
+LSM-backed apply call. Tests use it directly with stub hooks to
+exercise the coordination primitives without an LSM session.
+Production goes through 'runLedgerWorker', which dispatches forward
+and rollback messages around 'realWorkerHooks'.
 -}
 module DbSync.Ledger.Worker
   ( -- * Entry points
@@ -37,6 +33,7 @@ module DbSync.Ledger.Worker
     -- * Test hooks
   , WorkerHooks (..)
   , realWorkerHooks
+  , chainSyncDispatchLoop
   ) where
 
 import Cardano.Prelude
@@ -45,16 +42,23 @@ import qualified Control.Concurrent.Class.MonadSTM.Strict as Strict
 import Control.Concurrent.STM (TBQueue, readTBQueue)
 import qualified Data.Strict.Maybe as SMaybe
 
-import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
+import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..), WithOrigin (..))
 import Control.Tracer (traceWith)
 import Ouroboros.Consensus.Block (blockSlot)
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
 import Ouroboros.Consensus.Shelley.HFEras ()                  -- per-era HFC instances
 import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol () -- LedgerSupportsProtocol orphans
+import Ouroboros.Network.Block (pointSlot)
 
 import DbSync.AppM (LedgerM, runAppM)
+import DbSync.Block.Types (CardanoPoint)
 import qualified DbSync.Era.Shelley.Generic.EpochUpdate as Generic
-import DbSync.Ledger.State (applyBlockAndSnapshot, getTopLevelConfig, readCurrentStateUnsafe)
+import DbSync.Ledger.State
+  ( applyBlockAndSnapshot
+  , getTopLevelConfig
+  , loadLedgerAtPoint
+  , readCurrentStateUnsafe
+  )
 import DbSync.Ledger.Types (ApplyResult (..), LedgerEnv (..))
 import DbSync.Node.ChainSyncMsg (ChainSyncMsg (..))
 import DbSync.StateQuery
@@ -64,19 +68,19 @@ import DbSync.StateQuery
   , seedInterpreterFromLedgerState
   )
 import DbSync.StateQuery.Types (sdSlotNo)
-import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
+import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..), logThreadExit)
 import DbSync.Trace.Watchdog (Watchdog, bumpWorker, setWorkerNote)
 
 -- ---------------------------------------------------------------------------
 -- * Hooks
 -- ---------------------------------------------------------------------------
 
--- | The two operations the worker performs per block, factored out
--- so tests can stub them. In production these resolve to
--- 'getSlotDetails' and 'applyBlockAndSnapshot' respectively.
+-- | The per-block operations the worker performs, factored out so
+-- tests can stub them without an LSM session. The production loop
+-- ('runLedgerWorker') wraps these in a 'ChainSyncMsg' dispatcher
+-- that also handles 'MsgRollback'.
 --
--- Polymorphic in @blk@ so test stubs can use simpler types
--- ('()' is convenient).
+-- Polymorphic in @blk@ so test stubs can use simpler types.
 data WorkerHooks blk = WorkerHooks
   { whGetSlotDetails   :: !(blk -> IO SlotDetails)
   , whApplyAndSnapshot :: !(blk -> SlotDetails -> IO (ApplyResult, Bool))
@@ -86,10 +90,10 @@ data WorkerHooks blk = WorkerHooks
 -- 'StateQueryVar', a 'Watchdog' handle, and the optional resume
 -- replay boundary.
 --
--- The 'consistent' flag passed to 'applyBlockAndSnapshot' is
--- conservatively 'False' during Ingest (we treat the chain tip as
--- far away); Phase 7 will set it 'True' once the receiver knows
--- we're inside @k=2160@ of the node tip.
+-- The /consistent with tip/ flag passed to 'applyBlockAndSnapshot'
+-- is read from 'leConsistentWithTip' on every apply, so the
+-- orchestrator can flip the snapshot cadence (Ingest = every 10
+-- epochs, Follow = every epoch) without restarting the worker.
 --
 -- The 'Watchdog' note is stamped around each hook call so a hang
 -- inside @applyBlockAndSnapshot@ or @seedInterpreterFromLedgerState@
@@ -107,7 +111,8 @@ realWorkerHooks env sqv wd mReplayBoundary =
         getSlotDetailsIO (leTracer env) sqv (leSystemStart env) (blockSlot blk)
     , whApplyAndSnapshot = \blk sd -> do
         setWorkerNote wd "worker: applyBlockAndSnapshot"
-        result <- runAppM env (applyBlockAndSnapshot blk sd False mReplayBoundary)
+        consistent <- Strict.readTVarIO (leConsistentWithTip env)
+        result <- runAppM env (applyBlockAndSnapshot blk sd consistent mReplayBoundary)
         -- Re-seed the cached HFC interpreter from the post-apply state so
         -- the next getSlotDetailsIO stays inside the summary's horizon.
         setWorkerNote wd "worker: readCurrentStateUnsafe (re-seed)"
@@ -122,17 +127,14 @@ realWorkerHooks env sqv wd mReplayBoundary =
 -- * Entry points
 -- ---------------------------------------------------------------------------
 
--- | Production worker entry point — drains 'leLedgerQueue', applies
--- each block to the LSM-backed ledger, and signals 'leEpochReady'
--- on every epoch boundary.
+-- | Production worker entry point. Drains 'leLedgerQueue' and
+-- dispatches each message: 'MsgForward' goes through the block
+-- hooks; 'MsgRollback' walks the in-memory buffer via
+-- 'loadLedgerAtPoint'.
 --
--- Runs in 'LedgerM' so the 'LedgerEnv' comes from the 'MonadReader'
--- context. 'StateQueryVar' and 'Watchdog' live on 'IngestEnv'
--- rather than 'LedgerEnv', so the caller pairs them up and invokes
--- @runAppM env (runLedgerWorker mReplayBoundary sqv wd)@. The
--- replay boundary is forwarded to 'applyBlockAndSnapshot'; the
--- watchdog handle is used by the hooks to publish per-block
--- progress and free-text call-site notes.
+-- 'StateQueryVar' and 'Watchdog' live on 'IngestEnv' rather than
+-- 'LedgerEnv', so the caller pairs them up and invokes
+-- @runAppM env (runLedgerWorker mReplayBoundary sqv wd)@.
 runLedgerWorker
   :: Maybe SlotNo
   -> StateQueryVar
@@ -140,49 +142,102 @@ runLedgerWorker
   -> LedgerM ()
 runLedgerWorker mReplayBoundary sqv wd = do
   env <- ask
-  liftIO $ do
-    traceWith (leTracer env) $ LogMsg Info "LedgerWorker"
-      "starting (draining ledger queue)" Nothing
-    runLedgerWorkerWith
-      (Just (leTracer env))
-      (liftHooksForChainSync (realWorkerHooks env sqv wd mReplayBoundary))
-      (Just wd)
-      (leLedgerQueue env)
-      (leEpochReady env)
-      (leEpochWait env)
+  liftIO $ chainSyncWorkerLoop env (realWorkerHooks env sqv wd mReplayBoundary) wd
 
--- | Adapt block-level hooks to the chainsync message queue.
+-- | Production loop: build per-message handlers from the LSM-backed
+-- 'LedgerEnv' and the block 'WorkerHooks', then drain the queue via
+-- the generic 'chainSyncDispatchLoop'.
+chainSyncWorkerLoop
+  :: LedgerEnv
+  -> WorkerHooks (CardanoBlock StandardCrypto)
+  -> Watchdog
+  -> IO ()
+chainSyncWorkerLoop env hooks wd = do
+  traceWith (leTracer env) $ LogMsg Info "LedgerWorker"
+    "starting (draining ledger queue)" Nothing
+  chainSyncDispatchLoop
+    (Just (leTracer env))
+    (applyForward env hooks wd)
+    (handleRollback env wd)
+    (Just wd)
+    (leLedgerQueue env)
+
+-- | Production forward handler: apply the block, bump the watchdog,
+-- signal epoch boundaries, and clear any pending epoch-wait flag.
+applyForward
+  :: LedgerEnv
+  -> WorkerHooks (CardanoBlock StandardCrypto)
+  -> Watchdog
+  -> CardanoBlock StandardCrypto
+  -> IO ()
+applyForward env hooks wd blk = do
+  sd <- whGetSlotDetails hooks blk
+  (result, _tookSnap) <- whApplyAndSnapshot hooks blk sd
+  bumpWorker wd (sdSlotNo sd)
+  case apNewEpoch result of
+    SMaybe.Just ne -> do
+      _ <- atomically $ Strict.tryPutTMVar (leEpochReady env) (Generic.neEpoch ne)
+      pure ()
+    SMaybe.Nothing -> pure ()
+  _ <- atomically $ Strict.tryReadTMVar (leEpochWait env)
+  pure ()
+
+-- | Production rollback handler: walk the in-memory buffer back to
+-- the target. Panics if the target is deeper than the buffer — the
+-- recovery path is to restart dbsync so the disk snapshot can be
+-- reloaded at the rollback point.
+handleRollback :: LedgerEnv -> Watchdog -> CardanoPoint -> IO ()
+handleRollback env wd p = do
+  setWorkerNote wd "worker: rollback (loadLedgerAtPoint)"
+  result <- runAppM env (loadLedgerAtPoint p)
+  case result of
+    Right _ ->
+      traceWith (leTracer env) $ LogMsg Info "LedgerWorker"
+        ("rolled back to " <> show p) Nothing
+    Left _ ->
+      panic $
+        "LedgerWorker: rollback target "
+          <> show p
+          <> " is beyond the in-memory buffer (~100 blocks). "
+          <> "Restart dbsync to recover from a disk snapshot."
+  bumpWorker wd (pointSlotNo p)
+
+-- | Generic ChainSyncMsg dispatch loop. Production wires real
+-- handlers ('applyForward', 'handleRollback') around this; tests
+-- pass stubs to exercise the dispatch without an LSM session.
 --
--- Forward blocks delegate to the underlying hooks unchanged. Rollback
--- markers panic — the worker keeps an LSM-backed ledger that does not
--- yet support an in-RAM rollback path. The Ingest phase guarantees we
--- never see one (the consumer exits at the @chain_tip − k@ boundary
--- before any volatile block reaches the worker); Follow phases that
--- need ledger-aware rollback will replace this panic with a call into
--- 'loadLedgerAtPoint'.
-liftHooksForChainSync
-  :: WorkerHooks (CardanoBlock StandardCrypto)
-  -> WorkerHooks ChainSyncMsg
-liftHooksForChainSync rawHooks =
-  WorkerHooks
-    { whGetSlotDetails = \case
-        MsgForward blk -> whGetSlotDetails rawHooks blk
-        MsgRollback p  ->
-          panic $
-            "LedgerWorker: in-RAM rollback at " <> show p
-              <> " not implemented"
-    , whApplyAndSnapshot = \msg sd -> case msg of
-        MsgForward blk -> whApplyAndSnapshot rawHooks blk sd
-        MsgRollback p  ->
-          panic $
-            "LedgerWorker: in-RAM rollback at " <> show p
-              <> " not implemented"
-    }
+-- Crashes are logged at 'Error' severity (when a tracer is supplied)
+-- and re-thrown so the supervising 'Async' propagates the failure.
+chainSyncDispatchLoop
+  :: Maybe AppTracer
+  -> (CardanoBlock StandardCrypto -> IO ())
+  -> (CardanoPoint -> IO ())
+  -> Maybe Watchdog
+  -> TBQueue ChainSyncMsg
+  -> IO ()
+chainSyncDispatchLoop mTracer forwardH rollbackH mWatchdog queue =
+  loop `catch` \(e :: SomeException) -> do
+    for_ mTracer (logThreadExit "LedgerWorker" e)
+    throwIO e
+  where
+    loop = forever $ do
+      for_ mWatchdog $ \wd -> setWorkerNote wd "worker: readTBQueue (waiting for message)"
+      msg <- atomically $ readTBQueue queue
+      case msg of
+        MsgForward  blk -> forwardH blk
+        MsgRollback p   -> rollbackH p
 
--- | Generic worker loop, parameterised by the per-block hooks. The
--- production path uses 'realWorkerHooks'; tests inject a fake hook
--- to verify the coordination shape without spinning up an LSM
--- session.
+-- | Slot of a 'CardanoPoint' for the watchdog bump. 'Origin'
+-- (genesis) bumps with slot 0 — the watchdog only tracks monotonic
+-- progress, not absolute values.
+pointSlotNo :: CardanoPoint -> SlotNo
+pointSlotNo p = case pointSlot p of
+  Origin -> SlotNo 0
+  At s   -> s
+
+-- | Generic worker loop, parameterised by the per-block hooks. Used
+-- by tests to inject a fake apply hook and exercise the coordination
+-- primitives without an LSM session.
 --
 -- Any exception thrown by the loop is logged (when a tracer is
 -- supplied) at 'Error' severity and re-thrown so the supervising
@@ -202,9 +257,7 @@ runLedgerWorkerWith
   -> IO ()
 runLedgerWorkerWith mTracer hooks mWatchdog queue epochReady epochWait =
   loop `catch` \(e :: SomeException) -> do
-    for_ mTracer $ \tracer ->
-      traceWith tracer $ LogMsg Error "LedgerWorker"
-        ("crashed: " <> show e) Nothing
+    for_ mTracer (logThreadExit "LedgerWorker" e)
     throwIO e
   where
     loop = forever $ do
@@ -225,8 +278,7 @@ runLedgerWorkerWith mTracer hooks mWatchdog queue epochReady epochWait =
           pure ()
         SMaybe.Nothing -> pure ()
 
-      -- 'epochWait' is the Phase 7 transition signal — non-blocking
-      -- here. When set, Phase 7 logic will arrange the actual handoff.
+      -- 'epochWait' is the transition signal — non-blocking here.
       _ <- atomically $ Strict.tryReadTMVar epochWait
       pure ()
 {-# SCC runLedgerWorkerWith #-}

@@ -32,10 +32,12 @@ import DbSync.Config.Types
   , SyncOptions (..)
   , SyncConfig (..)
   )
+import DbSync.Db.Phase (SyncPhase (..))
 import DbSync.Env (CoreEnv (..))
 import DbSync.Error (throwInternal)
 import DbSync.Metrics (Metrics (..))
 import DbSync.Extractor (ExtractorDef (..))
+import DbSync.Phase.Ref (newSyncPhaseRef)
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Extractor.UTxO (utxoExtractor)
 import DbSync.Extractor.Metadata (metadataExtractor)
@@ -53,12 +55,19 @@ import DbSync.AppM (CoreM)
 -- ---------------------------------------------------------------------------
 
 -- | Build the shared core environment from parsed configs.
+--
+-- The phase ref is seeded with 'IngestChainHistory'; the orchestrator
+-- in 'DbSync.App.Run' overwrites it immediately after the boot
+-- decision so the displayed value is correct from the first
+-- subsystem log onwards.
+--
 -- Throws via 'throwInternal' if 'buildExtractors' rejects the profile.
 buildCoreEnv :: AppTracer -> SyncConfig -> NodeConfig -> Network -> IO CoreEnv
 buildCoreEnv tracer syncCfg nodeCfg network = do
   extractors <- case buildExtractors (scOptions syncCfg) of
     Left err  -> throwInternal err
     Right xs  -> pure xs
+  phaseRef <- newSyncPhaseRef IngestChainHistory
   pure CoreEnv
     { ceTracer      = tracer
     , ceMinSeverity = severityFromText (lgLevel (scLogging syncCfg))
@@ -67,6 +76,7 @@ buildCoreEnv tracer syncCfg nodeCfg network = do
     , ceNodeConfig  = nodeCfg
     , ceExtractors  = extractors
     , ceNetwork     = network
+    , ceSyncPhase   = phaseRef
     }
 
 -- | Build the list of enabled extractors from config, validate their

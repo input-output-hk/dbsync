@@ -313,6 +313,7 @@ mkHasLedgerEnv
     epochReady      <- newEmptyTMVarIO
     epochWait       <- newEmptyTMVarIO
     snapshotQueue   <- newTBQueueIO snapshotQueueBound
+    consistentVar   <- newTVarIO False
 
     -- One snapshot, two directories — both halves required, neither a duplicate:
     --   <dir>/snapshot-headers/<slot>/  small (KB–MB): ExtLedgerState
@@ -406,6 +407,7 @@ mkHasLedgerEnv
           , leLatestApplyResult    = latestApplyVar
           , leDepositAccumulator   = depositAccumRef
           , leControlConnection    = ctrlConn
+          , leConsistentWithTip    = consistentVar
           }
   where
     -- Shallow — the worker is a single consumer and we want strong

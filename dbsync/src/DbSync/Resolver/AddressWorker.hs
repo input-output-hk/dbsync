@@ -15,7 +15,7 @@
 --      behind.
 --   3. 'awaitDrained' blocks until every queued job has been
 --      processed — used at the 'IngestChainHistory' \/
---      'PreparingForChainTip' transition.
+--      'PreparingForVolatileTail' transition.
 --   4. 'closeAddressResolver' cancels the worker thread and
 --      releases the PG connection.
 module DbSync.Resolver.AddressWorker
@@ -80,7 +80,7 @@ import DbSync.Error (throwDb)
 import DbSync.Resolver.AddressBuffer
   ( EpochAddressBuffer (..)
   )
-import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
+import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..), logThreadExit)
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -103,7 +103,7 @@ data AddressResolver = AddressResolver
   , arIdCounter :: !(IORef Int64)
     -- ^ Source of truth for the next @address.id@ to assign during
     -- 'IngestChainHistory'. PG sequences are not created until
-    -- 'PreparingForChainTip' (see 'DbSync.Db.Schema.Init'), so the
+    -- 'PreparingForVolatileTail' (see 'DbSync.Db.Schema.Init'), so the
     -- worker allocates IDs in-process and 'mkBoundarySyncStateRow'
     -- persists the next-to-assign value into 'ssrAddressIdCounter'
     -- so a crash + resume can pick up where the worker left off.
@@ -278,9 +278,7 @@ runAddressResolverWith
   -> IO ()
 runAddressResolverWith mTracer hooks queue inFlight =
   loop `catch` \(e :: SomeException) -> do
-    for_ mTracer $ \tracer ->
-      traceWith tracer $ LogMsg Error "AddressResolver"
-        ("crashed: " <> show e) Nothing
+    for_ mTracer (logThreadExit "AddressResolver" e)
     throwIO e
   where
     loop = forever $ do

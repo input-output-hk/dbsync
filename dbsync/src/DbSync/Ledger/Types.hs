@@ -235,6 +235,11 @@ data LedgerEnv = LedgerEnv
     -- ^ PG connection used by the snapshot-writer thread to record
     -- successful snapshot completions in
     -- @dbsync_sync_state.last_snapshot_slot@.
+  , leConsistentWithTip    :: !(StrictTVar IO Bool)
+    -- ^ 'True' once @FollowingChainTip@ is active. Read by the
+    -- worker on every apply and passed to 'shouldSnapshotAtEpoch';
+    -- 'False' yields the lagging cadence (every 10 epochs), 'True'
+    -- the near-tip cadence (every epoch).
   }
 
 -- | Constructor for 'NoLedgerEnv'. In 'IO' purely to keep the shape

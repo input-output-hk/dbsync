@@ -44,6 +44,7 @@ library
     -- Modules
     DbSync.App
     DbSync.App.Args
+    DbSync.App.Boot
     DbSync.App.Run
     DbSync.AppM
     DbSync.Cli
@@ -59,19 +60,18 @@ library
     DbSync.Trace.Backend
     DbSync.Trace.Timing
     DbSync.Trace.Watchdog
-    DbSync.Phase
-    DbSync.Phase.Boot
+    DbSync.Phase.Ref
     DbSync.Phase.IngestChainHistory
-    DbSync.Phase.PreparingForChainTip
-    DbSync.Phase.PreparingForChainTip.Backfill
-    DbSync.Phase.PreparingForChainTip.Indexes
-    DbSync.Phase.PreparingForChainTip.PreResolveIndexes
-    DbSync.Phase.PreparingForChainTip.Resolve
-    DbSync.Phase.PreparingForChainTip.Sequences
-    DbSync.Phase.PreparingForChainTip.Tuning
+    DbSync.Phase.PreparingForVolatileTail
+    DbSync.Phase.PreparingForVolatileTail.Backfill
+    DbSync.Phase.PreparingForVolatileTail.Indexes
+    DbSync.Phase.PreparingForVolatileTail.PreResolveIndexes
+    DbSync.Phase.PreparingForVolatileTail.Resolve
+    DbSync.Phase.PreparingForVolatileTail.Sequences
+    DbSync.Phase.PreparingForVolatileTail.Tuning
     DbSync.Db.Pool
-    DbSync.Phase.FollowingChainTip
-    DbSync.Phase.FollowingChainTip.Rollback
+    DbSync.Phase.Following
+    DbSync.Phase.Following.Rollback
     DbSync.Block.Receiver
     DbSync.Block.Metadata
     DbSync.Block.Parser

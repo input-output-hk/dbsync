@@ -42,7 +42,7 @@ import DbSync.Extractor
   , TxContext (..)
   )
 import DbSync.Ledger.Types (lookupDepositsMap)
-import DbSync.Phase (SyncPhase (..))
+import DbSync.Db.Phase (isFollowPath)
 import DbSync.Resolver (IdResolver (..))
 import DbSync.Util (coinToInt64)
 import DbSync.Writer (Writer (..))
@@ -97,21 +97,17 @@ processCore resolver writer ctx = do
               }
     writeTx writer (tcTxId tc) tx
 
--- | Pick @tx.fee@ and @tx.deposit@ for one transaction based on
--- whether it succeeded, whether the ledger worker is on, and which
--- lifecycle phase is driving the run. Branches:
+-- | Pick @tx.fee@ and @tx.deposit@ for one transaction.
 --
---   * Phase-2 failure, Follow — inline collateral diff via
---     'resolveInputValues'; @deposit = Just 0@.
---   * Phase-2 failure, Ingest — keep parser's @fee = 0@ sentinel
---     (post-load SQL fills it); @deposit = Just 0@.
---   * Valid + ledger ON, deposit observed — @bcDepositsMap@ value.
---   * Valid + ledger ON, no deposit event — @deposit = Nothing@
---     (plain transfer; matches original behaviour).
---   * Valid + ledger OFF, Follow — inline identity via
---     'resolveInputValues'.
---   * Valid + ledger OFF, Ingest — @deposit = Nothing@ (post-load
---     SQL fills it from the same identity formula).
+-- Dispatch turns on three orthogonal axes:
+--
+--   * Validity — phase-2 failure vs valid contract.
+--   * Write path — Follow (INSERT, can resolve input values inline)
+--     vs Ingest (COPY, post-load SQL fills the columns).
+--   * Ledger worker — ON (deposits observed) vs OFF (identity backfill).
+--
+-- The Follow path is shared by 'FollowingVolatileTail' and
+-- 'FollowingChainTip' via 'isFollowPath'.
 computeTxFinancials
   :: IdResolver IO
   -> BlockContext
@@ -123,31 +119,33 @@ computeTxFinancials resolver ctx gtx
   where
     parserFee = DbLovelace (G.txFee gtx)
 
-    phase2 FollowingChainTip = do
-      collInValues <- resolveInputValues resolver
-        [(G.txInHash i, G.txInIndex i) | i <- G.txCollateralInputs gtx]
-      let collInSum  = sum (map (maybe 0 unDbLovelace) collInValues)
-          collOutSum = maybe 0 G.txOutValue (G.txCollateralOutput gtx)
-      pure (DbLovelace (collInSum - collOutSum), Just 0)
-    phase2 _ = pure (parserFee, Just 0)
+    phase2 p
+      | isFollowPath p = do
+          collInValues <- resolveInputValues resolver
+            [(G.txInHash i, G.txInIndex i) | i <- G.txCollateralInputs gtx]
+          let collInSum  = sum (map (maybe 0 unDbLovelace) collInValues)
+              collOutSum = maybe 0 G.txOutValue (G.txCollateralOutput gtx)
+          pure (DbLovelace (collInSum - collOutSum), Just 0)
+      | otherwise = pure (parserFee, Just 0)
 
     valid _ bld
       | bldLedgerEnabled bld =
           let mDep = lookupDepositsMap (G.txHash gtx) (bldDepositsMap bld)
            in pure (parserFee, fmap coinToInt64 mDep)
-    valid FollowingChainTip _ = do
-      inValues <- resolveInputValues resolver
-        [(G.txInHash i, G.txInIndex i) | i <- G.txInputs gtx]
-      let inSum    = sum (map (maybe 0 unDbLovelace) inValues) :: Word64
-          wdSum    = sum (map G.txwAmount (G.txWithdrawals gtx)) :: Word64
-          outSum   = G.txOutSum gtx
-          fee      = G.txFee gtx
-          donation = G.txTreasuryDonation gtx
-          dep      = fromIntegral inSum + fromIntegral wdSum
-                   - fromIntegral outSum - fromIntegral fee
-                   - fromIntegral donation :: Int64
-      pure (parserFee, Just dep)
-    valid _ _ = pure (parserFee, Nothing)
+    valid p _
+      | isFollowPath p = do
+          inValues <- resolveInputValues resolver
+            [(G.txInHash i, G.txInIndex i) | i <- G.txInputs gtx]
+          let inSum    = sum (map (maybe 0 unDbLovelace) inValues) :: Word64
+              wdSum    = sum (map G.txwAmount (G.txWithdrawals gtx)) :: Word64
+              outSum   = G.txOutSum gtx
+              fee      = G.txFee gtx
+              donation = G.txTreasuryDonation gtx
+              dep      = fromIntegral inSum + fromIntegral wdSum
+                       - fromIntegral outSum - fromIntegral fee
+                       - fromIntegral donation :: Int64
+          pure (parserFee, Just dep)
+      | otherwise = pure (parserFee, Nothing)
 
 -- ---------------------------------------------------------------------------
 -- * Record builders (pure, shared across phases)

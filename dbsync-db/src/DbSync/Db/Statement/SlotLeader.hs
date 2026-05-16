@@ -2,7 +2,7 @@
 
 -- | Hasql 'Statement' bindings for the @slot_leader@ table.
 --
--- Used during 'FollowingChainTip' and 'PreparingForChainTip'; the
+-- Used during 'FollowingChainTip' and 'PreparingForVolatileTail'; the
 -- 'IngestChainHistory' phase writes via COPY instead.
 module DbSync.Db.Statement.SlotLeader
   ( -- * Inserts

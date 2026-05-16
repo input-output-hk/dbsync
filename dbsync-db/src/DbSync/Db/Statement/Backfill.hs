@@ -147,7 +147,7 @@ backfillPhaseTwoDepositSql = T.unwords
 -- target set is the whole table. Bulk-scan locality beats per-row
 -- random I/O at that scale. The planner needs accurate statistics
 -- for @tx@ / @tx_in@ / @tx_out@ / @withdrawal@ to choose Hash Join
--- here; 'Phase.PreparingForChainTip.run' runs an explicit ANALYZE
+-- here; 'Phase.PreparingForVolatileTail.run' runs an explicit ANALYZE
 -- between resolve and backfill so the stats reflect the post-resolve
 -- cardinalities rather than what autovacuum last saw mid-ingest.
 backfillValidContractDepositStmt :: Stmt.Statement () Int64

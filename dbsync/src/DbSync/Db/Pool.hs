@@ -3,7 +3,7 @@
 -- | Bracketed 'Hasql.Pool.Pool' opener for the parallel-capable Prep
 -- steps.
 --
--- Steps in 'DbSync.Phase.PreparingForChainTip.run' that touch
+-- Steps in 'DbSync.Phase.PreparingForVolatileTail.run' that touch
 -- disjoint tables (the @ALTER … SET LOGGED@ flip, the
 -- non-concurrent index build) parallelise cleanly across separate
 -- backends. The single-statement steps stay on the dedicated
@@ -27,7 +27,7 @@ import qualified Hasql.Pool as Pool
 import qualified Hasql.Pool.Config as PoolConfig
 import qualified Hasql.Session as Sess
 
-import DbSync.Phase.PreparingForChainTip.Tuning
+import DbSync.Phase.PreparingForVolatileTail.Tuning
   ( PrepTuning
   , prepSessionGUCsSession
   )

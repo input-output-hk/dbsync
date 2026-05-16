@@ -4,7 +4,7 @@
 --
 -- Generates @CREATE TABLE@ statements from 'TableDef' definitions.
 -- During 'IngestChainHistory', tables are created as @UNLOGGED@ with no
--- indexes or constraints; during 'PreparingForChainTip' they are
+-- indexes or constraints; during 'PreparingForVolatileTail' they are
 -- converted to @LOGGED@ and indexes are added.
 module DbSync.Db.Schema.Generate
   ( generateCreateTable
@@ -51,7 +51,7 @@ import DbSync.Db.Sql (quoteIdent)
 -- @
 --
 -- Indexes and foreign keys are never emitted here — they are added
--- during 'PreparingForChainTip'.
+-- during 'PreparingForVolatileTail'.
 generateCreateTable :: TableDef -> Text
 generateCreateTable td =
   T.unlines $

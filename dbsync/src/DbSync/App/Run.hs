@@ -17,7 +17,9 @@ module DbSync.App.Run
 
 import Cardano.Prelude
 
+import qualified Control.Concurrent.Class.MonadSTM.Strict as Strict
 import Control.Concurrent.STM (newTBQueueIO, newTVarIO)
+import qualified Control.Concurrent.STM as STM
 import Control.Tracer (traceWith)
 import Data.IORef (newIORef)
 import qualified Data.Text as T
@@ -26,7 +28,7 @@ import qualified Hasql.Connection.Settings as HasqlSettings
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 
-import Cardano.Network.NodeToClient (withIOManager)
+import Cardano.Network.NodeToClient (IOManager, withIOManager)
 import Cardano.Slotting.Slot (SlotNo (..))
 import Ouroboros.Consensus.BlockchainTime.WallClock.Types (SystemStart (..))
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
@@ -40,7 +42,7 @@ import DbSync.App.Args (AppArgs (..))
 import DbSync.AppM (runAppM)
 import DbSync.Block.Types (CardanoPoint)
 import DbSync.Checkpoint.Manager (mkResumeExtractState)
-import DbSync.Checkpoint.Resume (deleteRowsPastSlot)
+import DbSync.Checkpoint.Resume (CleanupMode (..), deleteRowsPastSlot)
 import DbSync.Checkpoint.SyncState
   ( ControlConnection (..)
   , SyncStateRow (..)
@@ -73,7 +75,7 @@ import DbSync.Db.Schema.Init
   , renderSchemaMismatch
   , showWalLevel
   )
-import DbSync.Env (CoreEnv (..), FollowEnv (..), IngestEnv (..))
+import DbSync.Env (CoreEnv (..), FollowEnv (..), IngestEnv (..), mkFollowEnvFromIngest)
 import DbSync.Extractor (ExtractState, ExtractorDef (..), freshExtractState)
 import DbSync.Id.DedupMap (newMaps)
 import DbSync.Ingest.Consumer (runConsumer)
@@ -89,17 +91,21 @@ import DbSync.Ledger.State
 import DbSync.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..), mkNoLedgerEnv)
 import DbSync.Ledger.Worker (runLedgerWorker)
 import DbSync.Node.Connection (IntersectionRequirement (..), connectToNode, getNetworkMagic)
-import qualified DbSync.Phase.FollowingChainTip as Follow
-import DbSync.Phase.Boot
+import qualified DbSync.Phase.Following as Follow
+import DbSync.App.Boot
   ( BootDecision (..)
   , ResumeContext (..)
   , ResumeIntersection (..)
+  , candidateSnapshotSlots
   , decideBoot
   , mkCardanoPoint
   , renderBootError
+  , resumeContextFrom
   )
-import qualified DbSync.Phase.PreparingForChainTip as Prep
-import DbSync.Phase.PreparingForChainTip.Tuning (defaultPrepTuning)
+import DbSync.Db.Phase (SyncPhase (..))
+import DbSync.Phase.Ref (setSyncPhase)
+import qualified DbSync.Phase.PreparingForVolatileTail as Prep
+import DbSync.Phase.PreparingForVolatileTail.Tuning (defaultPrepTuning)
 import DbSync.Resolver.AddressBuffer (newAddressBufferRef)
 import DbSync.Resolver.AddressWorker (awaitDrained, closeAddressResolver, mkAddressResolver)
 import DbSync.Resolver.Follow (mkFollowResolver)
@@ -107,18 +113,22 @@ import DbSync.Resolver.Ingest (mkIngestResolver)
 import DbSync.StateQuery (StateQueryVar, newStateQueryVar, seedInterpreterFromLedgerState)
 import DbSync.Trace.Timing (withHeartbeat)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
-import DbSync.Trace.Watchdog (newWatchdog, runWatchdog)
+import DbSync.Trace.Watchdog (Watchdog, newWatchdog, runWatchdog)
 import DbSync.Writer.CopyAdapter (mkCopyWriterAdapter)
 import DbSync.Writer.InsertAdapter (mkInsertWriter)
 
 -- | Run the full sync lifecycle. Returns when:
 --
---   * 'IngestChainHistory' exits cleanly at the rollback boundary
---     and 'PreparingForChainTip' completes (the natural exit point
---     today; a follow-up will chain straight into Follow); or
---   * 'FollowingChainTip' fast-path returns (only when
---     'aaShutdownSignal' fires for the test harness); or
+--   * 'FollowingChainTip' returns because @aaShutdownSignal@ fired
+--     (test-only path); or
 --   * a linked async crashes, propagating its exception out.
+--
+-- After Ingest exits at the rollback boundary, Prep runs to
+-- completion and 'handoffToFollow' opens a fresh receiver feeding
+-- the existing block queue. The ledger worker and snapshot writer
+-- stay alive across the boundary; the snapshot cadence flips from
+-- /every 10 epochs/ (Ingest) to /every epoch/ (Follow) via the
+-- 'leConsistentWithTip' flag.
 runApp :: AppTracer -> AppArgs -> IO ()
 runApp tracer args = do
   let validProfile = aaProfile args
@@ -196,7 +206,7 @@ runApp tracer args = do
     logInfo "Sync-state seeded"
     -- Fresh sync only: surface a misconfigured wal_level so the
     -- operator can flip it before Ingest starts. wal_level=minimal
-    -- skips WAL on the UNLOGGED→LOGGED flip in PreparingForChainTip
+    -- skips WAL on the UNLOGGED→LOGGED flip in PreparingForVolatileTail
     -- for tables over wal_skip_threshold. Not a blocker — managed
     -- PG operators may not control this GUC.
     walLevel <- showWalLevel connStrTxt
@@ -255,7 +265,12 @@ runApp tracer args = do
           Right d -> pure d
 
   -- 8. Resolve the boot decision.
-  (initialExtractState, dedupMaps, intersectReq, replayBoundary, replayStart, initialAddressId) <-
+  --
+  -- 'BootFollowingFastPath' does its entire run inline and returns
+  -- 'Nothing'; the rest of runApp (which is the Ingest pipeline) then
+  -- short-circuits. The other two branches return 'Just' with the
+  -- initial state the Ingest setup needs.
+  mIngestState <-
     case bootDecision of
       BootFresh -> do
         case hasLedgerEnv of
@@ -264,7 +279,7 @@ runApp tracer args = do
             initLedgerDbFromGenesis lenv
           LedgerDisabled _ -> pure ()
         maps <- newMaps
-        pure (mkInitState, maps, IntersectGenesis, Nothing, Nothing, 1)
+        pure $ Just (mkInitState, maps, IntersectGenesis, Nothing, Nothing, 1)
 
       BootResume rc -> do
         let row = rcSyncState rc
@@ -273,7 +288,7 @@ runApp tracer args = do
             <> show (ssrLastCommittedSlot row)
             <> ", block "
             <> show (ssrLastCommittedBlockNo row)
-        deleted <- deleteRowsPastSlot consumerCtrlConn tableDefs row
+        deleted <- deleteRowsPastSlot IngestResume consumerCtrlConn tableDefs row
         when (deleted > 0) $
           logInfo $
             "Cleaned up " <> show deleted
@@ -314,7 +329,7 @@ runApp tracer args = do
             panic "BootResume (ledger enabled) returned without a chosen snapshot"
 
         ireq <- resolveIntersection logInfo logError consumerCtrlConn rc
-        pure
+        pure $ Just
           ( mkResumeExtractState row
           , maps
           , ireq
@@ -324,116 +339,118 @@ runApp tracer args = do
           )
 
       BootFollowingFastPath rc -> do
-        runFollowFastPath
-          tracer logInfo logError hasqlSettings coreEnv topLevelCfg networkMagic
-          socketPath systemStart stateQueryVar hasLedgerEnv
-          consumerCtrlConn rc mShutdown
-        -- runFollowFastPath either races the shutdown signal and
-        -- returns, or blocks forever. If we get here the signal
-        -- fired or a linked async crashed; either way nothing else
-        -- to do in runApp.
-        exitSuccess
+        setSyncPhase tracer (ceSyncPhase coreEnv) FollowingVolatileTail
+        flipConsistentWithTip hasLedgerEnv
+        watchdog <- newWatchdog (ceMinSeverity coreEnv)
+        withIOManager $ \iomgr ->
+          withLedgerThreads hasLedgerEnv Nothing stateQueryVar watchdog $
+            runFollowFastPath
+              tracer logInfo logError hasqlSettings coreEnv topLevelCfg networkMagic
+              socketPath systemStart stateQueryVar hasLedgerEnv
+              consumerCtrlConn rc mShutdown iomgr watchdog
+        pure Nothing
 
-  -- 9. Build the ingest pipeline state.
-  stRef            <- newIORef initialExtractState
-  copyWriter       <- mkCopyWriter connStr tableDefs
-  blockQueue       <- newTBQueueIO 500
-  receiverStats    <- newReceiverStats
-  watchdog         <- newWatchdog (ceMinSeverity coreEnv)
-  addrBuffer       <- newAddressBufferRef
-  addrResolver     <- mkAddressResolver tracer hasqlSettings initialAddressId
-  latestPointRef   <- newIORef Nothing
-  rollbackBoundary <- newTVarIO Nothing
+  for_ mIngestState $ \(initialExtractState, dedupMaps, intersectReq, replayBoundary, replayStart, initialAddressId) -> do
 
-  let resolver = mkIngestResolver stRef dedupMaps addrBuffer
-      writer   = mkCopyWriterAdapter copyWriter
+    -- 9. Build the ingest pipeline state.
+    stRef            <- newIORef initialExtractState
+    copyWriter       <- mkCopyWriter connStr tableDefs
+    blockQueue       <- newTBQueueIO 500
+    receiverStats    <- newReceiverStats
+    watchdog         <- newWatchdog (ceMinSeverity coreEnv)
+    addrBuffer       <- newAddressBufferRef
+    addrResolver     <- mkAddressResolver tracer hasqlSettings initialAddressId
+    latestPointRef   <- newIORef Nothing
+    rollbackBoundary <- newTVarIO Nothing
 
-  let ingestEnv = IngestEnv
-        { ieCore                    = coreEnv
-        , ieBlockQueue              = blockQueue
-        , ieCopyWriter              = copyWriter
-        , ieDedupMaps               = dedupMaps
-        , ieAddressBuffer           = addrBuffer
-        , ieAddressResolver         = addrResolver
-        , ieHasLedgerEnv            = hasLedgerEnv
-        , ieStateQueryVar           = stateQueryVar
-        , ieSystemStart             = systemStart
-        , ieResolver                = resolver
-        , ieWriter                  = writer
-        , ieExtractState            = stRef
-        , ieReceiverStats           = receiverStats
-        , ieControlConnection       = consumerCtrlConn
-        , ieLastCommittedSlotAtBoot = replayBoundary
-        , ieReplayStartSlot         = replayStart
-        , ieWatchdog                = watchdog
-        , ieLatestReceivedPoint     = latestPointRef
-        , ieRollbackBoundary        = rollbackBoundary
-        }
+    let resolver = mkIngestResolver stRef dedupMaps addrBuffer
+        writer   = mkCopyWriterAdapter copyWriter
 
-  logInfo "Starting block ingestion..."
+    let ingestEnv = IngestEnv
+          { ieCore                    = coreEnv
+          , ieBlockQueue              = blockQueue
+          , ieCopyWriter              = copyWriter
+          , ieDedupMaps               = dedupMaps
+          , ieAddressBuffer           = addrBuffer
+          , ieAddressResolver         = addrResolver
+          , ieHasLedgerEnv            = hasLedgerEnv
+          , ieStateQueryVar           = stateQueryVar
+          , ieSystemStart             = systemStart
+          , ieResolver                = resolver
+          , ieWriter                  = writer
+          , ieExtractState            = stRef
+          , ieReceiverStats           = receiverStats
+          , ieControlConnection       = consumerCtrlConn
+          , ieLastCommittedSlotAtBoot = replayBoundary
+          , ieReplayStartSlot         = replayStart
+          , ieWatchdog                = watchdog
+          , ieLatestReceivedPoint     = latestPointRef
+          , ieRollbackBoundary        = rollbackBoundary
+          }
 
-  -- Cleanup of Ingest-only resources. Runs whether the consumer exits
-  -- cleanly at the rollback boundary or aborts with an exception.
-  let shutdownIngest = do
-        logInfo "Shutting down COPY writer..."
-        cwCommit copyWriter `catch` \(e :: SomeException) ->
-          logError $ "Error during final commit: " <> show e
-        closeCopyWriter copyWriter
-        logInfo "Draining address resolver..."
-        awaitDrained addrResolver `catch` \(e :: SomeException) ->
-          logError $ "Error draining address resolver: " <> show e
-        logInfo "Stopping address resolver..."
-        closeAddressResolver addrResolver
-          `catch` \(e :: SomeException) ->
-            logError $ "Error closing address resolver: " <> show e
+    logInfo "Starting block ingestion..."
 
-      ingestAction = runAppM ingestEnv runConsumer `finally` shutdownIngest
+    -- Cleanup of Ingest-only resources. Runs whether the consumer
+    -- exits cleanly at the rollback boundary or aborts with an
+    -- exception.
+    let shutdownIngest = do
+          logInfo "Shutting down COPY writer..."
+          cwCommit copyWriter `catch` \(e :: SomeException) ->
+            logError $ "Error during final commit: " <> show e
+          closeCopyWriter copyWriter
+          logInfo "Draining address resolver..."
+          awaitDrained addrResolver `catch` \(e :: SomeException) ->
+            logError $ "Error draining address resolver: " <> show e
+          logInfo "Stopping address resolver..."
+          closeAddressResolver addrResolver
+            `catch` \(e :: SomeException) ->
+              logError $ "Error closing address resolver: " <> show e
 
-      shutdownPostIngest = do
-        logInfo "Closing consumer control connection..."
-        closeControlConnection consumerCtrlConn
-          `catch` \(e :: SomeException) ->
-            logError $ "Error closing consumer control connection: " <> show e
-        case hasLedgerEnv of
-          LedgerEnabled lenv -> do
-            logInfo "Closing LSM session..."
-            leClose lenv `catch` \(e :: SomeException) ->
-              logError $ "Error closing LSM session: " <> show e
-            logInfo "Closing snapshot-writer control connection..."
-            closeControlConnection (leControlConnection lenv)
-              `catch` \(e :: SomeException) ->
-                logError $ "Error closing snapshot control connection: " <> show e
-          LedgerDisabled _ -> pure ()
+        ingestAction = runAppM ingestEnv runConsumer `finally` shutdownIngest
 
-      runPrepAndMarkComplete =
-        bracket (openControlConnection hasqlSettings) closeControlConnection $ \prepConn -> do
-          Prep.run tracer (unControlConnection prepConn) hasqlSettings defaultPrepTuning tableDefs
-          markSyncComplete prepConn
+        shutdownPostIngest = do
+          logInfo "Closing consumer control connection..."
+          closeControlConnection consumerCtrlConn
+            `catch` \(e :: SomeException) ->
+              logError $ "Error closing consumer control connection: " <> show e
+          case hasLedgerEnv of
+            LedgerEnabled lenv -> do
+              logInfo "Closing LSM session..."
+              leClose lenv `catch` \(e :: SomeException) ->
+                logError $ "Error closing LSM session: " <> show e
+              logInfo "Closing snapshot-writer control connection..."
+              closeControlConnection (leControlConnection lenv)
+                `catch` \(e :: SomeException) ->
+                  logError $ "Error closing snapshot control connection: " <> show e
+            LedgerDisabled _ -> pure ()
 
-  let mLedgerQueue = case hasLedgerEnv of
-        LedgerEnabled lenv -> Just (leLedgerQueue lenv)
-        LedgerDisabled _   -> Nothing
+        runPrepAndMarkComplete =
+          bracket (openControlConnection hasqlSettings) closeControlConnection $ \prepConn -> do
+            setSyncPhase tracer (ceSyncPhase coreEnv) PreparingForVolatileTail
+            Prep.run tracer (unControlConnection prepConn) hasqlSettings defaultPrepTuning tableDefs
+            markSyncComplete prepConn
 
-  withIOManager (\iomgr ->
-    withAsync (runWatchdog tracer watchdog blockQueue mLedgerQueue) $ \watchdogThread -> do
-      link watchdogThread
-      withAsync (runAppM ingestEnv $ connectToNode iomgr topLevelCfg networkMagic socketPath intersectReq) $ \nodeThread -> do
-        link nodeThread
-        case hasLedgerEnv of
-          LedgerEnabled lenv ->
-            withAsync (runAppM lenv (runLedgerWorker replayBoundary stateQueryVar watchdog)) $ \workerThread -> do
-              link workerThread
-              withAsync (runLedgerStateWriteThread hasLedgerEnv) $ \snapWriter -> do
-                link snapWriter
-                ingestAction
-                cancel snapWriter
-                cancel workerThread
-                cancel nodeThread
-                runPrepAndMarkComplete
-          LedgerDisabled _ -> do
+    let mLedgerQueue = case hasLedgerEnv of
+          LedgerEnabled lenv -> Just (leLedgerQueue lenv)
+          LedgerDisabled _   -> Nothing
+
+    withIOManager (\iomgr ->
+      withLedgerThreads hasLedgerEnv replayBoundary stateQueryVar watchdog $
+        withAsync (runWatchdog tracer watchdog blockQueue mLedgerQueue) $ \watchdogThread -> do
+          link watchdogThread
+          withAsync (runAppM ingestEnv $ connectToNode iomgr topLevelCfg networkMagic socketPath intersectReq) $ \nodeThread -> do
+            link nodeThread
             ingestAction
             cancel nodeThread
-            runPrepAndMarkComplete) `finally` shutdownPostIngest
+          -- Ingest receiver cancelled. Ledger worker and snapshot
+          -- writer stay alive across Prep and into Follow.
+          runPrepAndMarkComplete
+          flipConsistentWithTip hasLedgerEnv
+          setSyncPhase tracer (ceSyncPhase coreEnv) FollowingVolatileTail
+          handoffToFollow
+            iomgr ingestEnv logInfo logError hasqlSettings
+            topLevelCfg networkMagic socketPath mShutdown
+      ) `finally` shutdownPostIngest
 
 -- ---------------------------------------------------------------------------
 -- * Helpers
@@ -488,11 +505,127 @@ resolveSlot logInfo ctrl slot = do
 mkInitState :: ExtractState
 mkInitState = freshExtractState
 
--- | Boot directly into 'FollowingChainTip', skipping
--- 'IngestChainHistory' / 'PreparingForChainTip'. When the optional
--- shutdown signal fires, the Follow loop is cancelled and
--- 'runFollowFastPath' returns normally; otherwise it blocks
--- forever (production behaviour).
+-- | Run the ledger worker + snapshot-writer asyncs for the duration
+-- of the inner action. No-op when the ledger feature is disabled.
+--
+-- The two threads share the caller's 'Watchdog', so a single sampler
+-- covers their progress alongside the receiver / consumer bumps.
+-- Cancellation propagates to both async children when the inner
+-- action exits or raises.
+withLedgerThreads
+  :: HasLedgerEnv
+  -> Maybe SlotNo
+  -> StateQueryVar
+  -> Watchdog
+  -> IO a
+  -> IO a
+withLedgerThreads (LedgerDisabled _) _ _ _ inner = inner
+withLedgerThreads hasLE@(LedgerEnabled lenv) replayBoundary sqv wd inner =
+  withAsync (runAppM lenv (runLedgerWorker replayBoundary sqv wd)) $ \w -> do
+    link w
+    withAsync (runLedgerStateWriteThread hasLE) $ \s -> do
+      link s
+      inner
+
+-- | Mark the ledger subsystem as caught up with the chain tip, so
+-- the worker's per-block snapshot decision flips to /every epoch/
+-- instead of /every 10 epochs/. No-op when ledger is disabled.
+flipConsistentWithTip :: HasLedgerEnv -> IO ()
+flipConsistentWithTip (LedgerDisabled _) = pure ()
+flipConsistentWithTip (LedgerEnabled lenv) =
+  Strict.atomically $ Strict.writeTVar (leConsistentWithTip lenv) True
+
+-- | In-process Ingest → Prep → Follow handoff.
+--
+-- Called after 'PreparingForVolatileTail' has marked sync complete.
+-- Reads the just-written sync state, builds a 'ResumeContext', and
+-- spawns a fresh chainsync receiver bound to a 'FollowEnv' that
+-- reuses the Ingest receiver-side state (block queue, watchdog,
+-- ledger queue, control connection) via 'mkFollowEnvFromIngest'.
+-- Any blocks the Ingest receiver queued past the rollback boundary
+-- before being cancelled stay in the queue and are processed by the
+-- Follow consumer.
+--
+-- Returns when the shutdown signal fires (test path) or the Follow
+-- loop / a linked async terminates.
+handoffToFollow
+  :: IOManager
+  -> IngestEnv
+  -> (Text -> IO ())
+  -> (Text -> IO ())
+  -> HasqlSettings.Settings
+  -> TopLevelConfig (CardanoBlock StandardCrypto)
+  -> NetworkMagic
+  -> FilePath
+  -> Maybe (IO ())
+  -> IO ()
+handoffToFollow
+  iomgr ie logInfo logError hasqlSettings topLevelCfg networkMagic
+  socketPath mShutdown = do
+    let consumerCtrlConn = ieControlConnection ie
+    mRow <- readSyncState consumerCtrlConn
+    row <- case mRow of
+      Just r -> pure r
+      Nothing ->
+        panic "handoffToFollow: dbsync_sync_state row missing after markSyncComplete"
+    let resumeDesc = case (ssrLastCommittedSlot row, ssrLastCommittedBlockNo row) of
+          (Just s, Just b) ->
+            "at slot " <> show s <> ", block " <> show b
+          _ -> "at genesis"
+    logInfo $
+      "Prep complete; handing off to FollowingChainTip " <> resumeDesc
+
+    -- The Ingest receiver kept reading from the node while the
+    -- consumer was draining the rollback boundary; whatever it
+    -- queued past the consumer's exit is still in the block queue
+    -- and Follow's consumer will INSERT those first before the new
+    -- receiver's stream catches up.
+    buffered <- atomically $ STM.lengthTBQueue (ieBlockQueue ie)
+    when (buffered > 0) $
+      logInfo $
+        "FollowingChainTip starting with "
+          <> show buffered
+          <> " block(s) buffered from Ingest's tail"
+
+    let rc = resumeContextFrom row Nothing
+    intersectReq <- resolveIntersection logInfo logError consumerCtrlConn rc
+
+    followCtrl <- openControlConnection hasqlSettings
+    let followConn = unControlConnection followCtrl
+    resolver <- mkFollowResolver followConn
+    let writer     = mkInsertWriter followConn
+        followEnv  = mkFollowEnvFromIngest ie followConn resolver writer
+
+        followAction =
+          runAppM followEnv Follow.run
+            `finally` do
+              logInfo "Closing Follow hasql connection..."
+              closeControlConnection followCtrl
+                `catch` \(e :: SomeException) ->
+                  logError $ "Error closing Follow connection: " <> show e
+
+        racedFollow = case mShutdown of
+          Nothing      -> followAction
+          Just waitSig -> void (race waitSig followAction)
+
+    -- The receiver runs under 'followEnv' so its watchdog / block
+    -- queue / rollback boundary refs are the same ones IngestEnv
+    -- carried. The Ingest receiver was cancelled before Prep ran;
+    -- this opens a fresh one starting at the post-Ingest commit
+    -- point.
+    withAsync (runAppM followEnv $ connectToNode iomgr topLevelCfg networkMagic socketPath intersectReq) $ \nodeThread -> do
+      link nodeThread
+      racedFollow
+
+-- | Boot directly into 'FollowingChainTip' on a restart after Prep
+-- has already marked sync complete. Builds the Follow state from
+-- scratch (no 'IngestEnv' is in scope) and runs the receiver +
+-- Follow loop. The caller is responsible for opening the
+-- 'IOManager' and any ledger threads ('withLedgerThreads').
+--
+-- When the optional shutdown signal fires, the Follow loop is
+-- cancelled and this returns normally; otherwise it blocks forever
+-- (production behaviour).
 runFollowFastPath
   :: AppTracer
   -> (Text -> IO ())
@@ -508,28 +641,40 @@ runFollowFastPath
   -> ControlConnection
   -> ResumeContext
   -> Maybe (IO ())
+  -> IOManager
+  -> Watchdog
   -> IO ()
 runFollowFastPath
   tracer logInfo logError hasqlSettings coreEnv topLevelCfg networkMagic
   socketPath systemStart stateQueryVar hasLedgerEnv consumerCtrlConn rc
-  mShutdown = do
+  mShutdown iomgr watchdog = do
 
     logInfo "Boot: sync_complete=true; starting FollowingChainTip"
 
     let row = rcSyncState rc
         tableDefs = concatMap pdTables (ceExtractors coreEnv)
-    deleted <- deleteRowsPastSlot consumerCtrlConn tableDefs row
+    -- 'FollowRestart' mode skips the dedup-counter DELETE. The counter
+    -- columns on 'SyncStateRow' are frozen at Ingest's last
+    -- pending-boundary snapshot; running them here would wipe every
+    -- dedup row Ingest's last two epochs and Follow wrote, silently
+    -- orphaning the fact-table FKs that reference them.
+    deleted <- deleteRowsPastSlot FollowRestart consumerCtrlConn tableDefs row
     when (deleted > 0) $
       logInfo $
         "Cleaned up " <> show deleted
           <> " rows past last_committed_slot from a prior Follow crash"
+
+    -- Ledger-enabled fast-path needs the in-memory LedgerDB primed
+    -- from disk before the worker tries to apply blocks. The Ingest
+    -- resume path does this too; without it the worker crashes with
+    -- \"LedgerDB not initialised\" on the first MsgForward.
+    loadLedgerSnapshotForFollow tracer logInfo hasLedgerEnv stateQueryVar topLevelCfg row
 
     followCtrl <- openControlConnection hasqlSettings
     let followConn = unControlConnection followCtrl
 
     blockQueue       <- newTBQueueIO 500
     receiverStats    <- newReceiverStats
-    watchdog         <- newWatchdog (ceMinSeverity coreEnv)
     latestPointRef   <- newIORef Nothing
     rollbackBoundary <- newTVarIO Nothing
 
@@ -572,15 +717,69 @@ runFollowFastPath
           Nothing      -> followAction
           Just waitSig -> void (race waitSig followAction)
 
-    withIOManager $ \iomgr ->
-      withAsync (runWatchdog tracer watchdog blockQueue mLedgerQueue) $ \watchdogThread -> do
-        link watchdogThread
-        withAsync (runAppM followEnv $ connectToNode iomgr topLevelCfg networkMagic socketPath intersectReq) $ \nodeThread -> do
-          link nodeThread
-          racedFollow
+    withAsync (runWatchdog tracer watchdog blockQueue mLedgerQueue) $ \watchdogThread -> do
+      link watchdogThread
+      withAsync (runAppM followEnv $ connectToNode iomgr topLevelCfg networkMagic socketPath intersectReq) $ \nodeThread -> do
+        link nodeThread
+        racedFollow
 
 -- | Cadence between snapshot-load heartbeat lines. Tuned so a fast
 -- load doesn't emit any heartbeats while a slow one still gives the
 -- operator visibility within the first minute.
 snapshotHeartbeatSeconds :: Int
 snapshotHeartbeatSeconds = 15
+
+-- | Prime the in-memory 'LedgerDB' for the Follow fast-path by
+-- restoring the latest on-disk snapshot at or before
+-- @last_committed_slot@. No-op when ledger is disabled.
+--
+-- Panics if no usable snapshot exists or if the chosen snapshot is
+-- behind @last_committed_slot@: the fast-path doesn't yet drive a
+-- chainsync replay window, so a gap can't be closed automatically.
+-- Operator recovery is @--resync-from-genesis@.
+loadLedgerSnapshotForFollow
+  :: AppTracer
+  -> (Text -> IO ())
+  -> HasLedgerEnv
+  -> StateQueryVar
+  -> TopLevelConfig (CardanoBlock StandardCrypto)
+  -> SyncStateRow
+  -> IO ()
+loadLedgerSnapshotForFollow tracer logInfo hasLedgerEnv stateQueryVar topLevelCfg row =
+  case hasLedgerEnv of
+    LedgerDisabled _ -> pure ()
+    LedgerEnabled lenv -> do
+      snapshots <- listSnapshots (leSnapshotManager lenv)
+      case ssrLastCommittedSlot row of
+        Nothing ->
+          panic
+            "Follow fast-path: ledger enabled but dbsync_sync_state has\
+            \ no last_committed_slot. Restart with --resync-from-genesis."
+        Just lastSlot -> case candidateSnapshotSlots snapshots lastSlot of
+          [] ->
+            panic $
+              "Follow fast-path: ledger enabled but no on-disk snapshot\
+              \ exists at or before slot " <> show lastSlot
+              <> ". The previous snapshot writer never persisted state for\
+                 \ this run. Restart with --resync-from-genesis."
+          (snap : _) -> do
+            let snapSlot = dsNumber snap
+            logInfo $ "Loading ledger snapshot at slot " <> show snapSlot
+            loadResult <-
+              withHeartbeat tracer "LedgerSnapshot"
+                ("still loading snapshot at slot " <> show snapSlot)
+                snapshotHeartbeatSeconds $
+                initLedgerDbFromSnapshot lenv snap
+            case loadResult of
+              Left err -> panic $ "Failed to load ledger snapshot: " <> err
+              Right () -> do
+                loadedExt <- runAppM lenv readCurrentStateUnsafe
+                seedInterpreterFromLedgerState topLevelCfg loadedExt stateQueryVar
+                when (lastSlot > snapSlot) $
+                  panic $
+                    "Follow fast-path: snapshot at slot " <> show snapSlot
+                    <> " is behind last_committed_slot " <> show lastSlot
+                    <> " (" <> show (lastSlot - snapSlot)
+                    <> " slot gap). Replay between snapshot and committed\
+                       \ slot is not supported on this path. Restart with\
+                       \ --resync-from-genesis."

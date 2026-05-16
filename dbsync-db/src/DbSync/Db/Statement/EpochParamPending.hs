@@ -8,17 +8,17 @@
 --     consumer at each epoch boundary. @ON CONFLICT (epoch_no)
 --     DO NOTHING@ makes a re-flush after partial crash a no-op.
 --   * 'applyPoolUpdateDepositStmt' / 'applyStakeRegistrationDepositStmt'
---     — UPDATE pairs run in 'PreparingForChainTip' to fill the
+--     — UPDATE pairs run in 'PreparingForVolatileTail' to fill the
 --     ledger-derived deposit columns.
 --   * 'truncateEpochParamPendingStmt' — clears the table at the end
---     of 'PreparingForChainTip' once the backfills have run. We
+--     of 'PreparingForVolatileTail' once the backfills have run. We
 --     truncate rather than DROP so a future Follow → Ingest re-entry
 --     finds the table intact.
 module DbSync.Db.Statement.EpochParamPending
   ( -- * Bulk insert (called by the consumer)
     insertEpochParamPendingStmt
 
-    -- * Backfill UPDATEs (called by PreparingForChainTip)
+    -- * Backfill UPDATEs (called by PreparingForVolatileTail)
   , applyPoolUpdateDepositStmt
   , applyStakeRegistrationDepositStmt
 
@@ -120,7 +120,7 @@ applyStakeRegistrationDepositStmt =
 -- ---------------------------------------------------------------------------
 
 -- | @TRUNCATE epoch_param_pending@. Run at the end of
--- 'PreparingForChainTip' after the two apply UPDATEs. The table
+-- 'PreparingForVolatileTail' after the two apply UPDATEs. The table
 -- stays in the schema so a future Follow → Ingest re-entry can
 -- reuse it without re-running 'initSchema'.
 truncateEpochParamPendingStmt :: Stmt.Statement () ()

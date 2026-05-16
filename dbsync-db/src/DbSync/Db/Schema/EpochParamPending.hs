@@ -2,7 +2,7 @@
 
 -- | Per-epoch protocol-parameter snapshot, written by the ledger
 -- worker during 'IngestChainHistory' and consumed by
--- 'PreparingForChainTip' to backfill @pool_update.deposit@ (first
+-- 'PreparingForVolatileTail' to backfill @pool_update.deposit@ (first
 -- registrations) and @stake_registration.deposit@ (Shelley-Babbage
 -- rows whose cert carries no inline deposit).
 --
@@ -15,7 +15,7 @@
 --
 -- One row per epoch, keyed on @epoch_no@. INSERT uses
 -- @ON CONFLICT DO NOTHING@ so a re-flush after partial crash is a
--- no-op. Truncated at the end of 'PreparingForChainTip' once the
+-- no-op. Truncated at the end of 'PreparingForVolatileTail' once the
 -- backfill UPDATEs have run.
 module DbSync.Db.Schema.EpochParamPending
   ( -- * Schema type

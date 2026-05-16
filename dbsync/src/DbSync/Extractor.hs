@@ -24,7 +24,6 @@ module DbSync.Extractor
     -- * Accessor classes
   , HasExtractors (..)
   , HasLedgerData (..)
-  , HasSyncPhase (..)
 
     -- * Re-exports (for ExtractState used by IngestResolver)
   , ExtractState (..)
@@ -41,7 +40,7 @@ import DbSync.Id.Counter (IdCounters, freshIdCounters)
 import DbSync.Db.Schema.Ids (BlockId, PoolHashId, SlotLeaderId, StakeAddressId, TxId, TxOutId)
 import DbSync.Db.Schema.Types (TableDef)
 import DbSync.Ledger.Types (DepositsMap, emptyDepositsMap)
-import DbSync.Phase (SyncPhase)
+import DbSync.Db.Phase (SyncPhase)
 import DbSync.Resolver (IdResolver)
 import DbSync.Writer (Writer)
 
@@ -151,10 +150,6 @@ class HasExtractors env where
 -- has applied the block; ledger-OFF returns 'emptyBlockLedgerData'.
 class HasLedgerData env where
   getLedgerData :: env -> GenericBlock -> IO BlockLedgerData
-
--- | Read the lifecycle phase from the env. Constant for the run.
-class HasSyncPhase env where
-  getSyncPhase :: env -> SyncPhase
 
 -- ---------------------------------------------------------------------------
 -- * ExtractState (used by IngestResolver)

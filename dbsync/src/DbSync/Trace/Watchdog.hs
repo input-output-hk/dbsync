@@ -4,11 +4,15 @@
 -- | Liveness watchdog. Receiver / ledger worker / consumer each bump
 -- their own counter per block; a sampler reads them every
 -- 'watchdogInterval' and traces deltas plus per-thread note slots.
--- A @(+0)@ delta marks a stalled thread.
 --
--- Diagnostic-only: output is 'Debug' severity and the whole subsystem
--- short-circuits to a no-op when the configured minimum severity is
--- above 'Debug'.
+-- The per-sample line traces at 'Debug'. When a thread fails to
+-- advance for 'stallWarnThreshold' consecutive intervals the sampler
+-- escalates to one 'Warning' line per stuck thread so the alert is
+-- visible against the surrounding Debug noise.
+--
+-- Diagnostic-only: the whole subsystem short-circuits to a no-op when
+-- the configured minimum severity is above 'Debug', so the per-block
+-- bumps cost nothing in production-default 'Info' setups.
 module DbSync.Trace.Watchdog
   ( -- * Types
     Watchdog (..)
@@ -26,6 +30,7 @@ module DbSync.Trace.Watchdog
     -- * Sampler
   , runWatchdog
   , watchdogInterval
+  , stallWarnThreshold
   ) where
 
 import Cardano.Prelude
@@ -62,6 +67,9 @@ data WatchdogState = WatchdogState
   }
 
 -- | Enabled if the configured minimum severity admits 'Debug'.
+-- The watchdog is opt-in diagnostics; at 'Info' or above the
+-- per-block bumps and the sampler thread are pure overhead, so the
+-- whole subsystem short-circuits to a no-op.
 newWatchdog :: Severity -> IO Watchdog
 newWatchdog minSeverity
   | minSeverity > Debug = pure WatchdogDisabled
@@ -126,10 +134,47 @@ setReceiverNote (WatchdogEnabled s) note = writeIORef (wsReceiverNote s) note
 watchdogInterval :: Int
 watchdogInterval = 5
 
+-- | How many consecutive zero-delta samples count as a stall worth
+-- a 'Warning'. Three intervals at 'watchdogInterval' = 5s is 15s of
+-- no progress on a thread — long enough to be confident it isn't
+-- just a slow block.
+stallWarnThreshold :: Int
+stallWarnThreshold = 3
+
+-- | Per-thread sampler iteration state: previous block count plus
+-- the current streak of consecutive zero-delta samples.
+data ThreadSample = ThreadSample
+  { tsPrevBlocks :: !Word64
+  , tsStreak     :: !Int
+  }
+
+-- | Result of advancing one thread's sample by one interval.
+data ThreadAdvance = ThreadAdvance
+  { taNext    :: !ThreadSample
+  , taDelta   :: !Word64
+  , taCrossed :: !Bool
+    -- ^ 'True' on the iteration that pushes the streak from below to
+    -- at-or-above 'stallWarnThreshold'. Only this iteration emits a
+    -- 'Warning'; later iterations on the same stuck-streak stay
+    -- silent so the operator gets one alert per stuck-period, not a
+    -- repeating flood.
+  }
+
+advanceThread :: ThreadSample -> Word64 -> ThreadAdvance
+advanceThread ts curBlocks =
+  ThreadAdvance
+    { taNext    = ThreadSample { tsPrevBlocks = curBlocks, tsStreak = streak' }
+    , taDelta   = delta
+    , taCrossed = tsStreak ts < stallWarnThreshold
+                    && streak' >= stallWarnThreshold
+    }
+  where
+    !delta   = curBlocks - tsPrevBlocks ts
+    !streak' = if delta == 0 then tsStreak ts + 1 else 0
+
 -- | Background loop: every 'watchdogInterval' seconds, sample every
--- counter and log a single diagnostic line. Always emits at 'Debug'
--- severity, including the @[STALL]@ variant — the watchdog is a
--- diagnostic tool, not an operator alert.
+-- counter and log one Debug context line. Per-thread stall streaks
+-- escalate to a 'Warning' once they cross 'stallWarnThreshold'.
 --
 -- When the watchdog is 'WatchdogDisabled' this returns immediately;
 -- the caller's surrounding 'withAsync' then has a child that exits
@@ -149,9 +194,10 @@ runWatchdog tracer (WatchdogEnabled s) blockQ mLedgerQ = do
   initConsumerB <- readIORef (wsConsumerBlocks s)
   initWorkerB   <- readIORef (wsWorkerBlocks s)
   initReceiverB <- readIORef (wsReceiverBlocks s)
-  loop initConsumerB initWorkerB initReceiverB
+  let seed b = ThreadSample { tsPrevBlocks = b, tsStreak = 0 }
+  loop (seed initConsumerB) (seed initWorkerB) (seed initReceiverB)
   where
-    loop !prevConsumerB !prevWorkerB !prevReceiverB = do
+    loop !consumerPrev !workerPrev !receiverPrev = do
       threadDelay (watchdogInterval * 1_000_000)
 
       consumerB    <- readIORef (wsConsumerBlocks s)
@@ -167,11 +213,16 @@ runWatchdog tracer (WatchdogEnabled s) blockQ mLedgerQ = do
       qBlock   <- atomically $ STM.lengthTBQueue blockQ
       qLedger  <- traverse (atomically . STM.lengthTBQueue) mLedgerQ
 
-      let dConsumer = consumerB - prevConsumerB
-          dWorker   = workerB   - prevWorkerB
-          dReceiver = receiverB - prevReceiverB
-          stalled   = dConsumer == 0 || dWorker == 0 || dReceiver == 0
-          marker    = if stalled then " [STALL]" else ""
+      let consumerAdv = advanceThread consumerPrev consumerB
+          workerAdv   = advanceThread workerPrev   workerB
+          receiverAdv = advanceThread receiverPrev receiverB
+
+          dConsumer = taDelta consumerAdv
+          dWorker   = taDelta workerAdv
+          dReceiver = taDelta receiverAdv
+
+          anyStalled = dConsumer == 0 || dWorker == 0 || dReceiver == 0
+          marker     = if anyStalled then " [STALL]" else ""
 
           renderQ :: Text -> Maybe Natural -> Text
           renderQ name Nothing  = name <> "=-"
@@ -198,4 +249,20 @@ runWatchdog tracer (WatchdogEnabled s) blockQ mLedgerQ = do
 
       traceWith tracer $ LogMsg Debug "Watchdog" msg Nothing
 
-      loop consumerB workerB receiverB
+      when (taCrossed receiverAdv) $
+        emitStallWarning "receiver" receiverS receiverNote
+      when (taCrossed workerAdv) $
+        emitStallWarning "ledger worker" workerS workerNote
+      when (taCrossed consumerAdv) $
+        emitStallWarning "consumer" consumerS consumerNote
+
+      loop (taNext consumerAdv) (taNext workerAdv) (taNext receiverAdv)
+
+    emitStallWarning :: Text -> Word64 -> Text -> IO ()
+    emitStallWarning threadName slot note =
+      traceWith tracer $ LogMsg Warning "Watchdog"
+        ( threadName <> " has not advanced in "
+            <> show (stallWarnThreshold * watchdogInterval) <> "s"
+            <> " (last slot " <> show slot
+            <> ", note=" <> note <> ")"
+        ) Nothing

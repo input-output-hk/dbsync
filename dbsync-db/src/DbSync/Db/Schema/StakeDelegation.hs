@@ -206,7 +206,7 @@ data RewardRest = RewardRest
 -- | The @epoch_stake@ table. Active stake distribution per
 -- (stake address, pool, epoch). Unique on @(addr_id, pool_id,
 -- epoch_no)@ — the constraint is added during
--- @PreparingForChainTip@, not at @CREATE TABLE@ time.
+-- @PreparingForVolatileTail@, not at @CREATE TABLE@ time.
 data EpochStake = EpochStake
   { epochStakeAddrId  :: !StakeAddressId
   , epochStakePoolId  :: !PoolHashId
@@ -395,7 +395,7 @@ rewardRestTableDef = TableDef
 
 -- | The @epoch_stake@ table. The triple (addr_id, pool_id,
 -- epoch_no) is unique; the constraint is added during
--- @PreparingForChainTip@, not at @CREATE TABLE@ time.
+-- @PreparingForVolatileTail@, not at @CREATE TABLE@ time.
 epochStakeTableDef :: TableDef
 epochStakeTableDef = TableDef
   { tdName    = "epoch_stake"

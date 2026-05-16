@@ -128,9 +128,9 @@ data SchemaAction
 -- 2. Creates the @dbsync_sync_state@ singleton metadata table
 --    (LOGGED, constrained; see 'DbSync.Db.Schema.SyncState').
 -- 3. Creates the @epoch_param_pending@ system table used by the
---    ledger worker → PreparingForChainTip deposit-flush handshake
+--    ledger worker → PreparingForVolatileTail deposit-flush handshake
 --    (LOGGED so it survives a crash between flush and sync-state
---    advance; truncated at end of 'PreparingForChainTip').
+--    advance; truncated at end of 'PreparingForVolatileTail').
 -- 4. Creates all data tables from the 'TableDef's via 'generateCreateTable'.
 -- 5. Records extractor versions in @schema_version@.
 --

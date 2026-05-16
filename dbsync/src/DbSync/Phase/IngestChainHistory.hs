@@ -16,6 +16,6 @@ import DbSync.AppM (IngestM)
 -- TODO: orchestrate the receiver ('DbSync.Node.Connection.connectToNode')
 -- and the consumer ('DbSync.Ingest.Consumer.runConsumer') in lock-step
 -- under 'withAsync', then exit when the immutable tip is reached so the
--- caller can transition to 'DbSync.Phase.PreparingForChainTip'.
+-- caller can transition to 'DbSync.Phase.PreparingForVolatileTail'.
 run :: IngestM ()
 run = panic "TODO: not implemented"

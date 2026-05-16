@@ -7,7 +7,7 @@
 -- During 'IngestChainHistory', @tx_in.tx_out_id@ is NULL (deferred
 -- resolution). The @tx_out_hash@ and @tx_out_index@ columns are
 -- populated instead, and resolved via a post-load SQL join during
--- 'PreparingForChainTip'.
+-- 'PreparingForVolatileTail'.
 module DbSync.Db.Schema.UTxO
   ( -- * Schema types
     TxOut (..)

@@ -320,6 +320,45 @@ nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats watchd
 -- * ChainSync pipelined client
 -- ---------------------------------------------------------------------------
 
+-- | Mutable bookkeeping the chainsync callbacks share across a single
+-- session. Created fresh inside 'blockFetchClient' on every
+-- (re)connection so both fields reset when a new session starts.
+--
+-- Distinct from 'ReceiverStats' (which lives for the whole app and is
+-- reset per epoch by the consumer) and from 'Watchdog' (cross-thread
+-- liveness sampling). Both fields here are read and written only by
+-- the receiver thread.
+data SessionState = SessionState
+  { ssHaveSeenBlock     :: !(IORef Bool)
+    -- ^ 'False' until the first forward block of this session
+    -- arrives. The node always sends a confirming 'MsgRollBackward'
+    -- to the chosen intersection point right after
+    -- 'MsgIntersectFound'; that rollback is a protocol artefact, not
+    -- a real chain reorganisation, so it must not propagate as a
+    -- 'MsgRollback' to downstream consumers. Flipped to 'True' on
+    -- the first 'MsgRollForward'.
+  , ssFirstBlocksLogged :: !(IORef Int)
+    -- ^ Counter that starts at 'firstBlocksToLog' and decrements per
+    -- forward block. While positive the receiver logs slot+blockNo
+    -- at 'Info' so the operator can confirm the new session is
+    -- producing — important on reconnect / handoff where the first
+    -- block has a large BlockNo and the historical "blockNo == 1"
+    -- trigger never fires.
+  }
+
+newSessionState :: IO SessionState
+newSessionState =
+  SessionState
+    <$> newIORef False
+    <*> newIORef firstBlocksToLog
+
+-- | How many forward blocks to log at 'Info' at the start of each
+-- session. Three gives the operator a clear pulse-check (one to
+-- prove the receiver is alive, two more to confirm it's not a
+-- one-shot artefact) without flooding the log.
+firstBlocksToLog :: Int
+firstBlocksToLog = 3
+
 -- | Pipelined ChainSync client that writes blocks to a TQueue.
 --
 -- The intersection point is chosen at every (re)connection:
@@ -363,26 +402,22 @@ blockFetchClient
        ()
 blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latestPointRef rollbackBoundary kBlocks intersect =
   ChainSyncClientPipelined $ do
-    -- Per-session flag: 'False' until the first forward block arrives
-    -- after an intersect handshake. The node always sends a confirming
-    -- 'MsgRollBackward' to the chosen intersection point right after
-    -- 'MsgIntersectFound'; that rollback is a protocol artefact, not
-    -- a real chain reorganisation, so it must not propagate as a
-    -- 'MsgRollback' to downstream consumers.
-    haveSeenBlock <- newIORef False
+    -- Per-session mutable bookkeeping. Bundled so callbacks pass one
+    -- record instead of N independent IORefs.
+    ss <- newSessionState
     mLatest <- readIORef latestPointRef
     let (intersectPoints, isResume) = case mLatest of
           Just p  -> ([p], True)
           Nothing -> (bootIntersectPoints, False)
     when isResume $
       traceWith appTracer $ LogMsg Info "ChainSync"
-        ("Reconnecting; intersecting at last received point " <> show mLatest) Nothing
+        ("Resuming from last received point " <> show mLatest) Nothing
     pure $
       SendMsgFindIntersect
         intersectPoints
         ClientPipelinedStIntersect
-          { recvMsgIntersectFound    = onIntersectFound haveSeenBlock
-          , recvMsgIntersectNotFound = onIntersectNotFound isResume haveSeenBlock
+          { recvMsgIntersectFound    = onIntersectFound ss
+          , recvMsgIntersectNotFound = onIntersectNotFound isResume ss
           }
   where
     bootIntersectPoints = case intersect of
@@ -392,13 +427,13 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
     -- Log the chosen candidate so the operator can see which
     -- snapshot point the node selected — useful when the candidate
     -- list contains fallbacks beyond the newest snapshot.
-    onIntersectFound haveSeenBlock chosen tip = do
+    onIntersectFound ss chosen tip = do
       traceWith appTracer $ LogMsg Info "ChainSync"
         ("Intersected at " <> show chosen <> " (server tip " <> show tip <> ")") Nothing
-      atomicWriteIORef haveSeenBlock False
-      pure $ goTip haveSeenBlock policy Zero Origin tip
+      atomicWriteIORef (ssHaveSeenBlock ss) False
+      pure $ goTip ss policy Zero Origin tip
 
-    onIntersectNotFound isResume haveSeenBlock tip
+    onIntersectNotFound isResume ss tip
       | isResume =
           throwNetwork $
             "ChainSync reconnection: node could not intersect at our last "
@@ -409,8 +444,8 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
           IntersectGenesis -> do
             traceWith appTracer $ LogMsg Info "ChainSync"
               "Node also has no chain yet; following from origin" Nothing
-            atomicWriteIORef haveSeenBlock False
-            pure $ goTip haveSeenBlock policy Zero Origin tip
+            atomicWriteIORef (ssHaveSeenBlock ss) False
+            pure $ goTip ss policy Zero Origin tip
           IntersectAt ps ->
             throwNetwork $
               "ChainSync intersection not found on node at any of "
@@ -426,60 +461,68 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
     policy = pipelineDecisionLowHighMark 10 50
 
     goTip
-      :: IORef Bool
+      :: SessionState
       -> MkPipelineDecision
       -> Nat n
       -> WithOrigin BlockNo
       -> Tip (CardanoBlock StandardCrypto)
       -> ClientPipelinedStIdle n (CardanoBlock StandardCrypto) CardanoPoint (Tip (CardanoBlock StandardCrypto)) IO ()
-    goTip haveSeenBlock mkDecision n clientTip serverTip =
-      go haveSeenBlock mkDecision n clientTip (getTipBlockNo serverTip)
+    goTip ss mkDecision n clientTip serverTip =
+      go ss mkDecision n clientTip (getTipBlockNo serverTip)
 
     go
-      :: IORef Bool
+      :: SessionState
       -> MkPipelineDecision
       -> Nat n
       -> WithOrigin BlockNo
       -> WithOrigin BlockNo
       -> ClientPipelinedStIdle n (CardanoBlock StandardCrypto) CardanoPoint (Tip (CardanoBlock StandardCrypto)) IO ()
-    go haveSeenBlock mkDecision n clientTip serverTip =
+    go ss mkDecision n clientTip serverTip =
       case (n, runPipelineDecision mkDecision n clientTip serverTip) of
         (_Zero, (Request, mkDecision')) ->
-          SendMsgRequestNext (pure ()) (mkClientStNext haveSeenBlock mkDecision' n)
+          SendMsgRequestNext (pure ()) (mkClientStNext ss mkDecision' n)
         (_, (Pipeline, mkDecision')) ->
           SendMsgRequestNextPipelined
             (pure ())
-            (go haveSeenBlock mkDecision' (Succ n) clientTip serverTip)
+            (go ss mkDecision' (Succ n) clientTip serverTip)
         (Succ n', (CollectOrPipeline, mkDecision')) ->
           CollectResponse
-            (Just . pure $ SendMsgRequestNextPipelined (pure ()) $ go haveSeenBlock mkDecision' (Succ n) clientTip serverTip)
-            (mkClientStNext haveSeenBlock mkDecision' n')
+            (Just . pure $ SendMsgRequestNextPipelined (pure ()) $ go ss mkDecision' (Succ n) clientTip serverTip)
+            (mkClientStNext ss mkDecision' n')
         (Succ n', (Collect, mkDecision')) ->
           CollectResponse
             Nothing
-            (mkClientStNext haveSeenBlock mkDecision' n')
+            (mkClientStNext ss mkDecision' n')
 
     mkClientStNext
-      :: IORef Bool
+      :: SessionState
       -> MkPipelineDecision
       -> Nat n
       -> ClientStNext n (CardanoBlock StandardCrypto) CardanoPoint (Tip (CardanoBlock StandardCrypto)) IO ()
-    mkClientStNext haveSeenBlock mkDecision n =
+    mkClientStNext ss mkDecision n =
       ClientStNext
         { recvMsgRollForward = \blk tip -> do
-            let bn@(BlockNo bnRaw) = blockNo blk
-            -- Per-block trace at Debug; periodic Info at first block and
-            -- every 10000 thereafter so the operator can confirm blocks
-            -- are still arriving without flooding the log.
+            let bn = blockNo blk
+                blkSlot = blockSlot blk
+            -- Debug per-block trace. The first three blocks of every
+            -- session also log at Info so the operator can confirm
+            -- the post-intersect stream is producing — important on
+            -- reconnect / handoff where the first block has a large
+            -- BlockNo that the historical "block 1" trigger missed.
             traceWith appTracer $ LogMsg Debug "ChainSync"
               ("Block " <> show bn) Nothing
-            when (bnRaw == 1) $
-              traceWith appTracer $ LogMsg Info "ChainSync" "Receiving blocks" Nothing
+            remaining <- atomicModifyIORef' (ssFirstBlocksLogged ss) $ \r ->
+              if r > 0 then (r - 1, r) else (0, 0)
+            when (remaining > 0) $
+              traceWith appTracer $ LogMsg Info "ChainSync"
+                ( "First post-intersect block at slot " <> show blkSlot
+                    <> ", block " <> show bn
+                ) Nothing
             recordBlockReceived receiverStats
-            bumpReceiver watchdog (blockSlot blk)
+            bumpReceiver watchdog blkSlot
             -- Mark the post-intersect handshake as complete; any
             -- subsequent rollback is a real chain reorganisation.
-            atomicWriteIORef haveSeenBlock True
+            atomicWriteIORef (ssHaveSeenBlock ss) True
             -- The rollback boundary moves with the node tip; publish
             -- it before enqueuing so a slow consumer never sees a
             -- block whose ancestor has already passed the boundary.
@@ -513,19 +556,24 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
             -- block we crash before delivering doesn't advance the
             -- recorded position.
             atomicWriteIORef latestPointRef (Just (blockPoint blk))
-            pure $ goTip haveSeenBlock mkDecision n (At bn) tip
+            pure $ goTip ss mkDecision n (At bn) tip
         , recvMsgRollBackward = \point tip -> do
             -- The first MsgRollBackward after MsgIntersectFound is the
             -- node's confirming rollback to the chosen intersection
             -- point — a protocol artefact, not a chain reorganisation.
             -- Don't surface it to downstream consumers; just record
             -- the position and continue.
-            isConfirmingRollback <- atomicModifyIORef' haveSeenBlock
+            isConfirmingRollback <- atomicModifyIORef' (ssHaveSeenBlock ss)
               (\seen -> (True, not seen))
-            traceWith appTracer $ LogMsg Warning "ChainSync"
-              ( "Rollback to " <> show point
-                  <> (if isConfirmingRollback then " (confirming intersect; not propagated)" else "")
-              ) Nothing
+            -- Confirming rollbacks log at Info (benign protocol step);
+            -- real chain reorgs log at Warning (downstream consumers
+            -- are about to see DELETEs).
+            let sev = if isConfirmingRollback then Info else Warning
+                suffix
+                  | isConfirmingRollback = " (confirming intersect; not propagated)"
+                  | otherwise            = ""
+            traceWith appTracer $ LogMsg sev "ChainSync"
+              ("Rollback to " <> show point <> suffix) Nothing
             atomicWriteIORef latestPointRef (Just point)
             publishRollbackBoundary tip
             unless isConfirmingRollback $ do
@@ -533,7 +581,7 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
               atomically $ writeTBQueue blockQueue msg
               for_ mLedgerQueue $ \ledgerQueue ->
                 atomically $ writeTBQueue ledgerQueue msg
-            pure $ goTip haveSeenBlock mkDecision n Origin tip
+            pure $ goTip ss mkDecision n Origin tip
         }
 
     -- Compute @tipBlock − k@ from a server tip and publish it on the

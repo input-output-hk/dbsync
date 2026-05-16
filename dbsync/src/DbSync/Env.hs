@@ -52,14 +52,13 @@ import DbSync.Extractor
   , ExtractorDef
   , HasExtractors (..)
   , HasLedgerData (..)
-  , HasSyncPhase (..)
   , emptyBlockLedgerData
   )
 import DbSync.Id.DedupMap (DedupMaps)
 import DbSync.Ingest.ReceiverStats (ReceiverStats)
 import DbSync.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..))
 import DbSync.Metrics (HasMetrics (..), Metrics)
-import DbSync.Phase (SyncPhase (..))
+import DbSync.Phase.Ref (HasSyncPhase (..), SyncPhaseRef, readSyncPhase)
 import DbSync.Resolver (HasResolver (..), IdResolver)
 import DbSync.Resolver.AddressBuffer (AddressBufferRef)
 import DbSync.Resolver.AddressWorker (AddressResolver)
@@ -109,28 +108,29 @@ class HasReceiverChannels env where
 
 -- | Shared core environment available in every phase.
 --
--- Contains the tracer, metrics handles, configuration, and the list
--- of active extractors. Constructed once at startup.
+-- Constructed once at startup; the phase ref is mutated by the
+-- orchestrator and the Follow loop as the lifecycle progresses.
 data CoreEnv = CoreEnv
   { ceTracer      :: !AppTracer
     -- ^ Structured logging tracer (contra-tracer)
   , ceMinSeverity :: !Severity
-    -- ^ The same minimum severity the tracer was built with — kept
-    --   here so subsystems that gate work on the log level (the
-    --   liveness watchdog, the per-epoch dedup/RAM diagnostic) can
-    --   decide whether to allocate state at all instead of just
-    --   doing the work and filtering at trace time.
+    -- ^ Same value the tracer was built with. Subsystems that gate
+    -- allocation on log level (watchdog, per-epoch diagnostic) read
+    -- it rather than re-parsing the profile.
   , ceMetrics     :: !Metrics
     -- ^ Prometheus metrics handles
   , ceConfig      :: !SyncConfig
-    -- ^ Parsed db-sync configuration
+    -- ^ Parsed db-sync profile
   , ceNodeConfig  :: !NodeConfig
     -- ^ Extracted cardano-node configuration
   , ceExtractors  :: ![ExtractorDef]
     -- ^ Active extractor definitions
   , ceNetwork     :: !Network
-    -- ^ Chain network ID, sourced from the Shelley genesis.
-    --   Drives the HRP for stake / reward Bech32 encodings.
+    -- ^ Chain network ID from the Shelley genesis. Drives the HRP
+    -- on stake / reward Bech32 encodings.
+  , ceSyncPhase   :: !SyncPhaseRef
+    -- ^ Live lifecycle phase. Written by the orchestrator and the
+    -- Follow loop; read by extractors, logs, and the watchdog.
   }
 
 -- | Environment for the 'IngestChainHistory' phase.
@@ -229,11 +229,12 @@ data IngestEnv = IngestEnv
     -- shorter than @k@ blocks (everything is volatile in that case).
     -- The consumer compares each processed block against this and
     -- exits 'IngestChainHistory' cleanly once it crosses, so the
-    -- caller can run 'PreparingForChainTip' before handing off to
+    -- caller can run 'PreparingForVolatileTail' before handing off to
     -- 'FollowingChainTip'.
   }
 
--- | Environment for the 'FollowingChainTip' phase.
+-- | Environment for the Follow loop ('FollowingVolatileTail' and
+-- 'FollowingChainTip').
 --
 -- Lighter than 'IngestEnv' — no COPY connections, no dedup maps, no
 -- background address resolver. Reads from the same chainsync message
@@ -421,25 +422,32 @@ instance HasWriter FollowEnv where
   getWriter = feWriter
 
 -- ---------------------------------------------------------------------------
--- * HasLedgerData / HasSyncPhase instances
+-- * HasLedgerData instances
 -- ---------------------------------------------------------------------------
 
 -- | During 'IngestChainHistory' extractors never see ledger output
 -- per block: the worker accumulates protocol-param deposits into
--- @epoch_param_pending@ at epoch boundaries and
--- 'PreparingForChainTip' backfills the affected columns once
--- ingest exits. Keeping this 'emptyBlockLedgerData' decouples the
--- worker from the consumer's hot path.
+-- @epoch_param_pending@ at epoch boundaries and the post-load pass
+-- backfills the affected columns once ingest exits. Keeping this
+-- 'emptyBlockLedgerData' decouples the worker from the consumer's
+-- hot path.
 instance HasLedgerData IngestEnv where
   getLedgerData _env _block = pure emptyBlockLedgerData
-
-instance HasSyncPhase IngestEnv where
-  getSyncPhase _ = IngestChainHistory
 
 -- | 'FollowEnv' currently has no ledger env; returns empty until
 -- the Follow-side worker plumbing lands.
 instance HasLedgerData FollowEnv where
   getLedgerData _ _ = pure emptyBlockLedgerData
 
+-- ---------------------------------------------------------------------------
+-- * HasSyncPhase instances
+-- ---------------------------------------------------------------------------
+
+instance HasSyncPhase CoreEnv where
+  getSyncPhase = readSyncPhase . ceSyncPhase
+
+instance HasSyncPhase IngestEnv where
+  getSyncPhase = getSyncPhase . ieCore
+
 instance HasSyncPhase FollowEnv where
-  getSyncPhase _ = FollowingChainTip
+  getSyncPhase = getSyncPhase . feCore

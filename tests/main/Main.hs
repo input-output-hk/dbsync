@@ -1,16 +1,18 @@
 -- | Test runner.
 --
--- Specs are grouped under three top-level categories so the
--- @cabal test@ output makes it obvious what each block exercises:
+-- Specs are grouped under three top-level categories matching the
+-- @hs-source-dirs@ split in @dbsync-tests.cabal@:
 --
---   * "Unit tests" — pure, no IO beyond deterministic helpers; fast.
---   * "Property tests" — QuickCheck over arbitrary 'CardanoBlock'.
---   * "Database integration" — require a running @dbsync_test@
---     PostgreSQL database; each spec sets up + tears down its own
---     schema.
+--   * "Unit tests" (@main/unit@)        — pure, no IO beyond
+--     deterministic helpers; fast. Includes 'PropertySpec'.
+--   * "Database integration" (@main/integration@) — require a
+--     running @dbsync_test@ PostgreSQL database; each spec sets up
+--     and tears down its own schema. No mock chain.
+--   * "End-to-end" (@main/e2e@)         — drive the full sync
+--     lifecycle through the mock chainsync server; slowest tier.
 --
--- All categories run by default in CI and locally. To run a single
--- category use @--match "Database integration"@ etc.
+-- All tiers run by default. To run a single tier locally use
+-- @cabal test --test-options=\"--match=Unit\"@ etc.
 module Main
   ( main
   ) where
@@ -40,7 +42,8 @@ import qualified DbSync.Ledger.DepositAccumulatorSpec as LedgerDepositAccumulato
 import qualified DbSync.Ledger.StateSpec as LedgerStateSpec
 import qualified DbSync.Ledger.TypesSpec as LedgerTypesSpec
 import qualified DbSync.Ledger.WorkerSpec as LedgerWorkerSpec
-import qualified DbSync.Phase.BootSpec as PhaseBootSpec
+import qualified DbSync.App.BootSpec as AppBootSpec
+import qualified DbSync.Phase.RefSpec as PhaseRefSpec
 import qualified DbSync.Schema.AdaPotsSpec as SchemaAdaPotsSpec
 import qualified DbSync.Schema.AddressSpec as SchemaAddressSpec
 import qualified DbSync.Schema.CoreSpec as SchemaCoreSpec
@@ -68,13 +71,16 @@ import qualified DbSync.Db.Statement.BlockSpec as DbStatementBlockSpec
 import qualified DbSync.Db.Statement.RoundTripSpec as DbStatementRoundTripSpec
 import qualified DbSync.Db.Statement.SlotLeaderSpec as DbStatementSlotLeaderSpec
 import qualified DbSync.Db.Statement.SyncStateSpec as DbStatementSyncStateSpec
-import qualified DbSync.Phase.FollowingChainTip.RollbackSpec as PhaseRollbackSpec
-import qualified DbSync.Phase.FollowingChainTipSpec as PhaseFollowingChainTipSpec
+import qualified DbSync.Phase.Following.RollbackSpec as PhaseRollbackSpec
+import qualified DbSync.Phase.FollowingSpec as PhaseFollowingSpec
+import qualified DbSync.Phase.PreparingForVolatileTailSpec as PhasePreparingForVolatileTailSpec
+import qualified DbSync.Schema.InitSpec as SchemaInitSpec
+
+-- End-to-end
+import qualified DbSync.Phase.FollowRestartSpec as PhaseFollowRestartSpec
 import qualified DbSync.Phase.IngestPrepFollowSpec as PhaseIngestPrepFollowSpec
 import qualified DbSync.Phase.MockChainSpec as PhaseMockChainSpec
 import qualified DbSync.Phase.MockNodeSpec as PhaseMockNodeSpec
-import qualified DbSync.Phase.PreparingForChainTipSpec as PhasePreparingForChainTipSpec
-import qualified DbSync.Schema.InitSpec as SchemaInitSpec
 
 main :: IO ()
 main = hspec $ do
@@ -99,7 +105,8 @@ main = hspec $ do
     LedgerStateSpec.spec
     LedgerTypesSpec.spec
     LedgerWorkerSpec.spec
-    PhaseBootSpec.spec
+    AppBootSpec.spec
+    PhaseRefSpec.spec
     SchemaAdaPotsSpec.spec
     SchemaAddressSpec.spec
     SchemaCoreSpec.spec
@@ -128,10 +135,13 @@ main = hspec $ do
     DbStatementRoundTripSpec.spec
     DbStatementSlotLeaderSpec.spec
     DbStatementSyncStateSpec.spec
-    PhaseFollowingChainTipSpec.spec
-    PhaseIngestPrepFollowSpec.spec
-    PhaseMockChainSpec.spec
-    PhaseMockNodeSpec.spec
-    PhasePreparingForChainTipSpec.spec
+    PhaseFollowingSpec.spec
+    PhasePreparingForVolatileTailSpec.spec
     PhaseRollbackSpec.cascadeSpec
     SchemaInitSpec.spec
+
+  describe "End-to-end" $ do
+    PhaseIngestPrepFollowSpec.spec
+    PhaseFollowRestartSpec.spec
+    PhaseMockChainSpec.spec
+    PhaseMockNodeSpec.spec

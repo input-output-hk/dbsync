@@ -12,7 +12,6 @@
 module DbSync.Db.Schema.EpochSyncStats
   ( -- * Schema types
     EpochSyncStats (..)
-  , SyncPhase (..)
   , EpochSyncTime (..)
 
     -- * Table definitions
@@ -28,8 +27,10 @@ import Cardano.Prelude
 
 import Data.ByteString.Builder (Builder, byteString)
 import qualified Data.ByteString.Char8 as BS8
+import qualified Data.Text.Encoding as TE
 import Data.Time.Clock (UTCTime)
 
+import DbSync.Db.Phase (SyncPhase (..), renderSyncPhase)
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Types
@@ -46,12 +47,6 @@ type instance Key EpochSyncTime = EpochSyncTimeId
 -- ---------------------------------------------------------------------------
 -- * Schema types
 -- ---------------------------------------------------------------------------
-
--- | Which sync phase was active when this epoch completed.
-data SyncPhase
-  = IngestChainHistory
-  | FollowingChainTip
-  deriving stock (Eq, Show)
 
 -- | The @epoch_sync_stats@ table.
 -- One row per epoch, recording sync performance metrics.
@@ -149,6 +144,10 @@ encodeEpochSyncTimeCopy (EpochSyncTimeId estid) est =
 bDouble :: Double -> Builder
 bDouble = byteString . BS8.pack . show
 
+-- | The consumer never commits an epoch boundary in
+-- 'PreparingForVolatileTail', so reaching the encoder in that phase
+-- is an orchestrator bug.
 bPhase :: SyncPhase -> Builder
-bPhase IngestChainHistory = byteString "IngestChainHistory"
-bPhase FollowingChainTip  = byteString "FollowingChainTip"
+bPhase PreparingForVolatileTail =
+  panic "EpochSyncStats.bPhase: PreparingForVolatileTail reached the consumer"
+bPhase p = byteString (TE.encodeUtf8 (renderSyncPhase p))

@@ -7,7 +7,7 @@
 --
 -- During 'IngestChainHistory', @tx_in.tx_out_id@ is NULL — only
 -- the spent tx hash and output index are stored. The FK is resolved
--- post-load via a SQL join in 'PreparingForChainTip'.
+-- post-load via a SQL join in 'PreparingForVolatileTail'.
 module DbSync.Extractor.UTxO
   ( utxoExtractor
 

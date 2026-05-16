@@ -44,12 +44,14 @@ library dbsync-testlib
   exposed-modules:
     DbSync.Test.AppHarness
     DbSync.Test.Database
+    DbSync.Test.E2E
     DbSync.Test.Fixtures
     DbSync.Test.Generators
     DbSync.Test.Hasql
     DbSync.Test.Helpers
     DbSync.Test.MockChain
     DbSync.Test.MockNode
+    DbSync.Test.PgAssertions
     DbSync.Test.PipelineEnv
     DbSync.Test.Property.Invariants
   build-depends:
@@ -76,10 +78,23 @@ library dbsync-testlib
 -- ---------------------------------------------------------------------------
 -- Test runner
 -- ---------------------------------------------------------------------------
+--
+-- Specs live under one of three subdirectories to make the cost
+-- profile obvious at a glance:
+--
+--   * @main/unit@        — pure tests, no PG, no mock chain. Fast.
+--   * @main/integration@ — touches PG but no chain (schema DDL,
+--                          hasql round-trips, checkpoint logic).
+--   * @main/e2e@         — full app flow through the mock chainsync
+--                          server (slowest; one cabal-test pass each).
+--
+-- The runner ('main/Main.hs') groups them under matching @describe@
+-- headings so @cabal test --test-options="--match \"Unit tests\""@
+-- (or similar) selects a single tier.
 test-suite dbsync-test
   import:         warnings, defaults
   type:           exitcode-stdio-1.0
-  hs-source-dirs: main
+  hs-source-dirs: main, main/unit, main/integration, main/e2e
   main-is:        Main.hs
   ghc-options:    -threaded
   other-modules:
@@ -126,19 +141,22 @@ test-suite dbsync-test
     DbSync.Checkpoint.ManagerSpec
     DbSync.Checkpoint.ResumeSpec
     DbSync.Checkpoint.SyncStateSpec
-    DbSync.Phase.BootSpec
-    DbSync.Phase.FollowingChainTipSpec
-    DbSync.Phase.FollowingChainTip.RollbackSpec
+    DbSync.App.BootSpec
+    DbSync.Phase.RefSpec
+    DbSync.Phase.FollowingSpec
+    DbSync.Phase.Following.RollbackSpec
+    DbSync.Phase.FollowRestartSpec
     DbSync.Phase.IngestPrepFollowSpec
     DbSync.Phase.MockChainSpec
     DbSync.Phase.MockNodeSpec
-    DbSync.Phase.PreparingForChainTipSpec
+    DbSync.Phase.PreparingForVolatileTailSpec
     DbSync.StateQuery.ObservedSummarySpec
   build-depends:
       base
     , aeson
     , base16-bytestring
     , bech32
+    , contra-tracer
     , dbsync
     , dbsync-db
     , dbsync-mock

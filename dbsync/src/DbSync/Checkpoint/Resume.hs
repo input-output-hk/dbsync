@@ -2,25 +2,22 @@
 
 -- | Resume-time row cleanup.
 --
--- A crash between the COPY commit and the sync-state UPDATE can
--- leave rows in PG past 'ssrLastCommittedSlot'. 'deleteRowsPastSlot'
--- runs at boot to remove those rows so the consumer starts with a
--- consistent view.
+-- Two boot scenarios use different strategies:
 --
--- Per-table dispatch:
+--   * 'IngestResume' — full cleanup. The COPY writer commits at
+--     epoch boundaries and the dedup-counter snapshot in
+--     'SyncStateRow' lags by one epoch, so rows can sit past both
+--     'ssrLastCommittedSlot' and the recorded counters.
 --
---   * Tables with a @slot_no@ column are deleted by slot.
---   * Tables with a @block_id@ FK (but no @slot_no@) are deleted by
---     joining to @block.slot_no@.
---   * Dedup tables (no slot, no block) are deleted by id, using the
---     corresponding @*_id_counter@ from 'SyncStateRow' as the
---     \"first id past the committed point\" boundary.
---
--- Tables are processed in dependency order: the @block_id@-referencing
--- tables run their @block.slot_no@ subqueries against the still-intact
--- @block@ table, before @block@ itself is trimmed.
+--   * 'FollowRestart' — defensive only. Follow's per-block
+--     transaction is atomic, so no orphan rows past the recorded
+--     slot are possible. Dedup-counter columns are stale here
+--     because 'writeSyncStateSlotStmt' deliberately doesn't touch
+--     them — running the counter DELETE would wipe legitimate rows
+--     that fact-table FKs reference.
 module DbSync.Checkpoint.Resume
-  ( deleteRowsPastSlot
+  ( CleanupMode (..)
+  , deleteRowsPastSlot
   ) where
 
 import Cardano.Prelude
@@ -39,11 +36,26 @@ import DbSync.Db.Statement.Resume
   )
 import DbSync.Error (throwDb)
 
+-- | Which boot scenario the cleanup is running under. See module Haddock.
+data CleanupMode
+  = IngestResume
+    -- ^ Full cleanup against the 'SyncStateRow' counters.
+  | FollowRestart
+    -- ^ Skip the dedup-counter DELETE; the counters are stale on
+    -- this path and the DELETE would wipe live rows.
+  deriving stock (Eq, Show)
+
 -- | Delete every row past the row's @last_committed_slot@ across the
--- given tables. Returns the total number of rows deleted (for log
--- output). No-op when the row reports no committed progress.
-deleteRowsPastSlot :: HasCallStack => ControlConnection -> [TableDef] -> SyncStateRow -> IO Int64
-deleteRowsPastSlot ctrl tableDefs row =
+-- given tables. Returns the total number of rows deleted. No-op when
+-- the row reports no committed progress.
+deleteRowsPastSlot
+  :: HasCallStack
+  => CleanupMode
+  -> ControlConnection
+  -> [TableDef]
+  -> SyncStateRow
+  -> IO Int64
+deleteRowsPastSlot mode ctrl tableDefs row =
   case ssrLastCommittedSlot row of
     Nothing -> pure 0
     Just slotNo -> do
@@ -51,18 +63,19 @@ deleteRowsPastSlot ctrl tableDefs row =
           byBlockId  = [td        | (td, HasBlockId)    <- classified]
           bySlot     = [td        | (td, HasSlotNo)     <- classified]
           dedup      = [(td, ctr) | (td, IsDedup ctr)   <- classified]
-      -- Order matters: by-block-id tables must be cleaned before the
-      -- 'block' table is itself trimmed, otherwise their @SELECT id
-      -- FROM block WHERE slot_no > $1@ subquery returns nothing.
+      -- By-block-id tables join through 'block.slot_no', so they
+      -- must run before 'block' itself is trimmed.
       n1 <- sum <$> traverse (\td -> runStmt ctrl slotNo (deleteByBlockSlotStmt (tdName td))) byBlockId
       n2 <- sum <$> traverse (\td -> runStmt ctrl slotNo (deleteBySlotStmt      (tdName td))) bySlot
-      n3 <- sum <$> traverse
-              (\(td, counter) ->
-                 runStmt ctrl (counter row) (deleteDedupByCounterStmt (tdName td)))
-              dedup
+      n3 <- case mode of
+        IngestResume ->
+          sum <$> traverse
+            (\(td, counter) ->
+               runStmt ctrl (counter row) (deleteDedupByCounterStmt (tdName td)))
+            dedup
+        FollowRestart -> pure 0
       pure (n1 + n2 + n3)
 
--- | Per-table cleanup strategy.
 data TableShape
   = HasSlotNo
   | HasBlockId
@@ -80,16 +93,10 @@ classify td
     columnNames = map cdName (tdColumns td)
     hasColumn c = c `elem` columnNames
 
--- | One entry per dedup table, mapping its name to the counter on
--- 'SyncStateRow' that records \"the next id we'd assign\".
---
--- @address@ is included so partial-epoch rows from the background
--- 'DbSync.Resolver.AddressWorker.AddressResolver' get cleaned up:
--- a crash between the worker's INSERTs and 'writeSyncState' leaves
--- @address@ rows with @id >= ssrAddressIdCounter@; without this
--- entry the next run's SELECT-before-INSERT dedup races with the
--- orphan rows and produces duplicates that fail the post-load
--- @UNIQUE (raw)@ index build in 'PreparingForChainTip'.
+-- | Dedup table to its "next id to assign" counter on 'SyncStateRow'.
+-- @address@ is included because the background AddressResolver
+-- allocates IDs during Ingest and a crash between its INSERTs and
+-- 'writeSyncState' leaves rows past the recorded counter.
 dedupCounterFor :: Text -> Maybe (SyncStateRow -> Int64)
 dedupCounterFor = \case
   "slot_leader"   -> Just ssrSlotLeaderIdCounter
@@ -100,8 +107,6 @@ dedupCounterFor = \case
   "address"       -> Just ssrAddressIdCounter
   _               -> Nothing
 
--- | Run a 'Stmt.Statement' on the control connection, lifting any
--- 'SessionError' into 'AppDatabaseError'.
 runStmt :: HasCallStack => ControlConnection -> p -> Stmt.Statement p r -> IO r
 runStmt (ControlConnection conn) params stmt = do
   result <- Conn.use conn (Sess.statement params stmt)

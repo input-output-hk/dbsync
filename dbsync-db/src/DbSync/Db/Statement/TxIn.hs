@@ -6,7 +6,7 @@
 -- The 'IngestChainHistory' phase writes via COPY instead.
 --
 -- @tx_out_id@ is left NULL during ingest; it is resolved post-load by
--- a SQL join in 'PreparingForChainTip'. The same convention applies
+-- a SQL join in 'PreparingForVolatileTail'. The same convention applies
 -- here in FollowingChainTip — the writer never sets it.
 module DbSync.Db.Statement.TxIn
   ( -- * Inserts

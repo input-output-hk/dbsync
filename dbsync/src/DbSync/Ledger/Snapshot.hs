@@ -95,7 +95,7 @@ import DbSync.Ledger.Types
   , toConsensusStateRef
   )
 import DbSync.Block.Types (CardanoPoint)
-import DbSync.Trace.Types (LogMsg (..), Severity (..))
+import DbSync.Trace.Types (LogMsg (..), Severity (..), logThreadExit)
 
 -- ---------------------------------------------------------------------------
 -- * Listing
@@ -197,16 +197,15 @@ saveCleanupState sref = do
 -- block forever so the surrounding 'withAsync' wiring doesn't have
 -- to special-case the disabled arm.
 --
--- Any exception escaping the enabled-arm loop is logged at 'Error'
--- before being re-thrown, so a thread death is always visible in
--- the operator log.
+-- Exceptions escaping the enabled-arm loop are tagged via
+-- 'logThreadExit' so an 'AsyncCancelled' from orderly shutdown logs
+-- at 'Info' while a real crash logs at 'Error'.
 runLedgerStateWriteThread :: HasLedgerEnv -> IO ()
 runLedgerStateWriteThread = \case
   LedgerEnabled env  ->
     runAppM env snapshotWriteLoop
       `catch` \(e :: SomeException) -> do
-        traceWith (leTracer env) $ LogMsg Error "LedgerSnapshot"
-          ("snapshot-writer crashed: " <> show e) Nothing
+        logThreadExit "LedgerSnapshot" e (leTracer env)
         throwIO e
   LedgerDisabled _nle -> idleForever
   where

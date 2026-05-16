@@ -16,13 +16,17 @@ module DbSync.Trace.Types
 
     -- * Source-location capture
   , captureCallSite
+
+    -- * Thread-exit logging
+  , logThreadExit
   ) where
 
 import Cardano.Prelude
 
 import qualified Data.Text as Text
 
-import Control.Tracer (Tracer)
+import Control.Concurrent.Async (AsyncCancelled (..))
+import Control.Tracer (Tracer, traceWith)
 
 -- * Types
 
@@ -67,6 +71,19 @@ severityFromText t = case Text.toLower (Text.strip t) of
   "warn"    -> Warning
   "error"   -> Error
   _         -> Info
+
+-- | Log a background-thread exit. 'AsyncCancelled' is the normal
+-- shutdown signal — log at 'Info' so it doesn't pollute the
+-- operator's view of real failures. Any other exception is a real
+-- crash and logs at 'Error'.
+logThreadExit :: Text -> SomeException -> AppTracer -> IO ()
+logThreadExit component e tracer = case fromException e of
+  Just AsyncCancelled ->
+    traceWith tracer $ LogMsg Info component
+      "stopped (cancelled during shutdown)" Nothing
+  Nothing ->
+    traceWith tracer $ LogMsg Error component
+      ("crashed: " <> show e) Nothing
 
 -- | Extract the top frame of a 'CallStack' into 'SrcInfo'.
 --

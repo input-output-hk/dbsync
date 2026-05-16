@@ -85,7 +85,7 @@ import DbSync.Era.Shelley.Generic.Rewards
   , rewardTypeToSource
   )
 import DbSync.Ledger.Keys (PoolKeyHash, StakeCred)
-import DbSync.Phase (SyncPhase)
+import DbSync.Db.Phase (SyncPhase)
 
 -- ---------------------------------------------------------------------------
 -- * Types

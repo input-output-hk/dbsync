@@ -184,6 +184,7 @@ import qualified DbSync.Ledger.Snapshot
 import DbSync.Ledger.Snapshot (loadSnapshotFromDisk)
 import DbSync.Block.Types (CardanoPoint)
 import DbSync.StateQuery (SlotDetails (..))
+import DbSync.Phase.Ref (SyncPhaseRef)
 import DbSync.Trace.Types (AppTracer)
 import DbSync.Util (maybeToStrictMaybe)
 
@@ -301,10 +302,11 @@ mkHasLedgerEnv
   -> Bool                                           -- ^ Abort on invalid ledger state
   -> LedgerBackend
   -> ControlConnection                              -- ^ For 'markSnapshotComplete' from the writer thread
+  -> SyncPhaseRef                                   -- ^ Shared lifecycle phase, read by the worker for snapshot cadence
   -> IO HasLedgerEnv
 mkHasLedgerEnv
   tracer pinfo dir network maxSupply start snapEpoch
-  hasRewards abortOnPanic backend ctrlConn = do
+  hasRewards abortOnPanic backend ctrlConn phaseRef = do
     interpreterVar  <- newTVarIO Strict.Nothing
     stateVar        <- newTVarIO Strict.Nothing
     latestApplyVar  <- newTVarIO Strict.Nothing
@@ -313,7 +315,6 @@ mkHasLedgerEnv
     epochReady      <- newEmptyTMVarIO
     epochWait       <- newEmptyTMVarIO
     snapshotQueue   <- newTBQueueIO snapshotQueueBound
-    consistentVar   <- newTVarIO False
 
     -- One snapshot, two directories — both halves required, neither a duplicate:
     --   <dir>/snapshot-headers/<slot>/  small (KB–MB): ExtLedgerState
@@ -407,7 +408,7 @@ mkHasLedgerEnv
           , leLatestApplyResult    = latestApplyVar
           , leDepositAccumulator   = depositAccumRef
           , leControlConnection    = ctrlConn
-          , leConsistentWithTip    = consistentVar
+          , leSyncPhase            = phaseRef
           }
   where
     -- Shallow — the worker is a single consumer and we want strong

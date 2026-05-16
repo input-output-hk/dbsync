@@ -17,7 +17,6 @@ module DbSync.App.Run
 
 import Cardano.Prelude
 
-import qualified Control.Concurrent.Class.MonadSTM.Strict as Strict
 import Control.Concurrent.STM (newTBQueueIO, newTVarIO)
 import qualified Control.Concurrent.STM as STM
 import Control.Tracer (traceWith)
@@ -244,6 +243,7 @@ runApp tracer args = do
           False
           (lcBackend ledgerCfg)
           snapCtrlConn
+          (ceSyncPhase coreEnv)
       else do
         logInfo "Ledger feature disabled (set ledger.enabled = true in profile to opt in); skipping LSM session"
         LedgerDisabled <$> mkNoLedgerEnv tracer pinfo systemStart network
@@ -340,7 +340,6 @@ runApp tracer args = do
 
       BootFollowingFastPath rc -> do
         setSyncPhase tracer (ceSyncPhase coreEnv) FollowingVolatileTail
-        flipConsistentWithTip hasLedgerEnv
         watchdog <- newWatchdog (ceMinSeverity coreEnv)
         withIOManager $ \iomgr ->
           withLedgerThreads hasLedgerEnv Nothing stateQueryVar watchdog $
@@ -445,7 +444,6 @@ runApp tracer args = do
           -- Ingest receiver cancelled. Ledger worker and snapshot
           -- writer stay alive across Prep and into Follow.
           runPrepAndMarkComplete
-          flipConsistentWithTip hasLedgerEnv
           setSyncPhase tracer (ceSyncPhase coreEnv) FollowingVolatileTail
           handoffToFollow
             iomgr ingestEnv logInfo logError hasqlSettings
@@ -526,14 +524,6 @@ withLedgerThreads hasLE@(LedgerEnabled lenv) replayBoundary sqv wd inner =
     withAsync (runLedgerStateWriteThread hasLE) $ \s -> do
       link s
       inner
-
--- | Mark the ledger subsystem as caught up with the chain tip, so
--- the worker's per-block snapshot decision flips to /every epoch/
--- instead of /every 10 epochs/. No-op when ledger is disabled.
-flipConsistentWithTip :: HasLedgerEnv -> IO ()
-flipConsistentWithTip (LedgerDisabled _) = pure ()
-flipConsistentWithTip (LedgerEnabled lenv) =
-  Strict.atomically $ Strict.writeTVar (leConsistentWithTip lenv) True
 
 -- | In-process Ingest → Prep → Follow handoff.
 --
@@ -649,7 +639,7 @@ runFollowFastPath
   socketPath systemStart stateQueryVar hasLedgerEnv consumerCtrlConn rc
   mShutdown iomgr watchdog = do
 
-    logInfo "Boot: sync_complete=true; starting FollowingChainTip"
+    logInfo "Boot: sync_complete=true; entering FollowingVolatileTail"
 
     let row = rcSyncState rc
         tableDefs = concatMap pdTables (ceExtractors coreEnv)

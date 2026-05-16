@@ -120,6 +120,7 @@ import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()  -- 'LedgerSupport
 
 import DbSync.Block.Types (CardanoPoint)
 import DbSync.Checkpoint.SyncState (ControlConnection)
+import DbSync.Phase.Ref (SyncPhaseRef)
 import DbSync.StateQuery.Types (CardanoInterpreter, SlotDetails)
 import DbSync.Trace.Types (AppTracer)
 
@@ -235,11 +236,11 @@ data LedgerEnv = LedgerEnv
     -- ^ PG connection used by the snapshot-writer thread to record
     -- successful snapshot completions in
     -- @dbsync_sync_state.last_snapshot_slot@.
-  , leConsistentWithTip    :: !(StrictTVar IO Bool)
-    -- ^ 'True' once @FollowingChainTip@ is active. Read by the
-    -- worker on every apply and passed to 'shouldSnapshotAtEpoch';
-    -- 'False' yields the lagging cadence (every 10 epochs), 'True'
-    -- the near-tip cadence (every epoch).
+  , leSyncPhase            :: !SyncPhaseRef
+    -- ^ Live lifecycle phase, shared with 'CoreEnv'. The worker
+    -- reads 'isFollowPath' on every apply to choose snapshot
+    -- cadence: lagging (every 10 epochs) during Ingest, near-tip
+    -- (every epoch) once Follow has started.
   }
 
 -- | Constructor for 'NoLedgerEnv'. In 'IO' purely to keep the shape

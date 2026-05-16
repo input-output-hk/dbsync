@@ -52,6 +52,7 @@ import Ouroboros.Network.Block (pointSlot)
 
 import DbSync.AppM (LedgerM, runAppM)
 import DbSync.Block.Types (CardanoPoint)
+import DbSync.Db.Phase (isFollowPath)
 import qualified DbSync.Era.Shelley.Generic.EpochUpdate as Generic
 import DbSync.Ledger.State
   ( applyBlockAndSnapshot
@@ -61,6 +62,7 @@ import DbSync.Ledger.State
   )
 import DbSync.Ledger.Types (ApplyResult (..), LedgerEnv (..))
 import DbSync.Node.ChainSyncMsg (ChainSyncMsg (..))
+import DbSync.Phase.Ref (readSyncPhase)
 import DbSync.StateQuery
   ( SlotDetails
   , StateQueryVar
@@ -91,9 +93,9 @@ data WorkerHooks blk = WorkerHooks
 -- replay boundary.
 --
 -- The /consistent with tip/ flag passed to 'applyBlockAndSnapshot'
--- is read from 'leConsistentWithTip' on every apply, so the
+-- is derived from the shared 'SyncPhaseRef' on every apply, so the
 -- orchestrator can flip the snapshot cadence (Ingest = every 10
--- epochs, Follow = every epoch) without restarting the worker.
+-- epochs, Follow = every epoch) just by transitioning the phase.
 --
 -- The 'Watchdog' note is stamped around each hook call so a hang
 -- inside @applyBlockAndSnapshot@ or @seedInterpreterFromLedgerState@
@@ -111,7 +113,7 @@ realWorkerHooks env sqv wd mReplayBoundary =
         getSlotDetailsIO (leTracer env) sqv (leSystemStart env) (blockSlot blk)
     , whApplyAndSnapshot = \blk sd -> do
         setWorkerNote wd "worker: applyBlockAndSnapshot"
-        consistent <- Strict.readTVarIO (leConsistentWithTip env)
+        consistent <- isFollowPath <$> readSyncPhase (leSyncPhase env)
         result <- runAppM env (applyBlockAndSnapshot blk sd consistent mReplayBoundary)
         -- Re-seed the cached HFC interpreter from the post-apply state so
         -- the next getSlotDetailsIO stays inside the summary's horizon.

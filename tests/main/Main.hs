@@ -71,12 +71,14 @@ import qualified DbSync.Db.Statement.BlockSpec as DbStatementBlockSpec
 import qualified DbSync.Db.Statement.RoundTripSpec as DbStatementRoundTripSpec
 import qualified DbSync.Db.Statement.SlotLeaderSpec as DbStatementSlotLeaderSpec
 import qualified DbSync.Db.Statement.SyncStateSpec as DbStatementSyncStateSpec
+import qualified DbSync.Phase.Following.BufferedDiffSpec as PhaseFollowBufferedDiffSpec
 import qualified DbSync.Phase.Following.RollbackSpec as PhaseRollbackSpec
 import qualified DbSync.Phase.Following.RunSpec as PhaseFollowRunSpec
 import qualified DbSync.Phase.Preparing.RunSpec as PhasePrepSpec
 import qualified DbSync.Schema.InitSpec as SchemaInitSpec
 
 -- End-to-end
+import qualified DbSync.Phase.FollowAtTipSpec as PhaseFollowAtTipSpec
 import qualified DbSync.Phase.FollowPerfSpec as PhaseFollowPerfSpec
 import qualified DbSync.Phase.FollowRestartSpec as PhaseFollowRestartSpec
 import qualified DbSync.Phase.FollowRollbackOnBootSpec as PhaseFollowRollbackOnBootSpec
@@ -137,6 +139,7 @@ main = hspec $ do
     DbStatementRoundTripSpec.spec
     DbStatementSlotLeaderSpec.spec
     DbStatementSyncStateSpec.spec
+    PhaseFollowBufferedDiffSpec.spec
     PhaseFollowRunSpec.spec
     PhasePrepSpec.spec
     PhaseRollbackSpec.cascadeSpec
@@ -146,6 +149,7 @@ main = hspec $ do
     PhaseIngestPrepFollowSpec.spec
     PhaseFollowRestartSpec.spec
     PhaseFollowRollbackOnBootSpec.spec
+    PhaseFollowAtTipSpec.spec
     PhaseFollowPerfSpec.spec
     PhaseMockChainSpec.spec
     PhaseMockNodeSpec.spec

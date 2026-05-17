@@ -144,8 +144,10 @@ test-suite dbsync-test
     DbSync.Checkpoint.SyncStateSpec
     DbSync.App.BootSpec
     DbSync.Phase.CurrentSpec
+    DbSync.Phase.Following.BufferedDiffSpec
     DbSync.Phase.Following.RollbackSpec
     DbSync.Phase.Following.RunSpec
+    DbSync.Phase.FollowAtTipSpec
     DbSync.Phase.FollowPerfSpec
     DbSync.Phase.FollowRestartSpec
     DbSync.Phase.FollowRollbackOnBootSpec

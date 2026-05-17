@@ -21,6 +21,7 @@ module DbSync.Test.E2E
   , awaitShutdown
   , syncCompleteTrue
   , forgeAndWaitForBlocks
+  , waitForLogMatch
 
     -- * Filesystem probes
   , listLedgerSnapshots
@@ -28,6 +29,7 @@ module DbSync.Test.E2E
 
 import Cardano.Prelude
 
+import Data.IORef (IORef, readIORef)
 import qualified Data.Text as T
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath ((</>))
@@ -45,7 +47,7 @@ import DbSync.Test.Database (execTestDb, queryTestDb)
 import DbSync.Test.Helpers (waitFor)
 import DbSync.Test.MockNode (MockNode, forgeAndPushBlocks)
 import DbSync.Test.PgAssertions (countRows)
-import DbSync.Trace.Types (AppTracer)
+import DbSync.Trace.Types (AppTracer, LogMsg)
 
 -- | Conway test config bundle. Short epoch (500 slots) and small
 -- security parameter (k=10) so e2e specs cross both quickly.
@@ -162,6 +164,27 @@ forgeAndWaitForBlocks mn n minTotal timeoutSec = do
     ("block table to reach " <> show minTotal <> " rows")
     (do tot <- countRows "block"; pure (tot >= minTotal))
     timeoutSec
+
+-- | Poll the captured-log 'IORef' until any 'LogMsg' satisfies
+-- @predicate@, or panic after @timeoutSec@ seconds. Generalises the
+-- "wait for the app to emit a particular line" pattern used by
+-- several e2e specs.
+--
+-- The @label@ is the "what" being waited on and is interpolated
+-- into the timeout message — pick something readable like
+-- @"phase flip to FollowingChainTip"@.
+waitForLogMatch
+  :: IORef [LogMsg]
+  -> Text
+  -> (LogMsg -> Bool)
+  -> Int
+  -> IO ()
+waitForLogMatch ref label predicate =
+  waitFor ("log line for " <> label) matches
+  where
+    matches = do
+      msgs <- readIORef ref
+      pure (any predicate msgs)
 
 -- ---------------------------------------------------------------------------
 -- * Filesystem probes

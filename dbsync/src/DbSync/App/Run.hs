@@ -111,6 +111,7 @@ import DbSync.Phase.Preparing.Tuning (defaultPrepTuning)
 import DbSync.Address.Buffer (newAddressBufferRef)
 import DbSync.Address.Worker (awaitDrained, closeAddressResolver, mkAddressResolver)
 import DbSync.Phase.Following.Resolver (mkFollowResolver)
+import DbSync.Phase.Following.Tuning (defaultFollowTuning, setFollowSessionGUCs)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
 import DbSync.StateQuery (StateQueryVar, newStateQueryVar, seedInterpreterFromLedgerState)
 import DbSync.Trace.Timing (withHeartbeatIO)
@@ -587,6 +588,10 @@ handoffToFollow
 
     followCtrl <- openControlConnection hasqlSettings
     let followConn = unControlConnection followCtrl
+    -- @synchronous_commit = off@: per-block COMMITs no longer wait
+    -- on WAL fsync. Crash recovery is covered by chainsync replay
+    -- from @last_committed_slot@.
+    runAppM followConn (setFollowSessionGUCs defaultFollowTuning)
     resolver <- mkFollowResolver followConn
     let writer     = FollowingWriter.mkWriter followConn
         followEnv  = mkFollowEnvFromIngest ie followConn resolver writer
@@ -684,6 +689,10 @@ runFollowFastPath
 
     followCtrl <- openControlConnection hasqlSettings
     let followConn = unControlConnection followCtrl
+    -- @synchronous_commit = off@: per-block COMMITs no longer wait
+    -- on WAL fsync. Crash recovery is covered by chainsync replay
+    -- from @last_committed_slot@.
+    runAppM followConn (setFollowSessionGUCs defaultFollowTuning)
 
     blockQueue       <- newTBQueueIO 500
     receiverStats    <- newReceiverStats

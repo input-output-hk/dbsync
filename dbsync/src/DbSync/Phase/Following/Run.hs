@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE PatternSynonyms #-}
 
 -- | The Follow loop: per-block INSERT against PG with rollback
@@ -10,7 +11,10 @@
 --
 -- The loop reads one 'ChainSyncMsg' at a time from 'feBlockQueue'
 -- and either applies a forward block in its own PG transaction, or
--- runs the rollback cascade for a 'MsgRollback' marker.
+-- runs the rollback cascade for a 'MsgRollback' marker. Between
+-- messages the loop also fires an idle heartbeat every
+-- 'idleHeartbeatMicros' microseconds while in 'FollowingChainTip',
+-- so a quiet chain doesn't look like a stalled app at Info level.
 module DbSync.Phase.Following.Run
   ( run
   ) where
@@ -19,13 +23,13 @@ import Cardano.Prelude
 
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
-import Control.Concurrent.STM (readTBQueue)
 import qualified Control.Concurrent.STM as STM
 import Control.Tracer (traceWith)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import Numeric (showFFloat)
 import qualified Hasql.Connection as Conn
+import qualified Hasql.Pipeline as Pipeline
 import qualified Hasql.Session as Sess
 
 import Ouroboros.Consensus.Block (blockSlot)
@@ -42,40 +46,54 @@ import DbSync.Env (CoreEnv (..), FollowEnv (..))
 import DbSync.Extractor (ExtractorDef (..))
 import DbSync.Block.Pipeline (processBlock)
 import DbSync.Node.ChainSyncMsg (ChainSyncMsg (..))
+import DbSync.Phase.Following.IdAllocator (allocateAllIds)
+import DbSync.Phase.Following.IdCounts (countAssignableIds)
+import DbSync.Phase.Following.Resolver (mkBufferedFollowResolver)
 import qualified DbSync.Phase.Following.Rollback as Rollback
-import DbSync.Phase.Current (CurrentPhase, readCurrentPhase, setCurrentPhase)
+import DbSync.Phase.Following.WriteBuffer (drain, newWriteBuffer)
+import DbSync.Phase.Following.Writer (mkBufferedWriter)
+import DbSync.Phase.Current
+  ( CurrentPhase
+  , readCurrentPhase
+  , readCurrentPhaseSTM
+  , setCurrentPhase
+  )
 import DbSync.StateQuery (getSlotDetails, observeBlockSTM)
 import DbSync.Trace.Timing (fmtDuration)
 import DbSync.Trace.Types (LogMsg (..), Severity (..))
 import DbSync.Trace.Watchdog (bumpConsumer, setConsumerNote)
 
--- | Cadence for the periodic Follow-loop progress log.
+-- | Cadence for the periodic Follow-loop progress log while in
+-- 'FollowingVolatileTail'. In 'FollowingChainTip' the loop logs every
+-- applied block instead so the operator has per-block visibility at
+-- mainnet's ~20 s/block cadence.
 logEveryNBlocks :: Word64
 logEveryNBlocks = 100
 
--- | How many of the first forward blocks each consumer session
--- should log at 'Info'. Bridges the gap between the receiver's
--- "intersect confirmed" log and the first 'logEveryNBlocks' summary,
--- which is otherwise a multi-minute silence on a slow Follow.
-firstBlocksToHeartbeat :: Int
-firstBlocksToHeartbeat = 5
+-- | Maximum quiet period before the Follow loop emits a
+-- "still at tip" heartbeat. Only fires in 'FollowingChainTip'; in
+-- 'FollowingVolatileTail' the windowed summary covers visibility.
+-- 30 s gives the operator a clear stall signal without flooding logs
+-- during normal block gaps (mainnet caps at ~40 s on a missed-slot
+-- pair).
+idleHeartbeatMicros :: Int
+idleHeartbeatMicros = 30_000_000
 
--- | State carried across forward blocks so we can emit a single
--- summary every 'logEveryNBlocks' blocks or whenever a new epoch
--- crosses, whichever comes first.
+-- | State carried across forward blocks. Drives the windowed log
+-- cadence in 'FollowingVolatileTail', the per-block delta in
+-- 'FollowingChainTip', and the "N ago" suffix on the idle heartbeat.
 data FollowProgress = FollowProgress
   { fpWindowStart      :: !UTCTime
-    -- ^ When the current window opened — the diff against @now@ is
-    -- the elapsed wall-clock used for the rate column.
+    -- ^ When the current 'logEveryNBlocks' window opened.
   , fpBlocksThisWindow :: !Word64
   , fpLastEpoch        :: !(Maybe Word64)
-    -- ^ 'Nothing' before the first block lands; afterwards holds
-    -- the most recent block's epoch so we can detect a crossing.
-  , fpHeartbeatsLeft   :: !Int
-    -- ^ Counts down from 'firstBlocksToHeartbeat'; while positive
-    -- the loop logs one Info line per applied block so the operator
-    -- sees the consumer is processing before the first windowed
-    -- summary fires.
+    -- ^ 'Nothing' before the first block lands.
+  , fpLastBlockAt      :: !(Maybe UTCTime)
+    -- ^ When the most recent block finished 'processForward'.
+    -- Drives the per-block delta and the idle-heartbeat "N ago" suffix.
+  , fpLastSlot         :: !(Maybe Word64)
+    -- ^ Slot of the most recent applied block, surfaced in the idle
+    -- heartbeat so the chain pointer is visible even between blocks.
   }
 
 -- | Drain the chainsync queue forever.
@@ -100,13 +118,39 @@ run = do
     { fpWindowStart      = startedAt
     , fpBlocksThisWindow = 0
     , fpLastEpoch        = Nothing
-    , fpHeartbeatsLeft   = firstBlocksToHeartbeat
+    , fpLastBlockAt      = Nothing
+    , fpLastSlot         = Nothing
     }
   forever $ do
-    msg <- liftIO $ atomically $ readTBQueue feBlockQueue
-    case msg of
-      MsgForward  blk   -> processForward progressRef blk
-      MsgRollback point -> processRollback point
+    mMsg <- liftIO $
+      waitForMsgOrHeartbeat feBlockQueue phaseRef idleHeartbeatMicros
+    case mMsg of
+      Just (MsgForward  blk)   -> processForward progressRef blk
+      Just (MsgRollback point) -> processRollback point
+      Nothing                  -> emitIdleHeartbeat progressRef
+
+-- | Read the next message from the queue, or fall through with
+-- 'Nothing' after the heartbeat timer expires. Only fires the timer
+-- branch while the current phase is 'FollowingChainTip'; in any
+-- other phase this behaves like a plain 'readTBQueue' (windowed
+-- summaries cover visibility there).
+waitForMsgOrHeartbeat
+  :: STM.TBQueue ChainSyncMsg
+  -> CurrentPhase
+  -> Int
+  -> IO (Maybe ChainSyncMsg)
+waitForMsgOrHeartbeat q phaseRef micros = do
+  delayVar <- STM.registerDelay micros
+  STM.atomically $
+    (Just <$> STM.readTBQueue q)
+      `STM.orElse` heartbeatBranch delayVar
+  where
+    heartbeatBranch delayVar = do
+      phase <- readCurrentPhaseSTM phaseRef
+      when (phase /= FollowingChainTip) STM.retry
+      expired <- STM.readTVar delayVar
+      unless expired STM.retry
+      pure Nothing
 
 -- | Render the current phase as the log-component string. Always
 -- reflects whether we are catching up or steady-state, so a reader
@@ -116,10 +160,27 @@ readPhaseComponent = fmap renderSyncPhase . readCurrentPhase
 
 -- | Apply one forward block.
 --
--- The block parse and extractor pipeline run against the same hasql
--- connection as the sync-state advance; @BEGIN@/@COMMIT@ are wrapped
--- around both so the row writes and the @last_committed_*@ update
--- commit atomically.
+-- Five steps inside one PG transaction:
+--
+--   1. Walk the parsed block to count the IDs the extractors will
+--      need ('countAssignableIds').
+--   2. Allocate every assignable ID in one libpq pipeline
+--      ('allocateAllIds') — one network round-trip for the lot.
+--   3. Run extractors with a buffered resolver + writer. Dedup
+--      resolves still hit PG synchronously (one SELECT plus a
+--      possible @nextval@ on miss) but consult a per-block dedup
+--      cache so siblings find each other. All INSERTs land on a
+--      single 'WriteBuffer' instead of going out one by one.
+--   4. Flush the buffer plus the @last_committed_*@ UPDATE in one
+--      pipeline — one round-trip closes out all the deferred
+--      writes.
+--   5. COMMIT (cheap with @synchronous_commit = off@).
+--
+-- A typical mainnet block (20 txs, 70 outputs, 50 inputs) drops
+-- from ~175 round-trips with the per-row immediate writer to
+-- ~30 — the bulk of the savings coming from the writes; dedup
+-- resolves are still synchronous and are the obvious Stage 2
+-- target.
 processForward :: IORef FollowProgress -> CardanoBlock StandardCrypto -> FollowM ()
 processForward progressRef cardanoBlock = do
   env@FollowEnv
@@ -133,18 +194,26 @@ processForward progressRef cardanoBlock = do
   liftIO $ void $ atomically $ observeBlockSTM feStateQueryVar cardanoBlock
   sd <- getSlotDetails slot
   let !genBlock = parseBlock sd cardanoBlock
-  liftIO $ withTransactionOn feHasqlConnection $ do
-    runAppM env (processBlock genBlock)
-    let triple =
-          ( unSlotNo  (blkSlotNo  genBlock)
-          , unBlockNo (blkBlockNo genBlock)
-          , blkHash   genBlock
-          )
-    sessR <- Conn.use feHasqlConnection (Sess.statement triple writeSyncStateSlotStmt)
-    case sessR of
-      Right _ -> pure ()
-      Left e  ->
-        panic $ "Following: writeSyncStateSlotStmt: " <> show e
+      !counts   = countAssignableIds genBlock
+      triple    = ( unSlotNo  (blkSlotNo  genBlock)
+                  , unBlockNo (blkBlockNo genBlock)
+                  , blkHash   genBlock
+                  )
+  liftIO $ do
+    preAllocated <- allocateAllIds feHasqlConnection counts
+    buf          <- newWriteBuffer
+    resolver     <- mkBufferedFollowResolver feHasqlConnection preAllocated buf
+    let writer      = mkBufferedWriter buf
+        bufferedEnv = env { feResolver = resolver, feWriter = writer }
+    withTransactionOn feHasqlConnection $ do
+      runAppM bufferedEnv (processBlock genBlock)
+      writes <- drain buf
+      let flushAndAdvance =
+            writes *> void (Pipeline.statement triple writeSyncStateSlotStmt)
+      sessR <- Conn.use feHasqlConnection (Sess.pipeline flushAndAdvance)
+      case sessR of
+        Right () -> pure ()
+        Left e   -> panic $ "Following: per-block flush: " <> show e
   maybeFlipToTip (blkSlotNo genBlock)
   maybeLogProgress progressRef genBlock
 
@@ -169,14 +238,12 @@ maybeFlipToTip appliedSlot = do
 
 -- | Update the progress counter for this block, then emit either:
 --
---   * a per-block heartbeat for the first 'firstBlocksToHeartbeat'
---     forward blocks of the session (consumer-side "I'm alive"
---     log); or
+--   * one Info line per applied block when in 'FollowingChainTip' —
+--     at mainnet's ~20 s/block cadence this is roughly one log per
+--     20 s, the natural "I'm alive" rhythm at tip; or
 --   * the windowed summary when 'logEveryNBlocks' blocks have been
---     applied or a new epoch has crossed.
---
--- Both fire on the same block only when the window cadence happens
--- to coincide with the heartbeat window — uncommon and harmless.
+--     applied or a new epoch has crossed (other phases). Per-block
+--     spam isn't useful while still catching up.
 maybeLogProgress :: IORef FollowProgress -> GenericBlock -> FollowM ()
 maybeLogProgress progressRef gb = do
   FollowEnv{feCore, feBlockQueue} <- ask
@@ -184,49 +251,83 @@ maybeLogProgress progressRef gb = do
       phaseRef = ceCurrentPhase feCore
   liftIO $ do
     now <- getCurrentTime
+    phase <- readCurrentPhase phaseRef
     let !curSlot  = unSlotNo  (blkSlotNo  gb)
         !curEpoch = unEpochNo (blkEpochNo gb)
         !curBlock = unBlockNo (blkBlockNo gb)
-    (mHeartbeat, mDue) <- atomicModifyIORef' progressRef $ \p ->
+    (mWindowed, mPrevBlockAt) <- atomicModifyIORef' progressRef $ \p ->
       let !window'      = fpBlocksThisWindow p + 1
           !epochCrossed = case fpLastEpoch p of
                             Just prev -> curEpoch /= prev
                             Nothing   -> False
           !cadenceHit   = window' >= logEveryNBlocks
-          !shouldLog    = epochCrossed || cadenceHit
-          !hbLeft       = fpHeartbeatsLeft p
-          !hbFires      = hbLeft > 0
-          !p' = (if shouldLog
+          !shouldLogWindowed = epochCrossed || cadenceHit
+          !prevBlockAt = fpLastBlockAt p
+          !p' = (if shouldLogWindowed
                    then p { fpWindowStart      = now
                           , fpBlocksThisWindow = 0
                           }
                    else p { fpBlocksThisWindow = window' }
-                ) { fpLastEpoch      = Just curEpoch
-                  , fpHeartbeatsLeft = max 0 (hbLeft - 1)
+                ) { fpLastEpoch   = Just curEpoch
+                  , fpLastBlockAt = Just now
+                  , fpLastSlot    = Just curSlot
                   }
           !info = (fpWindowStart p, window')
-      in (p', ( if hbFires then Just () else Nothing
-              , if shouldLog then Just info else Nothing
+      in (p', ( if shouldLogWindowed then Just info else Nothing
+              , prevBlockAt
               ))
     component <- readPhaseComponent phaseRef
-    for_ mHeartbeat $ \() ->
-      traceWith tracer $ LogMsg Info component (mconcat
-        [ "applied block ", show curBlock
-        , " (slot ", show curSlot
-        , ", epoch ", show curEpoch, ")"
-        ]) Nothing
-    for_ mDue $ \(windowStart, blocks) -> do
-      qLen <- atomically $ STM.lengthTBQueue feBlockQueue
-      let !elapsed = realToFrac (diffUTCTime now windowStart) :: Double
-          !rate    = if elapsed > 0 then fromIntegral blocks / elapsed else 0
-          msg      = mconcat
-            [ "slot ",  show curSlot
-            , ", epoch ", show curEpoch
-            , " | ", show blocks, " blk in ", fmtDuration elapsed
-            , " (", fmtRate rate, " blk/s)"
-            , " | queue=", show qLen
+    case phase of
+      FollowingChainTip ->
+        traceWith tracer $ LogMsg Info component (mconcat
+          [ "applied block ", show curBlock
+          , ", slot ", show curSlot
+          , ", epoch ", show curEpoch
+          , renderSinceLast now mPrevBlockAt
+          ]) Nothing
+      _ ->
+        for_ mWindowed $ \(windowStart, blocks) -> do
+          qLen <- atomically $ STM.lengthTBQueue feBlockQueue
+          let !elapsed = realToFrac (diffUTCTime now windowStart) :: Double
+              !rate    = if elapsed > 0 then fromIntegral blocks / elapsed else 0
+              msg      = mconcat
+                [ "slot ",  show curSlot
+                , ", epoch ", show curEpoch
+                , " | ", show blocks, " blk in ", fmtDuration elapsed
+                , " (", fmtRate rate, " blk/s)"
+                , " | queue=", show qLen
+                ]
+          traceWith tracer $ LogMsg Info component msg Nothing
+
+-- | Render the "+T since prev" suffix used on the per-block
+-- 'FollowingChainTip' log. Empty on the first block (no previous)
+-- so the line stays compact.
+renderSinceLast :: UTCTime -> Maybe UTCTime -> Text
+renderSinceLast now = \case
+  Nothing -> ""
+  Just t  -> " (+" <> fmtDuration (realToFrac (diffUTCTime now t)) <> " since prev)"
+
+-- | Emit the idle "still at tip" heartbeat. Fired from the main
+-- loop's heartbeat branch; the wait function gates on phase so this
+-- is only reachable in 'FollowingChainTip'.
+emitIdleHeartbeat :: IORef FollowProgress -> FollowM ()
+emitIdleHeartbeat progressRef = do
+  FollowEnv{feCore, feBlockQueue} <- ask
+  let tracer   = ceTracer    feCore
+      phaseRef = ceCurrentPhase feCore
+  liftIO $ do
+    now <- getCurrentTime
+    progress <- readIORef progressRef
+    qLen <- atomically $ STM.lengthTBQueue feBlockQueue
+    component <- readPhaseComponent phaseRef
+    let body = case (fpLastSlot progress, fpLastBlockAt progress) of
+          (Just s, Just t) -> mconcat
+            [ "still at tip, last block at slot ", show s
+            , " (", fmtDuration (realToFrac (diffUTCTime now t)), " ago)"
+            , ", queue=", show qLen
             ]
-      traceWith tracer $ LogMsg Info component msg Nothing
+          _ -> "still at tip, no blocks applied yet, queue=" <> show qLen
+    traceWith tracer $ LogMsg Info component body Nothing
 
 -- | Compact rate formatter: more precision at low rates so a slow
 -- sync doesn't read as "0 blk/s", less precision once the rate is

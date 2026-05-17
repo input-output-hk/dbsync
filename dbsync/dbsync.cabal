@@ -73,10 +73,13 @@ library
     DbSync.Phase.Preparing.Sequences
     DbSync.Phase.Preparing.Tuning
     DbSync.Db.Pool
+    DbSync.Phase.Following.IdCounts
+    DbSync.Phase.Following.IdAllocator
     DbSync.Phase.Following.Resolver
     DbSync.Phase.Following.Rollback
     DbSync.Phase.Following.Run
     DbSync.Phase.Following.Tuning
+    DbSync.Phase.Following.WriteBuffer
     DbSync.Phase.Following.Writer
     DbSync.Block.Metadata
     DbSync.Block.Parser

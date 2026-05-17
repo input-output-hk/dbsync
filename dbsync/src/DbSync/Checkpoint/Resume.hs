@@ -27,7 +27,11 @@ import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 import qualified Hasql.Statement as Stmt
 
-import DbSync.Checkpoint.SyncState (ControlConnection (..), SyncStateRow (..))
+import DbSync.Checkpoint.SyncState
+  ( ControlConnection (..)
+  , HasControlConnection (..)
+  , SyncStateRow (..)
+  )
 import DbSync.Db.Schema.Types (ColumnDef (..), TableDef (..))
 import DbSync.Db.Statement.Resume
   ( deleteByBlockSlotStmt
@@ -49,13 +53,16 @@ data CleanupMode
 -- given tables. Returns the total number of rows deleted. No-op when
 -- the row reports no committed progress.
 deleteRowsPastSlot
-  :: HasCallStack
+  :: ( HasCallStack
+     , HasControlConnection env
+     , MonadReader env m
+     , MonadIO m
+     )
   => CleanupMode
-  -> ControlConnection
   -> [TableDef]
   -> SyncStateRow
-  -> IO Int64
-deleteRowsPastSlot mode ctrl tableDefs row =
+  -> m Int64
+deleteRowsPastSlot mode tableDefs row =
   case ssrLastCommittedSlot row of
     Nothing -> pure 0
     Just slotNo -> do
@@ -65,13 +72,13 @@ deleteRowsPastSlot mode ctrl tableDefs row =
           dedup      = [(td, ctr) | (td, IsDedup ctr)   <- classified]
       -- By-block-id tables join through 'block.slot_no', so they
       -- must run before 'block' itself is trimmed.
-      n1 <- sum <$> traverse (\td -> runStmt ctrl slotNo (deleteByBlockSlotStmt (tdName td))) byBlockId
-      n2 <- sum <$> traverse (\td -> runStmt ctrl slotNo (deleteBySlotStmt      (tdName td))) bySlot
+      n1 <- sum <$> traverse (\td -> runCtrl slotNo (deleteByBlockSlotStmt (tdName td))) byBlockId
+      n2 <- sum <$> traverse (\td -> runCtrl slotNo (deleteBySlotStmt      (tdName td))) bySlot
       n3 <- case mode of
         IngestResume ->
           sum <$> traverse
             (\(td, counter) ->
-               runStmt ctrl (counter row) (deleteDedupByCounterStmt (tdName td)))
+               runCtrl (counter row) (deleteDedupByCounterStmt (tdName td)))
             dedup
         FollowRestart -> pure 0
       pure (n1 + n2 + n3)
@@ -107,9 +114,14 @@ dedupCounterFor = \case
   "address"       -> Just ssrAddressIdCounter
   _               -> Nothing
 
-runStmt :: HasCallStack => ControlConnection -> p -> Stmt.Statement p r -> IO r
-runStmt (ControlConnection conn) params stmt = do
-  result <- Conn.use conn (Sess.statement params stmt)
+runCtrl
+  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  => p
+  -> Stmt.Statement p r
+  -> m r
+runCtrl params stmt = do
+  ControlConnection conn <- asks getControlConnection
+  result <- liftIO $ Conn.use conn (Sess.statement params stmt)
   case result of
     Left err -> throwDb $ "deleteRowsPastSlot: " <> T.pack (show err)
     Right r  -> pure r

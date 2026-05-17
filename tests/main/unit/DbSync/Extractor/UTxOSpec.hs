@@ -36,14 +36,14 @@ import DbSync.Extractor.UTxO
   , utxoExtractor
   )
 import DbSync.Id.DedupMap (newMaps)
-import DbSync.Ingest.Pipeline (processBlock)
-import DbSync.Resolver.AddressBuffer
+import DbSync.Block.Pipeline (processBlock)
+import DbSync.Address.Buffer
   ( EpochAddressBuffer (..)
   , newAddressBufferRef
   )
-import DbSync.Resolver.Ingest (mkIngestResolver)
+import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
-import DbSync.Writer.Testing (TestWriterState (..), emptyTestWriterState, mkTestWriter)
+import DbSync.Test.Writer (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..), secondsToDiffTime)

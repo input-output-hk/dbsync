@@ -248,7 +248,7 @@ snapshotWriteLoop = do
         -- a re-scan via 'listSnapshots' will discover it.
         markResult <- liftIO $
           Exception.try @Exception.SomeException $
-            markSnapshotComplete (leControlConnection env) (dsNumber ds)
+            runAppM env (markSnapshotComplete (dsNumber ds))
         case markResult of
           Right () ->
             logMsg env Info $

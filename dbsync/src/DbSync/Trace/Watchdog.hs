@@ -17,6 +17,7 @@ module DbSync.Trace.Watchdog
   ( -- * Types
     Watchdog (..)
   , WatchdogState (..)
+  , HasWatchdog (..)
   , newWatchdog
 
     -- * Hot-path bumps
@@ -29,6 +30,7 @@ module DbSync.Trace.Watchdog
 
     -- * Sampler
   , runWatchdog
+  , runWatchdogIO
   , watchdogInterval
   , stallWarnThreshold
   ) where
@@ -41,6 +43,7 @@ import Control.Concurrent.STM (TBQueue)
 import Control.Tracer (traceWith)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
 
+import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 
 -- ---------------------------------------------------------------------------
@@ -50,6 +53,11 @@ import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 data Watchdog
   = WatchdogDisabled
   | WatchdogEnabled !WatchdogState
+
+-- | Access the watchdog from env. Implemented by 'IngestEnv' and
+-- 'FollowEnv'.
+class HasWatchdog env where
+  getWatchdog :: env -> Watchdog
 
 -- | Per-thread counters; writers use 'atomicModifyIORef'' so
 -- concurrent bumps never lose updates. The sampler tolerates lossy
@@ -180,15 +188,27 @@ advanceThread ts curBlocks =
 -- the caller's surrounding 'withAsync' then has a child that exits
 -- straight away, leaving the rest of the orchestration unchanged.
 runWatchdog
-  :: AppTracer
-  -> Watchdog
-  -> TBQueue a
+  :: (HasTracer env, HasWatchdog env, MonadReader env m, MonadIO m)
+  => TBQueue a
   -- ^ block queue (receiver → consumer)
   -> Maybe (TBQueue b)
   -- ^ ledger queue (receiver → worker), or 'Nothing' when ledger disabled
+  -> m ()
+runWatchdog blockQ mLedgerQ = do
+  tracer  <- asks getTracer
+  wd      <- asks getWatchdog
+  liftIO (runWatchdogIO tracer wd blockQ mLedgerQ)
+
+-- | Bare-IO entry point. The polymorphic 'runWatchdog' delegates to
+-- this; direct callers should prefer the polymorphic one.
+runWatchdogIO
+  :: AppTracer
+  -> Watchdog
+  -> TBQueue a
+  -> Maybe (TBQueue b)
   -> IO ()
-runWatchdog _      WatchdogDisabled    _      _        = pure ()
-runWatchdog tracer (WatchdogEnabled s) blockQ mLedgerQ = do
+runWatchdogIO _      WatchdogDisabled    _      _        = pure ()
+runWatchdogIO tracer (WatchdogEnabled s) blockQ mLedgerQ = do
   -- Seed: capture the initial counter values so the first interval
   -- reports a real delta rather than the lifetime total.
   initConsumerB <- readIORef (wsConsumerBlocks s)

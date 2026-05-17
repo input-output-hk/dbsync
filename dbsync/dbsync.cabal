@@ -2,9 +2,9 @@ cabal-version: 3.6
 name:          dbsync
 version:       0.1.0.0
 synopsis:      Cardano blockchain to PostgreSQL — reimplemented
-description:   A greenfield reimplementation of dbsync using COPY-based
-               parallel extraction, monotonic ID pre-assignment, and a projection
-               system for modular data extraction.
+description:   A greenfield reimplementation of dbsync using a loader-stream
+               parallel extraction path, monotonic ID pre-assignment, and a
+               projection system for modular data extraction.
 license:       Apache-2.0
 author:        IOHK Engineering Team
 maintainer:    operations@iohk.io
@@ -60,24 +60,30 @@ library
     DbSync.Trace.Backend
     DbSync.Trace.Timing
     DbSync.Trace.Watchdog
-    DbSync.Phase.Ref
-    DbSync.Phase.IngestChainHistory
-    DbSync.Phase.PreparingForVolatileTail
-    DbSync.Phase.PreparingForVolatileTail.Backfill
-    DbSync.Phase.PreparingForVolatileTail.Indexes
-    DbSync.Phase.PreparingForVolatileTail.PreResolveIndexes
-    DbSync.Phase.PreparingForVolatileTail.Resolve
-    DbSync.Phase.PreparingForVolatileTail.Sequences
-    DbSync.Phase.PreparingForVolatileTail.Tuning
+    DbSync.Phase.Current
+    DbSync.Phase.Ingest.Consumer
+    DbSync.Phase.Ingest.ReceiverStats
+    DbSync.Phase.Ingest.Resolver
+    DbSync.Phase.Ingest.Writer
+    DbSync.Phase.Preparing.Backfill
+    DbSync.Phase.Preparing.Indexes
+    DbSync.Phase.Preparing.PreResolveIndexes
+    DbSync.Phase.Preparing.Resolve
+    DbSync.Phase.Preparing.Run
+    DbSync.Phase.Preparing.Sequences
+    DbSync.Phase.Preparing.Tuning
     DbSync.Db.Pool
-    DbSync.Phase.Following
+    DbSync.Phase.Following.Resolver
     DbSync.Phase.Following.Rollback
-    DbSync.Block.Receiver
+    DbSync.Phase.Following.Run
+    DbSync.Phase.Following.Tuning
+    DbSync.Phase.Following.Writer
     DbSync.Block.Metadata
     DbSync.Block.Parser
     DbSync.Block.Parser.Block
     DbSync.Block.Parser.Byron
     DbSync.Block.Parser.Tx
+    DbSync.Block.Pipeline
     DbSync.Block.Types
     DbSync.Extractor
     DbSync.Extractor.Core
@@ -90,24 +96,16 @@ library
     DbSync.Extractor.Cbor
     DbSync.Extractor.EpochSyncStats
     DbSync.Extractor.EpochBoundary
-    DbSync.Copy.Connection
-    DbSync.Copy.Writer
+    DbSync.Db.Loader
+    DbSync.Db.Loader.Connection
     DbSync.Db.Transaction
-    DbSync.Ingest.Consumer
-    DbSync.Ingest.Pipeline
-    DbSync.Ingest.ReceiverStats
     DbSync.Resolver
-    DbSync.Resolver.AddressBuffer
-    DbSync.Resolver.AddressWorker
-    DbSync.Resolver.Follow
-    DbSync.Resolver.Ingest
+    DbSync.Address.Buffer
+    DbSync.Address.Worker
     DbSync.StateQuery
     DbSync.StateQuery.ObservedSummary
     DbSync.StateQuery.Types
     DbSync.Writer
-    DbSync.Writer.CopyAdapter
-    DbSync.Writer.InsertAdapter
-    DbSync.Writer.Testing
     DbSync.Id.Counter
     DbSync.Id.DedupMap
     DbSync.Checkpoint.Manager
@@ -115,11 +113,11 @@ library
     DbSync.Checkpoint.SyncState
     DbSync.Checkpoint.Types
     DbSync.Checkpoint.Serialise
-    DbSync.Era.Shelley.Generic
-    DbSync.Era.Shelley.Generic.EpochUpdate
-    DbSync.Era.Shelley.Generic.ProtoParams
-    DbSync.Era.Shelley.Generic.Rewards
-    DbSync.Era.Shelley.Generic.StakeDist
+    DbSync.Era.Shelley
+    DbSync.Era.Shelley.EpochUpdate
+    DbSync.Era.Shelley.ProtoParams
+    DbSync.Era.Shelley.Rewards
+    DbSync.Era.Shelley.StakeDist
     DbSync.Ledger.DepositAccumulator
     DbSync.Ledger.Event
     DbSync.Ledger.Keys
@@ -230,7 +228,7 @@ executable dbsync
   import:         warnings, defaults
   hs-source-dirs: app
   main-is:        Main.hs
-  -- RTS flags tuned for COPY-heavy encoding (many short-lived
+  -- RTS flags tuned for loader-stream encoding (many short-lived
   -- ByteStrings that should die in the nursery).
   --   -A64m  : 64 MB nursery (vs default 4 MB) — minor GC 16x less often
   --   -N6    : 6 capabilities

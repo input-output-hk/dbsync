@@ -32,8 +32,8 @@ import DbSync.Db.Schema.UTxO
 import DbSync.Db.Types (DbLovelace (..))
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
 import DbSync.Extractor.SharedDedup (resolveAndWriteStakeAddress)
-import DbSync.Resolver (IdResolver (..))
-import DbSync.Writer (Writer (..))
+import DbSync.Resolver (HasResolver (..), IdResolver (..))
+import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- ---------------------------------------------------------------------------
 -- * Extractor definition
@@ -60,7 +60,9 @@ utxoExtractor = ExtractorDef
 -- ---------------------------------------------------------------------------
 
 processUTxO :: ProcessBlockFn
-processUTxO resolver writer ctx = do
+processUTxO ctx = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
   forM_ (bcTxs ctx) $ \tc -> do
     let txId    = tcTxId tc
         gtx     = tcGenTx tc
@@ -84,43 +86,44 @@ processUTxO resolver writer ctx = do
           -- The Follow resolver runs an UPDATE to fill in @address_id@
           -- synchronously; the Ingest resolver appends the tuple to
           -- a per-epoch buffer the worker drains an epoch later.
-          writeTxOut writer outId (mkTxOut txId Nothing mStakeId gout)
-          recordTxOutAddress resolver outId raw addr
+          liftIO $ writeTxOut writer outId (mkTxOut txId Nothing mStakeId gout)
+          liftIO $ recordTxOutAddress resolver outId raw addr
 
         forM_ (txInputs gtx) $ \gin -> do
-          inId <- assignTxInId resolver
-          writeTxIn writer inId (mkTxIn txId gin)
+          inId <- liftIO $ assignTxInId resolver
+          liftIO $ writeTxIn writer inId (mkTxIn txId gin)
 
         forM_ (txReferenceInputs gtx) $ \gin -> do
-          inId <- assignReferenceTxInId resolver
-          writeReferenceTxIn writer inId (mkReferenceTxIn txId gin)
+          inId <- liftIO $ assignReferenceTxInId resolver
+          liftIO $ writeReferenceTxIn writer inId (mkReferenceTxIn txId gin)
       else
         -- Phase-2 failure: the chain only records the collateral
         -- inputs (consumed) and the optional collateral return.
         -- Regular inputs / outputs / reference inputs do not exist
         -- on-chain for a failed tx.
         forM_ (txCollateralOutput gtx) $ \gout -> do
-          outId <- assignCollateralTxOutId resolver
+          outId <- liftIO $ assignCollateralTxOutId resolver
           mStakeId <- resolveCollateralStake gout
           let raw  = G.txOutAddressRaw gout
               addr = mkAddress mStakeId gout
-          writeCollateralTxOut writer outId (mkCollateralTxOut txId Nothing mStakeId gout)
-          recordCollateralTxOutAddress resolver outId raw addr
+          liftIO $ writeCollateralTxOut writer outId (mkCollateralTxOut txId Nothing mStakeId gout)
+          liftIO $ recordCollateralTxOutAddress resolver outId raw addr
 
     -- Collateral inputs are written for every tx — valid txs record them
     -- as a script-witness commitment, failed txs record them as the
     -- inputs that were actually consumed.
     forM_ (txCollateralInputs gtx) $ \gin -> do
-      inId <- assignCollateralTxInId resolver
-      writeCollateralTxIn writer inId (mkCollateralTxIn txId gin)
+      inId <- liftIO $ assignCollateralTxInId resolver
+      liftIO $ writeCollateralTxIn writer inId (mkCollateralTxIn txId gin)
   where
     -- Resolve the inline stake credential of a collateral-return
-    -- output, if its address carries one.
+    -- output, if its address carries one. Reads resolver/writer/network
+    -- from env via 'resolveAndWriteStakeAddress'.
     resolveCollateralStake gout =
       case extractStakeCred (G.txOutAddressRaw gout) of
         Nothing  -> pure Nothing
         Just cred ->
-          Just <$> resolveAndWriteStakeAddress (bcNetwork ctx) resolver writer cred
+          Just <$> resolveAndWriteStakeAddress cred
 
 -- ---------------------------------------------------------------------------
 -- * Record builders

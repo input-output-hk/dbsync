@@ -37,7 +37,7 @@ import qualified Hasql.Encoders as E
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Types
-import DbSync.Db.Writer.Copy.Encoder
+import DbSync.Db.Loader.Encoder
   ( buildCopyRow
   , bBool
   , bHex

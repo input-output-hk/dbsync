@@ -9,7 +9,7 @@ Description : Epoch-boundary projection — writes ada_pots (and, in
 Owns the @ada_pots@ table (and the other epoch-derived tables as
 they land — see LEDGER-PLAN.md §15). Driven not by the per-block
 'pdProcess' callback but by the consumer's epoch-boundary handler
-in 'DbSync.Ingest.Consumer', which:
+in 'DbSync.Phase.Ingest.Consumer', which:
 
   1. Detects a boundary by comparing the current block's epoch to
      the previously-observed one.
@@ -17,8 +17,8 @@ in 'DbSync.Ingest.Consumer', which:
      produced an 'ApplyResult' carrying @apNewEpoch = Just …@ for
      this transition.
   3. Calls 'runEpochBoundary' (this module) to write the boundary
-     rows to the per-table COPY queues.
-  4. Calls 'cwCommit' which drains every queue (including the
+     rows to the per-table loader-stream queues.
+  4. Calls 'lsCommit' which drains every queue (including the
      boundary-table queues) /in parallel/ across the per-table
      worker connections — that parallelism is option γ from
      LEDGER-PLAN.md §15.
@@ -46,15 +46,15 @@ import qualified Cardano.Ledger.State as Ledger
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import qualified Data.Strict.Maybe as Strict
 
-import qualified DbSync.Era.Shelley.Generic.EpochUpdate as Generic
+import qualified DbSync.Era.Shelley.EpochUpdate as Generic
 import DbSync.Db.Schema.AdaPots (AdaPots (..), adaPotsTableDef)
 import DbSync.Db.Schema.Ids (BlockId)
 import DbSync.Extractor (ExtractorDef (..))
 import DbSync.Ledger.Types (ApplyResult (..))
-import DbSync.Resolver (IdResolver (..))
+import DbSync.Resolver (HasResolver (..), IdResolver (..))
 import DbSync.StateQuery (SlotDetails (..))
 import DbSync.Util (coinToDbLovelace)
-import DbSync.Writer (Writer (..))
+import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- ---------------------------------------------------------------------------
 -- * Extractor registration
@@ -65,7 +65,7 @@ import DbSync.Writer (Writer (..))
 -- Only registers tables — the per-block 'pdProcess' is a no-op
 -- because epoch-boundary work is event-driven, not block-driven.
 -- 'runEpochBoundary' is what actually does the work, called from
--- 'DbSync.Ingest.Consumer' when a boundary is detected.
+-- 'DbSync.Phase.Ingest.Consumer' when a boundary is detected.
 --
 -- Currently registers @ada_pots@. Other boundary tables
 -- (@reward@, @reward_rest@, @drep_distr@, @pool_stat@,
@@ -77,7 +77,7 @@ epochBoundaryExtractor = ExtractorDef
   , pdVersion      = 1
   , pdDependencies = [("core", 1)]
   , pdTables       = [adaPotsTableDef]
-  , pdProcess      = \_ _ _ -> pure ()  -- No-op; consumer drives runEpochBoundary
+  , pdProcess      = \_ -> pure ()  -- No-op; consumer drives runEpochBoundary
   }
 
 -- ---------------------------------------------------------------------------
@@ -98,15 +98,14 @@ epochBoundaryExtractor = ExtractorDef
 -- calling it exactly once per boundary. Calling it twice would
 -- write two rows for the same epoch.
 runEpochBoundary
-  :: ApplyResult
+  :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
+  => ApplyResult
   -> BlockId
-  -> IdResolver IO
-  -> Writer IO
-  -> IO ()
-runEpochBoundary applyResult blockId resolver writer = do
+  -> m ()
+runEpochBoundary applyResult blockId =
   case apNewEpoch applyResult of
     Strict.Nothing -> pure ()  -- Not a boundary, or worker hasn't caught up
-    Strict.Just newEpoch       -> writeBoundaryAdaPots applyResult newEpoch blockId resolver writer
+    Strict.Just newEpoch -> writeBoundaryAdaPots applyResult newEpoch blockId
 
 -- ---------------------------------------------------------------------------
 -- * AdaPots
@@ -115,19 +114,20 @@ runEpochBoundary applyResult blockId resolver writer = do
 -- | Build and dispatch the 'AdaPots' row for the boundary, if the
 -- ledger reported any pots data.
 writeBoundaryAdaPots
-  :: ApplyResult
+  :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
+  => ApplyResult
   -> Generic.NewEpoch
   -> BlockId
-  -> IdResolver IO
-  -> Writer IO
-  -> IO ()
-writeBoundaryAdaPots applyResult newEpoch blockId resolver writer =
+  -> m ()
+writeBoundaryAdaPots applyResult newEpoch blockId =
   case Generic.neAdaPots newEpoch of
     Strict.Nothing -> pure ()  -- Pre-Shelley; nothing to write
     Strict.Just pots -> do
-      apId <- assignAdaPotsId resolver
+      resolver <- asks getResolver
+      writer   <- asks getWriter
+      apId <- liftIO $ assignAdaPotsId resolver
       let row = mkAdaPotsRow applyResult newEpoch blockId pots
-      writeAdaPots writer apId row
+      liftIO $ writeAdaPots writer apId row
 
 -- | Build an 'AdaPots' record from the boundary's
 -- 'Shelley.AdaPots' value.

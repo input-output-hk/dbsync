@@ -11,7 +11,7 @@
 module DbSync.Extractor.Core
   ( coreExtractor
 
-    -- * Slot-leader construction (used by 'DbSync.Ingest.Pipeline').
+    -- * Slot-leader construction (used by 'DbSync.Block.Pipeline').
   , mkSlotLeader
   ) where
 
@@ -43,9 +43,9 @@ import DbSync.Extractor
   )
 import DbSync.Ledger.Types (lookupDepositsMap)
 import DbSync.Db.Phase (isFollowPath)
-import DbSync.Resolver (IdResolver (..))
+import DbSync.Resolver (HasResolver (..), IdResolver (..))
 import DbSync.Util (coinToInt64)
-import DbSync.Writer (Writer (..))
+import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- ---------------------------------------------------------------------------
 -- * Extractor definition
@@ -75,27 +75,29 @@ coreExtractor = ExtractorDef
 -- 2. Write block row
 -- 3. Write tx rows (with phase- and ledger-aware fee/deposit dispatch)
 processCore :: ProcessBlockFn
-processCore resolver writer ctx = do
+processCore ctx = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
   let gb = bcGenBlock ctx
       blockId = bcBlockId ctx
       slId = bcSlotLeaderId ctx
 
   -- 1. Write slot leader row if new
   when (bcSlotLeaderNew ctx) $
-    writeSlotLeader writer slId (mkSlotLeader (bcSlotLeaderPoolHashId ctx) gb)
+    liftIO $ writeSlotLeader writer slId (mkSlotLeader (bcSlotLeaderPoolHashId ctx) gb)
 
   -- 2. Write block
   let block = mkBlock gb (bcPrevBlockId ctx) slId
-  writeBlock writer blockId block
+  liftIO $ writeBlock writer blockId block
 
   -- 3. Write transactions
   forM_ (bcTxs ctx) $ \tc -> do
-    (fee, deposit) <- computeTxFinancials resolver ctx (tcGenTx tc)
+    (fee, deposit) <- liftIO $ computeTxFinancials resolver ctx (tcGenTx tc)
     let tx = (mkTx blockId (tcGenTx tc))
               { txFee     = fee
               , txDeposit = deposit
               }
-    writeTx writer (tcTxId tc) tx
+    liftIO $ writeTx writer (tcTxId tc) tx
 
 -- | Pick @tx.fee@ and @tx.deposit@ for one transaction.
 --

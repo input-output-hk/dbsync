@@ -79,8 +79,8 @@ import Ouroboros.Consensus.Ledger.Abstract (AuxLedgerEvent)
 import Ouroboros.Consensus.Shelley.Ledger (ShelleyBlock, ShelleyLedgerEvent (..))
 import Ouroboros.Consensus.TypeFamilyWrappers
 
-import qualified DbSync.Era.Shelley.Generic.Rewards as Generic
-import DbSync.Era.Shelley.Generic.Rewards
+import qualified DbSync.Era.Shelley.Rewards as Generic
+import DbSync.Era.Shelley.Rewards
   ( RewardSource (..)
   , rewardTypeToSource
   )

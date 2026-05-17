@@ -1,21 +1,20 @@
-{-# LANGUAGE OverloadedStrings #-}
-
--- | Bracketed 'Hasql.Pool.Pool' opener for the parallel-capable Prep
--- steps.
+-- | Bracketed 'Hasql.Pool.Pool' opener for the parallel Prep steps,
+-- plus the 'PoolM' monad the bracketed action runs in.
 --
--- Steps in 'DbSync.Phase.PreparingForVolatileTail.run' that touch
--- disjoint tables (the @ALTER … SET LOGGED@ flip, the
--- non-concurrent index build) parallelise cleanly across separate
--- backends. The single-statement steps stay on the dedicated
--- control connection; only the parallel ones go through a pool.
---
--- Each pool backend boots with the 'PrepTuning' GUCs applied via
--- 'Hasql.Pool.Config.initSession', so workers acquired from the
--- pool run with the same @maintenance_work_mem@,
--- @max_parallel_maintenance_workers@, and @synchronous_commit@ as
--- the main Prep connection.
+-- Inside the bracket the pool is read from env (via 'HasPool'), not
+-- threaded through every 'usePool' call. Tracing also delegates
+-- through the env so per-table log lines work the same as outside.
 module DbSync.Db.Pool
-  ( withPrepPool
+  ( -- * Pool env + monad
+    PoolEnv (..)
+  , PoolM
+  , HasPool (..)
+
+    -- * Bracket
+  , withPrepPool
+  , withPrepPoolIO
+
+    -- * Session runner
   , usePool
   ) where
 
@@ -27,26 +26,63 @@ import qualified Hasql.Pool as Pool
 import qualified Hasql.Pool.Config as PoolConfig
 import qualified Hasql.Session as Sess
 
-import DbSync.Phase.PreparingForVolatileTail.Tuning
+import DbSync.AppM (AppM, runAppM)
+import DbSync.Phase.Preparing.Tuning
   ( PrepTuning
   , prepSessionGUCsSession
   )
+import DbSync.Trace (HasTracer (..))
+import DbSync.Trace.Types (AppTracer)
 
--- | Open a Hasql pool, hand it to the inner action, release on exit.
--- The pool is bounded to 'ptPoolSize' backends; each backend gets
--- the 'PrepTuning' GUCs applied exactly once when it is first
--- acquired (via @initSession@).
+-- | Access a 'Hasql.Pool.Pool' from env.
+class HasPool env where
+  getPool :: env -> Pool.Pool
+
+-- | Reader env inside a 'withPrepPool' bracket: just the pool plus
+-- whatever the caller needs for logging.
+data PoolEnv = PoolEnv
+  { pePool   :: !Pool.Pool
+  , peTracer :: !AppTracer
+  }
+
+instance HasPool PoolEnv where
+  getPool = pePool
+
+instance HasTracer PoolEnv where
+  getTracer = peTracer
+
+-- | The monad inside a 'withPrepPool' bracket.
+type PoolM = AppM PoolEnv
+
+-- | Acquire a pool, run @action@ in 'PoolM' with the pool bound on
+-- env, release the pool on exit. Each backend boots with the
+-- 'PrepTuning' GUCs applied via @initSession@.
 withPrepPool
-  :: ConnSettings.Settings
+  :: (HasTracer env, MonadReader env m, MonadIO m)
+  => ConnSettings.Settings
   -> PrepTuning
   -> Int
-  -- ^ Pool size. The caller decides because different Prep steps
-  -- have different resource profiles (the flip is bandwidth-bound;
-  -- the index build is RAM-bound).
-  -> (Pool.Pool -> IO a)
+  -- ^ Pool size. Different Prep steps have different resource
+  -- profiles (the flip is bandwidth-bound; the index build is
+  -- RAM-bound), so the caller picks.
+  -> PoolM a
+  -> m a
+withPrepPool connSettings tuning poolSize action = do
+  tracer <- asks getTracer
+  liftIO (withPrepPoolIO tracer connSettings tuning poolSize action)
+
+-- | As 'withPrepPool' but takes the tracer explicitly. Used by call
+-- sites that don't (yet) carry a 'HasTracer' env.
+withPrepPoolIO
+  :: AppTracer
+  -> ConnSettings.Settings
+  -> PrepTuning
+  -> Int
+  -> PoolM a
   -> IO a
-withPrepPool connSettings tuning poolSize =
-  bracket (Pool.acquire poolConfig) Pool.release
+withPrepPoolIO tracer connSettings tuning poolSize action =
+  bracket (Pool.acquire poolConfig) Pool.release $ \pool ->
+    runAppM (PoolEnv pool tracer) action
   where
     poolConfig = PoolConfig.settings
       [ PoolConfig.staticConnectionSettings connSettings
@@ -65,13 +101,17 @@ withPrepPool connSettings tuning poolSize =
 prepAcquisitionTimeout :: DiffTime
 prepAcquisitionTimeout = 6 * 3600  -- 6 hours
 
--- | Run a 'Sess.Session' on a pool backend, panicking on driver
--- failure. Prep is one-shot DDL; there is no retry strategy that
--- makes sense, and surfacing the actual hasql error message is the
--- most useful behaviour.
-usePool :: Pool.Pool -> Text -> Sess.Session a -> IO a
-usePool pool ctx session = do
-  result <- Pool.use pool session
+-- | Run a 'Sess.Session' on the env's pool, panicking on driver
+-- failure. Prep is one-shot DDL with no useful retry strategy;
+-- surfacing the actual hasql error is the most useful behaviour.
+usePool
+  :: (HasPool env, MonadReader env m, MonadIO m)
+  => Text
+  -> Sess.Session a
+  -> m a
+usePool ctx session = do
+  pool <- asks getPool
+  result <- liftIO (Pool.use pool session)
   case result of
     Right a -> pure a
     Left  e -> panic $ "DbSync.Db.Pool." <> ctx <> ": " <> show e

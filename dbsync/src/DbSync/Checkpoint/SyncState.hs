@@ -5,14 +5,16 @@
 -- live in @dbsync-db@ (re-exported here so existing call sites don't
 -- need a new import).
 --
--- libpq remains for COPY streaming in 'DbSync.Copy.Connection'; the
--- control-plane path here goes through hasql.
+-- libpq remains for the loader-stream transport in
+-- 'DbSync.Db.Loader.Connection'; the control-plane path here goes
+-- through hasql.
 module DbSync.Checkpoint.SyncState
   ( -- * Row type (re-export from dbsync-db)
     SyncStateRow (..)
 
     -- * Connection lifecycle
   , ControlConnection (..)
+  , HasControlConnection (..)
   , openControlConnection
   , closeControlConnection
 
@@ -26,7 +28,7 @@ module DbSync.Checkpoint.SyncState
     -- * Boot-time canonicalisation
   , fetchBlockHashAtSlot
 
-    -- * Dedup map rebuild (currently a stub)
+    -- * Dedup map rebuild
   , rebuildDedupMaps
   ) where
 
@@ -48,8 +50,9 @@ import DbSync.Db.Statement.Resume
   , selectDedupSingleStmt
   , selectMultiAssetDedupStmt
   )
+import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Timing (fmtDuration, fmtRows)
-import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
+import DbSync.Trace.Types (LogMsg (..), Severity (..))
 import DbSync.Db.Statement.SyncState
   ( markSnapshotCompleteStmt
   , markSyncCompleteStmt
@@ -76,12 +79,17 @@ newtype ControlConnection = ControlConnection
   { unControlConnection :: Conn.Connection
   }
 
+-- | Access the control connection from env.
+class HasControlConnection env where
+  getControlConnection :: env -> ControlConnection
+
+-- | Self-instance so boot-time IO code can drive the polymorphic
+-- helpers via @runAppM ctrlConn ...@ without building a phase env.
+instance HasControlConnection ControlConnection where
+  getControlConnection = identity
+
 -- | Open a fresh 'ControlConnection'. Throws 'AppDatabaseError' on
 -- handshake failure.
---
--- Settings are built by callers via the @Hasql.Connection.Settings@
--- helpers (@hostAndPort@, @user@, @password@, @dbname@) combined with
--- 'mconcat'.
 openControlConnection :: HasCallStack => Settings.Settings -> IO ControlConnection
 openControlConnection settings = do
   result <- Conn.acquire settings
@@ -99,44 +107,52 @@ closeControlConnection = Conn.release . unControlConnection
 -- ---------------------------------------------------------------------------
 
 -- | Read the singleton row, or 'Nothing' if it has never been seeded.
-readSyncState :: HasCallStack => ControlConnection -> IO (Maybe SyncStateRow)
-readSyncState ctrl = runStmt "readSyncState" ctrl () readSyncStateStmt
+readSyncState
+  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  => m (Maybe SyncStateRow)
+readSyncState = runCtrlStmt "readSyncState" () readSyncStateStmt
 
 -- | Overwrite the consumer-owned columns of the singleton row.
 -- Throws 'AppDatabaseError' if zero rows are affected (i.e. when
 -- 'seedSyncState' was never called).
-writeSyncState :: HasCallStack => ControlConnection -> SyncStateRow -> IO ()
-writeSyncState ctrl row = do
-  n <- runStmt "writeSyncState" ctrl row writeSyncStateStmt
+writeSyncState
+  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  => SyncStateRow
+  -> m ()
+writeSyncState row = do
+  n <- runCtrlStmt "writeSyncState" row writeSyncStateStmt
   expectOneRowAffected "writeSyncState" n
 
 -- | Insert the singleton row with sensible defaults. Idempotent
 -- (@ON CONFLICT DO NOTHING@). Must be invoked once after
 -- 'DbSync.Db.Schema.Init.initSchema' creates the table.
 seedSyncState
-  :: HasCallStack
-  => ControlConnection
-  -> Int   -- ^ @schema_version_applied@
+  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  => Int   -- ^ @schema_version_applied@
   -> Bool  -- ^ @ledger_enabled@
-  -> IO ()
-seedSyncState ctrl schemaVersion ledgerEnabled =
-  runStmt "seedSyncState" ctrl
+  -> m ()
+seedSyncState schemaVersion ledgerEnabled =
+  runCtrlStmt "seedSyncState"
     (fromIntegral schemaVersion, ledgerEnabled)
     seedSyncStateStmt
 
 -- | Record that a ledger snapshot at the given slot has been
--- successfully written. Owned by the snapshot-writer thread; the
--- consumer thread does not call this.
-markSnapshotComplete :: HasCallStack => ControlConnection -> Word64 -> IO ()
-markSnapshotComplete ctrl slotNo = do
-  n <- runStmt "markSnapshotComplete" ctrl slotNo markSnapshotCompleteStmt
+-- successfully written.
+markSnapshotComplete
+  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  => Word64
+  -> m ()
+markSnapshotComplete slotNo = do
+  n <- runCtrlStmt "markSnapshotComplete" slotNo markSnapshotCompleteStmt
   expectOneRowAffected "markSnapshotComplete" n
 
 -- | Flip @sync_complete@ to true at the Ingest → Follow boundary.
 -- Subsequent boots take the fast path.
-markSyncComplete :: HasCallStack => ControlConnection -> IO ()
-markSyncComplete ctrl = do
-  n <- runStmt "markSyncComplete" ctrl () markSyncCompleteStmt
+markSyncComplete
+  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  => m ()
+markSyncComplete = do
+  n <- runCtrlStmt "markSyncComplete" () markSyncCompleteStmt
   expectOneRowAffected "markSyncComplete" n
 
 -- ---------------------------------------------------------------------------
@@ -144,16 +160,13 @@ markSyncComplete ctrl = do
 -- ---------------------------------------------------------------------------
 
 -- | Look up the header hash at a given slot in the @block@ table.
--- 'Nothing' means no committed block at that slot (PG wiped,
--- chain rolled back during downtime, etc.). Used by the boot flow
--- to canonicalise snapshot intersection candidates.
+-- 'Nothing' means no committed block at that slot.
 fetchBlockHashAtSlot
-  :: HasCallStack
-  => ControlConnection
-  -> Word64
-  -> IO (Maybe ByteString)
-fetchBlockHashAtSlot ctrl slot =
-  runStmt "fetchBlockHashAtSlot" ctrl slot selectBlockHashAtSlotStmt
+  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  => Word64
+  -> m (Maybe ByteString)
+fetchBlockHashAtSlot slot =
+  runCtrlStmt "fetchBlockHashAtSlot" slot selectBlockHashAtSlotStmt
 
 -- ---------------------------------------------------------------------------
 -- * Dedup-map rebuild
@@ -167,58 +180,76 @@ fetchBlockHashAtSlot ctrl slot =
 -- The supplied 'TableDef' list determines which tables are queried —
 -- a dedup table absent from the active schema (e.g. @script@) is
 -- silently skipped, leaving its map empty.
-rebuildDedupMaps :: HasCallStack => AppTracer -> ControlConnection -> [TableDef] -> IO DedupMaps
-rebuildDedupMaps tracer ctrl tableDefs = do
-  maps <- newMaps
+rebuildDedupMaps
+  :: ( HasCallStack
+     , HasTracer env
+     , HasControlConnection env
+     , MonadReader env m
+     , MonadIO m
+     )
+  => [TableDef]
+  -> m DedupMaps
+rebuildDedupMaps tableDefs = do
+  maps <- liftIO newMaps
   let tableNames = map tdName tableDefs
       whenPresent name action =
         when (name `elem` tableNames) action
   whenPresent "slot_leader" $
-    populateSingle tracer ctrl "slot_leader" "hash" (dmsSlotLeader maps)
+    populateSingle "slot_leader" "hash" (dmsSlotLeader maps)
   whenPresent "stake_address" $
-    populateSingle tracer ctrl "stake_address" "hash_raw" (dmsStakeAddress maps)
+    populateSingle "stake_address" "hash_raw" (dmsStakeAddress maps)
   whenPresent "pool_hash" $
-    populateSingle tracer ctrl "pool_hash" "hash_raw" (dmsPoolHash maps)
+    populateSingle "pool_hash" "hash_raw" (dmsPoolHash maps)
   whenPresent "multi_asset" $
-    populateMultiAsset tracer ctrl (dmsMultiAsset maps)
+    populateMultiAsset (dmsMultiAsset maps)
   pure maps
 
--- | Populate a dedup map whose natural key is a single column.
-populateSingle :: HasCallStack => AppTracer -> ControlConnection -> Text -> Text -> DedupMap -> IO ()
-populateSingle tracer ctrl tableName keyCol dm =
-  timedRebuild tracer tableName $ do
-    rows <- runStmt ("rebuildDedupMaps[" <> tableName <> "]") ctrl ()
+populateSingle
+  :: ( HasCallStack
+     , HasTracer env
+     , HasControlConnection env
+     , MonadReader env m
+     , MonadIO m
+     )
+  => Text -> Text -> DedupMap -> m ()
+populateSingle tableName keyCol dm =
+  timedRebuild tableName $ do
+    rows <- runCtrlStmt ("rebuildDedupMaps[" <> tableName <> "]") ()
               (selectDedupSingleStmt tableName keyCol)
-    forM_ rows $ \(rowId, key) ->
+    liftIO $ forM_ rows $ \(rowId, key) ->
       insertExisting (SBS.toShort key) rowId dm
     pure (fromIntegral (length rows))
 
--- | Populate the multi-asset dedup map. Keys must match the form
--- written by 'DbSync.Extractor.SharedDedup.resolveAndWriteMultiAsset'
--- (Blake2b-224 of @policy ++ name@), otherwise a resumed run will
--- allocate fresh ids for already-known assets.
-populateMultiAsset :: HasCallStack => AppTracer -> ControlConnection -> DedupMap -> IO ()
-populateMultiAsset tracer ctrl dm =
-  timedRebuild tracer "multi_asset" $ do
-    rows <- runStmt "rebuildDedupMaps[multi_asset]" ctrl ()
+populateMultiAsset
+  :: ( HasCallStack
+     , HasTracer env
+     , HasControlConnection env
+     , MonadReader env m
+     , MonadIO m
+     )
+  => DedupMap -> m ()
+populateMultiAsset dm =
+  timedRebuild "multi_asset" $ do
+    rows <- runCtrlStmt "rebuildDedupMaps[multi_asset]" ()
               selectMultiAssetDedupStmt
-    forM_ rows $ \(rowId, policy, name) ->
+    liftIO $ forM_ rows $ \(rowId, policy, name) ->
       insertExisting (hashDedupKey (policy <> name)) rowId dm
     pure (fromIntegral (length rows))
 
--- | Wrap one table's dedup-map repopulation in start/end trace lines
--- so the operator can see which table is in flight and how long each
--- took. The action returns the number of rows loaded; the @SELECT@
--- itself is the slow part, so the timer captures fetch + insert
--- together rather than splitting them.
-timedRebuild :: AppTracer -> Text -> IO Int64 -> IO ()
-timedRebuild tracer tableName action = do
-  traceWith tracer $ LogMsg Info "DedupRebuild"
+-- | Wrap one table's repopulation in start/end trace lines and time
+-- the inner action. The returned row count from the action is
+-- formatted into the completion line.
+timedRebuild
+  :: (HasTracer env, MonadReader env m, MonadIO m)
+  => Text -> m Int64 -> m ()
+timedRebuild tableName action = do
+  tracer <- asks getTracer
+  liftIO $ traceWith tracer $ LogMsg Info "DedupRebuild"
     (tableName <> ": loading") Nothing
-  start <- getCurrentTime
+  start <- liftIO getCurrentTime
   rows  <- action
-  end   <- getCurrentTime
-  traceWith tracer $ LogMsg Info "DedupRebuild" (
+  end   <- liftIO getCurrentTime
+  liftIO $ traceWith tracer $ LogMsg Info "DedupRebuild" (
       tableName <> ": " <> fmtRows rows <> " rows in "
         <> fmtDuration (realToFrac (diffUTCTime end start))
     ) Nothing
@@ -227,24 +258,25 @@ timedRebuild tracer tableName action = do
 -- * Internal: statement runner
 -- ---------------------------------------------------------------------------
 
--- | Run a 'Stmt.Statement' in a single-shot session and lift any
--- 'SessionError' into 'AppDatabaseError'.
-runStmt
-  :: HasCallStack
+-- | Run a 'Stmt.Statement' against the env's control connection;
+-- lift any 'SessionError' into 'AppDatabaseError'.
+runCtrlStmt
+  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
   => Text
-  -> ControlConnection
   -> p
   -> Stmt.Statement p r
-  -> IO r
-runStmt callerName (ControlConnection conn) params stmt = do
-  result <- Conn.use conn (Sess.statement params stmt)
+  -> m r
+runCtrlStmt callerName params stmt = do
+  ControlConnection conn <- asks getControlConnection
+  result <- liftIO $ Conn.use conn (Sess.statement params stmt)
   case result of
     Left err -> throwDb $ callerName <> ": " <> show err
     Right r  -> pure r
 
 -- | Throw a uniform diagnostic when an UPDATE\/INSERT didn't affect
 -- exactly one row (the singleton-row invariant).
-expectOneRowAffected :: HasCallStack => Text -> Int64 -> IO ()
+expectOneRowAffected
+  :: (HasCallStack, MonadIO m) => Text -> Int64 -> m ()
 expectOneRowAffected callerName = \case
   1 -> pure ()
   n ->
@@ -253,3 +285,5 @@ expectOneRowAffected callerName = \case
         <> ": UPDATE affected "
         <> show n
         <> " rows, expected exactly 1. Did seedSyncState run?"
+
+

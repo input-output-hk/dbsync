@@ -102,7 +102,7 @@ instance FromJSON DatabaseConfig where
 data SyncSettings = SyncSettings
   { ssMode            :: !SyncMode
   , ssCheckpointDir   :: !FilePath
-  , ssCopyConnections :: !Int
+  , ssLoaderConnections :: !Int
   }
   deriving stock (Eq, Show)
 
@@ -111,14 +111,14 @@ instance FromJSON SyncSettings where
     SyncSettings
       <$> o .:? "mode"             .!= SyncModeAuto
       <*> o .:? "checkpoint_dir"   .!= "/data/checkpoints"
-      <*> o .:? "copy_connections" .!= 12
+      <*> o .:? "loader_connections" .!= 12
 
 -- | Default sync settings used when the "sync" section is omitted.
 defaultSyncSettings :: SyncSettings
 defaultSyncSettings = SyncSettings
   { ssMode            = SyncModeAuto
   , ssCheckpointDir   = "/data/checkpoints"
-  , ssCopyConnections = 12
+  , ssLoaderConnections = 12
   }
 
 -- | How to determine which phase to start in.

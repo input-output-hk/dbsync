@@ -1,19 +1,26 @@
-{-# LANGUAGE OverloadedStrings #-}
-
--- | Timing helpers that wrap an 'IO' action with start/end trace
--- lines bracketing wall-clock duration. 'timed' carries the row
--- count returned by the action; 'timed_' is for actions that
--- don't return one.
+-- | Timing helpers that wrap an action with start/end trace lines
+-- bracketing wall-clock duration. 'timed' carries the row count
+-- returned by the action; 'timed_' is for actions that don't.
 --
 -- Both emit at 'Info' so the per-step duration is visible at the
--- default log level — operators chasing a long-running phase
--- always want to know which sub-step is in flight, independent of
--- whether the watchdog / per-epoch diagnostics (which gate on
--- 'Debug') are enabled.
+-- default log level — operators chasing a long-running phase always
+-- want to know which sub-step is in flight, independent of whether
+-- the watchdog / per-epoch diagnostics (which gate on 'Debug') are
+-- enabled.
+--
+-- Each helper has two flavours:
+--
+--   * @withHeartbeat@ / @timedTrace@ / @timedTrace_@ — polymorphic
+--     over an 'AppM env' that satisfies 'HasTracer'. New code.
+--   * @*IO@ siblings — take the tracer explicitly. For boot code
+--     that hasn't built an env yet.
 module DbSync.Trace.Timing
   ( timedTrace
   , timedTrace_
   , withHeartbeat
+  , timedTraceIO
+  , timedTraceIO_
+  , withHeartbeatIO
 
     -- * Formatting helpers
   , fmtDuration
@@ -22,30 +29,71 @@ module DbSync.Trace.Timing
 
 import Cardano.Prelude
 
+import Control.Monad.IO.Unlift (MonadUnliftIO, withRunInIO)
 import Control.Tracer (traceWith)
 import qualified Data.Text as Text
 import Data.Time.Clock (diffUTCTime, getCurrentTime)
 import Text.Printf (printf)
 
+import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 
--- | Run an action while a sidecar thread emits a heartbeat trace on
--- the supplied component every @intervalSeconds@ until the action
--- returns. Each heartbeat appends the elapsed wall-clock so a stalled
--- operation reads as a stalled timer.
---
--- Use for opaque long-running calls with no internal progress hook
--- — e.g. the boot-time LSM snapshot load or any DDL that may take
--- minutes on a mainnet-shaped DB. The heartbeat runs at 'Info' so
--- it's visible at the default log level.
+-- ---------------------------------------------------------------------------
+-- * Env-aware variants
+-- ---------------------------------------------------------------------------
+
+-- | Run an action while a sidecar thread emits a heartbeat trace
+-- every @intervalSeconds@. Each heartbeat appends elapsed wall-clock
+-- so a stalled operation reads as a stalled timer.
 withHeartbeat
-  :: AppTracer
-  -> Text   -- ^ Component label (the @[Info] <Component>:@ tag)
-  -> Text   -- ^ Message prefix; the elapsed-time suffix is appended
-  -> Int    -- ^ Seconds between heartbeats
-  -> IO a
-  -> IO a
-withHeartbeat tracer component prefix intervalSeconds action = do
+  :: (HasTracer env, MonadReader env m, MonadUnliftIO m)
+  => Text     -- ^ Component label
+  -> Text     -- ^ Message prefix; the elapsed-time suffix is appended
+  -> Int      -- ^ Seconds between heartbeats
+  -> m a
+  -> m a
+withHeartbeat component prefix intervalSeconds action = do
+  tracer <- asks getTracer
+  withRunInIO $ \run ->
+    withHeartbeatIO tracer component prefix intervalSeconds (run action)
+
+-- | Run an action returning a row count; emit @"<label>: starting"@
+-- before and @"<label>: <N> rows in <T>"@ after.
+timedTrace
+  :: (HasTracer env, MonadReader env m, MonadIO m)
+  => Text -> Text -> m Int64 -> m Int64
+timedTrace component label action = do
+  tracer <- asks getTracer
+  liftIO $ emitTrace tracer component (label <> ": starting")
+  start <- liftIO getCurrentTime
+  rows  <- action
+  end   <- liftIO getCurrentTime
+  liftIO $ emitTrace tracer component $
+    label <> ": " <> fmtRows rows <> " rows in "
+      <> fmtDuration (realToFrac (diffUTCTime end start))
+  pure rows
+
+-- | Like 'timedTrace' but for actions without a row count.
+timedTrace_
+  :: (HasTracer env, MonadReader env m, MonadIO m)
+  => Text -> Text -> m a -> m a
+timedTrace_ component label action = do
+  tracer <- asks getTracer
+  liftIO $ emitTrace tracer component (label <> ": starting")
+  start <- liftIO getCurrentTime
+  a     <- action
+  end   <- liftIO getCurrentTime
+  liftIO $ emitTrace tracer component $
+    label <> ": complete in "
+      <> fmtDuration (realToFrac (diffUTCTime end start))
+  pure a
+
+-- ---------------------------------------------------------------------------
+-- * Explicit-tracer variants (for boot code without an env)
+-- ---------------------------------------------------------------------------
+
+withHeartbeatIO :: AppTracer -> Text -> Text -> Int -> IO a -> IO a
+withHeartbeatIO tracer component prefix intervalSeconds action = do
   start <- getCurrentTime
   withAsync (heartbeat start) $ \_ -> action
   where
@@ -57,10 +105,8 @@ withHeartbeat tracer component prefix intervalSeconds action = do
             <> " elapsed)"
         ) Nothing
 
--- | Run an action returning a row count; emit @"<label>: starting"@
--- before and @"<label>: <N> rows in <T>"@ after.
-timedTrace :: AppTracer -> Text -> Text -> IO Int64 -> IO Int64
-timedTrace tracer component label action = do
+timedTraceIO :: AppTracer -> Text -> Text -> IO Int64 -> IO Int64
+timedTraceIO tracer component label action = do
   emitTrace tracer component (label <> ": starting")
   start <- getCurrentTime
   rows  <- action
@@ -70,9 +116,8 @@ timedTrace tracer component label action = do
       <> fmtDuration (realToFrac (diffUTCTime end start))
   pure rows
 
--- | Like 'timedTrace' but for actions without a row count.
-timedTrace_ :: AppTracer -> Text -> Text -> IO a -> IO a
-timedTrace_ tracer component label action = do
+timedTraceIO_ :: AppTracer -> Text -> Text -> IO a -> IO a
+timedTraceIO_ tracer component label action = do
   emitTrace tracer component (label <> ": starting")
   start <- getCurrentTime
   a     <- action

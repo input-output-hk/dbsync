@@ -109,9 +109,9 @@ import qualified Ouroboros.Consensus.Storage.LedgerDB.V2.LedgerSeq as Consensus 
 import Prelude (id)
 
 import DbSync.Config.Types (LedgerBackend)
-import qualified DbSync.Era.Shelley.Generic.EpochUpdate as Generic
-import qualified DbSync.Era.Shelley.Generic.ProtoParams as Generic
-import qualified DbSync.Era.Shelley.Generic.StakeDist as Generic
+import qualified DbSync.Era.Shelley.EpochUpdate as Generic
+import qualified DbSync.Era.Shelley.ProtoParams as Generic
+import qualified DbSync.Era.Shelley.StakeDist as Generic
 import DbSync.Ledger.Event (LedgerEvent)
 import DbSync.Ledger.Keys (PoolKeyHash)
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock)
@@ -120,7 +120,7 @@ import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()  -- 'LedgerSupport
 
 import DbSync.Block.Types (CardanoPoint)
 import DbSync.Checkpoint.SyncState (ControlConnection)
-import DbSync.Phase.Ref (SyncPhaseRef)
+import DbSync.Phase.Current (CurrentPhase)
 import DbSync.StateQuery.Types (CardanoInterpreter, SlotDetails)
 import DbSync.Trace.Types (AppTracer)
 
@@ -236,7 +236,7 @@ data LedgerEnv = LedgerEnv
     -- ^ PG connection used by the snapshot-writer thread to record
     -- successful snapshot completions in
     -- @dbsync_sync_state.last_snapshot_slot@.
-  , leSyncPhase            :: !SyncPhaseRef
+  , leCurrentPhase         :: !CurrentPhase
     -- ^ Live lifecycle phase, shared with 'CoreEnv'. The worker
     -- reads 'isFollowPath' on every apply to choose snapshot
     -- cadence: lagging (every 10 epochs) during Ingest, near-tip

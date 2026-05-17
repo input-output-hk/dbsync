@@ -109,7 +109,7 @@ data TableDef = TableDef
   , tdGeneratedColumns  :: ![(Text, Text)]
       -- ^ Per-column @GENERATED ALWAYS AS (expr) STORED@ definitions,
       -- keyed by column name. Listed columns are excluded from the
-      -- COPY column list in 'DbSync.Copy.Connection.beginCopy' so
+      -- COPY column list in 'DbSync.Db.Loader.Connection.beginStream' so
       -- PostgreSQL computes them on insert.
   , tdForeignKeys       :: ![ForeignKey]
       -- ^ Outgoing FK references. Consumed by the

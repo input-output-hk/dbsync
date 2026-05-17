@@ -68,7 +68,7 @@ mkStubDef name version deps = ExtractorDef
   , pdVersion      = version
   , pdDependencies = deps
   , pdTables       = []
-  , pdProcess      = \_ _ _ -> pure ()
+  , pdProcess      = \_ -> pure ()
   }
 
 spec :: Spec

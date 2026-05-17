@@ -105,7 +105,7 @@ import DbSync.Db.Types
   , unDbLovelace
   , unDbWord64
   )
-import DbSync.Db.Writer.Copy.Encoder
+import DbSync.Db.Loader.Encoder
   ( buildCopyRow
   , bBool, bHex, bInt64, bText, bUTCTime, bWord16, bWord64
   )

@@ -25,6 +25,7 @@ import qualified System.Process
 
 import Test.Hspec (Spec, afterAll_, beforeAll_, before_, describe, it, shouldBe, shouldSatisfy)
 
+import DbSync.AppM (runAppM)
 import DbSync.Checkpoint.SyncState
   ( ControlConnection
   , SyncStateRow (..)
@@ -48,14 +49,14 @@ spec = describe "DbSync.Checkpoint.SyncState" $
     describe "readSyncState on an un-seeded table" $
       it "returns Nothing" $
         withControlConnection $ \conn -> do
-          row <- readSyncState conn
+          row <- runAppM conn readSyncState
           row `shouldBe` Nothing
 
     describe "seedSyncState" $ do
       it "inserts the singleton row with all defaults" $
         withControlConnection $ \conn -> do
-          seedSyncState conn 1 False
-          mRow <- readSyncState conn
+          runAppM conn (seedSyncState 1 False)
+          mRow <- runAppM conn readSyncState
           mRow `shouldSatisfy` isJust
           case mRow of
             Nothing  -> panic "already asserted"
@@ -74,21 +75,21 @@ spec = describe "DbSync.Checkpoint.SyncState" $
 
       it "captures ledger_enabled = True when requested" $
         withControlConnection $ \conn -> do
-          seedSyncState conn 1 True
-          mRow <- readSyncState conn
+          runAppM conn (seedSyncState 1 True)
+          mRow <- runAppM conn readSyncState
           case mRow of
             Just row -> ssrLedgerEnabled row `shouldBe` True
             Nothing  -> panic "seed did not persist"
 
       it "is idempotent — second call does not create a second row" $
         withControlConnection $ \conn -> do
-          seedSyncState conn 1 False
-          seedSyncState conn 1 False
-          seedSyncState conn 1 True    -- different args — still a no-op
+          runAppM conn (seedSyncState 1 False)
+          runAppM conn (seedSyncState 1 False)
+          runAppM conn (seedSyncState 1 True)    -- different args — still a no-op
           rowCount <- T.strip <$> queryTestDb "SELECT count(*) FROM dbsync_sync_state;"
           rowCount `shouldBe` "1"
           -- And the first seeding wins (ledger_enabled stays False)
-          mRow <- readSyncState conn
+          mRow <- runAppM conn readSyncState
           case mRow of
             Just row -> ssrLedgerEnabled row `shouldBe` False
             Nothing  -> panic "row vanished between seeds"
@@ -100,19 +101,19 @@ spec = describe "DbSync.Checkpoint.SyncState" $
     describe "writeSyncState round-trip" $ do
       it "writes every field, then readSyncState returns the same row" $
         withControlConnection $ \conn -> do
-          seedSyncState conn 1 True
-          writeSyncState conn sampleRow
-          mReadBack <- readSyncState conn
+          runAppM conn (seedSyncState 1 True)
+          runAppM conn (writeSyncState sampleRow)
+          mReadBack <- runAppM conn readSyncState
           case mReadBack of
             Just readBack -> readBack `shouldBe` sampleRow
             Nothing       -> panic "row vanished after write"
 
       it "overwrites previous values on repeated writes" $
         withControlConnection $ \conn -> do
-          seedSyncState conn 1 True
-          writeSyncState conn sampleRow
-          writeSyncState conn sampleRow { ssrLastCommittedSlot = Just 12345 }
-          mReadBack <- readSyncState conn
+          runAppM conn (seedSyncState 1 True)
+          runAppM conn (writeSyncState sampleRow)
+          runAppM conn (writeSyncState sampleRow { ssrLastCommittedSlot = Just 12345 })
+          mReadBack <- runAppM conn readSyncState
           case mReadBack of
             Just readBack -> ssrLastCommittedSlot readBack `shouldBe` Just 12345
             Nothing       -> panic "row vanished after write"
@@ -120,7 +121,7 @@ spec = describe "DbSync.Checkpoint.SyncState" $
       it "throws AppDatabaseError when the row was never seeded" $
         withControlConnection $ \conn -> do
           -- resetSyncStateTable above leaves the table empty; don't seed.
-          result <- try (writeSyncState conn sampleRow)
+          result <- try (runAppM conn (writeSyncState sampleRow))
           case result of
             Left (AppDatabaseError _ msg) ->
               msg `shouldSatisfy` T.isInfixOf "expected exactly 1"
@@ -129,24 +130,24 @@ spec = describe "DbSync.Checkpoint.SyncState" $
 
       it "preserves NULL in last_committed_block_hash" $
         withControlConnection $ \conn -> do
-          seedSyncState conn 1 False
-          writeSyncState conn sampleRow { ssrLastCommittedBlockHash = Nothing }
-          mReadBack <- readSyncState conn
+          runAppM conn (seedSyncState 1 False)
+          runAppM conn (writeSyncState sampleRow { ssrLastCommittedBlockHash = Nothing })
+          mReadBack <- runAppM conn readSyncState
           case mReadBack of
             Just readBack -> ssrLastCommittedBlockHash readBack `shouldBe` Nothing
             Nothing       -> panic "row vanished after write"
 
       it "round-trips a realistic 32-byte block hash" $
         withControlConnection $ \conn -> do
-          seedSyncState conn 1 False
+          runAppM conn (seedSyncState 1 False)
           let bigHash = BS.pack
                 [ 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89
                 , 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89
                 , 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89
                 , 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89
                 ]
-          writeSyncState conn sampleRow { ssrLastCommittedBlockHash = Just bigHash }
-          mReadBack <- readSyncState conn
+          runAppM conn (writeSyncState sampleRow { ssrLastCommittedBlockHash = Just bigHash })
+          mReadBack <- runAppM conn readSyncState
           case mReadBack of
             Just readBack -> ssrLastCommittedBlockHash readBack `shouldBe` Just bigHash
             Nothing       -> panic "row vanished after write"
@@ -154,10 +155,10 @@ spec = describe "DbSync.Checkpoint.SyncState" $
     describe "markSnapshotComplete" $ do
       it "writes last_snapshot_slot without touching other fields" $
         withControlConnection $ \conn -> do
-          seedSyncState conn 1 True
-          writeSyncState conn sampleRow
-          markSnapshotComplete conn 7777
-          mReadBack <- readSyncState conn
+          runAppM conn (seedSyncState 1 True)
+          runAppM conn (writeSyncState sampleRow)
+          runAppM conn (markSnapshotComplete 7777)
+          mReadBack <- runAppM conn readSyncState
           case mReadBack of
             Just row -> do
               ssrLastSnapshotSlot row       `shouldBe` Just 7777
@@ -171,27 +172,27 @@ spec = describe "DbSync.Checkpoint.SyncState" $
 
       it "is idempotent on the same slot" $
         withControlConnection $ \conn -> do
-          seedSyncState conn 1 True
-          markSnapshotComplete conn 1234
-          markSnapshotComplete conn 1234
-          mReadBack <- readSyncState conn
+          runAppM conn (seedSyncState 1 True)
+          runAppM conn (markSnapshotComplete 1234)
+          runAppM conn (markSnapshotComplete 1234)
+          mReadBack <- runAppM conn readSyncState
           case mReadBack of
             Just row -> ssrLastSnapshotSlot row `shouldBe` Just 1234
             Nothing  -> panic "row vanished"
 
       it "writeSyncState does not overwrite a previously recorded snapshot slot" $
         withControlConnection $ \conn -> do
-          seedSyncState conn 1 True
-          markSnapshotComplete conn 999
-          writeSyncState conn sampleRow { ssrLastSnapshotSlot = Just 0 }
-          mReadBack <- readSyncState conn
+          runAppM conn (seedSyncState 1 True)
+          runAppM conn (markSnapshotComplete 999)
+          runAppM conn (writeSyncState sampleRow { ssrLastSnapshotSlot = Just 0 })
+          mReadBack <- runAppM conn readSyncState
           case mReadBack of
             Just row -> ssrLastSnapshotSlot row `shouldBe` Just 999
             Nothing  -> panic "row vanished"
 
       it "throws AppDatabaseError when the row was never seeded" $
         withControlConnection $ \conn -> do
-          result <- try (markSnapshotComplete conn 42)
+          result <- try (runAppM conn (markSnapshotComplete 42))
           case result of
             Left (AppDatabaseError _ _) -> pure ()
             Left other                  -> panic $ "Wrong exception type: " <> show other

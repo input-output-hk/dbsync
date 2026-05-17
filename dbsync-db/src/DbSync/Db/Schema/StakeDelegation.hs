@@ -98,7 +98,7 @@ import DbSync.Db.Types
   , bRewardSource
   )
 
-import DbSync.Db.Writer.Copy.Encoder
+import DbSync.Db.Loader.Encoder
   ( buildCopyRow
   , bBool
   , bHex
@@ -494,7 +494,7 @@ encodeWithdrawalCopy (WithdrawalId wid) w =
 -- | COPY row for @reward@. @earned_epoch@ is omitted because
 -- PostgreSQL computes it via the @GENERATED ALWAYS AS (...) STORED@
 -- expression on the column; the COPY column list (built by
--- 'DbSync.Copy.Connection.buildColumnList') excludes it.
+-- 'DbSync.Db.Loader.Connection.buildColumnList') excludes it.
 encodeRewardCopy :: RewardId -> Reward -> ByteString
 encodeRewardCopy (RewardId rid) r =
   buildCopyRow

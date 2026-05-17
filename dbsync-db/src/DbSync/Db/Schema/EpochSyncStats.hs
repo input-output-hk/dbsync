@@ -35,7 +35,7 @@ import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Types
 import DbSync.Db.Types (SyncState, bSyncState)
-import DbSync.Db.Writer.Copy.Encoder (buildCopyRow, bInt64, bUTCTime, bWord64)
+import DbSync.Db.Loader.Encoder (buildCopyRow, bInt64, bUTCTime, bWord64)
 
 -- ---------------------------------------------------------------------------
 -- * Key type family instances

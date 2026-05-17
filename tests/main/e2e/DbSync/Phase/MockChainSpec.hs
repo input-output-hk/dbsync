@@ -3,7 +3,7 @@
 -- | Multi-block / multi-epoch scenarios using the chain-gen harness
 -- ('DbSync.Test.MockChain').
 --
--- Where 'DbSync.Phase.FollowingSpec' uses hand-crafted
+-- Where 'DbSync.Phase.Following.RunSpec' uses hand-crafted
 -- 'GenericBlock' fixtures (one or two blocks per scenario), this
 -- spec drives a real forging 'Interpreter' so we can assert against
 -- the database after dozens of blocks across genuine epoch

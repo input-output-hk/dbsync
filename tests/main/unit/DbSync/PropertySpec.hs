@@ -29,7 +29,7 @@ import DbSync.Test.Property.Invariants
   ( runPureExtract
   , runPureExtractMany
   )
-import DbSync.Writer.Testing (TestWriterState (..))
+import DbSync.Test.Writer (TestWriterState (..))
 
 spec :: Spec
 spec = describe "DbSync.PropertySpec (Arbitrary CardanoBlock)" $

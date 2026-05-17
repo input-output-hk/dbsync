@@ -9,7 +9,7 @@
   "sync": {
     "mode": "auto",
     "checkpoint_dir": "/data/checkpoints",
-    "copy_connections": 4
+    "loader_connections": 4
   },
   "ledger": {
     "enabled": false

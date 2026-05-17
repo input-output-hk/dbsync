@@ -19,8 +19,8 @@ import DbSync.Db.Schema.MultiAsset
 import DbSync.Db.Types (DbWord64 (..))
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
 import DbSync.Extractor.SharedDedup (resolveAndWriteMultiAsset)
-import DbSync.Resolver (IdResolver (..))
-import DbSync.Writer (Writer (..))
+import DbSync.Resolver (HasResolver (..), IdResolver (..))
+import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- ---------------------------------------------------------------------------
 -- * Extractor definition
@@ -40,7 +40,9 @@ multiAssetExtractor = ExtractorDef
 -- ---------------------------------------------------------------------------
 
 processMultiAsset :: ProcessBlockFn
-processMultiAsset resolver writer ctx =
+processMultiAsset ctx = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
   forM_ (bcTxs ctx) $ \tc -> do
     let txId   = tcTxId tc
         gtx    = tcGenTx tc
@@ -50,24 +52,24 @@ processMultiAsset resolver writer ctx =
     -- no ma_tx_mint or ma_tx_out rows belong to a failed tx.
     when (txValidContract gtx) $ do
       forM_ (txMint gtx) $ \(policy, name, quantity) -> do
-        maId <- resolveAndWriteMultiAsset resolver writer policy name
-        mintId <- assignMaTxMintId resolver
+        maId <- resolveAndWriteMultiAsset policy name
+        mintId <- liftIO $ assignMaTxMintId resolver
         let mint = MaTxMint
               { maTxMintQuantity = quantity
               , maTxMintTxId     = txId
               , maTxMintIdent    = maId
               }
-        writeMaTxMint writer mintId mint
+        liftIO $ writeMaTxMint writer mintId mint
 
       forM_ (zip outIds (txOutputs gtx)) $ \(outId, gout) -> do
         forM_ (txOutMultiAssets gout) $ \(policy, name, quantity) -> do
-          maId <- resolveAndWriteMultiAsset resolver writer policy name
-          maoId <- assignMaTxOutId resolver
+          maId <- resolveAndWriteMultiAsset policy name
+          maoId <- liftIO $ assignMaTxOutId resolver
           let mao = MaTxOut
                 { maTxOutQuantity = DbWord64 (fromIntegral quantity)
                 , maTxOutTxOutId  = outId
                 , maTxOutIdent    = maId
                 }
-          writeMaTxOut writer maoId mao
+          liftIO $ writeMaTxOut writer maoId mao
 
 

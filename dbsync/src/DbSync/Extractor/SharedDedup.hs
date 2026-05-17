@@ -22,14 +22,15 @@ import DbSync.Db.Schema.Ids (MultiAssetId, PoolHashId, StakeAddressId)
 import DbSync.Db.Schema.MultiAsset (MultiAsset (..))
 import DbSync.Db.Schema.Pool (PoolHash (..))
 import DbSync.Db.Schema.StakeDelegation (StakeAddress (..))
-import DbSync.Resolver (IdResolver (..))
+import DbSync.Env (HasNetwork (..))
+import DbSync.Resolver (HasResolver (..), IdResolver (..))
 import DbSync.Util.Bech32
   ( mkAssetFingerprint
   , serialisePoolKeyHashToBech32
   , serialiseStakeKeyHashToBech32
   )
 import DbSync.Util.DedupHash (hashDedupKey)
-import DbSync.Writer (Writer (..))
+import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- ---------------------------------------------------------------------------
 -- * Resolvers
@@ -43,17 +44,18 @@ import DbSync.Writer (Writer (..))
 -- (e.g. @pool_update.active_epoch_no@: +2 vs +3 epoch offset) consult
 -- the flag instead of querying the DB.
 resolveAndWritePoolHash
-  :: IdResolver IO
-  -> Writer IO
-  -> ByteString
-  -> IO (PoolHashId, Bool)
-resolveAndWritePoolHash resolver writer poolKeyHash = do
+  :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
+  => ByteString
+  -> m (PoolHashId, Bool)
+resolveAndWritePoolHash poolKeyHash = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
   let ph = PoolHash
         { poolHashHashRaw = poolKeyHash
         , poolHashView    = serialisePoolKeyHashToBech32 poolKeyHash
         }
-  result@(phId, isNew) <- resolvePoolHash resolver poolKeyHash ph
-  when isNew $ writePoolHash writer phId ph
+  result@(phId, isNew) <- liftIO $ resolvePoolHash resolver poolKeyHash ph
+  when isNew $ liftIO $ writePoolHash writer phId ph
   pure result
 
 -- | Resolve a stake address by 28-byte credential hash, writing a fresh
@@ -67,12 +69,18 @@ resolveAndWritePoolHash resolver writer poolKeyHash = do
 -- @script_hash = Nothing@ and uses the stake-key (not stake-script)
 -- header.
 resolveAndWriteStakeAddress
-  :: Network
-  -> IdResolver IO
-  -> Writer IO
-  -> ByteString
-  -> IO StakeAddressId
-resolveAndWriteStakeAddress network resolver writer credHash = do
+  :: ( HasResolver env
+     , HasWriter env
+     , HasNetwork env
+     , MonadReader env m
+     , MonadIO m
+     )
+  => ByteString
+  -> m StakeAddressId
+resolveAndWriteStakeAddress credHash = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
+  network  <- asks getNetwork
   let mainnet = isMainnet network
       header  = if mainnet then 0xE1 else 0xE0
       addr29  = BS.cons header credHash
@@ -84,8 +92,8 @@ resolveAndWriteStakeAddress network resolver writer credHash = do
   -- Dedup key is the 29-byte serialised reward address — matches
   -- what 'rebuildDedupMaps' reads back from @stake_address.hash_raw@
   -- on resume.
-  (saId, isNew) <- resolveStakeAddress resolver addr29 sa
-  when isNew $ writeStakeAddress writer saId sa
+  (saId, isNew) <- liftIO $ resolveStakeAddress resolver addr29 sa
+  when isNew $ liftIO $ writeStakeAddress writer saId sa
   pure saId
 
 -- | Resolve a multi-asset by @(policy, name)@, writing a fresh
@@ -96,20 +104,21 @@ resolveAndWriteStakeAddress network resolver writer credHash = do
 -- MUST apply the same hash to the same input; otherwise resumed
 -- runs will allocate fresh ids for already-known assets.
 resolveAndWriteMultiAsset
-  :: IdResolver IO
-  -> Writer IO
-  -> ByteString    -- ^ policy ID
+  :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
+  => ByteString    -- ^ policy ID
   -> ByteString    -- ^ asset name
-  -> IO MultiAssetId
-resolveAndWriteMultiAsset resolver writer policy name = do
+  -> m MultiAssetId
+resolveAndWriteMultiAsset policy name = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
   let !key = hashDedupKey (policy <> name)
       ma = MultiAsset
         { multiAssetPolicy      = policy
         , multiAssetName        = name
         , multiAssetFingerprint = mkAssetFingerprint policy name
         }
-  (maId, isNew) <- resolveMultiAsset resolver key ma
-  when isNew $ writeMultiAsset writer maId ma
+  (maId, isNew) <- liftIO $ resolveMultiAsset resolver key ma
+  when isNew $ liftIO $ writeMultiAsset writer maId ma
   pure maId
 
 -- ---------------------------------------------------------------------------

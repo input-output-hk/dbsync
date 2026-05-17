@@ -16,8 +16,8 @@ import Cardano.Prelude
 import DbSync.Block.Types (GenericTx (..))
 import DbSync.Db.Schema.CBOR
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
-import DbSync.Resolver (IdResolver (..))
-import DbSync.Writer (Writer (..))
+import DbSync.Resolver (HasResolver (..), IdResolver (..))
+import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- ---------------------------------------------------------------------------
 -- * Extractor definition
@@ -37,7 +37,9 @@ cborExtractor = ExtractorDef
 -- ---------------------------------------------------------------------------
 
 processCbor :: ProcessBlockFn
-processCbor resolver writer ctx = do
+processCbor ctx = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
   forM_ (bcTxs ctx) $ \tc -> do
     let txId = tcTxId tc
         gtx  = tcGenTx tc
@@ -45,11 +47,11 @@ processCbor resolver writer ctx = do
     -- Only write if CBOR bytes are available (Nothing for Byron)
     case txCborRaw gtx of
       Just !cborBytes -> do
-        tcId <- assignTxCborId resolver
+        tcId <- liftIO $ assignTxCborId resolver
         let txCbor = TxCbor
               { txCborTxId  = txId
               , txCborBytes = cborBytes
               }
-        writeTxCbor writer tcId txCbor
+        liftIO $ writeTxCbor writer tcId txCbor
       Nothing ->
         pure ()

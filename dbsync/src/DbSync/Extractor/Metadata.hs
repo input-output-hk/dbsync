@@ -22,8 +22,8 @@ import DbSync.Block.Types (GenericTx (..))
 import DbSync.Db.Schema.Metadata
 import DbSync.Db.Types (DbWord64 (..))
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
-import DbSync.Resolver (IdResolver (..))
-import DbSync.Writer (Writer (..))
+import DbSync.Resolver (HasResolver (..), IdResolver (..))
+import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- ---------------------------------------------------------------------------
 -- * Extractor definition
@@ -47,12 +47,14 @@ metadataExtractor = ExtractorDef
 -- no rows. Failed phase-2 txs are skipped — their metadata is not
 -- recorded on-chain.
 processMetadata :: ProcessBlockFn
-processMetadata resolver writer ctx =
+processMetadata ctx = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
   forM_ (bcTxs ctx) $ \tc ->
     when (txValidContract (tcGenTx tc)) $
       case txMetadata (tcGenTx tc) of
         Nothing    -> pure ()
-        Just mdMap -> forM_ (Map.toAscList mdMap) (writeOne resolver writer (tcTxId tc))
+        Just mdMap -> forM_ (Map.toAscList mdMap) (liftIO . writeOne resolver writer (tcTxId tc))
   where
     writeOne r w txId (key, value) = do
       mdId <- assignTxMetadataId r

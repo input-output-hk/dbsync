@@ -45,7 +45,7 @@ spec = describe "DbSync.Config" $ do
           -- Sync settings
           ssMode (scSync cfg) `shouldBe` SyncModeAuto
           ssCheckpointDir (scSync cfg) `shouldBe` "/data/checkpoints"
-          ssCopyConnections (scSync cfg) `shouldBe` 12
+          ssLoaderConnections (scSync cfg) `shouldBe` 12
 
           -- Ledger
           lcEnabled (scLedger cfg) `shouldBe` True
@@ -71,7 +71,7 @@ spec = describe "DbSync.Config" $ do
         Right cfg -> do
           -- Sync defaults
           ssMode (scSync cfg) `shouldBe` SyncModeAuto
-          ssCopyConnections (scSync cfg) `shouldBe` 12
+          ssLoaderConnections (scSync cfg) `shouldBe` 12
 
           -- Ledger defaults — opt-in, off when omitted
           lcEnabled (scLedger cfg) `shouldBe` False

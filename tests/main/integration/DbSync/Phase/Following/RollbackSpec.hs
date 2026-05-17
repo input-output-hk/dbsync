@@ -84,11 +84,12 @@ import DbSync.Extractor.MultiAsset (multiAssetExtractor)
 import DbSync.Extractor.Pool (poolExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Extractor.UTxO (utxoExtractor)
-import DbSync.Ingest.Pipeline (processBlock)
+import DbSync.Block.Pipeline (processBlock)
 import DbSync.Db.Phase (SyncPhase (..))
+import DbSync.AppM (runAppM)
 import qualified DbSync.Phase.Following.Rollback as Rollback
 import DbSync.App.Boot (mkCardanoPoint)
-import DbSync.Resolver.Follow (mkFollowResolver)
+import DbSync.Phase.Following.Resolver (mkFollowResolver)
 import DbSync.Test.Database
   ( queryTestDb
   , setupFollowTipSchema
@@ -97,10 +98,10 @@ import DbSync.Test.Database
   )
 import DbSync.Test.Hasql (withTestConnection)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnvWith)
-import DbSync.Writer.InsertAdapter (mkInsertWriter)
+import qualified DbSync.Phase.Following.Writer as FollowingWriter
 
 -- ---------------------------------------------------------------------------
--- Tables and extractors mirror the FollowingSpec setup so the
+-- Tables and extractors mirror the Following.RunSpec setup so the
 -- schema-init is identical to the one the production code uses.
 -- ---------------------------------------------------------------------------
 
@@ -238,7 +239,7 @@ cascadeSpec = describe "Rollback.rollbackToPoint" $
       -- deleted, along with their txs, tx_outs, and metadata. The
       -- first block stays.
       withTestConnection $ \conn ->
-        Rollback.rollbackToPoint tables conn target
+        runAppM conn (Rollback.rollbackToPoint tables target)
       blockN' <- T.strip <$> queryTestDb "SELECT count(*) FROM block;"
       blockN' `shouldBe` "1"
 
@@ -260,7 +261,7 @@ cascadeSpec = describe "Rollback.rollbackToPoint" $
       slBefore   <- T.strip <$> queryTestDb "SELECT count(*) FROM slot_leader;"
 
       withTestConnection $ \conn ->
-        Rollback.rollbackToPoint tables conn target
+        runAppM conn (Rollback.rollbackToPoint tables target)
 
       addrAfter <- T.strip <$> queryTestDb "SELECT count(*) FROM address;"
       slAfter   <- T.strip <$> queryTestDb "SELECT count(*) FROM slot_leader;"
@@ -275,7 +276,7 @@ cascadeSpec = describe "Rollback.rollbackToPoint" $
         \VALUES (1, false) ON CONFLICT (id) DO NOTHING;"
 
       withTestConnection $ \conn ->
-        Rollback.rollbackToPoint tables conn target
+        runAppM conn (Rollback.rollbackToPoint tables target)
 
       result <- T.strip <$>
         queryTestDb
@@ -294,7 +295,7 @@ runFollow :: [GenericBlock] -> IO ()
 runFollow blocks =
   withTestConnection $ \conn -> do
     resolver <- mkFollowResolver conn
-    let writer = mkInsertWriter conn
+    let writer = FollowingWriter.mkWriter conn
         env    =
           mkTestPipelineEnvWith
             Mainnet

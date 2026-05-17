@@ -27,8 +27,17 @@ module DbSync.Env
 
     -- * Accessor classes
   , HasConfig (..)
-  , HasNetwork (..)
+  , HasNetwork (..)  -- re-export from Extractor
   , HasReceiverChannels (..)
+
+    -- * Small env adapters
+    --
+    -- Used by boot code and tests where no full phase env is in
+    -- scope. Production phase envs satisfy the same classes directly
+    -- via the records above.
+  , TracerWithControl (..)
+  , TracerWithConn (..)
+  , LoaderWithControl (..)
   ) where
 
 import Cardano.Prelude
@@ -44,28 +53,34 @@ import Ouroboros.Consensus.BlockchainTime.WallClock.Types (SystemStart)
 
 import DbSync.Block.Types (CardanoPoint)
 import DbSync.Node.ChainSyncMsg (ChainSyncMsg)
-import DbSync.Checkpoint.SyncState (ControlConnection)
+import DbSync.Checkpoint.SyncState (ControlConnection, HasControlConnection (..))
 import DbSync.Config.Types (NodeConfig, SyncConfig)
-import DbSync.Copy.Writer (CopyWriter)
+import DbSync.Db.Loader (LoaderStream, HasLoaderStream (..))
+import DbSync.Db.Transaction (HasHasqlConnection (..))
 import DbSync.Extractor
   ( ExtractState
   , ExtractorDef
   , HasExtractors (..)
   , HasLedgerData (..)
+  , HasNetwork (..)
   , emptyBlockLedgerData
   )
 import DbSync.Id.DedupMap (DedupMaps)
-import DbSync.Ingest.ReceiverStats (ReceiverStats)
+import DbSync.Phase.Ingest.ReceiverStats (ReceiverStats)
 import DbSync.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..))
 import DbSync.Metrics (HasMetrics (..), Metrics)
-import DbSync.Phase.Ref (HasSyncPhase (..), SyncPhaseRef, readSyncPhase)
+import DbSync.Phase.Current (HasCurrentPhase (..), CurrentPhase, readCurrentPhase)
 import DbSync.Resolver (HasResolver (..), IdResolver)
-import DbSync.Resolver.AddressBuffer (AddressBufferRef)
-import DbSync.Resolver.AddressWorker (AddressResolver)
-import DbSync.StateQuery.Types (StateQueryVar)
+import DbSync.Address.Buffer (AddressBufferRef)
+import DbSync.Address.Worker (AddressResolver)
+import DbSync.StateQuery.Types
+  ( HasStateQueryVar (..)
+  , HasSystemStart (..)
+  , StateQueryVar
+  )
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer, Severity)
-import DbSync.Trace.Watchdog (Watchdog)
+import DbSync.Trace.Watchdog (HasWatchdog (..), Watchdog)
 import DbSync.Writer (HasWriter (..), Writer)
 
 -- NOTE: DedupMaps is internally mutable (BasicHashTable + IORef counters).
@@ -78,12 +93,6 @@ import DbSync.Writer (HasWriter (..), Writer)
 -- | Access the sync configuration from any environment.
 class HasConfig env where
   getConfig :: env -> SyncConfig
-
--- | Access the chain's 'Network' (mainnet vs testnet) from any
--- environment. Read once at startup from the Shelley genesis and
--- never changes for the lifetime of a sync.
-class HasNetwork env where
-  getNetwork :: env -> Network
 
 -- | The state the chainsync receiver needs from whichever phase
 -- owns it. Both 'IngestEnv' and 'FollowEnv' provide it, so
@@ -128,16 +137,16 @@ data CoreEnv = CoreEnv
   , ceNetwork     :: !Network
     -- ^ Chain network ID from the Shelley genesis. Drives the HRP
     -- on stake / reward Bech32 encodings.
-  , ceSyncPhase   :: !SyncPhaseRef
+  , ceCurrentPhase :: !CurrentPhase
     -- ^ Live lifecycle phase. Written by the orchestrator and the
     -- Follow loop; read by extractors, logs, and the watchdog.
   }
 
 -- | Environment for the 'IngestChainHistory' phase.
 --
--- Extends 'CoreEnv' with the runtime state needed for bulk COPY
--- ingestion: the chainsync message queue, COPY connections, ID
--- counters, mutable dedup hash tables, the resolver and writer
+-- Extends 'CoreEnv' with the runtime state needed for loader-stream
+-- ingestion: the chainsync message queue, loader-stream connections,
+-- ID counters, mutable dedup hash tables, the resolver and writer
 -- adapters, the state-query interpreter handle, the system start,
 -- and the ledger subsystem 'HasLedgerEnv' which is either
 -- @LedgerEnabled !LedgerEnv@ (carrying its own block queue +
@@ -157,8 +166,8 @@ data IngestEnv = IngestEnv
     -- on this queue during 'IngestChainHistory' (the consumer exits
     -- at the rollback boundary, so no volatile block ever arrives);
     -- the consumer panics if one slips through.
-  , ieCopyWriter    :: !CopyWriter
-    -- ^ Multi-threaded COPY writer (per-table TBQueues + worker threads)
+  , ieLoaderStream    :: !LoaderStream
+    -- ^ Multi-threaded loader-stream writer (per-table TBQueues + worker threads)
   , ieDedupMaps     :: !DedupMaps
     -- ^ Mutable deduplication maps (internally mutable hash tables)
   , ieAddressBuffer :: !AddressBufferRef
@@ -184,8 +193,8 @@ data IngestEnv = IngestEnv
     -- ^ Ingest-phase ID resolver (DedupMaps + IdCounters under the hood).
     -- Built once from 'ieDedupMaps' and 'ieExtractState' at startup.
   , ieWriter        :: !(Writer IO)
-    -- ^ Ingest-phase writer (the COPY adapter). Built once from
-    -- 'ieCopyWriter' at startup.
+    -- ^ Ingest-phase writer (the loader-stream adapter). Built once
+    -- from 'ieLoaderStream' at startup.
   , ieExtractState  :: !(IORef ExtractState)
     -- ^ Per-block extraction state — carries the 'IdCounters' through
     -- 'atomicModifyIORef'' so the resolver can hand out fresh IDs.
@@ -193,7 +202,7 @@ data IngestEnv = IngestEnv
     -- ^ Receiver-thread statistics (blocks received, writes blocked).
     -- Mutated by the chainsync receiver, read+reset per epoch by the
     -- consumer for the @Ingest:@ log line. See
-    -- 'DbSync.Ingest.ReceiverStats' for rationale.
+    -- 'DbSync.Phase.Ingest.ReceiverStats' for rationale.
   , ieControlConnection :: !ControlConnection
     -- ^ PG connection used by the consumer to advance
     -- @dbsync_sync_state@ at each epoch boundary via 'commitEpoch'.
@@ -440,14 +449,110 @@ instance HasLedgerData FollowEnv where
   getLedgerData _ _ = pure emptyBlockLedgerData
 
 -- ---------------------------------------------------------------------------
--- * HasSyncPhase instances
+-- * HasCurrentPhase instances
 -- ---------------------------------------------------------------------------
 
-instance HasSyncPhase CoreEnv where
-  getSyncPhase = readSyncPhase . ceSyncPhase
+instance HasCurrentPhase CoreEnv where
+  getCurrentPhase = readCurrentPhase . ceCurrentPhase
 
-instance HasSyncPhase IngestEnv where
-  getSyncPhase = getSyncPhase . ieCore
+instance HasCurrentPhase IngestEnv where
+  getCurrentPhase = getCurrentPhase . ieCore
 
-instance HasSyncPhase FollowEnv where
-  getSyncPhase = getSyncPhase . feCore
+instance HasCurrentPhase FollowEnv where
+  getCurrentPhase = getCurrentPhase . feCore
+
+-- ---------------------------------------------------------------------------
+-- * HasControlConnection instances
+-- ---------------------------------------------------------------------------
+
+instance HasControlConnection IngestEnv where
+  getControlConnection = ieControlConnection
+
+instance HasControlConnection FollowEnv where
+  getControlConnection = feControlConnection
+
+instance HasControlConnection LedgerEnv where
+  getControlConnection = leControlConnection
+
+-- ---------------------------------------------------------------------------
+-- * HasHasqlConnection instances
+-- ---------------------------------------------------------------------------
+
+instance HasHasqlConnection FollowEnv where
+  getHasqlConnection = feHasqlConnection
+
+-- ---------------------------------------------------------------------------
+-- * HasLoaderStream instances
+-- ---------------------------------------------------------------------------
+
+instance HasLoaderStream IngestEnv where
+  getLoaderStream = ieLoaderStream
+
+-- ---------------------------------------------------------------------------
+-- * HasWatchdog instances
+-- ---------------------------------------------------------------------------
+
+instance HasWatchdog IngestEnv where
+  getWatchdog = ieWatchdog
+
+instance HasWatchdog FollowEnv where
+  getWatchdog = feWatchdog
+
+-- ---------------------------------------------------------------------------
+-- * HasStateQueryVar / HasSystemStart instances
+-- ---------------------------------------------------------------------------
+
+instance HasStateQueryVar IngestEnv where
+  getStateQueryVar = ieStateQueryVar
+
+instance HasStateQueryVar FollowEnv where
+  getStateQueryVar = feStateQueryVar
+
+instance HasSystemStart IngestEnv where
+  getSystemStart = ieSystemStart
+
+instance HasSystemStart FollowEnv where
+  getSystemStart = feSystemStart
+
+instance HasSystemStart LedgerEnv where
+  getSystemStart = leSystemStart
+
+-- ---------------------------------------------------------------------------
+-- * Small env adapters
+--
+-- Used by boot code (no 'IngestEnv' / 'FollowEnv' built yet) and by
+-- tests (no real phase env in scope). Production phase envs satisfy
+-- these classes directly via the records above.
+-- ---------------------------------------------------------------------------
+
+-- | Tracer + control connection. Drives 'rebuildDedupMaps' and any
+-- other 'CheckpointM env m' action that just needs a logger and the
+-- @sync_state@ connection.
+data TracerWithControl = TracerWithControl !AppTracer !ControlConnection
+
+instance HasTracer TracerWithControl where
+  getTracer (TracerWithControl t _) = t
+
+instance HasControlConnection TracerWithControl where
+  getControlConnection (TracerWithControl _ c) = c
+
+-- | Tracer + raw hasql connection. Drives the Prep phase helpers
+-- and any other @(LoggingM env m, HasHasqlConnection env)@ action
+-- run from boot or test code.
+data TracerWithConn = TracerWithConn !AppTracer !Conn.Connection
+
+instance HasTracer TracerWithConn where
+  getTracer (TracerWithConn t _) = t
+
+instance HasHasqlConnection TracerWithConn where
+  getHasqlConnection (TracerWithConn _ c) = c
+
+-- | Loader stream + control connection. Drives 'commitEpoch' from
+-- any caller that has both handles but isn't running inside 'IngestEnv'.
+data LoaderWithControl = LoaderWithControl !LoaderStream !ControlConnection
+
+instance HasLoaderStream LoaderWithControl where
+  getLoaderStream (LoaderWithControl ls _) = ls
+
+instance HasControlConnection LoaderWithControl where
+  getControlConnection (LoaderWithControl _ c) = c

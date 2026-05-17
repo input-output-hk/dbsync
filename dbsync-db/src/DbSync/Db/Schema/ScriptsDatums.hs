@@ -79,7 +79,7 @@ import DbSync.Db.Types
   , scriptTypeDecoder
   , scriptTypeEncoder
   )
-import DbSync.Db.Writer.Copy.Encoder
+import DbSync.Db.Loader.Encoder
   ( buildCopyRow
   , bHex
   , bInt64

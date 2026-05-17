@@ -1,11 +1,8 @@
 -- | PostgreSQL transaction bracket for hasql connections.
---
--- Wraps an 'IO' action between @BEGIN@ and @COMMIT@; on any
--- exception the transaction is rolled back and the exception
--- re-thrown. Used by the 'FollowingChainTip' loop to make each
--- per-block apply atomic with its 'sync_state' advance.
 module DbSync.Db.Transaction
-  ( withTransaction
+  ( HasHasqlConnection (..)
+  , withTransaction
+  , withTransactionOn
   ) where
 
 import Cardano.Prelude
@@ -13,27 +10,53 @@ import Cardano.Prelude
 import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 
--- | Run @action@ inside a PG transaction on @conn@.
---
--- Commits on success; rolls back and re-throws on any exception. If
--- the rollback itself fails (the connection is already in a broken
--- state, for example) that failure is swallowed so the original
--- exception isn't masked.
-withTransaction :: Conn.Connection -> IO a -> IO a
-withTransaction conn action = do
-  runSql "BEGIN"
-  result <- action `onException` rollbackQuiet
-  runSql "COMMIT"
-  pure result
-  where
-    runSql :: Text -> IO ()
-    runSql sql = do
-      r <- Conn.use conn (Sess.script sql)
-      case r of
-        Right () -> pure ()
-        Left e   -> panic $ "withTransaction: " <> sql <> ": " <> show e
+import Control.Monad.IO.Unlift (MonadUnliftIO, withRunInIO)
 
-    rollbackQuiet :: IO ()
-    rollbackQuiet =
-      void (Conn.use conn (Sess.script "ROLLBACK"))
-        `catch` \(_ :: SomeException) -> pure ()
+-- | Per-phase hasql connection used for INSERTs and the rollback
+-- cascade. Implemented by 'FollowEnv'.
+class HasHasqlConnection env where
+  getHasqlConnection :: env -> Conn.Connection
+
+-- | Self-instance so boot-time / test code can drive
+-- 'HasHasqlConnection'-polymorphic helpers via @runAppM conn ...@
+-- without building a phase env.
+instance HasHasqlConnection Conn.Connection where
+  getHasqlConnection = identity
+
+-- | Run @action@ between @BEGIN@ and @COMMIT@ on the env's
+-- connection. Rolls back on exception; swallows a failed rollback
+-- so the original exception isn't masked.
+withTransaction
+  :: (HasHasqlConnection env, MonadReader env m, MonadUnliftIO m)
+  => m a
+  -> m a
+withTransaction action = do
+  conn <- asks getHasqlConnection
+  withTransactionOn conn action
+
+-- | As 'withTransaction' but takes the connection explicitly. Used
+-- by call sites that don't (yet) have a 'HasHasqlConnection' env in
+-- scope.
+withTransactionOn
+  :: MonadUnliftIO m
+  => Conn.Connection
+  -> m a
+  -> m a
+withTransactionOn conn action =
+  withRunInIO $ \run -> do
+    runSql conn "BEGIN"
+    result <- run action `onException` rollbackQuiet conn
+    runSql conn "COMMIT"
+    pure result
+
+runSql :: Conn.Connection -> Text -> IO ()
+runSql conn sql = do
+  r <- Conn.use conn (Sess.script sql)
+  case r of
+    Right () -> pure ()
+    Left e   -> panic $ "withTransaction: " <> sql <> ": " <> show e
+
+rollbackQuiet :: Conn.Connection -> IO ()
+rollbackQuiet conn =
+  void (Conn.use conn (Sess.script "ROLLBACK"))
+    `catch` \(_ :: SomeException) -> pure ()

@@ -1,14 +1,13 @@
 -- | Application monad stack.
 --
 -- 'AppM' is a thin @ReaderT env IO@ newtype used throughout db-sync.
--- The phase-specific aliases ('CoreM', 'IngestM', 'FollowM', 'LedgerM')
--- are also defined here so there is a single place to look for the
--- monad shape. They all share the underlying 'ReaderT env IO' machinery
--- via the @newtype@-derived instances.
+-- The phase-specific aliases ('CoreM', 'IngestM', 'FollowM',
+-- 'LedgerM') name the env each phase uses; everything else carries
+-- 'HasXxx' constraints and works in any matching env.
 --
--- 'AppM' derives 'MonadUnliftIO' so that exception-aware operations
--- like 'bracket', 'catch', 'withAsync', and 'try' work directly inside
--- AppM without manual @runAppM@ ceremony.
+-- 'AppM' derives 'MonadUnliftIO' so 'bracket', 'catch',
+-- 'withAsync', and friends work directly without manual @runAppM@
+-- ceremony.
 module DbSync.AppM
   ( AppM (..)
   , runAppM
@@ -16,14 +15,27 @@ module DbSync.AppM
   , IngestM
   , FollowM
   , LedgerM
+
+    -- * Constraint synonyms
+  , LoggingM
+  , CheckpointM
+  , DbConnM
+  , ExtractorC
   ) where
 
 import Cardano.Prelude
 
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 
+import DbSync.Checkpoint.SyncState (HasControlConnection)
+import DbSync.Db.Transaction (HasHasqlConnection)
 import DbSync.Env (CoreEnv, FollowEnv, IngestEnv)
+import DbSync.Extractor (HasExtractors)
 import DbSync.Ledger.Types (LedgerEnv)
+import DbSync.Resolver (HasResolver)
+import DbSync.Trace (HasTracer)
+import DbSync.Env (HasNetwork)
+import DbSync.Writer (HasWriter)
 
 -- | The core application monad: @ReaderT env IO@.
 newtype AppM env a = AppM {unAppM :: ReaderT env IO a}
@@ -47,3 +59,38 @@ type FollowM = AppM FollowEnv
 -- feature is enabled (callers pattern-match on 'HasLedgerEnv' at the
 -- boundary, then run the action via @runAppM lenv@).
 type LedgerM = AppM LedgerEnv
+
+-- ---------------------------------------------------------------------------
+-- Constraint synonyms
+--
+-- Bundles of constraints used together repeatedly. Keep the set
+-- small — only collapse when the same combination shows up more
+-- than a handful of times.
+-- ---------------------------------------------------------------------------
+
+-- | Anything that needs an env-bound tracer plus 'MonadIO'.
+type LoggingM env m =
+  (HasTracer env, MonadReader env m, MonadIO m)
+
+-- | Writes against the @sync_state@ control connection, logged.
+type CheckpointM env m =
+  ( HasTracer env
+  , HasControlConnection env
+  , MonadReader env m
+  , MonadIO m
+  )
+
+-- | DB-write operations against the per-phase hasql connection.
+type DbConnM env m =
+  ( HasHasqlConnection env
+  , MonadReader env m
+  , MonadIO m
+  )
+
+-- | Standard extractor surface: resolver + writer + chain network.
+type ExtractorC env =
+  ( HasResolver env
+  , HasWriter env
+  , HasNetwork env
+  , HasExtractors env
+  )

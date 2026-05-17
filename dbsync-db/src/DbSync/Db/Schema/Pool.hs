@@ -97,7 +97,7 @@ import DbSync.Db.Types
   , maybeDbLovelaceDecoder
   , maybeDbLovelaceEncoder
   )
-import DbSync.Db.Writer.Copy.Encoder (buildCopyRow, bHex, bInt64, bText, bWord64)
+import DbSync.Db.Loader.Encoder (buildCopyRow, bHex, bInt64, bText, bWord64)
 
 -- ---------------------------------------------------------------------------
 -- * Key type family instances

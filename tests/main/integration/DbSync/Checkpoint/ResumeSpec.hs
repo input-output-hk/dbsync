@@ -23,7 +23,9 @@ import Test.Hspec (Spec, afterAll_, beforeAll_, before_, describe, it, shouldBe)
 
 import qualified Data.ByteString.Short as SBS
 
+import DbSync.AppM (runAppM)
 import DbSync.Checkpoint.Resume (CleanupMode (..), deleteRowsPastSlot)
+import DbSync.Env (TracerWithControl (..))
 import DbSync.Trace.Backend (mkNullTracer)
 import DbSync.Checkpoint.SyncState
   ( ControlConnection
@@ -35,12 +37,12 @@ import DbSync.Checkpoint.SyncState
   , seedSyncState
   , writeSyncState
   )
-import DbSync.Copy.Writer (CopyWriter (..), closeCopyWriter, mkCopyWriter)
+import DbSync.Db.Loader (LoaderStream (..), closeLoaderStream, mkLoaderStream)
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
 import DbSync.Db.Schema.Init (dropSchema, initSchema)
 import DbSync.Db.Schema.Types (TableDef)
 import DbSync.Id.DedupMap (DedupMaps (..), lookupOrInsert, size)
-import DbSync.Db.Writer.Copy.Encoder
+import DbSync.Db.Loader.Encoder
   ( buildCopyRow
   , bBool
   , bHex
@@ -114,17 +116,17 @@ rowAtBoundary boundarySlot nextSlotLeaderId = SyncStateRow
 -- | Push synthetic rows for blocks @[1..n]@. Block @i@ has slot
 -- @i * 100@ and @block_no = i@. Tx @i@ points to block @i@.
 -- slot_leader @i@ has hash @0xab @ replicated.
-populateChain :: CopyWriter -> Int64 -> IO ()
-populateChain cw n = do
+populateChain :: LoaderStream -> Int64 -> IO ()
+populateChain bs n = do
   forM_ [1 .. n] $ \i -> do
-    cwWriteRow cw "slot_leader" $
+    lsWriteRow bs "slot_leader" $
       buildCopyRow
         [ Just $ bInt64 i
         , Just $ bHex (BS.replicate 28 (fromIntegral (0xa0 + i)))
         , Nothing
         , Just $ bText ("leader-" <> T.pack (show i))
         ]
-    cwWriteRow cw "block" $
+    lsWriteRow bs "block" $
       buildCopyRow
         [ Just $ bInt64 i                                            -- id
         , Just $ bHex (BS.replicate 32 (fromIntegral (0xb0 + i)))    -- hash
@@ -143,7 +145,7 @@ populateChain cw n = do
         , Nothing                                                    -- op_cert
         , Nothing                                                    -- op_cert_counter
         ]
-    cwWriteRow cw "tx" $
+    lsWriteRow bs "tx" $
       buildCopyRow
         [ Just $ bInt64 i                                            -- id
         , Just $ bHex (BS.replicate 32 (fromIntegral (0xc0 + i)))    -- hash
@@ -198,14 +200,14 @@ ingestResumeSpec = describe "IngestResume" $ do
 
     it "is a no-op when last_committed_slot is Nothing" $ do
       withControlConnection $ \ctrl -> do
-        seedSyncState ctrl 1 False
-        cw <- mkCopyWriter testConnBs coreTables
-        populateChain cw 3
-        cwCommit cw
-        closeCopyWriter cw
+        runAppM ctrl (seedSyncState 1 False)
+        bs <- mkLoaderStream testConnBs coreTables
+        populateChain bs 3
+        lsCommit bs
+        closeLoaderStream bs
 
         let row = (rowAtBoundary 100 1) { ssrLastCommittedSlot = Nothing }
-        deleted <- deleteRowsPastSlot IngestResume ctrl coreTables row
+        deleted <- runAppM ctrl (deleteRowsPastSlot IngestResume coreTables row)
         deleted `shouldBe` 0
 
         countRows "block"       >>= (`shouldBe` 3)
@@ -214,17 +216,17 @@ ingestResumeSpec = describe "IngestResume" $ do
 
     it "deletes block rows past last_committed_slot" $ do
       withControlConnection $ \ctrl -> do
-        seedSyncState ctrl 1 False
-        cw <- mkCopyWriter testConnBs coreTables
-        populateChain cw 5  -- slots 100, 200, 300, 400, 500
-        cwCommit cw
-        closeCopyWriter cw
+        runAppM ctrl (seedSyncState 1 False)
+        bs <- mkLoaderStream testConnBs coreTables
+        populateChain bs 5  -- slots 100, 200, 300, 400, 500
+        lsCommit bs
+        closeLoaderStream bs
 
         -- Counter at 6 keeps slot_leader untouched; the test focuses
         -- on the slot-based fact-table cleanup.
         let row = rowAtBoundary 300 6
-        writeSyncState ctrl row
-        deleted <- deleteRowsPastSlot IngestResume ctrl coreTables row
+        runAppM ctrl (writeSyncState row)
+        deleted <- runAppM ctrl (deleteRowsPastSlot IngestResume coreTables row)
 
         deleted `shouldBe` 4
         countRows "block"       >>= (`shouldBe` 3)
@@ -233,15 +235,15 @@ ingestResumeSpec = describe "IngestResume" $ do
 
     it "deletes tx rows whose block crossed the boundary" $ do
       withControlConnection $ \ctrl -> do
-        seedSyncState ctrl 1 False
-        cw <- mkCopyWriter testConnBs coreTables
-        populateChain cw 5
-        cwCommit cw
-        closeCopyWriter cw
+        runAppM ctrl (seedSyncState 1 False)
+        bs <- mkLoaderStream testConnBs coreTables
+        populateChain bs 5
+        lsCommit bs
+        closeLoaderStream bs
 
         let row = rowAtBoundary 250 6
-        writeSyncState ctrl row
-        _ <- deleteRowsPastSlot IngestResume ctrl coreTables row
+        runAppM ctrl (writeSyncState row)
+        _ <- runAppM ctrl (deleteRowsPastSlot IngestResume coreTables row)
 
         remainingTx <-
           T.strip <$> queryTestDb "SELECT id FROM tx ORDER BY id;"
@@ -249,17 +251,17 @@ ingestResumeSpec = describe "IngestResume" $ do
 
     it "deletes dedup rows whose id >= the recorded counter" $ do
       withControlConnection $ \ctrl -> do
-        seedSyncState ctrl 1 False
-        cw <- mkCopyWriter testConnBs coreTables
-        populateChain cw 5
-        cwCommit cw
-        closeCopyWriter cw
+        runAppM ctrl (seedSyncState 1 False)
+        bs <- mkLoaderStream testConnBs coreTables
+        populateChain bs 5
+        lsCommit bs
+        closeLoaderStream bs
 
         -- Counter at 4 means "next id is 4"; ids 4 and 5 are past
         -- the committed point.
         let row = rowAtBoundary 1000 4
-        writeSyncState ctrl row
-        _ <- deleteRowsPastSlot IngestResume ctrl coreTables row
+        runAppM ctrl (writeSyncState row)
+        _ <- runAppM ctrl (deleteRowsPastSlot IngestResume coreTables row)
 
         countRows "slot_leader" >>= (`shouldBe` 3)
         remaining <-
@@ -268,15 +270,15 @@ ingestResumeSpec = describe "IngestResume" $ do
 
     it "leaves everything alone when no rows are past the boundary" $ do
       withControlConnection $ \ctrl -> do
-        seedSyncState ctrl 1 False
-        cw <- mkCopyWriter testConnBs coreTables
-        populateChain cw 3
-        cwCommit cw
-        closeCopyWriter cw
+        runAppM ctrl (seedSyncState 1 False)
+        bs <- mkLoaderStream testConnBs coreTables
+        populateChain bs 3
+        lsCommit bs
+        closeLoaderStream bs
 
         let row = rowAtBoundary 9_999 4
-        writeSyncState ctrl row
-        deleted <- deleteRowsPastSlot IngestResume ctrl coreTables row
+        runAppM ctrl (writeSyncState row)
+        deleted <- runAppM ctrl (deleteRowsPastSlot IngestResume coreTables row)
         deleted `shouldBe` 0
 
         countRows "block"       >>= (`shouldBe` 3)
@@ -288,19 +290,19 @@ followRestartSpec = describe "FollowRestart" $ do
 
     it "skips the dedup-counter DELETE even when ids exceed the counter" $ do
       withControlConnection $ \ctrl -> do
-        seedSyncState ctrl 1 False
-        cw <- mkCopyWriter testConnBs coreTables
-        populateChain cw 5
-        cwCommit cw
-        closeCopyWriter cw
+        runAppM ctrl (seedSyncState 1 False)
+        bs <- mkLoaderStream testConnBs coreTables
+        populateChain bs 5
+        lsCommit bs
+        closeLoaderStream bs
 
         -- Counter frozen at the start-of-Follow value (1). All 5
         -- slot_leader rows have id >= 1; the IngestResume mode would
         -- wipe every one. FollowRestart must leave them alone.
         let row = (rowAtBoundary 9_999 1)
                     { ssrLastCommittedBlockNo = Just 5 }
-        writeSyncState ctrl row
-        deleted <- deleteRowsPastSlot FollowRestart ctrl coreTables row
+        runAppM ctrl (writeSyncState row)
+        deleted <- runAppM ctrl (deleteRowsPastSlot FollowRestart coreTables row)
         deleted `shouldBe` 0
 
         countRows "slot_leader" >>= (`shouldBe` 5)
@@ -309,18 +311,18 @@ followRestartSpec = describe "FollowRestart" $ do
 
     it "still trims fact-table rows past last_committed_slot" $ do
       withControlConnection $ \ctrl -> do
-        seedSyncState ctrl 1 False
-        cw <- mkCopyWriter testConnBs coreTables
-        populateChain cw 5
-        cwCommit cw
-        closeCopyWriter cw
+        runAppM ctrl (seedSyncState 1 False)
+        bs <- mkLoaderStream testConnBs coreTables
+        populateChain bs 5
+        lsCommit bs
+        closeLoaderStream bs
 
         -- Defensive byBlockId / bySlot cleanup remains active: if a
         -- bug leaves fact rows past the committed slot, this still
         -- catches them. Counter at 1 must not affect the count.
         let row = rowAtBoundary 300 1
-        writeSyncState ctrl row
-        deleted <- deleteRowsPastSlot FollowRestart ctrl coreTables row
+        runAppM ctrl (writeSyncState row)
+        deleted <- runAppM ctrl (deleteRowsPastSlot FollowRestart coreTables row)
 
         deleted `shouldBe` 4
         countRows "block"       >>= (`shouldBe` 3)
@@ -329,14 +331,14 @@ followRestartSpec = describe "FollowRestart" $ do
 
     it "is a no-op when last_committed_slot is Nothing" $ do
       withControlConnection $ \ctrl -> do
-        seedSyncState ctrl 1 False
-        cw <- mkCopyWriter testConnBs coreTables
-        populateChain cw 3
-        cwCommit cw
-        closeCopyWriter cw
+        runAppM ctrl (seedSyncState 1 False)
+        bs <- mkLoaderStream testConnBs coreTables
+        populateChain bs 3
+        lsCommit bs
+        closeLoaderStream bs
 
         let row = (rowAtBoundary 100 1) { ssrLastCommittedSlot = Nothing }
-        deleted <- deleteRowsPastSlot FollowRestart ctrl coreTables row
+        deleted <- runAppM ctrl (deleteRowsPastSlot FollowRestart coreTables row)
         deleted `shouldBe` 0
 
         countRows "slot_leader" >>= (`shouldBe` 3)
@@ -350,8 +352,8 @@ rebuildDedupMapsSpec = describe "DbSync.Checkpoint.SyncState.rebuildDedupMaps" $
 
     it "returns empty maps when no rows exist" $
       withControlConnection $ \ctrl -> do
-        seedSyncState ctrl 1 False
-        maps <- rebuildDedupMaps mkNullTracer ctrl coreTables
+        runAppM ctrl (seedSyncState 1 False)
+        maps <- runAppM (TracerWithControl mkNullTracer ctrl) (rebuildDedupMaps coreTables)
         size (dmsSlotLeader maps)   >>= (`shouldBe` 0)
         size (dmsStakeAddress maps) >>= (`shouldBe` 0)
         size (dmsPoolHash maps)     >>= (`shouldBe` 0)
@@ -359,13 +361,13 @@ rebuildDedupMapsSpec = describe "DbSync.Checkpoint.SyncState.rebuildDedupMaps" $
 
     it "loads slot_leader rows back into the dedup map" $
       withControlConnection $ \ctrl -> do
-        seedSyncState ctrl 1 False
-        cw <- mkCopyWriter testConnBs coreTables
-        populateChain cw 3
-        cwCommit cw
-        closeCopyWriter cw
+        runAppM ctrl (seedSyncState 1 False)
+        bs <- mkLoaderStream testConnBs coreTables
+        populateChain bs 3
+        lsCommit bs
+        closeLoaderStream bs
 
-        maps <- rebuildDedupMaps mkNullTracer ctrl coreTables
+        maps <- runAppM (TracerWithControl mkNullTracer ctrl) (rebuildDedupMaps coreTables)
         size (dmsSlotLeader maps) >>= (`shouldBe` 3)
 
         -- Looking up a known key returns the existing id, doesn't
@@ -378,13 +380,13 @@ rebuildDedupMapsSpec = describe "DbSync.Checkpoint.SyncState.rebuildDedupMaps" $
 
     it "advances the counter past existing ids so new keys avoid collisions" $
       withControlConnection $ \ctrl -> do
-        seedSyncState ctrl 1 False
-        cw <- mkCopyWriter testConnBs coreTables
-        populateChain cw 3
-        cwCommit cw
-        closeCopyWriter cw
+        runAppM ctrl (seedSyncState 1 False)
+        bs <- mkLoaderStream testConnBs coreTables
+        populateChain bs 3
+        lsCommit bs
+        closeLoaderStream bs
 
-        maps <- rebuildDedupMaps mkNullTracer ctrl coreTables
+        maps <- runAppM (TracerWithControl mkNullTracer ctrl) (rebuildDedupMaps coreTables)
         let unseenKey = SBS.toShort (BS.replicate 28 0xff)
         (rowId, isNew) <- lookupOrInsert unseenKey (dmsSlotLeader maps)
         isNew `shouldBe` True
@@ -392,15 +394,15 @@ rebuildDedupMapsSpec = describe "DbSync.Checkpoint.SyncState.rebuildDedupMaps" $
 
     it "skips dedup tables not present in the schema list" $
       withControlConnection $ \ctrl -> do
-        seedSyncState ctrl 1 False
+        runAppM ctrl (seedSyncState 1 False)
         -- Only block + tx in the schema list — slot_leader is absent,
         -- so its map is left empty even if rows exist server-side.
-        cw <- mkCopyWriter testConnBs coreTables
-        populateChain cw 3
-        cwCommit cw
-        closeCopyWriter cw
+        bs <- mkLoaderStream testConnBs coreTables
+        populateChain bs 3
+        lsCommit bs
+        closeLoaderStream bs
 
-        maps <- rebuildDedupMaps mkNullTracer ctrl [blockTableDef, txTableDef]
+        maps <- runAppM (TracerWithControl mkNullTracer ctrl) (rebuildDedupMaps [blockTableDef, txTableDef])
         size (dmsSlotLeader maps) >>= (`shouldBe` 0)
 
 -- ---------------------------------------------------------------------------
@@ -412,33 +414,33 @@ fetchBlockHashAtSlotSpec = describe "DbSync.Checkpoint.SyncState.fetchBlockHashA
 
     it "returns the hash of the block at the given slot" $
       withControlConnection $ \ctrl -> do
-        seedSyncState ctrl 1 False
-        cw <- mkCopyWriter testConnBs coreTables
-        populateChain cw 5  -- slots 100, 200, 300, 400, 500
-        cwCommit cw
-        closeCopyWriter cw
+        runAppM ctrl (seedSyncState 1 False)
+        bs <- mkLoaderStream testConnBs coreTables
+        populateChain bs 5  -- slots 100, 200, 300, 400, 500
+        lsCommit bs
+        closeLoaderStream bs
 
         -- 'populateChain' writes block i with hash 0xb0+i replicated.
         -- block 3 sits at slot 300 with hash 0xb3 replicated 32 times.
-        result <- fetchBlockHashAtSlot ctrl 300
+        result <- runAppM ctrl (fetchBlockHashAtSlot 300)
         result `shouldBe` Just (BS.replicate 32 0xb3)
 
     it "returns Nothing when no block is at the given slot" $
       withControlConnection $ \ctrl -> do
-        seedSyncState ctrl 1 False
-        cw <- mkCopyWriter testConnBs coreTables
-        populateChain cw 3
-        cwCommit cw
-        closeCopyWriter cw
+        runAppM ctrl (seedSyncState 1 False)
+        bs <- mkLoaderStream testConnBs coreTables
+        populateChain bs 3
+        lsCommit bs
+        closeLoaderStream bs
 
         -- Slot 12345 is between populated slots, not on any of them.
-        result <- fetchBlockHashAtSlot ctrl 12345
+        result <- runAppM ctrl (fetchBlockHashAtSlot 12345)
         result `shouldBe` Nothing
 
     it "returns Nothing on an empty block table" $
       withControlConnection $ \ctrl -> do
-        seedSyncState ctrl 1 False
-        result <- fetchBlockHashAtSlot ctrl 100
+        runAppM ctrl (seedSyncState 1 False)
+        result <- runAppM ctrl (fetchBlockHashAtSlot 100)
         result `shouldBe` Nothing
 
 resetFixtures :: IO ()

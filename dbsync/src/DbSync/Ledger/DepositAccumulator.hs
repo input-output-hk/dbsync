@@ -52,6 +52,7 @@ import qualified Data.Map.Strict as Map
 import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 
+import DbSync.Checkpoint.SyncState (ControlConnection (..), HasControlConnection (..))
 import DbSync.Db.Statement.EpochParamPending (insertEpochParamPendingStmt)
 import DbSync.Db.Types (DbLovelace (..))
 import DbSync.Error (throwDb)
@@ -117,14 +118,15 @@ takeAllEpochs ref = atomicModifyIORef' ref $ \m -> (Map.empty, m)
 -- Empty input is a no-op. Idempotent via @ON CONFLICT (epoch_no)
 -- DO NOTHING@ on the underlying statement.
 flushEpochParams
-  :: Conn.Connection
-  -> Map EpochNo EpochParams
-  -> IO ()
-flushEpochParams conn m
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
+  => Map EpochNo EpochParams
+  -> m ()
+flushEpochParams m
   | Map.null m = pure ()
   | otherwise = do
+      ControlConnection conn <- asks getControlConnection
       let cols = depositColumnVectors m
-      result <- Conn.use conn (Sess.statement cols insertEpochParamPendingStmt)
+      result <- liftIO $ Conn.use conn (Sess.statement cols insertEpochParamPendingStmt)
       case result of
         Right () -> pure ()
         Left  e  -> throwDb $ "flushEpochParams: " <> show e

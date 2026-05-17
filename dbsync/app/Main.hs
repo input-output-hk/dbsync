@@ -35,8 +35,7 @@ main = do
   validProfile <- loadProfile bootLogError (caProfile args)
 
   -- 2. Rebuild the tracer at the profile-configured severity. The
-  --    watchdog + per-epoch diagnostics gate on the same value via
-  --    'ceMinSeverity'.
+  --    watchdog + per-epoch diagnostics gate on the same value.
   let minSeverity = severityFromText (lgLevel (scLogging validProfile))
   tracer <- mkStdErrTracer minSeverity
   let logError msg = traceWith tracer $ LogMsg Error "App" msg Nothing

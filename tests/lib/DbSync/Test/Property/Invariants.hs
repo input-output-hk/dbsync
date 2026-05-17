@@ -49,12 +49,12 @@ import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()  -- LedgerSupports
 import DbSync.Block.Parser (parseBlock)
 import DbSync.Extractor (ExtractorDef, freshExtractState)
 import DbSync.Id.DedupMap (DedupMaps, newMaps)
-import DbSync.Ingest.Pipeline (processBlock)
-import DbSync.Resolver.AddressBuffer (newAddressBufferRef)
-import DbSync.Resolver.Ingest (mkIngestResolver)
+import DbSync.Block.Pipeline (processBlock)
+import DbSync.Address.Buffer (newAddressBufferRef)
+import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
 import DbSync.StateQuery.Types (SlotDetails (..))
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
-import DbSync.Writer.Testing (TestWriterState, emptyTestWriterState, mkTestWriter)
+import DbSync.Test.Writer (TestWriterState, emptyTestWriterState, mkTestWriter)
 
 -- ---------------------------------------------------------------------------
 -- Runners

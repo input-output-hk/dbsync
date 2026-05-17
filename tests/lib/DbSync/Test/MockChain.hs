@@ -83,11 +83,11 @@ import DbSync.Config.Node (parseNodeConfig)
 import DbSync.Config.Types (NodeConfig (..))
 import DbSync.Extractor (ExtractorDef)
 import DbSync.Extractor (emptyBlockLedgerData)
-import DbSync.Ingest.Pipeline (processBlock)
+import DbSync.Block.Pipeline (processBlock)
 import DbSync.Db.Phase (SyncPhase (..))
-import DbSync.Resolver.Follow (mkFollowResolver)
+import DbSync.Phase.Following.Resolver (mkFollowResolver)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnvWith)
-import DbSync.Writer.InsertAdapter (mkInsertWriter)
+import qualified DbSync.Phase.Following.Writer as FollowingWriter
 import DbSync.StateQuery
   ( StateQueryVar
   , getSlotDetailsIO
@@ -232,7 +232,7 @@ parseAndProcess
 parseAndProcess conn mc extractors blocks = do
   genericBlocks <- traverse toGeneric blocks
   resolver <- mkFollowResolver conn
-  let writer = mkInsertWriter conn
+  let writer = FollowingWriter.mkWriter conn
       env    =
         mkTestPipelineEnvWith
           (mcNetwork mc)

@@ -1,18 +1,19 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# OPTIONS_GHC -Wno-unused-do-bind #-}
 
 -- | Integration tests for 'DbSync.Checkpoint.Manager.commitEpoch'.
 --
--- The tests drive the full epoch-commit path: multiple COPY
+-- The tests drive the full epoch-commit path: multiple bulk
 -- connections write rows, 'commitEpoch' is invoked, and we verify:
 --
---   * All COPY connections flushed their rows to the target tables.
+--   * All loader connections flushed their rows to the target tables.
 --   * @dbsync_sync_state@ advanced to the committed slot.
 --   * The ID counters match the values we passed in.
---   * A subsequent @cwReopen@ (implicit inside 'commitEpoch') lets
+--   * A subsequent @lsReopen@ (implicit inside 'commitEpoch') lets
 --     the writer keep streaming without errors.
 --   * On the failure path (sync-state write fails) the already-flushed
---     COPY data remains in PG, while @last_committed_slot@ stays at
---     the previous epoch — the exact “rows past last_committed_slot”
+--     rows remain in PG, while @last_committed_slot@ stays at the
+--     previous epoch — the exact “rows past last_committed_slot”
 --     scenario that the resume flow cleans up on boot.
 --
 -- Requires a running PostgreSQL instance with a @dbsync_test@ database.
@@ -30,11 +31,12 @@ import qualified System.Process
 import Test.Hspec (Spec, afterAll_, beforeAll_, before_, describe, it, shouldBe)
 
 import DbSync.Checkpoint.Manager (commitEpoch)
-import DbSync.Copy.Writer (CopyWriter (..), closeCopyWriter, mkCopyWriter)
+import DbSync.Db.Loader (LoaderStream (..), closeLoaderStream, mkLoaderStream)
+import DbSync.Env (LoaderWithControl (..))
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
 import DbSync.Db.Schema.Init (dropSchema, initSchema)
 import DbSync.Db.Schema.Types (TableDef)
-import DbSync.Db.Writer.Copy.Encoder
+import DbSync.Db.Loader.Encoder
   ( buildCopyRow
   , bBool
   , bHex
@@ -53,6 +55,7 @@ import DbSync.Checkpoint.SyncState
   , seedSyncState
   )
 import DbSync.Test.Database (queryTestDb, testConnBs, testConnStr, testHasqlSettings, truncateAllTables)
+import DbSync.AppM (runAppM)
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -132,10 +135,10 @@ withControlConnection =
 -- | Write one synthetic row into each of @block@, @tx@, @slot_leader@.
 -- Uses the real 'buildCopyRow' encoders from @dbsync-db@ — hand-rolled
 -- escaping would be off-by-one on the double-backslash convention.
-writeOneOfEach :: CopyWriter -> Int64 -> IO ()
-writeOneOfEach cw baseId = do
+writeOneOfEach :: LoaderStream -> Int64 -> IO ()
+writeOneOfEach bs baseId = do
   -- slot_leader (id, hash, pool_hash_id, description)
-  cwWriteRow cw "slot_leader" $
+  lsWriteRow bs "slot_leader" $
     buildCopyRow
       [ Just $ bInt64 baseId
       , Just $ bHex (BS.replicate 28 0xab)     -- 28-byte placeholder hash
@@ -143,7 +146,7 @@ writeOneOfEach cw baseId = do
       , Just $ bText "leader"
       ]
   -- block — 16 columns (matches blockTableDef)
-  cwWriteRow cw "block" $
+  lsWriteRow bs "block" $
     buildCopyRow
       [ Just $ bInt64 baseId                           -- id
       , Just $ bHex (BS.replicate 32 0xaa)             -- hash
@@ -163,7 +166,7 @@ writeOneOfEach cw baseId = do
       , Nothing                                        -- op_cert_counter
       ]
   -- tx — 13 columns (matches txTableDef)
-  cwWriteRow cw "tx" $
+  lsWriteRow bs "tx" $
     buildCopyRow
       [ Just $ bInt64 baseId                  -- id
       , Just $ bHex (BS.replicate 32 0xbb)    -- hash
@@ -193,15 +196,15 @@ spec = describe "DbSync.Checkpoint.Manager.commitEpoch" $
   afterAll_  (dropSchema coreTables coreVersions testConnStr) $
   before_    resetFixtures $ do
 
-    it "flushes COPY data AND advances dbsync_sync_state atomically" $ do
-      -- Arrange: control conn seeded, COPY writer primed.
+    it "flushes bulk data AND advances dbsync_sync_state atomically" $ do
+      -- Arrange: control conn seeded, loader stream primed.
       withControlConnection $ \ctrl -> do
-        seedSyncState ctrl 1 False
-        cw <- mkCopyWriter testConnBs coreTables
+        runAppM ctrl (seedSyncState 1 False)
+        bs <- mkLoaderStream testConnBs coreTables
         -- Act: push one row through each of the three tables, commit.
-        writeOneOfEach cw 1
-        commitEpoch cw ctrl epoch5Row
-        closeCopyWriter cw
+        writeOneOfEach bs 1
+        runAppM (LoaderWithControl bs ctrl) (commitEpoch epoch5Row)
+        closeLoaderStream bs
         -- Assert: all three data tables now have one row.
         blockCount <- T.strip <$> queryTestDb "SELECT count(*) FROM block;"
         txCount    <- T.strip <$> queryTestDb "SELECT count(*) FROM tx;"
@@ -210,23 +213,24 @@ spec = describe "DbSync.Checkpoint.Manager.commitEpoch" $
         txCount    `shouldBe` "1"
         slCount    `shouldBe` "1"
         -- And sync_state reflects the new epoch.
-        mRow <- readSyncState ctrl
+        mRow <- runAppM ctrl readSyncState 
         case mRow of
           Just row -> row `shouldBe` epoch5Row
           Nothing  -> panic "sync_state was not updated"
 
     it "counters advance monotonically across two epochs" $
       withControlConnection $ \ctrl -> do
-        seedSyncState ctrl 1 False
-        cw <- mkCopyWriter testConnBs coreTables
+        runAppM ctrl (seedSyncState 1 False)
+        bs <- mkLoaderStream testConnBs coreTables
+        let env = LoaderWithControl bs ctrl
         -- Epoch 5
-        writeOneOfEach cw 1
-        commitEpoch cw ctrl epoch5Row
+        writeOneOfEach bs 1
+        runAppM env (commitEpoch epoch5Row)
         -- Epoch 6
-        writeOneOfEach cw 2
-        commitEpoch cw ctrl epoch6Row
-        closeCopyWriter cw
-        mRow <- readSyncState ctrl
+        writeOneOfEach bs 2
+        runAppM env (commitEpoch epoch6Row)
+        closeLoaderStream bs
+        mRow <- runAppM ctrl readSyncState
         case mRow of
           Just row -> do
             ssrLastCommittedSlot row    `shouldBe` Just 25000
@@ -237,25 +241,26 @@ spec = describe "DbSync.Checkpoint.Manager.commitEpoch" $
 
     it "data table grows by one row per epoch" $
       withControlConnection $ \ctrl -> do
-        seedSyncState ctrl 1 False
-        cw <- mkCopyWriter testConnBs coreTables
-        writeOneOfEach cw 1
-        commitEpoch cw ctrl epoch5Row
-        writeOneOfEach cw 2
-        commitEpoch cw ctrl epoch6Row
-        closeCopyWriter cw
+        runAppM ctrl (seedSyncState 1 False)
+        bs <- mkLoaderStream testConnBs coreTables
+        let env = LoaderWithControl bs ctrl
+        writeOneOfEach bs 1
+        runAppM env (commitEpoch epoch5Row)
+        writeOneOfEach bs 2
+        runAppM env (commitEpoch epoch6Row)
+        closeLoaderStream bs
         blockCount <- T.strip <$> queryTestDb "SELECT count(*) FROM block;"
         blockCount `shouldBe` "2"
 
     it "when sync-state write fails, data rows stay committed (resume cleans up on boot)" $
       withControlConnection $ \ctrl -> do
         -- Deliberately do NOT seed the row. The UPDATE in
-        -- writeSyncState will affect 0 rows and throw, but the COPY
+        -- writeSyncState will affect 0 rows and throw, but the bulk
         -- commit has already landed.
-        cw <- mkCopyWriter testConnBs coreTables
-        writeOneOfEach cw 1
-        result <- try (commitEpoch cw ctrl epoch5Row)
-        closeCopyWriter cw
+        bs <- mkLoaderStream testConnBs coreTables
+        writeOneOfEach bs 1
+        result <- try (runAppM (LoaderWithControl bs ctrl) (commitEpoch epoch5Row))
+        closeLoaderStream bs
         case result of
           Left (_ :: SomeException) -> pure ()
           Right ()                  -> panic "commitEpoch should have thrown"
@@ -263,7 +268,7 @@ spec = describe "DbSync.Checkpoint.Manager.commitEpoch" $
         blockCount <- T.strip <$> queryTestDb "SELECT count(*) FROM block;"
         blockCount `shouldBe` "1"
         -- Sync state is still empty (was never seeded + write failed).
-        mRow <- readSyncState ctrl
+        mRow <- runAppM ctrl readSyncState
         mRow `shouldBe` Nothing
 
   where

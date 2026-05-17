@@ -36,14 +36,14 @@ import qualified DbSync.Extractor.EpochBoundarySpec as ExtractorEpochBoundarySpe
 import qualified DbSync.Extractor.PoolSpec as ExtractorPoolSpec
 import qualified DbSync.Extractor.StakeDelegationSpec as ExtractorStakeDelegationSpec
 import qualified DbSync.Extractor.UTxOSpec as ExtractorUTxOSpec
-import qualified DbSync.Ingest.ConsumerSpec as IngestConsumerSpec
-import qualified DbSync.Ingest.PipelineSpec as IngestPipelineSpec
+import qualified DbSync.Phase.Ingest.ConsumerSpec as IngestConsumerSpec
+import qualified DbSync.Block.PipelineSpec as BlockPipelineSpec
 import qualified DbSync.Ledger.DepositAccumulatorSpec as LedgerDepositAccumulatorSpec
 import qualified DbSync.Ledger.StateSpec as LedgerStateSpec
 import qualified DbSync.Ledger.TypesSpec as LedgerTypesSpec
 import qualified DbSync.Ledger.WorkerSpec as LedgerWorkerSpec
 import qualified DbSync.App.BootSpec as AppBootSpec
-import qualified DbSync.Phase.RefSpec as PhaseRefSpec
+import qualified DbSync.Phase.CurrentSpec as PhaseCurrentSpec
 import qualified DbSync.Schema.AdaPotsSpec as SchemaAdaPotsSpec
 import qualified DbSync.Schema.AddressSpec as SchemaAddressSpec
 import qualified DbSync.Schema.CoreSpec as SchemaCoreSpec
@@ -59,21 +59,21 @@ import qualified DbSync.Util.DedupHashSpec as UtilDedupHashSpec
 
 -- Property tests
 import qualified DbSync.PropertySpec as PropertySpec
-import qualified DbSync.Resolver.AddressWorkerSpec as AddressWorkerSpec
+import qualified DbSync.Address.WorkerSpec as AddressWorkerSpec
 
 -- Database integration
 import qualified DbSync.Checkpoint.ManagerSpec as CheckpointManagerSpec
 import qualified DbSync.Checkpoint.ResumeSpec as CheckpointResumeSpec
 import qualified DbSync.Checkpoint.SyncStateSpec as CheckpointSyncStateSpec
-import qualified DbSync.Copy.WriterSpec as CopyWriterSpec
+import qualified DbSync.Db.LoaderSpec as LoaderSpec
 import qualified DbSync.Db.Statement.BackfillSpec as DbStatementBackfillSpec
 import qualified DbSync.Db.Statement.BlockSpec as DbStatementBlockSpec
 import qualified DbSync.Db.Statement.RoundTripSpec as DbStatementRoundTripSpec
 import qualified DbSync.Db.Statement.SlotLeaderSpec as DbStatementSlotLeaderSpec
 import qualified DbSync.Db.Statement.SyncStateSpec as DbStatementSyncStateSpec
 import qualified DbSync.Phase.Following.RollbackSpec as PhaseRollbackSpec
-import qualified DbSync.Phase.FollowingSpec as PhaseFollowingSpec
-import qualified DbSync.Phase.PreparingForVolatileTailSpec as PhasePreparingForVolatileTailSpec
+import qualified DbSync.Phase.Following.RunSpec as PhaseFollowRunSpec
+import qualified DbSync.Phase.Preparing.RunSpec as PhasePrepSpec
 import qualified DbSync.Schema.InitSpec as SchemaInitSpec
 
 -- End-to-end
@@ -100,13 +100,13 @@ main = hspec $ do
     ExtractorStakeDelegationSpec.spec
     ExtractorUTxOSpec.spec
     IngestConsumerSpec.spec
-    IngestPipelineSpec.spec
+    BlockPipelineSpec.spec
     LedgerDepositAccumulatorSpec.spec
     LedgerStateSpec.spec
     LedgerTypesSpec.spec
     LedgerWorkerSpec.spec
     AppBootSpec.spec
-    PhaseRefSpec.spec
+    PhaseCurrentSpec.spec
     SchemaAdaPotsSpec.spec
     SchemaAddressSpec.spec
     SchemaCoreSpec.spec
@@ -129,14 +129,14 @@ main = hspec $ do
     CheckpointManagerSpec.spec
     CheckpointResumeSpec.spec
     CheckpointSyncStateSpec.spec
-    CopyWriterSpec.spec
+    LoaderSpec.spec
     DbStatementBackfillSpec.spec
     DbStatementBlockSpec.spec
     DbStatementRoundTripSpec.spec
     DbStatementSlotLeaderSpec.spec
     DbStatementSyncStateSpec.spec
-    PhaseFollowingSpec.spec
-    PhasePreparingForVolatileTailSpec.spec
+    PhaseFollowRunSpec.spec
+    PhasePrepSpec.spec
     PhaseRollbackSpec.cascadeSpec
     SchemaInitSpec.spec
 

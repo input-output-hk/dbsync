@@ -4,12 +4,12 @@
 -- calls at each epoch boundary. It sequences three pieces of work so
 -- that the system can safely crash and resume at any time:
 --
---   1. Drain and commit every COPY connection owned by the
---      'CopyWriter' — all data rows for the epoch flush to PG.
+--   1. Drain and commit every loader connection owned by the
+--      'LoaderStream' — all data rows for the epoch flush to PG.
 --   2. Update the 'dbsync_sync_state' singleton on the dedicated
 --      'ControlConnection' — @last_committed_*@ and the counters
 --      advance.
---   3. Reopen the COPY streams so the next epoch can start writing.
+--   3. Reopen the loader streams so the next epoch can start writing.
 --
 -- If the sync-state write fails after the data flush succeeds, rows
 -- exist past @last_committed_slot@. The resume flow on restart
@@ -24,8 +24,8 @@ module DbSync.Checkpoint.Manager
 
 import Cardano.Prelude
 
-import DbSync.Checkpoint.SyncState (ControlConnection, SyncStateRow (..), writeSyncState)
-import DbSync.Copy.Writer (CopyWriter (..))
+import DbSync.Checkpoint.SyncState (HasControlConnection, SyncStateRow (..), writeSyncState)
+import DbSync.Db.Loader (LoaderStream (..), HasLoaderStream (..))
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Id.Counter (IdCounter (..), IdCounters (..), mkIdCounter)
 
@@ -33,25 +33,29 @@ import DbSync.Id.Counter (IdCounter (..), IdCounters (..), mkIdCounter)
 --
 -- Failure semantics:
 --
---   * If step 1 ('cwCommit') throws, no sync-state update happens.
+--   * If step 1 ('lsCommit') throws, no sync-state update happens.
 --     On restart the resume flow reads the stale sync state and
 --     processing resumes from the previous epoch.
 --   * If step 2 ('writeSyncState') throws, data is in PG past
 --     @last_committed_slot@. Resume's @DELETE FROM <t> WHERE slot_no
 --     > s@ removes it on restart.
---   * If step 3 ('cwReopen') throws, sync state is already advanced
---     and the COPY connections are unusable. Caller should treat as
+--   * If step 3 ('lsReopen') throws, sync state is already advanced
+--     and the loader connections are unusable. Caller should treat as
 --     fatal and exit; a clean restart reopens the streams.
 commitEpoch
-  :: HasCallStack
-  => CopyWriter
-  -> ControlConnection
-  -> SyncStateRow
-  -> IO ()
-commitEpoch cw controlConn newRow = do
-  cwCommit cw
-  writeSyncState controlConn newRow
-  cwReopen cw
+  :: ( HasCallStack
+     , HasLoaderStream env
+     , HasControlConnection env
+     , MonadReader env m
+     , MonadIO m
+     )
+  => SyncStateRow
+  -> m ()
+commitEpoch newRow = do
+  bs <- asks getLoaderStream
+  liftIO (lsCommit bs)
+  writeSyncState newRow
+  liftIO (lsReopen bs)
 
 -- | Build a 'SyncStateRow' from the boundary block's
 -- @(slot, blockNo, hash)@, the current 'IdCounters' snapshot, the
@@ -61,7 +65,7 @@ commitEpoch cw controlConn newRow = do
 -- those columns.
 --
 -- The address counter is passed in separately because it lives on the
--- 'DbSync.Resolver.AddressWorker.AddressResolver' (the worker is the
+-- 'DbSync.Address.Worker.AddressResolver' (the worker is the
 -- sole allocator of @address.id@) rather than in 'IdCounters'.
 mkBoundarySyncStateRow
   :: Word64        -- ^ Last committed slot (boundary block's slot)

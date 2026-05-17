@@ -2,7 +2,7 @@
 
 -- | Query-plan assertions for the four post-load backfill UPDATEs.
 --
--- 'PreparingForVolatileTailSpec' already covers the /correctness/ of
+-- 'Phase.Preparing.RunSpec' already covers the /correctness/ of
 -- each backfill: it drives a 3-block fixture through the real
 -- pipeline and asserts on the @tx.fee@ / @tx.deposit@ values that
 -- come out the other side. What it cannot catch is a query-plan
@@ -10,7 +10,7 @@
 -- fixture even when the plan is pathological enough to take hours
 -- on a real chain.
 --
--- This spec stops mid-'PreparingForVolatileTail.run' (after the
+-- This spec stops mid-'Phase.Preparing.Run.run' (after the
 -- pre-resolve indexes, the FK resolves and a fresh @ANALYZE@, but
 -- before the backfill UPDATEs themselves) and runs @EXPLAIN@
 -- against each backfill statement. The assertions check that the
@@ -41,7 +41,7 @@ import Test.Hspec
   , shouldSatisfy
   )
 
-import DbSync.Copy.Writer (CopyWriter (..), closeCopyWriter, mkCopyWriter)
+import DbSync.Db.Loader (LoaderStream (..), closeLoaderStream, mkLoaderStream)
 import DbSync.Db.Schema.Address (addressTableDef)
 import DbSync.Db.Schema.CBOR (txCborTableDef)
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
@@ -90,11 +90,13 @@ import DbSync.Extractor.Pool (poolExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Extractor.UTxO (utxoExtractor)
 import DbSync.Id.DedupMap (newMaps)
-import DbSync.Ingest.Pipeline (processBlock)
-import qualified DbSync.Phase.PreparingForVolatileTail.PreResolveIndexes as PreResolveIndexes
-import qualified DbSync.Phase.PreparingForVolatileTail.Resolve as Resolve
-import DbSync.Resolver.AddressBuffer (newAddressBufferRef)
-import DbSync.Resolver.Ingest (mkIngestResolver)
+import DbSync.Block.Pipeline (processBlock)
+import DbSync.AppM (runAppM)
+import DbSync.Env (TracerWithConn (..))
+import qualified DbSync.Phase.Preparing.PreResolveIndexes as PreResolveIndexes
+import qualified DbSync.Phase.Preparing.Resolve as Resolve
+import DbSync.Address.Buffer (newAddressBufferRef)
+import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
 import DbSync.Test.Database
   ( execTestDb
   , queryTestDb
@@ -105,13 +107,13 @@ import DbSync.Test.Fixtures (byronBlock, producerBlock, spendingBlock)
 import DbSync.Test.Hasql (withTestConnection)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import DbSync.Trace.Backend (mkNullTracer)
-import DbSync.Writer.CopyAdapter (mkCopyWriterAdapter)
+import qualified DbSync.Phase.Ingest.Writer as IngestWriter
 
 -- ---------------------------------------------------------------------------
 -- * Schema setup
 -- ---------------------------------------------------------------------------
 
--- | Same table set as 'PreparingForVolatileTailSpec' so the fixtures
+-- | Same table set as 'Phase.Preparing.RunSpec' so the fixtures
 -- flow through the real COPY pipeline. The backfill spec only
 -- needs a subset for assertions but the COPY writer expects every
 -- target table to exist.
@@ -170,7 +172,7 @@ extractors =
 -- * Setup / teardown
 -- ---------------------------------------------------------------------------
 
--- | Tables the post-resolve ANALYZE in 'Phase.PreparingForVolatileTail.run'
+-- | Tables the post-resolve ANALYZE in 'Phase.Preparing.Run.run'
 -- refreshes. Duplicated here verbatim because exporting the binding
 -- from the production module just for a test would push a non-test
 -- name into the public surface.
@@ -196,20 +198,21 @@ setUp = do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
   addrBuf <- newAddressBufferRef
-  cw <- mkCopyWriter testConnBs tables
+  bs <- mkLoaderStream testConnBs tables
   let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf)
-                              (mkCopyWriterAdapter cw) extractors
+                              (IngestWriter.mkWriter bs) extractors
   for_ [producerBlock, spendingBlock, byronBlock] $ \blk ->
     runReaderT (processBlock blk) env
-  cwCommit cw
-  closeCopyWriter cw
+  lsCommit bs
+  closeLoaderStream bs
 
   withTestConnection $ \conn -> do
-    PreResolveIndexes.createPreResolveIndexes mkNullTracer conn
-    _ <- Resolve.resolveForeignKeys mkNullTracer conn
+    let prepEnv = TracerWithConn mkNullTracer conn
+    runAppM prepEnv PreResolveIndexes.createPreResolveIndexes
+    _ <- runAppM prepEnv Resolve.resolveForeignKeys
     pure ()
 
-  -- Run ANALYZE the same way 'Phase.PreparingForVolatileTail.run'
+  -- Run ANALYZE the same way 'Phase.Preparing.Run.run'
   -- does — needed for the planner to pick non-trivial plans even
   -- on this tiny fixture.
   for_ analyzeTables $ \td -> execTestDb (analyzeSql (tdName td))
@@ -255,7 +258,7 @@ spec = describe "DbSync.Db.Statement.Backfill" $
       it "every new pre-resolve index exists in pg_indexes" $ do
         -- The five names that must exist after pre-resolve runs.
         -- The two original (tx-hash + tx_out tx_id/index) were
-        -- already checked in 'PreparingForVolatileTailSpec.indexes';
+        -- already checked in 'Phase.Preparing.RunSpec.indexes';
         -- this case covers the four new perf indexes the rewritten
         -- backfills need.
         count <- T.strip <$> queryTestDb
@@ -327,4 +330,4 @@ spec = describe "DbSync.Db.Statement.Backfill" $
 
 -- ---------------------------------------------------------------------------
 -- Fixtures live in 'DbSync.Test.Fixtures'; shared with
--- 'PreparingForVolatileTailSpec'.
+-- 'Phase.Preparing.RunSpec'.

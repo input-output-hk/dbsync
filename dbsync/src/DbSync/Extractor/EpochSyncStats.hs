@@ -28,5 +28,5 @@ epochSyncStatsExtractor = ExtractorDef
   , pdVersion      = 1
   , pdDependencies = []  -- Independent meta-data, no block data dependencies
   , pdTables       = [epochSyncStatsTableDef]
-  , pdProcess      = \_ _ _ -> pure ()  -- No-op: Consumer writes directly
+  , pdProcess      = \_ -> pure ()  -- No-op: Consumer writes directly
   }

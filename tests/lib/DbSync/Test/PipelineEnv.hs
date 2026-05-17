@@ -26,7 +26,7 @@ import DbSync.Extractor
   , emptyBlockLedgerData
   )
 import DbSync.Db.Phase (SyncPhase (..))
-import DbSync.Phase.Ref (HasSyncPhase (..))
+import DbSync.Phase.Current (HasCurrentPhase (..))
 import DbSync.Resolver (HasResolver (..), IdResolver)
 import DbSync.Writer (HasWriter (..), Writer)
 
@@ -60,8 +60,8 @@ instance HasNetwork TestPipelineEnv where
 instance HasLedgerData TestPipelineEnv where
   getLedgerData env = tpeLedgerData env
 
-instance HasSyncPhase TestPipelineEnv where
-  getSyncPhase = pure . tpeSyncPhase
+instance HasCurrentPhase TestPipelineEnv where
+  getCurrentPhase = pure . tpeSyncPhase
 
 -- | Build an env on mainnet with empty ledger data and Ingest phase.
 mkTestPipelineEnv

@@ -51,7 +51,7 @@ data SrcInfo = SrcInfo
 -- | Structured log message with severity, component, and optional source location.
 data LogMsg = LogMsg
   { lmSeverity  :: !Severity
-  , lmComponent :: !Text        -- ^ "IngestChainHistory", "CopyWriter", etc.
+  , lmComponent :: !Text        -- ^ "IngestChainHistory", "LoaderStream", etc.
   , lmMessage   :: !Text
   , lmSrcInfo   :: !(Maybe SrcInfo)  -- ^ populated for Warning and Error
   }
@@ -76,6 +76,9 @@ severityFromText t = case Text.toLower (Text.strip t) of
 -- shutdown signal — log at 'Info' so it doesn't pollute the
 -- operator's view of real failures. Any other exception is a real
 -- crash and logs at 'Error'.
+--
+-- Stays in 'IO' because every caller is a 'catch' handler that
+-- doesn't have an env in scope.
 logThreadExit :: Text -> SomeException -> AppTracer -> IO ()
 logThreadExit component e tracer = case fromException e of
   Just AsyncCancelled ->

@@ -13,6 +13,10 @@ module DbSync.StateQuery.Types
     SlotDetails (..)
   , CardanoInterpreter
   , StateQueryVar (..)
+
+    -- * Accessor classes
+  , HasStateQueryVar (..)
+  , HasSystemStart (..)
   ) where
 
 import Cardano.Prelude
@@ -23,6 +27,7 @@ import Control.Concurrent.STM (TMVar, TVar)
 
 import Data.Time.Clock (UTCTime)
 
+import Ouroboros.Consensus.BlockchainTime.WallClock.Types (SystemStart)
 import Ouroboros.Consensus.Cardano.Block
   ( CardanoBlock
   , CardanoEras
@@ -71,3 +76,13 @@ data StateQueryVar = StateQueryVar
   , sqvInterpreterVar :: !(TVar (Maybe CardanoInterpreter))
   , sqvObservedVar    :: !(TVar ObservedSummary)
   }
+
+-- | Access the local-state-query handle from env. Used to derive
+-- 'SlotDetails' for each block.
+class HasStateQueryVar env where
+  getStateQueryVar :: env -> StateQueryVar
+
+-- | Access the network 'SystemStart' from env. Required alongside
+-- 'HasStateQueryVar' to convert relative slot times into UTC.
+class HasSystemStart env where
+  getSystemStart :: env -> SystemStart

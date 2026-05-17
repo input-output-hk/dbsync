@@ -54,6 +54,7 @@ library dbsync-testlib
     DbSync.Test.PgAssertions
     DbSync.Test.PipelineEnv
     DbSync.Test.Property.Invariants
+    DbSync.Test.Writer
   build-depends:
       base
     , bytestring
@@ -113,7 +114,7 @@ test-suite dbsync-test
     DbSync.Db.Statement.SyncStateSpec
     DbSync.Db.TypesSpec
     DbSync.PropertySpec
-    DbSync.Resolver.AddressWorkerSpec
+    DbSync.Address.WorkerSpec
     DbSync.Schema.AdaPotsSpec
     DbSync.Schema.AddressSpec
     DbSync.Schema.CoreSpec
@@ -130,10 +131,10 @@ test-suite dbsync-test
     DbSync.Extractor.PoolSpec
     DbSync.Extractor.StakeDelegationSpec
     DbSync.Extractor.UTxOSpec
-    DbSync.Ingest.ConsumerSpec
-    DbSync.Ingest.PipelineSpec
+    DbSync.Block.PipelineSpec
+    DbSync.Phase.Ingest.ConsumerSpec
     DbSync.Schema.InitSpec
-    DbSync.Copy.WriterSpec
+    DbSync.Db.LoaderSpec
     DbSync.Ledger.DepositAccumulatorSpec
     DbSync.Ledger.StateSpec
     DbSync.Ledger.TypesSpec
@@ -142,14 +143,14 @@ test-suite dbsync-test
     DbSync.Checkpoint.ResumeSpec
     DbSync.Checkpoint.SyncStateSpec
     DbSync.App.BootSpec
-    DbSync.Phase.RefSpec
-    DbSync.Phase.FollowingSpec
+    DbSync.Phase.CurrentSpec
     DbSync.Phase.Following.RollbackSpec
+    DbSync.Phase.Following.RunSpec
     DbSync.Phase.FollowRestartSpec
     DbSync.Phase.IngestPrepFollowSpec
     DbSync.Phase.MockChainSpec
     DbSync.Phase.MockNodeSpec
-    DbSync.Phase.PreparingForVolatileTailSpec
+    DbSync.Phase.Preparing.RunSpec
     DbSync.StateQuery.ObservedSummarySpec
   build-depends:
       base

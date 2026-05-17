@@ -133,7 +133,7 @@ profileWithOptions opts = SyncConfig
   , scSync = SyncSettings
       { ssMode            = SyncModeAuto
       , ssCheckpointDir   = "/tmp/dbsync-test-checkpoints"
-      , ssCopyConnections = 4
+      , ssLoaderConnections = 4
       }
   , scLedger = LedgerConfig
       { lcEnabled = False
@@ -173,7 +173,7 @@ profileTableNames cfg = case buildExtractors (scOptions cfg) of
 --     keys yield @<table>_pkey_idx@; each entry in
 --     'tdUniqueConstraints' yields @<table>_unique_N_idx@.
 --   * 'preResolveIndexNames' below — the static perf indexes
---     'DbSync.Phase.PreparingForVolatileTail.PreResolveIndexes' builds
+--     'DbSync.Phase.Preparing.PreResolveIndexes' builds
 --     unconditionally, irrespective of which extractors are on.
 --
 -- Names are deduplicated since the @tx_unique_1_idx@ entry is built

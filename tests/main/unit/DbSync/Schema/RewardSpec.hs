@@ -195,7 +195,7 @@ generatedColumnDdlSpec = describe "generateCreateTable for tables with generated
 -- COPY encoding (generated columns must not appear in the row)
 -- ---------------------------------------------------------------------------
 
--- The COPY column list (built by 'DbSync.Copy.Connection.buildColumnList')
+-- The COPY column list (built by 'DbSync.Db.Loader.Connection.buildColumnList')
 -- filters out 'tdGeneratedColumns'. The encoder must therefore emit
 -- one fewer field than the table has columns; PostgreSQL fills in the
 -- generated column from its expression.

@@ -144,13 +144,13 @@ import System.Directory (createDirectoryIfMissing, doesDirectoryExist, removePat
 import System.FilePath ((</>))
 import System.Random (genWord64, newStdGen)
 
-import DbSync.AppM (LedgerM, runAppM)
+import DbSync.AppM (LedgerM)
 import DbSync.Checkpoint.SyncState (ControlConnection)
 import DbSync.Config.Types (LedgerBackend (..))
 import DbSync.Db.Types (DbLovelace (..))
-import qualified DbSync.Era.Shelley.Generic.EpochUpdate as Generic
-import qualified DbSync.Era.Shelley.Generic.ProtoParams as Generic
-import qualified DbSync.Era.Shelley.Generic.StakeDist as Generic
+import qualified DbSync.Era.Shelley.EpochUpdate as Generic
+import qualified DbSync.Era.Shelley.ProtoParams as Generic
+import qualified DbSync.Era.Shelley.StakeDist as Generic
 import DbSync.Ledger.DepositAccumulator
   ( EpochParams (..)
   , newEpochParamsRef
@@ -184,7 +184,7 @@ import qualified DbSync.Ledger.Snapshot
 import DbSync.Ledger.Snapshot (loadSnapshotFromDisk)
 import DbSync.Block.Types (CardanoPoint)
 import DbSync.StateQuery (SlotDetails (..))
-import DbSync.Phase.Ref (SyncPhaseRef)
+import DbSync.Phase.Current (CurrentPhase)
 import DbSync.Trace.Types (AppTracer)
 import DbSync.Util (maybeToStrictMaybe)
 
@@ -302,7 +302,7 @@ mkHasLedgerEnv
   -> Bool                                           -- ^ Abort on invalid ledger state
   -> LedgerBackend
   -> ControlConnection                              -- ^ For 'markSnapshotComplete' from the writer thread
-  -> SyncPhaseRef                                   -- ^ Shared lifecycle phase, read by the worker for snapshot cadence
+  -> CurrentPhase                                   -- ^ Shared lifecycle phase, read by the worker for snapshot cadence
   -> IO HasLedgerEnv
 mkHasLedgerEnv
   tracer pinfo dir network maxSupply start snapEpoch
@@ -408,7 +408,7 @@ mkHasLedgerEnv
           , leLatestApplyResult    = latestApplyVar
           , leDepositAccumulator   = depositAccumRef
           , leControlConnection    = ctrlConn
-          , leSyncPhase            = phaseRef
+          , leCurrentPhase         = phaseRef
           }
   where
     -- Shallow — the worker is a single consumer and we want strong
@@ -432,22 +432,25 @@ mkHasLedgerEnv
 -- be seeded from a matching disk snapshot instead; that path is not
 -- implemented yet, so resuming a ledger-enabled database without
 -- @--resync-from-genesis@ is currently unsupported.
-initLedgerDbFromGenesis :: LedgerEnv -> IO ()
-initLedgerDbFromGenesis env = do
-  sref <- initCardanoLedgerState env
-  atomically $ writeTVar (leStateVar env)
-    (Strict.Just (LedgerDB (StrictSeq.singleton sref)))
+initLedgerDbFromGenesis :: LedgerM ()
+initLedgerDbFromGenesis = do
+  env <- ask
+  liftIO $ do
+    sref <- initCardanoLedgerState env
+    atomically $ writeTVar (leStateVar env)
+      (Strict.Just (LedgerDB (StrictSeq.singleton sref)))
 
 -- | Restore the in-memory 'LedgerDB' from an on-disk snapshot.
 -- Returns 'Left' with the backend's error text on failure; the
 -- caller decides how to escalate.
-initLedgerDbFromSnapshot :: LedgerEnv -> DiskSnapshot -> IO (Either Text ())
-initLedgerDbFromSnapshot env snap = do
-  eRef <- runAppM env (loadSnapshotFromDisk snap)
+initLedgerDbFromSnapshot :: DiskSnapshot -> LedgerM (Either Text ())
+initLedgerDbFromSnapshot snap = do
+  env <- ask
+  eRef <- loadSnapshotFromDisk snap
   case eRef of
     Left err -> pure (Left err)
     Right sref -> do
-      atomically $ writeTVar (leStateVar env)
+      liftIO $ atomically $ writeTVar (leStateVar env)
         (Strict.Just (LedgerDB (StrictSeq.singleton sref)))
       pure (Right ())
 
@@ -640,7 +643,7 @@ applyBlockAndSnapshot blk slotDetails consistent mReplayBoundary = do
   -- Skipped inside the replay window: those epochs are already in
   -- @epoch_param_pending@ from the previous run.
   unless inReplayWindow $
-    liftIO $ accumulateEpochParams env appResult
+    accumulateEpochParams appResult
   tookSnapshot <-
     if not inReplayWindow
        && shouldSnapshotAtEpoch appResult consistent nearTip (leSnapshotNearTipEpoch env)
@@ -658,16 +661,17 @@ applyBlockAndSnapshot blk slotDetails consistent mReplayBoundary = do
 -- blocks are skipped — there are no protocol-param deposits to
 -- record. Multiple writes for the same epoch are idempotent
 -- because protocol params are constant within an epoch.
-accumulateEpochParams :: LedgerEnv -> ApplyResult -> IO ()
-accumulateEpochParams env result =
+accumulateEpochParams :: ApplyResult -> LedgerM ()
+accumulateEpochParams result =
   case apDeposits result of
     Strict.Nothing -> pure ()
     Strict.Just d  -> do
+      env <- ask
       let !ep = EpochParams
             { epStakeKeyDeposit = DbLovelace (fromIntegral (unCoin (Generic.stakeKeyDeposit d)))
             , epPoolDeposit     = DbLovelace (fromIntegral (unCoin (Generic.poolDeposit d)))
             }
-      recordEpochParams
+      liftIO $ recordEpochParams
         (leDepositAccumulator env)
         (sdEpochNo (apSlotDetails result))
         ep

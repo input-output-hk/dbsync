@@ -1,3 +1,5 @@
+{-# LANGUAGE RankNTypes #-}
+
 {- |
 Module      : DbSync.Extractor
 Description : Extractor definition types for modular data extraction.
@@ -24,6 +26,7 @@ module DbSync.Extractor
     -- * Accessor classes
   , HasExtractors (..)
   , HasLedgerData (..)
+  , HasNetwork (..)
 
     -- * Re-exports (for ExtractState used by IngestResolver)
   , ExtractState (..)
@@ -41,8 +44,22 @@ import DbSync.Db.Schema.Ids (BlockId, PoolHashId, SlotLeaderId, StakeAddressId, 
 import DbSync.Db.Schema.Types (TableDef)
 import DbSync.Ledger.Types (DepositsMap, emptyDepositsMap)
 import DbSync.Db.Phase (SyncPhase)
-import DbSync.Resolver (IdResolver)
-import DbSync.Writer (Writer)
+import DbSync.Resolver (HasResolver)
+import DbSync.Writer (HasWriter)
+
+-- ---------------------------------------------------------------------------
+-- * HasNetwork
+-- ---------------------------------------------------------------------------
+
+-- | Access the chain's 'Network' (mainnet vs testnet) from any
+-- environment. Read once at startup from the Shelley genesis and
+-- never changes for the lifetime of a sync.
+--
+-- Lives here (rather than in "DbSync.Env") because 'ProcessBlockFn'
+-- needs the constraint and the env definitions in "DbSync.Env"
+-- already depend on this module via 'HasExtractors'\/'HasLedgerData'.
+class HasNetwork env where
+  getNetwork :: env -> Network
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -68,10 +85,20 @@ data ExtractorDef = ExtractorDef
 
 -- | Process a single block through this extractor.
 --
--- Parameterised by 'IdResolver' (for per-extractor ID assignment)
--- and 'Writer' (where rows go). Receives a 'BlockContext' with
--- pre-assigned shared IDs (BlockId, TxId, TxOutId).
-type ProcessBlockFn = IdResolver IO -> Writer IO -> BlockContext -> IO ()
+-- Polymorphic over any env that satisfies 'HasResolver',
+-- 'HasWriter' and 'HasNetwork', so the same body works in 'IngestM'
+-- (COPY-backed) and 'FollowM' (INSERT-backed). The pre-assigned
+-- shared IDs and the per-block worker output ride on the
+-- 'BlockContext'.
+type ProcessBlockFn =
+  forall env m.
+  ( HasResolver env
+  , HasWriter env
+  , HasNetwork env
+  , MonadReader env m
+  , MonadIO m
+  )
+  => BlockContext -> m ()
 
 -- ---------------------------------------------------------------------------
 -- * Block context (pre-assigned shared IDs)

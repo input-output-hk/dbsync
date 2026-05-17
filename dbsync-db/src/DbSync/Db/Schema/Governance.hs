@@ -136,7 +136,7 @@ import DbSync.Db.Types
   , voteUrlDecoder
   , voteUrlEncoder
   )
-import DbSync.Db.Writer.Copy.Encoder
+import DbSync.Db.Loader.Encoder
   ( buildCopyRow
   , bBool
   , bHex

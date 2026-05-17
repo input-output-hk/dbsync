@@ -37,7 +37,7 @@ import DbSync.Env (CoreEnv (..))
 import DbSync.Error (throwInternal)
 import DbSync.Metrics (Metrics (..))
 import DbSync.Extractor (ExtractorDef (..))
-import DbSync.Phase.Ref (newSyncPhaseRef)
+import DbSync.Phase.Current (newCurrentPhase)
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Extractor.UTxO (utxoExtractor)
 import DbSync.Extractor.Metadata (metadataExtractor)
@@ -56,10 +56,10 @@ import DbSync.AppM (CoreM)
 
 -- | Build the shared core environment from parsed configs.
 --
--- The phase ref is seeded with 'IngestChainHistory'; the orchestrator
--- in 'DbSync.App.Run' overwrites it immediately after the boot
--- decision so the displayed value is correct from the first
--- subsystem log onwards.
+-- The phase holder is seeded with 'IngestChainHistory'; the
+-- orchestrator in 'DbSync.App.Run' overwrites it immediately after
+-- the boot decision so the displayed value is correct from the
+-- first subsystem log onwards.
 --
 -- Throws via 'throwInternal' if 'buildExtractors' rejects the profile.
 buildCoreEnv :: AppTracer -> SyncConfig -> NodeConfig -> Network -> IO CoreEnv
@@ -67,16 +67,16 @@ buildCoreEnv tracer syncCfg nodeCfg network = do
   extractors <- case buildExtractors (scOptions syncCfg) of
     Left err  -> throwInternal err
     Right xs  -> pure xs
-  phaseRef <- newSyncPhaseRef IngestChainHistory
+  curPhase <- newCurrentPhase IngestChainHistory
   pure CoreEnv
-    { ceTracer      = tracer
-    , ceMinSeverity = severityFromText (lgLevel (scLogging syncCfg))
-    , ceMetrics     = placeholderMetrics
-    , ceConfig      = syncCfg
-    , ceNodeConfig  = nodeCfg
-    , ceExtractors  = extractors
-    , ceNetwork     = network
-    , ceSyncPhase   = phaseRef
+    { ceTracer       = tracer
+    , ceMinSeverity  = severityFromText (lgLevel (scLogging syncCfg))
+    , ceMetrics      = placeholderMetrics
+    , ceConfig       = syncCfg
+    , ceNodeConfig   = nodeCfg
+    , ceExtractors   = extractors
+    , ceNetwork      = network
+    , ceCurrentPhase = curPhase
     }
 
 -- | Build the list of enabled extractors from config, validate their
@@ -218,7 +218,7 @@ stubExtractor name = ExtractorDef
   , pdVersion      = 1
   , pdDependencies = []
   , pdTables       = []
-  , pdProcess      = \_ _ _ -> pure ()  -- no-op stub
+  , pdProcess      = \_ -> pure ()  -- no-op stub
   }
 
 -- | Placeholder metrics until Prometheus is wired up.

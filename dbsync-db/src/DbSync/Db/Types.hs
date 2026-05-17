@@ -109,7 +109,7 @@ import Data.WideWord (Word128)
 import qualified Hasql.Decoders as D
 import qualified Hasql.Encoders as E
 
-import DbSync.Db.Writer.Copy.Encoder (bInt64)
+import DbSync.Db.Loader.Encoder (bInt64)
 
 -- ---------------------------------------------------------------------------
 -- * Numeric domain types

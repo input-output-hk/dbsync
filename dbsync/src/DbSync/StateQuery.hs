@@ -105,8 +105,6 @@ import Ouroboros.Network.Protocol.LocalStateQuery.Client
   )
 import Ouroboros.Network.Protocol.LocalStateQuery.Type (AcquireFailure (..), Target (..))
 
-import DbSync.AppM (IngestM)
-import DbSync.Env (IngestEnv (..))
 import DbSync.Error (throwBlock)
 import DbSync.StateQuery.ObservedSummary
   ( EraIdx (..)
@@ -117,8 +115,11 @@ import DbSync.StateQuery.ObservedSummary
   , isObservationBroken
   , observeBlock
   )
+import qualified DbSync.StateQuery.Types as SQT
 import DbSync.StateQuery.Types
   ( CardanoInterpreter
+  , HasStateQueryVar (..)
+  , HasSystemStart
   , SlotDetails (..)
   , StateQueryVar (..)
   )
@@ -167,9 +168,12 @@ seedInterpreterFromLedgerState topLevelCfg ExtLedgerState{ ledgerState = ls } sq
 -- | True when 'sqvInterpreterVar' has been seeded (snapshot or node).
 -- Lets callers suppress observed-summary fallback diagnostics that
 -- would otherwise mislead.
-isInterpreterCached :: StateQueryVar -> IO Bool
-isInterpreterCached sqv =
-  isJust <$> atomically (readTVar (sqvInterpreterVar sqv))
+isInterpreterCached
+  :: (HasStateQueryVar env, MonadReader env m, MonadIO m)
+  => m Bool
+isInterpreterCached = do
+  sqv <- asks getStateQueryVar
+  liftIO $ isJust <$> atomically (readTVar (sqvInterpreterVar sqv))
 
 -- ---------------------------------------------------------------------------
 -- * Local observation
@@ -196,17 +200,23 @@ observeBlockSTM sqv blk = do
 -- * Querying
 -- ---------------------------------------------------------------------------
 
--- | Get 'SlotDetails' for a given 'SlotNo' inside 'IngestM'.
+-- | Get 'SlotDetails' for a given 'SlotNo'.
 --
--- Reads the tracer, 'StateQueryVar' and 'SystemStart' from the
--- 'IngestEnv'; otherwise behaves identically to 'getSlotDetailsIO'.
--- Prefer this in 'IngestM' code paths so the env is not threaded
--- through every helper signature.
-getSlotDetails :: HasCallStack => SlotNo -> IngestM SlotDetails
+-- Reads the tracer, 'StateQueryVar' and 'SystemStart' from env;
+-- delegates to 'getSlotDetailsIO' for the actual resolution.
+getSlotDetails
+  :: ( HasCallStack
+     , HasTracer env
+     , HasStateQueryVar env
+     , HasSystemStart env
+     , MonadReader env m
+     , MonadIO m
+     )
+  => SlotNo -> m SlotDetails
 getSlotDetails slot = do
   tracer      <- asks getTracer
-  sqv         <- asks ieStateQueryVar
-  systemStart <- asks ieSystemStart
+  sqv         <- asks getStateQueryVar
+  systemStart <- asks SQT.getSystemStart
   liftIO $ getSlotDetailsIO tracer sqv systemStart slot
 
 -- | Get 'SlotDetails' for a given 'SlotNo' (raw 'IO' bridge).
@@ -275,14 +285,21 @@ getSlotDetailsIO tracer sqv systemStart slot = do
       now <- getCurrentTime
       pure sd { sdCurrentTime = now }
 
--- | Query the node for a 'CardanoInterpreter' inside 'IngestM'.
+-- | Query the node for a 'CardanoInterpreter'.
 --
--- Reads the tracer and 'StateQueryVar' from the 'IngestEnv'; defers
--- to 'getHistoryInterpreterIO' for the actual retry loop.
-getHistoryInterpreter :: HasCallStack => IngestM CardanoInterpreter
+-- Reads the tracer and 'StateQueryVar' from env; defers to
+-- 'getHistoryInterpreterIO' for the actual retry loop.
+getHistoryInterpreter
+  :: ( HasCallStack
+     , HasTracer env
+     , HasStateQueryVar env
+     , MonadReader env m
+     , MonadIO m
+     )
+  => m CardanoInterpreter
 getHistoryInterpreter = do
   tracer <- asks getTracer
-  sqv    <- asks ieStateQueryVar
+  sqv    <- asks getStateQueryVar
   liftIO $ getHistoryInterpreterIO tracer sqv
 
 -- | Query the node for a 'CardanoInterpreter' (raw 'IO' bridge),

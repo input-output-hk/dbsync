@@ -36,9 +36,9 @@ import DbSync.Extractor
   , TxContext (..)
   )
 import DbSync.Extractor.SharedDedup (resolveAndWritePoolHash, resolveAndWriteStakeAddress)
-import DbSync.Resolver (IdResolver (..))
+import DbSync.Resolver (HasResolver (..), IdResolver (..))
 import DbSync.Util (coinToDbLovelace, rewardAddrCred)
-import DbSync.Writer (Writer (..))
+import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- ---------------------------------------------------------------------------
 -- * Extractor definition
@@ -64,10 +64,11 @@ poolExtractor = ExtractorDef
 -- ---------------------------------------------------------------------------
 
 processPool :: ProcessBlockFn
-processPool resolver writer ctx = do
+processPool ctx = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
   let gb      = bcGenBlock ctx
       epochNo = unEpochNo (blkEpochNo gb)
-      network = bcNetwork ctx
       -- Worker-supplied protocol param when ledger ON; 'Nothing'
       -- otherwise — pool_update.deposit stays NULL to match the
       -- original schema's behaviour for ledger-disabled runs.
@@ -85,25 +86,25 @@ processPool resolver writer ctx = do
 
         -- Pool registration
         CertPoolRegistration prd -> do
-          (phId, isFirstReg) <- resolveAndWritePoolHash resolver writer (prdPoolHash prd)
+          (phId, isFirstReg) <- resolveAndWritePoolHash (prdPoolHash prd)
 
           mMetaId <- case prdMetadata prd of
             Nothing -> pure Nothing
             Just (url, hash) -> do
-              pmId <- assignPoolMetadataRefId resolver
+              pmId <- liftIO $ assignPoolMetadataRefId resolver
               let pm = PoolMetadataRef
                     { poolMetadataRefPoolId         = phId
                     , poolMetadataRefUrl             = url
                     , poolMetadataRefHash            = hash
                     , poolMetadataRefRegisteredTxId  = txId
                     }
-              writePoolMetadataRef writer pmId pm
+              liftIO $ writePoolMetadataRef writer pmId pm
               pure (Just pmId)
 
           let rewardCredHash = rewardAddrCred (prdRewardAddr prd)
-          rewardAddrId <- resolveAndWriteStakeAddress network resolver writer rewardCredHash
+          rewardAddrId <- resolveAndWriteStakeAddress rewardCredHash
 
-          puId <- assignPoolUpdateId resolver
+          puId <- liftIO $ assignPoolUpdateId resolver
           -- Only first registration is charged the deposit; re-
           -- registration of an already-known pool keeps the
           -- existing deposit on file.
@@ -125,35 +126,35 @@ processPool resolver writer ctx = do
                 , poolUpdateRewardAddrId   = rewardAddrId
                 , poolUpdateDeposit        = mDeposit
                 }
-          writePoolUpdate writer puId pu
+          liftIO $ writePoolUpdate writer puId pu
 
           -- 5. Write pool owners
           forM_ (prdOwners prd) $ \ownerHash -> do
-            ownerAddrId <- resolveAndWriteStakeAddress network resolver writer ownerHash
-            poId <- assignPoolOwnerId resolver
+            ownerAddrId <- resolveAndWriteStakeAddress ownerHash
+            poId <- liftIO $ assignPoolOwnerId resolver
             let po = PoolOwner
                   { poolOwnerAddrId       = ownerAddrId
                   , poolOwnerPoolUpdateId = puId
                   }
-            writePoolOwner writer poId po
+            liftIO $ writePoolOwner writer poId po
 
           -- 6. Write pool relays
           forM_ (prdRelays prd) $ \relayData -> do
-            prId <- assignPoolRelayId resolver
+            prId <- liftIO $ assignPoolRelayId resolver
             let pr = mkPoolRelay puId relayData
-            writePoolRelay writer prId pr
+            liftIO $ writePoolRelay writer prId pr
 
         -- Pool retirement
         CertPoolRetirement poolKeyHash retiringEpoch -> do
-          (phId, _) <- resolveAndWritePoolHash resolver writer poolKeyHash
-          prId <- assignPoolRetireId resolver
+          (phId, _) <- resolveAndWritePoolHash poolKeyHash
+          prId <- liftIO $ assignPoolRetireId resolver
           let pr = PoolRetire
                 { poolRetireHashId        = phId
                 , poolRetireCertIndex     = certIdx
                 , poolRetireAnnouncedTxId = txId
                 , poolRetireRetiringEpoch = retiringEpoch
                 }
-          writePoolRetire writer prId pr
+          liftIO $ writePoolRetire writer prId pr
 
         -- All other cert types: not pool-related
         _ -> pure ()

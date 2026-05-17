@@ -28,8 +28,8 @@ import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 
 import Test.Hspec (Spec, describe, expectationFailure, it, shouldBe)
 
-import qualified DbSync.Era.Shelley.Generic.EpochUpdate as Generic
-import qualified DbSync.Era.Shelley.Generic.StakeDist as Generic
+import qualified DbSync.Era.Shelley.EpochUpdate as Generic
+import qualified DbSync.Era.Shelley.StakeDist as Generic
 import DbSync.Db.Schema.AdaPots (AdaPots, adaPotsTableDef)
 import DbSync.Db.Schema.Ids (AdaPotsId (..), BlockId (..))
 import DbSync.Db.Schema.Types (TableDef (..))
@@ -39,10 +39,12 @@ import DbSync.Ledger.Types
   ( ApplyResult (..)
   , emptyDepositsMap
   )
+import DbSync.AppM (runAppM)
 import DbSync.Resolver (IdResolver)
 import DbSync.StateQuery (SlotDetails (..))
+import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import DbSync.Writer (Writer (..))
-import DbSync.Writer.Testing (emptyTestWriterState, mkTestWriter)
+import DbSync.Test.Writer (emptyTestWriterState, mkTestWriter)
 
 -- ---------------------------------------------------------------------------
 
@@ -79,7 +81,8 @@ spec = do
       let writer = countingAdaPotsWriter counterRef (mkTestWriter writerRef)
           result = mkApplyResult Strict.Nothing
 
-      runEpochBoundary result (BlockId 100) resolver writer
+      let env = mkTestPipelineEnv resolver writer []
+      runAppM env (runEpochBoundary result (BlockId 100))
 
       adaPotsCalls <- readIORef counterRef
       adaPotsCalls `shouldBe` 0
@@ -94,7 +97,8 @@ spec = do
               Strict.Just $
                 mkNewEpoch (EpochNo 1) Strict.Nothing
 
-      runEpochBoundary result (BlockId 100) resolver writer
+      let env = mkTestPipelineEnv resolver writer []
+      runAppM env (runEpochBoundary result (BlockId 100))
 
       adaPotsCalls <- readIORef counterRef
       adaPotsCalls `shouldBe` 0

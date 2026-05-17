@@ -65,6 +65,7 @@ import DbSync.Config.Types
   , SyncMode (..)
   , SyncSettings (..)
   , defaultLedgerBackend
+  , defaultSnapshotNearTipEpoch
   , defaultSyncOptions
   )
 import DbSync.Test.Database (queryTestDb, testDbName)
@@ -93,12 +94,17 @@ defaultTestProfile = profileWithOptions allImplementedExtractors
 -- | Same as 'defaultTestProfile' but with the ledger feature on.
 -- Tests that exercise the LedgerWorker / snapshot writer / Follow
 -- fast-path snapshot loading need ledger enabled.
+--
+-- The snapshot near-tip threshold is lowered to @2@ so snapshots
+-- fire on the short fixture chains; production default of @580@
+-- would mean no snapshot ever lands during a typical test run.
 ledgerEnabledTestProfile :: SyncConfig
 ledgerEnabledTestProfile =
   defaultTestProfile
     { scLedger = LedgerConfig
-        { lcEnabled = True
-        , lcBackend = defaultLedgerBackend
+        { lcEnabled              = True
+        , lcBackend              = defaultLedgerBackend
+        , lcSnapshotNearTipEpoch = 2
         }
     }
 
@@ -136,8 +142,9 @@ profileWithOptions opts = SyncConfig
       , ssLoaderConnections = 4
       }
   , scLedger = LedgerConfig
-      { lcEnabled = False
-      , lcBackend = defaultLedgerBackend
+      { lcEnabled              = False
+      , lcBackend              = defaultLedgerBackend
+      , lcSnapshotNearTipEpoch = defaultSnapshotNearTipEpoch
       }
   , scOptions = opts
   , scMetrics = MetricsConfig { mcPrometheusPort = 9999 }

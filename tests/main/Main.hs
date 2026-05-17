@@ -77,7 +77,9 @@ import qualified DbSync.Phase.Preparing.RunSpec as PhasePrepSpec
 import qualified DbSync.Schema.InitSpec as SchemaInitSpec
 
 -- End-to-end
+import qualified DbSync.Phase.FollowPerfSpec as PhaseFollowPerfSpec
 import qualified DbSync.Phase.FollowRestartSpec as PhaseFollowRestartSpec
+import qualified DbSync.Phase.FollowRollbackOnBootSpec as PhaseFollowRollbackOnBootSpec
 import qualified DbSync.Phase.IngestPrepFollowSpec as PhaseIngestPrepFollowSpec
 import qualified DbSync.Phase.MockChainSpec as PhaseMockChainSpec
 import qualified DbSync.Phase.MockNodeSpec as PhaseMockNodeSpec
@@ -143,5 +145,7 @@ main = hspec $ do
   describe "End-to-end" $ do
     PhaseIngestPrepFollowSpec.spec
     PhaseFollowRestartSpec.spec
+    PhaseFollowRollbackOnBootSpec.spec
+    PhaseFollowPerfSpec.spec
     PhaseMockChainSpec.spec
     PhaseMockNodeSpec.spec

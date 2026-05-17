@@ -15,7 +15,7 @@ module DbSync.Phase.FollowRestartSpec (spec) where
 
 import Cardano.Prelude
 
-import Test.Hspec (Spec, describe, it, pendingWith, shouldSatisfy)
+import Test.Hspec (Spec, describe, it, shouldSatisfy)
 
 import DbSync.Config.Types (SyncConfig)
 import DbSync.Test.AppHarness
@@ -43,16 +43,11 @@ spec = describe "FollowingChainTip restart" $ do
   it "preserves dedup rows and resumes inserting (ledger off)" $
     runRestartScenario defaultTestProfile RequireNoSnapshot
 
-  it "loads snapshot and resumes inserting (ledger on)" $ do
-    -- The snapshot cadence in 'shouldSnapshotAtEpoch' requires
-    -- either @nearTip@ (within 60 s of wall clock) or
-    -- @epoch mod 10 == 0@ or @epoch >= 580@. Fixture time is years
-    -- behind wall clock so @nearTip@ is always False; reaching
-    -- epoch 10 needs ~1000 forged blocks plus a slow Follow phase
-    -- to drain them. Re-enable once Follow throughput allows it or
-    -- once the snapshot threshold is configurable in the profile.
-    pendingWith
-      "needs forging 1000+ blocks or a test-mode snapshot threshold"
+  it "loads snapshot and resumes inserting (ledger on)" $
+    -- 'ledgerEnabledTestProfile' lowers the snapshot near-tip
+    -- threshold to epoch 2 so snapshots fire on the short fixture
+    -- chains; production default of @580@ would mean no snapshot
+    -- ever lands during a typical test run.
     runRestartScenario ledgerEnabledTestProfile RequireSnapshot
 
 -- | Tables whose row counts must survive the restart. They get IDs

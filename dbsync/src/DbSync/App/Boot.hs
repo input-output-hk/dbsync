@@ -21,6 +21,7 @@ module DbSync.App.Boot
     BootDecision (..)
   , ResumeContext (..)
   , ResumeIntersection (..)
+  , FastPathContext (..)
   , BootError (..)
 
     -- * Decision
@@ -60,7 +61,7 @@ data BootDecision
     -- ^ Start from genesis (fresh DB or a seeded-but-uncommitted row).
   | BootResume !ResumeContext
     -- ^ Resume past a previous run.
-  | BootFollowingFastPath !ResumeContext
+  | BootFollowingFastPath !FastPathContext
     -- ^ Historic sync is complete; proceed straight to Follow.
   deriving stock (Eq, Show)
 
@@ -75,6 +76,28 @@ data ResumeContext = ResumeContext
   { rcSyncState      :: !SyncStateRow
   , rcChosenSnapshot :: !(Maybe DiskSnapshot)
   , rcIntersection   :: !ResumeIntersection
+  }
+  deriving stock (Eq, Show)
+
+-- | Information needed to enter the Follow phase on a restart after
+-- Ingest+Prep have completed (@sync_complete = true@).
+--
+-- The candidate list is non-empty exactly when ledger is enabled and
+-- at least one snapshot survives at or before @last_committed_slot@.
+-- When ledger is disabled the list is empty: PG is the single source
+-- of truth and the caller intersects chainsync directly at
+-- @last_committed_*@.
+--
+-- The orchestrator walks the candidates newest-first, picking the
+-- first one whose slot has a matching @block.hash@ in PG. That
+-- chosen snapshot becomes the restart point: the ledger is loaded
+-- from it, PG is rolled back to it (when the snapshot lags PG), and
+-- chainsync intersects at it.
+data FastPathContext = FastPathContext
+  { fpcSyncState           :: !SyncStateRow
+  , fpcCandidateSnapshots  :: ![DiskSnapshot]
+    -- ^ Snapshots at or before @last_committed_slot@, newest-first.
+    -- Empty when ledger is disabled.
   }
   deriving stock (Eq, Show)
 
@@ -137,7 +160,7 @@ decideBoot mRow snapshots ledgerEnabledCfg = case mRow of
         Left $ BootLedgerEnabledMismatch (ssrLedgerEnabled row) ledgerEnabledCfg
 
     | ssrSyncComplete row ->
-        Right $ BootFollowingFastPath (resumeContextFrom row Nothing)
+        decideFastPath row snapshots ledgerEnabledCfg
 
     | rowHasNoCommittedProgress row ->
         Right BootFresh
@@ -170,6 +193,50 @@ decideBoot mRow snapshots ledgerEnabledCfg = case mRow of
                         }
           _ -> Left BootSyncStateMissing
 
+-- | Build the 'BootFollowingFastPath' decision for @sync_complete =
+-- true@.
+--
+-- Ledger disabled: PG is the single source of truth, candidate list
+-- is empty, the caller intersects chainsync directly at the row's
+-- @last_committed_*@.
+--
+-- Ledger enabled: returns the candidate list (snapshots at or
+-- before @last_committed_slot@, newest-first). Same fallback
+-- conditions as 'BootResume' — empty snapshot directory is
+-- 'BootResumeStateMissing', candidates all beyond the committed
+-- slot is 'BootNoUsableSnapshot'.
+decideFastPath
+  :: SyncStateRow
+  -> [DiskSnapshot]
+  -> Bool
+  -> Either BootError BootDecision
+decideFastPath row snapshots ledgerEnabledCfg
+  | not ledgerEnabledCfg =
+      Right $ BootFollowingFastPath
+        FastPathContext
+          { fpcSyncState           = row
+          , fpcCandidateSnapshots  = []
+          }
+  | otherwise =
+      case ssrLastCommittedSlot row of
+        Nothing ->
+          -- 'sync_complete = true' implies Ingest+Prep ran, which
+          -- only happens after at least one epoch boundary was
+          -- committed. Treat the inconsistent shape as a missing
+          -- resume anchor.
+          Left BootSyncStateMissing
+        Just slotNo
+          | null snapshots -> Left BootResumeStateMissing
+          | otherwise ->
+              case candidateSnapshotSlots snapshots slotNo of
+                []         -> Left (BootNoUsableSnapshot slotNo)
+                candidates ->
+                  Right $ BootFollowingFastPath
+                    FastPathContext
+                      { fpcSyncState           = row
+                      , fpcCandidateSnapshots  = candidates
+                      }
+
 -- | True when the row has no committed chain position.
 rowHasNoCommittedProgress :: SyncStateRow -> Bool
 rowHasNoCommittedProgress r =
@@ -178,8 +245,10 @@ rowHasNoCommittedProgress r =
     && isNothing (ssrLastCommittedBlockHash r)
 
 -- | Build a 'ResumeContext' with no chosen snapshot and a default
--- intersection point. Used by 'BootFollowingFastPath' where the
--- intersection point isn't consumed by the receiver.
+-- intersection point. Used by the in-process Ingest → Prep → Follow
+-- handoff where chainsync intersects at the row's last committed
+-- block (the ledger and PG are already aligned by the receiver's
+-- 'latestPointRef').
 resumeContextFrom :: SyncStateRow -> Maybe DiskSnapshot -> ResumeContext
 resumeContextFrom row mSnap =
   ResumeContext

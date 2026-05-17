@@ -33,6 +33,7 @@ module DbSync.Config.Types
   , defaultSyncSettings
   , defaultLedgerConfig
   , defaultLedgerBackend
+  , defaultSnapshotNearTipEpoch
   , defaultMetricsConfig
   , defaultLoggingConfig
   , defaultSyncOptions
@@ -140,12 +141,17 @@ instance FromJSON SyncMode where
 --
 -- The runtime ledger-state path comes from the @--ledger-state-dir@
 -- CLI flag (operational paths live on the CLI; profile is per-DB
--- shape config and travels across environments). The snapshot
--- near-tip-epoch threshold is currently hardcoded in @Main.hs@; if
--- it ever becomes configurable, it belongs here.
+-- shape config and travels across environments).
 data LedgerConfig = LedgerConfig
-  { lcEnabled :: !Bool
-  , lcBackend :: !LedgerBackend
+  { lcEnabled              :: !Bool
+  , lcBackend              :: !LedgerBackend
+  , lcSnapshotNearTipEpoch :: !Word64
+    -- ^ Past this epoch number, the ledger writes a snapshot at
+    -- every epoch boundary regardless of the in-RAM cadence rules.
+    -- Production default is @580@; tests lower it so snapshots fire
+    -- on the short fixture chains. Below this threshold the cadence
+    -- is /every 10 epochs/ in Ingest and /every epoch when near
+    -- tip/ in Follow.
   }
   deriving stock (Eq, Show)
 
@@ -154,13 +160,21 @@ instance FromJSON LedgerConfig where
     LedgerConfig
       <$> o .:? "enabled" .!= False
       <*> o .:? "backend" .!= defaultLedgerBackend
+      <*> o .:? "snapshot_near_tip_epoch" .!= defaultSnapshotNearTipEpoch
 
 -- | Default ledger config used when the @"ledger"@ section is omitted.
 defaultLedgerConfig :: LedgerConfig
 defaultLedgerConfig = LedgerConfig
-  { lcEnabled = False
-  , lcBackend = defaultLedgerBackend
+  { lcEnabled              = False
+  , lcBackend              = defaultLedgerBackend
+  , lcSnapshotNearTipEpoch = defaultSnapshotNearTipEpoch
   }
+
+-- | Production default for 'lcSnapshotNearTipEpoch'. Matches the
+-- upstream cardano-db-sync heuristic: past epoch 580 the chain is
+-- "modern" enough that a per-epoch snapshot is cheap and useful.
+defaultSnapshotNearTipEpoch :: Word64
+defaultSnapshotNearTipEpoch = 580
 
 -- | Which backend stores the ledger-state UTxO tables.
 --

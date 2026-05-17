@@ -232,22 +232,23 @@ Env vars used by the helper script: `CARDANO_NODE_DIR`, `TESTNET_DIR`, `PROFILE`
 └── dbsync/           # The sync engine
     ├── app/          # Executable entrypoint (Main.hs)
     └── src/DbSync/
-        ├── App.hs / AppM.hs / Cli.hs / Env.hs / Error.hs   # Top-level wiring & CLI
-        ├── Phase.hs + Phase/        # Phase orchestration: Boot, Ingest, Preparing, Following
-        ├── Block/                   # ChainSync receiver + HFC-era-dispatching block/tx parser
-        ├── Extractor/               # Pure GenericBlock → [Row] projections (Core, UTxO, Pool, …)
-        ├── Id/                      # Monotonic ID pre-assignment (Counter, DedupMap)
-        ├── Copy/                    # Per-table COPY connections + writer (Ingest path)
-        ├── Writer.hs + Writer/      # hasql INSERT/SELECT writer interface (Preparing/Following path)
-        ├── Ingest/                  # Producer/consumer pipeline (TBQueue, ReceiverStats)
-        ├── Resolver.hs + Resolver/  # Lookup + resolution helpers (epoch computation, …)
-        ├── StateQuery.hs + …/       # LocalStateQuery driver + observed-summary cache
-        ├── Checkpoint/              # Epoch-aligned checkpoint manager + resume logic
-        ├── Ledger/                  # Optional ledger-state worker (off the critical path)
-        ├── Era/                     # Shelley-generic helpers (rewards, stake dist, proto params)
-        ├── OffChain/                # Off-chain metadata fetchers (pool / vote)
-        ├── Node/                    # Unix-socket node connection
-        ├── Config.hs + Config/      # Profile + node-config parsing & validation
-        ├── Trace.hs + Trace/        # contra-tracer setup and structured logging
-        └── Metrics.hs               # Prometheus metric definitions
+        ├── App.hs / AppM.hs / Cli.hs / Env.hs / Error.hs / Util.hs   # Top-level wiring & CLI
+        ├── App/                          # Orchestrator: boot decision, run loop, AppArgs
+        ├── Phase/                        # Phase state machine: live Current carrier + Ingest / Preparing / Following
+        ├── Block/                        # ChainSync receiver + HFC-era-dispatching block/tx parser
+        ├── Extractor.hs + Extractor/     # Pure GenericBlock → [Row] projections (Core, UTxO, Pool, …)
+        ├── Id/                           # Monotonic ID pre-assignment (Counter, DedupMap)
+        ├── Db/                           # Loader-stream COPY writer + hasql pool + transaction bracket
+        ├── Writer.hs                     # hasql INSERT/SELECT writer interface (Preparing/Following path)
+        ├── Address/                      # Async address-resolution worker (fills tx_out.address_id)
+        ├── Resolver.hs                   # IdResolver interface shared by Ingest and Following extractors
+        ├── StateQuery.hs + StateQuery/   # LocalStateQuery driver + observed-summary cache
+        ├── Checkpoint/                   # Epoch-aligned checkpoint manager + resume logic
+        ├── Ledger/                       # Optional ledger-state worker (off the critical path)
+        ├── Era/                          # Shelley-generic helpers (rewards, stake dist, proto params)
+        ├── OffChain/                     # Off-chain metadata fetchers (pool / vote)
+        ├── Node/                         # Unix-socket node connection
+        ├── Config.hs + Config/           # Profile + node-config parsing & validation
+        ├── Trace.hs + Trace/             # contra-tracer setup and structured logging
+        └── Metrics.hs                    # Prometheus metric definitions
 ```

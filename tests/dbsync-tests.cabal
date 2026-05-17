@@ -146,7 +146,9 @@ test-suite dbsync-test
     DbSync.Phase.CurrentSpec
     DbSync.Phase.Following.RollbackSpec
     DbSync.Phase.Following.RunSpec
+    DbSync.Phase.FollowPerfSpec
     DbSync.Phase.FollowRestartSpec
+    DbSync.Phase.FollowRollbackOnBootSpec
     DbSync.Phase.IngestPrepFollowSpec
     DbSync.Phase.MockChainSpec
     DbSync.Phase.MockNodeSpec
@@ -173,6 +175,7 @@ test-suite dbsync-test
     , bytestring
     , containers
     , directory
+    , filepath
     , io-classes:strict-stm
     , optparse-applicative
     , ouroboros-consensus

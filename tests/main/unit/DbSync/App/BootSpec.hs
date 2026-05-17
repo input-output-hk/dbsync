@@ -15,6 +15,7 @@ import DbSync.Db.Schema.SyncState (SyncStateRow (..))
 import DbSync.App.Boot
   ( BootDecision (..)
   , BootError (..)
+  , FastPathContext (..)
   , ResumeContext (..)
   , ResumeIntersection (..)
   , decideBoot
@@ -130,12 +131,47 @@ spec = describe "DbSync.App.Boot.decideBoot" $ do
       decideBoot (Just (seededRow True)) [] True
         `shouldBe` Right BootFresh
 
-  describe "sync_complete = True" $
-    it "is BootFollowingFastPath" $ do
+  describe "sync_complete = True (ledger disabled)" $ do
+    it "is BootFollowingFastPath with empty candidate list" $ do
       let row = (committedRow False) { ssrSyncComplete = True }
       case decideBoot (Just row) [] False of
-        Right (BootFollowingFastPath rc) -> rcSyncState rc `shouldBe` row
+        Right (BootFollowingFastPath fpc) -> do
+          fpcSyncState          fpc `shouldBe` row
+          fpcCandidateSnapshots fpc `shouldBe` []
         other -> expectationFailure $ "unexpected: " <> show other
+
+  describe "sync_complete = True (ledger enabled)" $ do
+    let completedRow = (committedRow True) { ssrSyncComplete = True }
+
+    it "carries every in-range candidate snapshot, newest-first" $ do
+      let snaps =
+            [ snapshotAt 13_000_000   -- newest, past last_committed_slot
+            , snapshotAt 11_900_000   -- in-range
+            , snapshotAt 11_500_000   -- in-range
+            , snapshotAt 11_000_000   -- in-range
+            ]
+      case decideBoot (Just completedRow) snaps True of
+        Right (BootFollowingFastPath fpc) -> do
+          fpcSyncState fpc `shouldBe` completedRow
+          fpcCandidateSnapshots fpc
+            `shouldBe` [ snapshotAt 11_900_000
+                       , snapshotAt 11_500_000
+                       , snapshotAt 11_000_000
+                       ]
+        other -> expectationFailure $ "unexpected: " <> show other
+
+    it "fails when there are no snapshots on disk" $
+      decideBoot (Just completedRow) [] True
+        `shouldBe` Left BootResumeStateMissing
+
+    it "fails when every snapshot is past last_committed_slot" $
+      decideBoot (Just completedRow) [snapshotAt 99_999_999] True
+        `shouldBe` Left (BootNoUsableSnapshot 12_000_000)
+
+    it "rejects rows with no last_committed_slot" $ do
+      let row = completedRow { ssrLastCommittedSlot = Nothing }
+      decideBoot (Just row) [snapshotAt 1_000_000] True
+        `shouldBe` Left BootSyncStateMissing
 
   describe "ledger-disabled resume" $ do
     let row = committedRow False

@@ -92,11 +92,13 @@ import DbSync.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..), mkNoLedgerEnv)
 import DbSync.Ledger.Worker (runLedgerWorker)
 import DbSync.Node.Connection (IntersectionRequirement (..), connectToNode, getNetworkMagic)
 import qualified DbSync.Phase.Following.Run as Follow
+import qualified DbSync.Phase.Following.Rollback as Rollback
+import DbSync.Db.Schema.Types (TableDef)
 import DbSync.App.Boot
   ( BootDecision (..)
+  , FastPathContext (..)
   , ResumeContext (..)
   , ResumeIntersection (..)
-  , candidateSnapshotSlots
   , decideBoot
   , mkCardanoPoint
   , renderBootError
@@ -239,7 +241,7 @@ runApp tracer args = do
           network
           (sgMaxLovelaceSupply (scConfig (gcShelley genesisCfg)))
           systemStart
-          580
+          (lcSnapshotNearTipEpoch ledgerCfg)
           True
           False
           (lcBackend ledgerCfg)
@@ -340,7 +342,7 @@ runApp tracer args = do
           , ssrAddressIdCounter row
           )
 
-      BootFollowingFastPath rc -> do
+      BootFollowingFastPath fpc -> do
         runAppM coreEnv (setCurrentPhase (ceCurrentPhase coreEnv) FollowingVolatileTail)
         watchdog <- newWatchdog (ceMinSeverity coreEnv)
         withIOManager $ \iomgr ->
@@ -348,7 +350,7 @@ runApp tracer args = do
             runFollowFastPath
               tracer logInfo logError hasqlSettings coreEnv topLevelCfg networkMagic
               socketPath systemStart stateQueryVar hasLedgerEnv
-              consumerCtrlConn rc mShutdown iomgr watchdog
+              consumerCtrlConn fpc mShutdown iomgr watchdog
         pure Nothing
 
   for_ mIngestState $ \(initialExtractState, dedupMaps, intersectReq, replayBoundary, replayStart, initialAddressId) -> do
@@ -616,6 +618,22 @@ handoffToFollow
 -- Follow loop. The caller is responsible for opening the
 -- 'IOManager' and any ledger threads ('withLedgerThreads').
 --
+-- When ledger is enabled, the on-disk snapshot is the authoritative
+-- restart point. The flow:
+--
+--   1. Walk the candidate snapshots newest-first; pick the first
+--      whose slot has a matching @block.hash@ in PG.
+--   2. Load that snapshot into the in-memory 'LedgerDB'.
+--   3. If the snapshot's slot is below @last_committed_slot@, the
+--      asynchronous snapshot writer fell behind the consumer's
+--      commits before shutdown. Roll PG back to the snapshot's
+--      point using the same cascade chain reorgs use; this brings
+--      PG and ledger into alignment.
+--   4. Intersect chainsync at the (now-aligned) restart point.
+--
+-- When ledger is disabled there is no snapshot to load; chainsync
+-- intersects directly at the row's @last_committed_*@.
+--
 -- When the optional shutdown signal fires, the Follow loop is
 -- cancelled and this returns normally; otherwise it blocks forever
 -- (production behaviour).
@@ -632,19 +650,19 @@ runFollowFastPath
   -> StateQueryVar
   -> HasLedgerEnv
   -> ControlConnection
-  -> ResumeContext
+  -> FastPathContext
   -> Maybe (IO ())
   -> IOManager
   -> Watchdog
   -> IO ()
 runFollowFastPath
   tracer logInfo logError hasqlSettings coreEnv topLevelCfg networkMagic
-  socketPath systemStart stateQueryVar hasLedgerEnv consumerCtrlConn rc
+  socketPath systemStart stateQueryVar hasLedgerEnv consumerCtrlConn fpc
   mShutdown iomgr watchdog = do
 
     logInfo "Boot: sync_complete=true; entering FollowingVolatileTail"
 
-    let row = rcSyncState rc
+    let row = fpcSyncState fpc
         tableDefs = concatMap pdTables (ceExtractors coreEnv)
     -- 'FollowRestart' mode skips the dedup-counter DELETE. The counter
     -- columns on 'SyncStateRow' are frozen at Ingest's last
@@ -657,11 +675,12 @@ runFollowFastPath
         "Cleaned up " <> show deleted
           <> " rows past last_committed_slot from a prior Follow crash"
 
-    -- Ledger-enabled fast-path needs the in-memory LedgerDB primed
-    -- from disk before the worker tries to apply blocks. The Ingest
-    -- resume path does this too; without it the worker crashes with
-    -- \"LedgerDB not initialised\" on the first MsgForward.
-    loadLedgerSnapshotForFollow tracer logInfo hasLedgerEnv stateQueryVar topLevelCfg row
+    -- Pick the chainsync restart point. When ledger is enabled, this
+    -- also loads the chosen snapshot and rolls PG back to it if it
+    -- lags @last_committed_slot@.
+    intersectPoint <- prepareFastPathStart
+      tracer logInfo consumerCtrlConn tableDefs
+      hasLedgerEnv stateQueryVar topLevelCfg fpc
 
     followCtrl <- openControlConnection hasqlSettings
     let followConn = unControlConnection followCtrl
@@ -690,9 +709,9 @@ runFollowFastPath
             , feRollbackBoundary    = rollbackBoundary
             }
 
-    intersectReq <- resolveIntersection logInfo logError consumerCtrlConn rc
+    let intersectReq = IntersectAt [intersectPoint]
 
-    let mLedgerQueue = case hasLedgerEnv of
+        mLedgerQueue = case hasLedgerEnv of
           LedgerEnabled lenv -> Just (leLedgerQueue lenv)
           LedgerDisabled _   -> Nothing
 
@@ -722,57 +741,110 @@ runFollowFastPath
 snapshotHeartbeatSeconds :: Int
 snapshotHeartbeatSeconds = 15
 
--- | Prime the in-memory 'LedgerDB' for the Follow fast-path by
--- restoring the latest on-disk snapshot at or before
--- @last_committed_slot@. No-op when ledger is disabled.
+-- | Resolve the chainsync intersection point for the fast-path
+-- restart, loading the ledger snapshot and rolling PG back to it
+-- when needed.
 --
--- Panics if no usable snapshot exists or if the chosen snapshot is
--- behind @last_committed_slot@: the fast-path doesn't yet drive a
--- chainsync replay window, so a gap can't be closed automatically.
--- Operator recovery is @--resync-from-genesis@.
-loadLedgerSnapshotForFollow
+-- Ledger disabled: returns the row's last-committed point.
+--
+-- Ledger enabled:
+--
+--   * Walks 'fpcCandidateSnapshots' newest-first, picking the first
+--     whose slot has a matching @block.hash@ in PG. Orphaned
+--     candidates (snapshot exists but PG has no block at that slot)
+--     are skipped with a log line.
+--   * Loads the chosen snapshot into the in-memory 'LedgerDB' and
+--     seeds the HFC interpreter from the resulting ledger state.
+--   * If the snapshot's slot is below @last_committed_slot@, runs
+--     'Rollback.rollbackToPoint' on the snapshot's point. The
+--     cascade DELETEs every row past the point and advances
+--     @dbsync_sync_state.last_committed_*@ in one PG transaction,
+--     leaving the database aligned with the ledger.
+--
+-- Panics when every candidate is orphaned in PG — the
+-- state-directory and PG database have drifted apart and the
+-- operator's recovery is @--resync-from-genesis@.
+prepareFastPathStart
   :: AppTracer
   -> (Text -> IO ())
+  -> ControlConnection
+  -> [TableDef]
   -> HasLedgerEnv
   -> StateQueryVar
   -> TopLevelConfig (CardanoBlock StandardCrypto)
-  -> SyncStateRow
-  -> IO ()
-loadLedgerSnapshotForFollow tracer logInfo hasLedgerEnv stateQueryVar topLevelCfg row =
-  case hasLedgerEnv of
-    LedgerDisabled _ -> pure ()
-    LedgerEnabled lenv -> do
-      snapshots <- listSnapshots (leSnapshotManager lenv)
-      case ssrLastCommittedSlot row of
-        Nothing ->
+  -> FastPathContext
+  -> IO CardanoPoint
+prepareFastPathStart tracer logInfo ctrl tableDefs hasLE sqv topLevelCfg fpc =
+  case hasLE of
+    LedgerDisabled _ -> ledgerDisabledStart
+    LedgerEnabled lenv -> ledgerEnabledStart lenv
+  where
+    row = fpcSyncState fpc
+
+    ledgerDisabledStart =
+      case (ssrLastCommittedSlot row, ssrLastCommittedBlockHash row) of
+        (Just s, Just h) ->
+          pure (mkCardanoPoint s h)
+        _ ->
           panic
-            "Follow fast-path: ledger enabled but dbsync_sync_state has\
-            \ no last_committed_slot. Restart with --resync-from-genesis."
-        Just lastSlot -> case candidateSnapshotSlots snapshots lastSlot of
-          [] ->
-            panic $
-              "Follow fast-path: ledger enabled but no on-disk snapshot\
-              \ exists at or before slot " <> show lastSlot
-              <> ". The previous snapshot writer never persisted state for\
-                 \ this run. Restart with --resync-from-genesis."
-          (snap : _) -> do
-            let snapSlot = dsNumber snap
-            logInfo $ "Loading ledger snapshot at slot " <> show snapSlot
-            loadResult <-
-              withHeartbeatIO tracer "LedgerSnapshot"
-                ("still loading snapshot at slot " <> show snapSlot)
-                snapshotHeartbeatSeconds $
-                runAppM lenv (initLedgerDbFromSnapshot snap)
-            case loadResult of
-              Left err -> panic $ "Failed to load ledger snapshot: " <> err
-              Right () -> do
-                loadedExt <- runAppM lenv readCurrentStateUnsafe
-                seedInterpreterFromLedgerState topLevelCfg loadedExt stateQueryVar
-                when (lastSlot > snapSlot) $
-                  panic $
-                    "Follow fast-path: snapshot at slot " <> show snapSlot
-                    <> " is behind last_committed_slot " <> show lastSlot
-                    <> " (" <> show (lastSlot - snapSlot)
-                    <> " slot gap). Replay between snapshot and committed\
-                       \ slot is not supported on this path. Restart with\
-                       \ --resync-from-genesis."
+            "Follow fast-path: ledger disabled but dbsync_sync_state has\
+            \ no (slot, hash). The boot decision should have rejected\
+            \ this earlier; this is an internal invariant violation."
+
+    ledgerEnabledStart lenv = do
+      (snap, snapHash) <- pickValidatedSnapshot logInfo ctrl (fpcCandidateSnapshots fpc)
+      let snapSlot  = dsNumber snap
+          snapPoint = mkCardanoPoint snapSlot snapHash
+      logInfo $ "Loading ledger snapshot at slot " <> show snapSlot
+      loadResult <-
+        withHeartbeatIO tracer "LedgerSnapshot"
+          ("still loading snapshot at slot " <> show snapSlot)
+          snapshotHeartbeatSeconds $
+          runAppM lenv (initLedgerDbFromSnapshot snap)
+      case loadResult of
+        Left err -> panic $ "Failed to load ledger snapshot: " <> err
+        Right () -> do
+          loadedExt <- runAppM lenv readCurrentStateUnsafe
+          seedInterpreterFromLedgerState topLevelCfg loadedExt sqv
+      -- Rollback PG to the snapshot's point when the snapshot lags
+      -- the last-committed slot. The snapshot writer is asynchronous
+      -- and can fall behind the consumer at shutdown; we re-align by
+      -- deleting the committed rows the ledger doesn't know about.
+      case ssrLastCommittedSlot row of
+        Just lastSlot | lastSlot > snapSlot -> do
+          logInfo $
+            "Rolling back PG from slot " <> show lastSlot
+              <> " to snapshot slot " <> show snapSlot
+              <> " (" <> show (lastSlot - snapSlot)
+              <> " slots) to align with ledger state"
+          let rollbackEnv = TracerWithConn tracer (unControlConnection ctrl)
+          runAppM rollbackEnv (Rollback.rollbackToPoint tableDefs snapPoint)
+        _ -> pure ()
+      pure snapPoint
+
+-- | Walk the candidate snapshots newest-first. Return the first one
+-- whose slot has a matching @block.hash@ in PG, paired with that
+-- hash. Logs each skipped orphan.
+pickValidatedSnapshot
+  :: (Text -> IO ())
+  -> ControlConnection
+  -> [DiskSnapshot]
+  -> IO (DiskSnapshot, ByteString)
+pickValidatedSnapshot logInfo ctrl = go
+  where
+    go [] =
+      panic
+        "Follow fast-path: every candidate snapshot is orphaned in PG\
+        \ (no matching row in the block table). The state directory\
+        \ and PG database have drifted apart. Restart with\
+        \ --resync-from-genesis."
+    go (snap : rest) = do
+      mHash <- runAppM ctrl (fetchBlockHashAtSlot (dsNumber snap))
+      case mHash of
+        Just h  -> pure (snap, h)
+        Nothing -> do
+          logInfo $
+            "Snapshot at slot " <> show (dsNumber snap)
+              <> " is orphaned in PG (no matching block row);\
+                 \ trying older candidate"
+          go rest

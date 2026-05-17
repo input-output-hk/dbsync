@@ -4,8 +4,15 @@
 -- a single connection. IDs come from the resolver; this layer only
 -- writes.
 --
--- Tables outside the slice-A surface (block, slot_leader) panic;
--- they're filled in as their extractors land in tests.
+-- Each @write*@ goes straight to PG via @Conn.use Sess.statement@.
+-- Pipelining across multiple writes is left as future work — see
+-- @PLANS/FOLLOW-PERF.md@ — because the obvious "buffer and flush"
+-- shape breaks the in-block dedup pattern: dedup resolvers SELECT
+-- the just-inserted row to detect duplicates, and a buffered INSERT
+-- isn't visible to that SELECT until the buffer flushes.
+--
+-- 'commit' is a no-op; the per-block @BEGIN@\/@COMMIT@ envelope owned
+-- by @Phase.Following.Run@ is what actually closes the transaction.
 module DbSync.Phase.Following.Writer
   ( mkWriter
   ) where
@@ -48,23 +55,22 @@ mkWriter conn = Writer
   { writeBlock      = \bid blk -> run conn (bid, blk) insertBlockRowStmt
   , writeSlotLeader = \sid sl  -> run conn (sid, sl)  insertSlotLeaderRowStmt
   , writeTx         = \tid tx  -> run conn (tid, tx)  insertTxRowStmt
-  , commit          = pure ()
 
     -- UTxO writers
-  , writeAddress        = \aid addr -> run conn (aid, addr) insertAddressRowStmt
-  , writeTxOut          = \oid txo -> run conn (oid, txo) insertTxOutRowStmt
-  , writeTxIn           = \iid ti  -> run conn (iid, ti)  insertTxInRowStmt
-  , writeCollateralTxIn  = \iid ci  -> run conn (iid, ci)  insertCollateralTxInRowStmt
-  , writeCollateralTxOut = \oid co  -> run conn (oid, co)  insertCollateralTxOutRowStmt
-  , writeReferenceTxIn   = \iid ri  -> run conn (iid, ri)  insertReferenceTxInRowStmt
+  , writeAddress         = \aid addr -> run conn (aid, addr) insertAddressRowStmt
+  , writeTxOut           = \oid txo  -> run conn (oid, txo)  insertTxOutRowStmt
+  , writeTxIn            = \iid ti   -> run conn (iid, ti)   insertTxInRowStmt
+  , writeCollateralTxIn  = \iid ci   -> run conn (iid, ci)   insertCollateralTxInRowStmt
+  , writeCollateralTxOut = \oid co   -> run conn (oid, co)   insertCollateralTxOutRowStmt
+  , writeReferenceTxIn   = \iid ri   -> run conn (iid, ri)   insertReferenceTxInRowStmt
 
     -- Metadata writers
-  , writeTxMetadata     = \mid md  -> run conn (mid, md)  insertTxMetadataRowStmt
+  , writeTxMetadata = \mid md -> run conn (mid, md) insertTxMetadataRowStmt
 
     -- MultiAsset writers
-  , writeMultiAsset     = \mid ma  -> run conn (mid, ma)  insertMultiAssetRowStmt
-  , writeMaTxMint       = \mid m   -> run conn (mid, m)   insertMaTxMintRowStmt
-  , writeMaTxOut        = \mid m   -> run conn (mid, m)   insertMaTxOutRowStmt
+  , writeMultiAsset = \mid ma -> run conn (mid, ma) insertMultiAssetRowStmt
+  , writeMaTxMint   = \mid m  -> run conn (mid, m)  insertMaTxMintRowStmt
+  , writeMaTxOut    = \mid m  -> run conn (mid, m)  insertMaTxOutRowStmt
 
     -- StakeDelegation writers
   , writeStakeAddress        = \sid sa -> run conn (sid, sa) insertStakeAddressRowStmt
@@ -74,17 +80,22 @@ mkWriter conn = Writer
   , writeWithdrawal          = \wid w  -> run conn (wid, w)  insertWithdrawalRowStmt
 
     -- Pool writers
-  , writePoolHash         = \pid ph  -> run conn (pid, ph)  insertPoolHashRowStmt
-  , writePoolUpdate       = \pid pu  -> run conn (pid, pu)  insertPoolUpdateRowStmt
-  , writePoolMetadataRef  = \pid pm  -> run conn (pid, pm)  insertPoolMetadataRefRowStmt
-  , writePoolOwner        = \pid po  -> run conn (pid, po)  insertPoolOwnerRowStmt
-  , writePoolRetire       = \pid pr  -> run conn (pid, pr)  insertPoolRetireRowStmt
-  , writePoolRelay        = \pid pr  -> run conn (pid, pr)  insertPoolRelayRowStmt
+  , writePoolHash         = \pid ph -> run conn (pid, ph) insertPoolHashRowStmt
+  , writePoolUpdate       = \pid pu -> run conn (pid, pu) insertPoolUpdateRowStmt
+  , writePoolMetadataRef  = \pid pm -> run conn (pid, pm) insertPoolMetadataRefRowStmt
+  , writePoolOwner        = \pid po -> run conn (pid, po) insertPoolOwnerRowStmt
+  , writePoolRetire       = \pid pr -> run conn (pid, pr) insertPoolRetireRowStmt
+  , writePoolRelay        = \pid pr -> run conn (pid, pr) insertPoolRelayRowStmt
 
     -- CBOR writers
-  , writeTxCbor          = \tcid tc -> run conn (tcid, tc) insertTxCborRowStmt
-  , writeEpochSyncStats      = \_ _ -> todo "writeEpochSyncStats"
-  , writeAdaPots             = \_ _ -> todo "writeAdaPots"
+  , writeTxCbor = \tcid tc -> run conn (tcid, tc) insertTxCborRowStmt
+
+  , writeEpochSyncStats = \_ _ -> todo "writeEpochSyncStats"
+  , writeAdaPots        = \_ _ -> todo "writeAdaPots"
+
+    -- No-op: the per-block transaction envelope is owned by
+    -- @Phase.Following.Run@, not the Writer.
+  , commit = pure ()
   }
 
 run :: Conn.Connection -> a -> Stmt.Statement a b -> IO b
@@ -92,7 +103,7 @@ run conn p stmt = do
   result <- Conn.use conn (Sess.statement p stmt)
   case result of
     Right b -> pure b
-    Left e  -> panic $ "Insert writer session failed: " <> show e
+    Left  e -> panic $ "Insert writer session failed: " <> show e
 
 todo :: Text -> IO a
 todo name = pure $ panic $ "Phase.Following.Writer." <> name <> " not yet implemented"

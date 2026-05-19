@@ -65,6 +65,7 @@ seededRow ledgerEnabled = SyncStateRow
   , ssrSchemaVersionApplied          = 1
   , ssrLedgerEnabled                 = ledgerEnabled
   , ssrSyncComplete                  = False
+  , ssrPendingRollbackSlot           = Nothing
   }
 
 -- | A row with realistic committed progress.

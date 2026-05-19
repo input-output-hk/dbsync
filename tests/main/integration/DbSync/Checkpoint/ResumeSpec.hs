@@ -127,6 +127,7 @@ rowAtBoundary boundarySlot nextSlotLeaderId = SyncStateRow
   , ssrSchemaVersionApplied          = 1
   , ssrLedgerEnabled                 = False
   , ssrSyncComplete                  = False
+  , ssrPendingRollbackSlot           = Nothing
   }
 
 -- | A counter value safely past every id this spec's @populate*@

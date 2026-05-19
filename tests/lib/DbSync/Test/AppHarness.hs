@@ -270,6 +270,7 @@ mkAppArgsWithResync resync profile mn ledgerDir mShutdown = AppArgs
   , aaSocketPath        = mnSocketPath mn
   , aaLedgerStateDir    = ledgerDir
   , aaResyncFromGenesis = resync
+  , aaRollbackToSlot    = Nothing
   , aaShutdownSignal    = mShutdown
   , aaStateQueryVar     = Just (mcStateQueryVar (mnChain mn))
   }

@@ -168,6 +168,7 @@ test-suite dbsync-test
     , dbsync-db
     , dbsync-mock
     , dbsync-tests:dbsync-testlib
+    , Diff
     , hasql
     , hspec
     , cardano-crypto-class

@@ -45,15 +45,17 @@ import DbSync.Checkpoint.Resume (CleanupMode (..), deleteRowsPastSlot)
 import DbSync.Checkpoint.SyncState
   ( ControlConnection (..)
   , SyncStateRow (..)
+  , clearPendingRollbackSlot
   , closeControlConnection
   , fetchBlockHashAtSlot
   , markSyncComplete
   , openControlConnection
+  , readPendingRollbackSlot
   , readSyncState
   , rebuildDedupMaps
   , seedSyncState
   )
-import DbSync.Env (TracerWithConn (..), TracerWithControl (..))
+import DbSync.Env (CoreWithConn (..), TracerWithConn (..), TracerWithControl (..))
 import DbSync.Config.Genesis
   ( GenesisConfig (..)
   , ShelleyConfig (..)
@@ -80,7 +82,7 @@ import DbSync.Extractor (ExtractState, ExtractorDef (..), freshExtractState)
 import DbSync.Phase.Ingest.DedupMap (newMaps)
 import DbSync.Phase.Ingest.Consumer (runConsumer)
 import DbSync.Phase.Ingest.ReceiverStats (newReceiverStats)
-import DbSync.Ledger.Snapshot (runLedgerStateWriteThread)
+import DbSync.Ledger.Snapshot (deleteNewerSnapshots, runLedgerStateWriteThread)
 import DbSync.Ledger.State
   ( dropLedgerStateDir
   , initLedgerDbFromGenesis
@@ -252,7 +254,17 @@ runApp tracer args = do
         logInfo "Ledger feature disabled (set ledger.enabled = true in profile to opt in); skipping LSM session"
         LedgerDisabled <$> mkNoLedgerEnv tracer pinfo systemStart network
 
-  -- 7. Boot decision.
+  -- 7. Pre-boot rollback. Either the operator passed --rollback-to-slot
+  -- or a previous deep chainsync rollback left a marker that the ledger
+  -- worker couldn't satisfy from its in-RAM buffer. The CLI request
+  -- wins when both are present; the marker is cleared either way once
+  -- the cascade and snapshot cleanup commit.
+  unless needsSeed $
+    handlePreBootRollback
+      logInfo coreEnv consumerCtrlConn tableDefs hasLedgerEnv
+      (aaRollbackToSlot args)
+
+  -- 8. Boot decision.
   bootDecision <-
     if needsSeed
       then pure BootFresh
@@ -459,6 +471,50 @@ runApp tracer args = do
 -- ---------------------------------------------------------------------------
 -- * Helpers
 -- ---------------------------------------------------------------------------
+
+-- | Apply a rollback request that arrived before normal boot.
+--
+-- The CLI flag wins over the on-DB marker; if neither is set, this
+-- is a no-op. On success the marker is cleared so the next boot
+-- doesn't replay the rollback. Ledger snapshots strictly newer than
+-- the target are dropped so the next boot's snapshot picker stays
+-- aligned with the rolled-back chain.
+handlePreBootRollback
+  :: (Text -> IO ())
+  -> CoreEnv
+  -> ControlConnection
+  -> [TableDef]
+  -> HasLedgerEnv
+  -> Maybe Word64        -- ^ CLI request
+  -> IO ()
+handlePreBootRollback logInfo coreEnv ctrl tableDefs hasLE mCli = do
+  mMarker <- runAppM ctrl readPendingRollbackSlot
+  let mTarget = mCli <|> mMarker
+  for_ mTarget $ \targetSlot -> do
+    case mCli of
+      Just _  ->
+        logInfo $ "--rollback-to-slot " <> show targetSlot <> " requested"
+      Nothing ->
+        logInfo $
+          "Recovering from previous deep rollback to slot "
+            <> show targetSlot
+    let rollbackEnv = CoreWithConn coreEnv (unControlConnection ctrl)
+    mResolved <- runAppM rollbackEnv
+      (Rollback.rollbackToSlot tableDefs targetSlot)
+    case mResolved of
+      Just blockNo ->
+        logInfo $
+          "Rollback complete; database tip is block " <> show blockNo
+      Nothing ->
+        logInfo $
+          "Rollback no-op: no block at or after slot "
+            <> show targetSlot
+            <> " (database already below the requested point)"
+    case hasLE of
+      LedgerEnabled lenv ->
+        runAppM lenv (deleteNewerSnapshots (SlotNo targetSlot))
+      LedgerDisabled _ -> pure ()
+    runAppM ctrl clearPendingRollbackSlot
 
 -- | Turn a 'ResumeContext' into the receiver's intersection
 -- requirement. Mirrors upstream cardano-db-sync's
@@ -695,7 +751,7 @@ runFollowFastPath
     -- also loads the chosen snapshot and rolls PG back to it if it
     -- lags @last_committed_slot@.
     intersectPoint <- prepareFastPathStart
-      tracer logInfo consumerCtrlConn tableDefs
+      coreEnv logInfo consumerCtrlConn tableDefs
       hasLedgerEnv stateQueryVar topLevelCfg fpc
 
     followCtrl <- openControlConnection hasqlSettings
@@ -785,7 +841,7 @@ snapshotHeartbeatSeconds = 15
 -- state-directory and PG database have drifted apart and the
 -- operator's recovery is @--resync-from-genesis@.
 prepareFastPathStart
-  :: AppTracer
+  :: CoreEnv
   -> (Text -> IO ())
   -> ControlConnection
   -> [TableDef]
@@ -794,12 +850,13 @@ prepareFastPathStart
   -> TopLevelConfig (CardanoBlock StandardCrypto)
   -> FastPathContext
   -> IO CardanoPoint
-prepareFastPathStart tracer logInfo ctrl tableDefs hasLE sqv topLevelCfg fpc =
+prepareFastPathStart coreEnv logInfo ctrl tableDefs hasLE sqv topLevelCfg fpc =
   case hasLE of
     LedgerDisabled _ -> ledgerDisabledStart
     LedgerEnabled lenv -> ledgerEnabledStart lenv
   where
-    row = fpcSyncState fpc
+    row    = fpcSyncState fpc
+    tracer = ceTracer coreEnv
 
     ledgerDisabledStart =
       case (ssrLastCommittedSlot row, ssrLastCommittedBlockHash row) of
@@ -837,7 +894,7 @@ prepareFastPathStart tracer logInfo ctrl tableDefs hasLE sqv topLevelCfg fpc =
               <> " to snapshot slot " <> show snapSlot
               <> " (" <> show (lastSlot - snapSlot)
               <> " slots) to align with ledger state"
-          let rollbackEnv = TracerWithConn tracer (unControlConnection ctrl)
+          let rollbackEnv = CoreWithConn coreEnv (unControlConnection ctrl)
           runAppM rollbackEnv (Rollback.rollbackToPoint tableDefs snapPoint)
         _ -> pure ()
       pure snapPoint

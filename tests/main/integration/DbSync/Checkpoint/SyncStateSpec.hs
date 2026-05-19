@@ -287,4 +287,5 @@ sampleRow = SyncStateRow
   , ssrSchemaVersionApplied          = 1
   , ssrLedgerEnabled                 = True
   , ssrSyncComplete                  = False
+  , ssrPendingRollbackSlot           = Nothing
   }

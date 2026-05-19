@@ -13,6 +13,8 @@ module DbSync.Phase.Following.RollbackSpec
   ( spec
   , schemaWalkSpec
   , cascadeSpec
+  , kSafetyGuardSpec
+  , rollbackToSlotSpec
   ) where
 
 import Cardano.Prelude
@@ -29,7 +31,7 @@ import qualified Data.Text as T
 
 import qualified DbSync.Block.Metadata as Metadata
 
-import Test.Hspec (Spec, afterAll_, beforeAll_, before_, describe, it, shouldBe, shouldMatchList)
+import Test.Hspec (Spec, afterAll_, beforeAll_, before_, describe, it, shouldBe, shouldMatchList, shouldThrow)
 
 import DbSync.Block.Types
   ( BlockEra (..)
@@ -77,7 +79,10 @@ import DbSync.Db.Schema.UTxO
   , txInTableDef
   , txOutTableDef
   )
+import DbSync.Db.Transaction (HasHasqlConnection (..))
+import DbSync.Env (HasSecurityParam (..))
 import DbSync.Extractor (ExtractorDef, emptyBlockLedgerData)
+import qualified Hasql.Connection as Conn
 import DbSync.Extractor.Cbor (cborExtractor)
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Extractor.Metadata (metadataExtractor)
@@ -89,6 +94,7 @@ import DbSync.Block.Pipeline (processBlock)
 import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.AppM (runAppM)
 import qualified DbSync.Phase.Following.Rollback as Rollback
+import DbSync.App (cardanoSecurityParam)
 import DbSync.App.Boot (mkCardanoPoint)
 import DbSync.Phase.Following.Resolver (mkFollowResolver)
 import DbSync.Test.Database
@@ -160,6 +166,18 @@ extractorVersions =
 tableNames :: [Text]
 tableNames = map tdName tables
 
+-- | Test env: connection plus a test-controlled @k@. The cascade
+-- tests pass 'cardanoSecurityParam' so the guard never trips; the
+-- k-safety tests pass a small @k@ so a few-block fixture is enough
+-- to cross the horizon.
+data RollbackTestEnv = RollbackTestEnv !Conn.Connection !Word64
+
+instance HasHasqlConnection RollbackTestEnv where
+  getHasqlConnection (RollbackTestEnv c _) = c
+
+instance HasSecurityParam RollbackTestEnv where
+  getSecurityParam (RollbackTestEnv _ k) = k
+
 -- ---------------------------------------------------------------------------
 -- Spec entry point
 -- ---------------------------------------------------------------------------
@@ -168,6 +186,8 @@ spec :: Spec
 spec = do
   schemaWalkSpec
   cascadeSpec
+  kSafetyGuardSpec
+  rollbackToSlotSpec
 
 -- ---------------------------------------------------------------------------
 -- Schema-walk: assert tdForeignKeys declarations
@@ -240,7 +260,8 @@ cascadeSpec = describe "Rollback.rollbackToPoint" $
       -- deleted, along with their txs, tx_outs, and metadata. The
       -- first block stays.
       withTestConnection $ \conn ->
-        runAppM conn (Rollback.rollbackToPoint tables target)
+        runAppM (RollbackTestEnv conn cardanoSecurityParam)
+          (Rollback.rollbackToPoint tables target)
       blockN' <- countOf blockTableDef
       blockN' `shouldBe` "1"
 
@@ -262,7 +283,8 @@ cascadeSpec = describe "Rollback.rollbackToPoint" $
       slBefore   <- countOf slotLeaderTableDef
 
       withTestConnection $ \conn ->
-        runAppM conn (Rollback.rollbackToPoint tables target)
+        runAppM (RollbackTestEnv conn cardanoSecurityParam)
+          (Rollback.rollbackToPoint tables target)
 
       addrAfter <- countOf addressTableDef
       slAfter   <- countOf slotLeaderTableDef
@@ -278,7 +300,8 @@ cascadeSpec = describe "Rollback.rollbackToPoint" $
           <> " VALUES (1, false) ON CONFLICT (id) DO NOTHING;"
 
       withTestConnection $ \conn ->
-        runAppM conn (Rollback.rollbackToPoint tables target)
+        runAppM (RollbackTestEnv conn cardanoSecurityParam)
+          (Rollback.rollbackToPoint tables target)
 
       result <- T.strip <$> queryTestDb
         ( "SELECT last_committed_slot, last_committed_block_no,"
@@ -288,6 +311,82 @@ cascadeSpec = describe "Rollback.rollbackToPoint" $
       -- block1: slot 100, blockNo 1, hash 0x00..00 (32 bytes).
       result `shouldBe`
         "100|1|0000000000000000000000000000000000000000000000000000000000000000"
+
+-- ---------------------------------------------------------------------------
+-- k-safety guard: target past k blocks behind tip panics
+-- ---------------------------------------------------------------------------
+
+kSafetyGuardSpec :: Spec
+kSafetyGuardSpec = describe "Rollback.rollbackToPoint k-safety guard" $
+  beforeAll_ (setupFollowTipSchema tables extractorVersions) $
+  afterAll_  (teardownSchema tables) $
+  before_    (truncateAllTables tableNames) $ do
+
+    it "allows a target within k of the tip" $ do
+      runFollow [block1WithTx, block2WithTxMeta, block3WithTx]
+      -- block1 is blockNo 1; tip is blockNo 3; gap = 2; k = 5 covers it.
+      withTestConnection $ \conn ->
+        runAppM (RollbackTestEnv conn 5)
+          (Rollback.rollbackToPoint tables target)
+      blockN <- countOf blockTableDef
+      blockN `shouldBe` "1"
+
+    it "refuses a target past k blocks behind the tip" $ do
+      runFollow [block1WithTx, block2WithTxMeta, block3WithTx]
+      -- tip = 3, target = block1 (blockNo 1), gap = 2 > k = 1.
+      let attempt = withTestConnection $ \conn ->
+            runAppM (RollbackTestEnv conn 1)
+              (Rollback.rollbackToPoint tables target)
+      attempt `shouldThrow` (\(e :: SomeException) ->
+        "more than k=1" `T.isInfixOf` show e)
+      -- All blocks survive — the panic fired before any DELETE ran.
+      countOf blockTableDef >>= (`shouldBe` "3")
+
+-- ---------------------------------------------------------------------------
+-- rollbackToSlot: slot → point resolution
+-- ---------------------------------------------------------------------------
+
+rollbackToSlotSpec :: Spec
+rollbackToSlotSpec = describe "Rollback.rollbackToSlot" $
+  beforeAll_ (setupFollowTipSchema tables extractorVersions) $
+  afterAll_  (teardownSchema tables) $
+  before_    (truncateAllTables tableNames) $ do
+
+    it "resolves an exact-match slot to its block" $ do
+      runFollow [block1WithTx, block2WithTxMeta, block3WithTx]
+      result <- withTestConnection $ \conn ->
+        runAppM (RollbackTestEnv conn cardanoSecurityParam)
+          (Rollback.rollbackToSlot tables 120)   -- block2's slot
+      result `shouldBe` Just 2
+      countOf blockTableDef >>= (`shouldBe` "2")  -- block3 gone
+
+    it "resolves an empty slot to the next block at-or-after" $ do
+      runFollow [block1WithTx, block2WithTxMeta, block3WithTx]
+      -- Slots 100/120/140 are populated; 110 is empty. The resolver
+      -- should pick block2 (slot 120).
+      result <- withTestConnection $ \conn ->
+        runAppM (RollbackTestEnv conn cardanoSecurityParam)
+          (Rollback.rollbackToSlot tables 110)
+      result `shouldBe` Just 2
+      countOf blockTableDef >>= (`shouldBe` "2")
+
+    it "is a no-op when the target is past the current tip" $ do
+      runFollow [block1WithTx, block2WithTxMeta, block3WithTx]
+      result <- withTestConnection $ \conn ->
+        runAppM (RollbackTestEnv conn cardanoSecurityParam)
+          (Rollback.rollbackToSlot tables 9_999_999)
+      result `shouldBe` Nothing
+      countOf blockTableDef >>= (`shouldBe` "3")
+
+    it "is a no-op against an empty database" $ do
+      result <- withTestConnection $ \conn ->
+        runAppM (RollbackTestEnv conn cardanoSecurityParam)
+          (Rollback.rollbackToSlot tables 100)
+      result `shouldBe` Nothing
+
+-- ---------------------------------------------------------------------------
+-- Helpers
+-- ---------------------------------------------------------------------------
 
 -- | Bare row-count via @psql@. Returns the count as 'Text' so callers
 -- compare directly against the numeric literals they already use.

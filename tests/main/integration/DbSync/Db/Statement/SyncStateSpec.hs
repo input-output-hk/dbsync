@@ -31,10 +31,13 @@ import DbSync.Db.Schema.Init (dropSchema, initSchema)
 import DbSync.Db.Schema.SyncState (SyncStateRow (..), syncStateTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Statement.SyncState
-  ( markSnapshotCompleteStmt
+  ( clearPendingRollbackSlotStmt
+  , markSnapshotCompleteStmt
   , markSyncCompleteStmt
+  , readPendingRollbackSlotStmt
   , readSyncStateStmt
   , seedSyncStateStmt
+  , writePendingRollbackSlotStmt
   , writeSyncStateStmt
   )
 import DbSync.Test.Database (queryTestDb, testConnStr)
@@ -121,6 +124,43 @@ spec = describe "DbSync.Db.Statement.SyncState" $
             Just row -> ssrSyncComplete row `shouldBe` True
             Nothing  -> panic "row vanished"
 
+    describe "pending_rollback_slot marker" $ do
+      it "is NULL on a freshly seeded row" $
+        withTestConnection $ \conn -> do
+          runStatement conn (1, False) seedSyncStateStmt
+          marker <- runStatement conn () readPendingRollbackSlotStmt
+          marker `shouldBe` Nothing
+
+      it "round-trips through write + read" $
+        withTestConnection $ \conn -> do
+          runStatement conn (1, False) seedSyncStateStmt
+          n <- runStatement conn 99999 writePendingRollbackSlotStmt
+          n `shouldBe` 1
+          marker <- runStatement conn () readPendingRollbackSlotStmt
+          marker `shouldBe` Just 99999
+
+      it "clears via clearPendingRollbackSlotStmt" $
+        withTestConnection $ \conn -> do
+          runStatement conn (1, False) seedSyncStateStmt
+          _ <- runStatement conn 42 writePendingRollbackSlotStmt
+          n <- runStatement conn () clearPendingRollbackSlotStmt
+          n `shouldBe` 1
+          marker <- runStatement conn () readPendingRollbackSlotStmt
+          marker `shouldBe` Nothing
+
+      it "leaves other lifecycle columns alone" $
+        withTestConnection $ \conn -> do
+          runStatement conn (1, True) seedSyncStateStmt
+          _ <- runStatement conn () markSyncCompleteStmt
+          _ <- runStatement conn 7 writePendingRollbackSlotStmt
+          mRow <- runStatement conn () readSyncStateStmt
+          case mRow of
+            Just row -> do
+              ssrPendingRollbackSlot row `shouldBe` Just 7
+              ssrSyncComplete row        `shouldBe` True
+              ssrLedgerEnabled row       `shouldBe` True
+            Nothing  -> panic "row vanished"
+
 -- ---------------------------------------------------------------------------
 -- Helpers
 -- ---------------------------------------------------------------------------
@@ -180,4 +220,5 @@ sampleRow = SyncStateRow
   , ssrSchemaVersionApplied          = 1
   , ssrLedgerEnabled                 = True
   , ssrSyncComplete                  = False
+  , ssrPendingRollbackSlot           = Nothing
   }

@@ -28,6 +28,9 @@ data AppArgs = AppArgs
   , aaSocketPath        :: !FilePath
   , aaLedgerStateDir    :: !FilePath
   , aaResyncFromGenesis :: !Bool
+  , aaRollbackToSlot    :: !(Maybe Word64)
+    -- ^ Explicit CLI rollback request. Takes precedence over the
+    --   'pending_rollback_slot' marker when both are set.
   , aaShutdownSignal    :: !(Maybe (IO ()))
     -- ^ When set, race the Follow loop against this action and exit
     --   when it returns. Lets tests stop the app cleanly.

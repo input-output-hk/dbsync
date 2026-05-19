@@ -59,6 +59,7 @@ main = do
     , aaSocketPath        = caSocketPath args
     , aaLedgerStateDir    = caLedgerStateDir args
     , aaResyncFromGenesis = caResyncFromGenesis args
+    , aaRollbackToSlot    = caRollbackToSlot args
     , aaShutdownSignal    = Nothing
     , aaStateQueryVar     = Nothing
     }

@@ -13,6 +13,9 @@ module DbSync.Db.Statement.SyncState
   , writeSyncStateSlotStmt
   , markSnapshotCompleteStmt
   , markSyncCompleteStmt
+  , readPendingRollbackSlotStmt
+  , writePendingRollbackSlotStmt
+  , clearPendingRollbackSlotStmt
   ) where
 
 import Cardano.Prelude
@@ -149,5 +152,44 @@ markSyncCompleteStmt =
       [ "UPDATE dbsync_sync_state SET"
       , "  sync_complete = true"
       , ", updated_at    = now()"
+      , " WHERE id = 1"
+      ]
+
+-- | Read @pending_rollback_slot@. 'Nothing' means no rollback is
+-- pending; @Just@ means the boot path should run a rollback to that
+-- slot before normal resume.
+readPendingRollbackSlotStmt :: Stmt.Statement () (Maybe Word64)
+readPendingRollbackSlotStmt =
+  Stmt.preparable
+    "SELECT pending_rollback_slot FROM dbsync_sync_state WHERE id = 1"
+    E.noParams
+    (D.singleRow (fmap fromIntegral <$> D.column (D.nullable D.int8)))
+
+-- | Persist a pending rollback target. Written by the ledger worker
+-- on a deep rollback so the recovery survives the process restart.
+-- Also written by the CLI @--rollback-to-slot@ path before the
+-- cascade runs so a mid-rollback crash resumes cleanly.
+writePendingRollbackSlotStmt :: Stmt.Statement Word64 Int64
+writePendingRollbackSlotStmt =
+  Stmt.preparable sql encoder D.rowsAffected
+  where
+    sql = T.concat
+      [ "UPDATE dbsync_sync_state SET"
+      , "  pending_rollback_slot = $1"
+      , ", updated_at            = now()"
+      , " WHERE id = 1"
+      ]
+    encoder = fromIntegral >$< E.param (E.nonNullable E.int8)
+
+-- | Clear the pending-rollback marker. Called by the boot path after
+-- the recovery rollback has completed and committed.
+clearPendingRollbackSlotStmt :: Stmt.Statement () Int64
+clearPendingRollbackSlotStmt =
+  Stmt.preparable sql E.noParams D.rowsAffected
+  where
+    sql = T.concat
+      [ "UPDATE dbsync_sync_state SET"
+      , "  pending_rollback_slot = NULL"
+      , ", updated_at            = now()"
       , " WHERE id = 1"
       ]

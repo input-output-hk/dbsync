@@ -12,6 +12,9 @@ module DbSync.App
   , validateExtractorDeps
   , topoSortExtractors
 
+    -- * Constants
+  , cardanoSecurityParam
+
     -- * Startup
   , runStartup
   ) where
@@ -71,14 +74,15 @@ buildCoreEnv tracer syncCfg nodeCfg network = do
   curPhase <- newCurrentPhase IngestChainHistory
   let phaseAwareTracer = withPhaseFilter (readCurrentPhase curPhase) tracer
   pure CoreEnv
-    { ceTracer       = phaseAwareTracer
-    , ceMinSeverity  = severityFromText (lgLevel (scLogging syncCfg))
-    , ceMetrics      = placeholderMetrics
-    , ceConfig       = syncCfg
-    , ceNodeConfig   = nodeCfg
-    , ceExtractors   = extractors
-    , ceNetwork      = network
-    , ceCurrentPhase = curPhase
+    { ceTracer        = phaseAwareTracer
+    , ceMinSeverity   = severityFromText (lgLevel (scLogging syncCfg))
+    , ceMetrics       = placeholderMetrics
+    , ceConfig        = syncCfg
+    , ceNodeConfig    = nodeCfg
+    , ceExtractors    = extractors
+    , ceNetwork       = network
+    , ceCurrentPhase  = curPhase
+    , ceSecurityParam = cardanoSecurityParam
     }
 
 -- | Build the list of enabled extractors from config, validate their
@@ -226,6 +230,12 @@ stubExtractor name = ExtractorDef
 -- | Placeholder metrics until Prometheus is wired up.
 placeholderMetrics :: Metrics
 placeholderMetrics = Metrics 0 0 0 0 0 0 0 0 0
+
+-- | Cardano protocol security parameter @k@. Mainnet and every
+-- public testnet have used 2160 since Shelley; the value is part of
+-- the protocol parameters and a change would be a hard fork.
+cardanoSecurityParam :: Word64
+cardanoSecurityParam = 2160
 
 -- ---------------------------------------------------------------------------
 -- * Startup

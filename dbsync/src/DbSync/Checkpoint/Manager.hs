@@ -60,9 +60,9 @@ commitEpoch newRow = do
 -- | Build a 'SyncStateRow' from the boundary block's
 -- @(slot, blockNo, hash)@, the current 'IdCounters' snapshot, the
 -- address-resolver's in-process address counter, and the run-time
--- configuration. 'ssrLastSnapshotSlot' and 'ssrSyncComplete' are left
--- at their identity values; the @writeSyncState@ encoder ignores
--- those columns.
+-- configuration. 'ssrLastSnapshotSlot', 'ssrSyncComplete', and
+-- 'ssrPendingRollbackSlot' are left at their identity values; the
+-- @writeSyncState@ encoder ignores those columns.
 --
 -- The address counter is passed in separately because it lives on the
 -- 'DbSync.Address.Worker.AddressResolver' (the worker is the
@@ -113,6 +113,7 @@ mkBoundarySyncStateRow slotNo blockNo blockHash counters addressIdCounter schema
     , ssrSchemaVersionApplied          = schemaVersion
     , ssrLedgerEnabled                 = ledgerEnabled
     , ssrSyncComplete                  = False
+    , ssrPendingRollbackSlot           = Nothing
     }
 
 -- | Build the consumer's initial 'ExtractState' from a 'SyncStateRow'

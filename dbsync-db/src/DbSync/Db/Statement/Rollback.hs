@@ -11,7 +11,9 @@
 module DbSync.Db.Statement.Rollback
   ( -- * Resolving the rollback point
     queryBlockAtPointStmt
+  , queryBlockAtOrAfterSlotStmt
   , queryLastCommittedSlotStmt
+  , queryTipBlockNoStmt
 
     -- * Min-id queries (cascade entry points)
   , queryMinTxIdAfterBlockStmt
@@ -77,6 +79,41 @@ queryLastCommittedSlotStmt =
     "SELECT last_committed_slot FROM dbsync_sync_state WHERE id = 1"
     E.noParams
     (D.singleRow (D.column (D.nullable (fromIntegral <$> D.int8))))
+
+-- | The smallest block at-or-after a given slot. The CLI rollback
+-- target is a slot only; the cascade needs a point with the matching
+-- hash, so we resolve the slot to a real on-chain block here. Returns
+-- @(block_id, slot, block_no, hash)@. The @slot@ may exceed the
+-- requested value when empty slots sit between the request and the
+-- next block. 'Nothing' when no block lives at or after the requested
+-- slot (database empty, or rollback target is past the current tip).
+queryBlockAtOrAfterSlotStmt
+  :: Stmt.Statement Word64 (Maybe (BlockId, Word64, Word64, ByteString))
+queryBlockAtOrAfterSlotStmt =
+  Stmt.preparable sql encoder decoder
+  where
+    sql = T.concat
+      [ "SELECT id, slot_no, block_no, hash FROM "
+      , quoteIdent (tdName Core.blockTableDef)
+      , " WHERE slot_no >= $1"
+      , " ORDER BY slot_no ASC"
+      , " LIMIT 1"
+      ]
+    encoder = E.param (E.nonNullable (fromIntegral >$< E.int8))
+    decoder = D.rowMaybe $ (,,,)
+      <$> idDecoder BlockId
+      <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
+      <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
+      <*> D.column (D.nonNullable D.bytea)
+
+-- | @MAX(block_no) FROM block@. Feeds the k-safety guard inside
+-- 'rollbackToPoint'. 'Nothing' on an empty @block@ table.
+queryTipBlockNoStmt :: Stmt.Statement () (Maybe Word64)
+queryTipBlockNoStmt =
+  Stmt.preparable
+    ("SELECT MAX(block_no) FROM " <> quoteIdent (tdName Core.blockTableDef))
+    E.noParams
+    (D.singleRow (fmap fromIntegral <$> D.column (D.nullable D.int8)))
 
 -- ---------------------------------------------------------------------------
 -- * Min-id queries

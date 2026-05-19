@@ -29,6 +29,7 @@ spec = describe "DbSync.Cli" $ do
         , caLedgerStateDir    = "/data/dbsync"
         , caProfile           = "/path/to/dbsync-profile.json"
         , caResyncFromGenesis = False
+        , caRollbackToSlot    = Nothing
         }
 
     it "accepts arguments in any order" $ do
@@ -44,6 +45,7 @@ spec = describe "DbSync.Cli" $ do
         , caLedgerStateDir    = "/tmp/state"
         , caProfile           = "dbsync-profile.json"
         , caResyncFromGenesis = False
+        , caRollbackToSlot    = Nothing
         }
 
     it "defaults --resync-from-genesis to False when omitted" $ do
@@ -64,6 +66,25 @@ spec = describe "DbSync.Cli" $ do
             , "--resync-from-genesis"
             ]
       fmap caResyncFromGenesis result `shouldBe` Right True
+
+    it "defaults --rollback-to-slot to Nothing when omitted" $ do
+      let result = parseArgs
+            [ "--db-sync-config",   "x"
+            , "--socket-path",      "y"
+            , "--ledger-state-dir", "z"
+            , "--profile",          "w"
+            ]
+      fmap caRollbackToSlot result `shouldBe` Right Nothing
+
+    it "parses --rollback-to-slot SLOTNO into a Just" $ do
+      let result = parseArgs
+            [ "--db-sync-config",    "x"
+            , "--socket-path",       "y"
+            , "--ledger-state-dir",  "z"
+            , "--profile",           "w"
+            , "--rollback-to-slot",  "12345"
+            ]
+      fmap caRollbackToSlot result `shouldBe` Right (Just 12345)
 
     it "fails when --db-sync-config is missing" $ do
       let result = parseArgs

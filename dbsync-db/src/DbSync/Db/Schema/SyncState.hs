@@ -125,6 +125,11 @@ data SyncStateRow = SyncStateRow
   , ssrSchemaVersionApplied          :: !Int
   , ssrLedgerEnabled                 :: !Bool
   , ssrSyncComplete                  :: !Bool
+  , ssrPendingRollbackSlot           :: !(Maybe Word64)
+    -- ^ Target slot for a rollback that must run on next boot. Set
+    -- by the ledger worker when a chainsync rollback target lies past
+    -- the in-memory buffer, or by a crashed mid-rollback CLI request.
+    -- Cleared by the boot path after the recovery rollback completes.
   }
   deriving stock (Eq, Show)
 
@@ -156,6 +161,7 @@ syncStateTableDef = TableDef
       [ ColumnDef "schema_version_applied"          PgInteger     False
       , ColumnDef "ledger_enabled"                  PgBoolean     False
       , ColumnDef "sync_complete"                   PgBoolean     False
+      , ColumnDef "pending_rollback_slot"           PgBigInt      True
       , ColumnDef "updated_at"                      PgTimestampTz False
       ]
   , tdMode          = TableLogged
@@ -328,6 +334,7 @@ syncStateRowDecoder =
         <*> (fromIntegral <$> D.column (D.nonNullable D.int4))     -- schema_version_applied
         <*> D.column (D.nonNullable D.bool)                        -- ledger_enabled
         <*> D.column (D.nonNullable D.bool)                        -- sync_complete
+        <*> (fmap fromIntegral <$> D.column (D.nullable D.int8))   -- pending_rollback_slot
        )
     <* skipCol D.timestamptz                                   -- updated_at
   where

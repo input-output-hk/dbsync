@@ -29,6 +29,7 @@ module DbSync.Env
   , HasConfig (..)
   , HasNetwork (..)  -- re-export from Extractor
   , HasReceiverChannels (..)
+  , HasSecurityParam (..)
 
     -- * Small env adapters
     --
@@ -38,6 +39,7 @@ module DbSync.Env
   , TracerWithControl (..)
   , TracerWithConn (..)
   , LoaderWithControl (..)
+  , CoreWithConn (..)
   ) where
 
 import Cardano.Prelude
@@ -94,6 +96,12 @@ import DbSync.Writer (HasWriter (..), Writer)
 class HasConfig env where
   getConfig :: env -> SyncConfig
 
+-- | The protocol security parameter @k@ — the maximum rollback depth.
+-- A run-time constant sourced from the topology config at boot.
+-- Mainnet is 2160; testnets vary.
+class HasSecurityParam env where
+  getSecurityParam :: env -> Word64
+
 -- | The state the chainsync receiver needs from whichever phase
 -- owns it. Both 'IngestEnv' and 'FollowEnv' provide it, so
 -- 'DbSync.Node.Connection.connectToNode' can run against either.
@@ -140,6 +148,9 @@ data CoreEnv = CoreEnv
   , ceCurrentPhase :: !CurrentPhase
     -- ^ Live lifecycle phase. Written by the orchestrator and the
     -- Follow loop; read by extractors, logs, and the watchdog.
+  , ceSecurityParam :: !Word64
+    -- ^ Protocol @k@ (max rollback depth). Read by the rollback path
+    -- to gate deletes past the k-safety horizon.
   }
 
 -- | Environment for the 'IngestChainHistory' phase.
@@ -371,6 +382,15 @@ instance HasNetwork IngestEnv where
 instance HasNetwork FollowEnv where
   getNetwork = getNetwork . feCore
 
+instance HasSecurityParam CoreEnv where
+  getSecurityParam = ceSecurityParam
+
+instance HasSecurityParam IngestEnv where
+  getSecurityParam = getSecurityParam . ieCore
+
+instance HasSecurityParam FollowEnv where
+  getSecurityParam = getSecurityParam . feCore
+
 -- ---------------------------------------------------------------------------
 -- * HasReceiverChannels instances
 -- ---------------------------------------------------------------------------
@@ -556,3 +576,20 @@ instance HasLoaderStream LoaderWithControl where
 
 instance HasControlConnection LoaderWithControl where
   getControlConnection (LoaderWithControl _ c) = c
+
+-- | Full 'CoreEnv' plus a hasql connection. Used by boot-time and
+-- CLI flows that need both the run-wide config (security param,
+-- network, tracer) and a fresh PG connection.
+data CoreWithConn = CoreWithConn !CoreEnv !Conn.Connection
+
+instance HasTracer CoreWithConn where
+  getTracer (CoreWithConn c _) = getTracer c
+
+instance HasHasqlConnection CoreWithConn where
+  getHasqlConnection (CoreWithConn _ conn) = conn
+
+instance HasSecurityParam CoreWithConn where
+  getSecurityParam (CoreWithConn c _) = getSecurityParam c
+
+instance HasNetwork CoreWithConn where
+  getNetwork (CoreWithConn c _) = getNetwork c

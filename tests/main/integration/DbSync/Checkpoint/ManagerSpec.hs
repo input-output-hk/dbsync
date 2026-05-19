@@ -110,6 +110,7 @@ epoch5Row = SyncStateRow
   , ssrSchemaVersionApplied          = 1
   , ssrLedgerEnabled                 = False
   , ssrSyncComplete                  = False
+  , ssrPendingRollbackSlot           = Nothing
   }
 
 -- | A follow-up SyncStateRow for epoch 6, advancing slot, block_no,

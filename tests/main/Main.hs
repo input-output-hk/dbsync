@@ -19,7 +19,8 @@ module Main
 
 import Cardano.Prelude
 
-import Test.Hspec (describe, hspec)
+import System.Timeout (timeout)
+import Test.Hspec (SpecWith, around_, describe, expectationFailure, hspec)
 
 -- Unit tests
 import qualified DbSync.AppSpec as AppSpec
@@ -88,9 +89,27 @@ import qualified DbSync.Phase.IngestRestartSpec as PhaseIngestRestartSpec
 import qualified DbSync.Phase.MockChainSpec as PhaseMockChainSpec
 import qualified DbSync.Phase.MockNodeSpec as PhaseMockNodeSpec
 
+-- | Cap each spec item at @seconds@ so a hang fails the run with a
+-- clear message instead of stalling CI.
+withTimeoutSeconds :: Int -> SpecWith a -> SpecWith a
+withTimeoutSeconds seconds = around_ $ \action -> do
+  result <- timeout (seconds * 1_000_000) action
+  case result of
+    Just () -> pure ()
+    Nothing ->
+      expectationFailure $
+        "test exceeded " <> show seconds <> "s timeout"
+
+-- | Per-tier budgets. Unit specs are pure; integration specs hit
+-- PostgreSQL; e2e specs drive a mock node through a multi-block sync.
+unitTimeoutSeconds, integrationTimeoutSeconds, e2eTimeoutSeconds :: Int
+unitTimeoutSeconds        = 30
+integrationTimeoutSeconds = 120
+e2eTimeoutSeconds         = 300
+
 main :: IO ()
 main = hspec $ do
-  describe "Unit tests" $ do
+  describe "Unit tests" $ withTimeoutSeconds unitTimeoutSeconds $ do
     AppSpec.spec
     CliSpec.spec
     ConfigGenesisSpec.spec
@@ -128,10 +147,10 @@ main = hspec $ do
     AddressWorkerSpec.spec
     PhaseRollbackSpec.schemaWalkSpec
 
-  describe "Property tests" $
+  describe "Property tests" $ withTimeoutSeconds unitTimeoutSeconds $
     PropertySpec.spec
 
-  describe "Database integration" $ do
+  describe "Database integration" $ withTimeoutSeconds integrationTimeoutSeconds $ do
     CheckpointManagerSpec.spec
     CheckpointResumeSpec.spec
     CheckpointSyncStateSpec.spec
@@ -145,9 +164,11 @@ main = hspec $ do
     PhaseFollowRunSpec.spec
     PhasePrepSpec.spec
     PhaseRollbackSpec.cascadeSpec
+    PhaseRollbackSpec.kSafetyGuardSpec
+    PhaseRollbackSpec.rollbackToSlotSpec
     SchemaInitSpec.spec
 
-  describe "End-to-end" $ do
+  describe "End-to-end" $ withTimeoutSeconds e2eTimeoutSeconds $ do
     PhaseIngestPrepFollowSpec.spec
     PhaseIngestRestartSpec.spec
     PhaseFollowRestartSpec.spec

@@ -21,6 +21,7 @@ import Cardano.Prelude
 import Options.Applicative
   ( Parser
   , ParserInfo
+  , auto
   , execParser
   , fullDesc
   , header
@@ -29,6 +30,7 @@ import Options.Applicative
   , info
   , long
   , metavar
+  , option
   , progDesc
   , strOption
   , switch
@@ -44,6 +46,10 @@ data CliArgs = CliArgs
                                     --   sub-directory is created (LSM session + snapshots)
   , caProfile         :: !FilePath  -- ^ Path to dbsync-profile.json (database, options, sync mode)
   , caResyncFromGenesis :: !Bool    -- ^ If 'True', wipe the schema + ledger state and re-sync from genesis
+  , caRollbackToSlot  :: !(Maybe Word64)
+    -- ^ Roll the database back to the nearest block at-or-after this
+    -- slot, then continue with normal boot. Pure recovery hatch — no
+    -- migration semantics. 'Nothing' is the normal case.
   }
   deriving stock (Eq, Show)
 
@@ -88,6 +94,17 @@ cliArgsP =
     <*> switch
       ( long "resync-from-genesis"
           <> help "Wipe the database schema and ledger state, then re-sync from genesis (destructive)"
+      )
+    <*> optional
+      ( option auto
+          ( long "rollback-to-slot"
+              <> metavar "SLOTNO"
+              <> help
+                  "Roll the database back to the nearest block at or after \
+                  \SLOTNO before starting the normal sync flow. Empty slots \
+                  \are tolerated — the rollback resolves to the smallest \
+                  \block with slot_no >= SLOTNO."
+          )
       )
 
 -- | Parse CLI args from the process arguments. Exits on failure.

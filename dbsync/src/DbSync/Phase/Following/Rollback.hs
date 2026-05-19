@@ -16,6 +16,7 @@
 -- declare the right FK; no hand-maintained list to drift.
 module DbSync.Phase.Following.Rollback
   ( rollbackToPoint
+  , rollbackToSlot
 
     -- * Schema-walk helpers (exported for tests)
   , childrenOf
@@ -27,7 +28,7 @@ import Control.Monad.IO.Unlift (MonadUnliftIO)
 import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 import qualified Hasql.Statement as Stmt
-import Ouroboros.Consensus.Block.Abstract (toRawHash)
+import Ouroboros.Consensus.Block.Abstract (fromRawHash, toRawHash)
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
 import Ouroboros.Consensus.Cardano.Node ()                       -- CanHardFork orphan
 import Ouroboros.Consensus.Shelley.HFEras ()                     -- per-era HFC instances
@@ -44,13 +45,16 @@ import qualified DbSync.Db.Schema.UTxO as UTxO
 import DbSync.Db.Statement.Rollback
   ( deleteBlockAfterIdStmt
   , deleteWhereGteStmt
+  , queryBlockAtOrAfterSlotStmt
   , queryBlockAtPointStmt
   , queryMinPoolUpdateIdAfterTxStmt
   , queryMinTxIdAfterBlockStmt
   , queryMinTxOutIdAfterBlockStmt
+  , queryTipBlockNoStmt
   )
 import DbSync.Db.Statement.SyncState (writeSyncStateSlotStmt)
 import DbSync.Db.Transaction (HasHasqlConnection (..), withTransaction)
+import DbSync.Env (HasSecurityParam (..))
 
 -- | Delete every row past the rollback target and advance
 -- @dbsync_sync_state.last_committed_*@ to match.
@@ -61,12 +65,20 @@ import DbSync.Db.Transaction (HasHasqlConnection (..), withTransaction)
 -- belongs to. Tables that don't reference @tx@ / @tx_out@ /
 -- @pool_update@ are silently skipped.
 --
+-- The k-safety horizon comes from 'getSecurityParam' on the env. A
+-- target more than @k@ blocks behind the current PG tip is rejected
+-- with 'panic' — chainsync can't deliver a deeper rollback, and a
+-- CLI @--rollback-to-slot@ past that depth means the operator
+-- should @--resync-from-genesis@ instead.
+--
 -- Refuses to roll back to 'GenesisPoint' — that would empty the DB
 -- and is almost always a protocol bug rather than a real rollback.
 -- Panics on a target the @block@ table doesn't know about (the node
 -- sent us a point we never received).
 rollbackToPoint
-  :: (HasHasqlConnection env, MonadReader env m, MonadUnliftIO m)
+  :: ( HasHasqlConnection env, HasSecurityParam env
+     , MonadReader env m, MonadUnliftIO m
+     )
   => [TableDef] -> CardanoPoint -> m ()
 rollbackToPoint tableDefs point = case point of
   GenesisPoint ->
@@ -82,6 +94,21 @@ rollbackToPoint tableDefs point = case point of
       Nothing -> panic $
         "rollbackToPoint: no block in PG at slot " <> show rawSlot
           <> " — node sent a rollback target we never received"
+
+    -- k-safety guard. Reads the live tip rather than relying on
+    -- @dbsync_sync_state.last_committed_block_no@: the latter can
+    -- lag mid-Follow whereas the @block@ table is the ground truth
+    -- for what would be deleted.
+    kBlocks    <- asks getSecurityParam
+    mTipBlockNo <- runSess "queryTipBlockNoStmt" ((), queryTipBlockNoStmt)
+    for_ mTipBlockNo $ \tipBlockNo ->
+      when (tipBlockNo > targetBlockNo + kBlocks) $
+        panic $
+          "rollbackToPoint: target block " <> show targetBlockNo
+            <> " is more than k=" <> show kBlocks
+            <> " behind current tip " <> show tipBlockNo
+            <> ". Use --resync-from-genesis for rollbacks past the"
+            <> " k-safety horizon."
 
     -- Single-threaded Follow loop guarantees no concurrent inserts
     -- shift these thresholds between the reads and the deletes, so
@@ -143,6 +170,33 @@ rollbackToPoint tableDefs point = case point of
       -- Sync-state advance. The target block is the new chain tip.
       void $ runSess "writeSyncStateSlotStmt"
         ((rawSlot, targetBlockNo, rawHash), writeSyncStateSlotStmt)
+
+-- | Roll back to the nearest block at-or-after a slot number.
+--
+-- The CLI gives a bare slot, but Cardano slots can be empty so the
+-- exact slot may not contain a block. This resolves to the smallest
+-- block with @slot_no >= targetSlot@ and delegates to
+-- 'rollbackToPoint' for the cascade. Returns the block_no rolled
+-- back to, or 'Nothing' if the DB has no block at-or-after the
+-- target (database is already below the requested point — no work).
+rollbackToSlot
+  :: ( HasHasqlConnection env, HasSecurityParam env
+     , MonadReader env m, MonadUnliftIO m
+     )
+  => [TableDef] -> Word64 -> m (Maybe Word64)
+rollbackToSlot tableDefs targetSlot = do
+  mTarget <- runSess "queryBlockAtOrAfterSlotStmt"
+    (targetSlot, queryBlockAtOrAfterSlotStmt)
+  case mTarget of
+    Nothing -> pure Nothing
+    Just (_, resolvedSlot, resolvedBlockNo, resolvedHash) -> do
+      let hash  = fromRawHash (Proxy @(CardanoBlock StandardCrypto)) resolvedHash
+          -- Use the resolved block's slot, not the requested one —
+          -- 'rollbackToPoint' looks the block up by @(slot, hash)@
+          -- and the two only match for the actual on-chain slot.
+          point = BlockPoint (SlotNo resolvedSlot) hash
+      rollbackToPoint tableDefs point
+      pure (Just resolvedBlockNo)
 
 -- | All tables that declare an outgoing FK to @parentTable@, paired
 -- with the FK column name. Walks every supplied 'TableDef' and pulls

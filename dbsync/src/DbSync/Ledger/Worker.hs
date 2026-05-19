@@ -52,6 +52,8 @@ import Ouroboros.Network.Block (pointSlot)
 
 import DbSync.AppM (LedgerM, runAppM)
 import DbSync.Block.Types (CardanoPoint)
+import DbSync.Checkpoint.SyncState (writePendingRollbackSlot)
+import DbSync.Error (throwLedger)
 import DbSync.Phase.Type (isFollowPath)
 import qualified DbSync.Ledger.EpochUpdate as Generic
 import DbSync.Ledger.State
@@ -184,25 +186,35 @@ applyForward env hooks wd blk = do
   _ <- atomically $ Strict.tryReadTMVar (leEpochWait env)
   pure ()
 
--- | Production rollback handler: walk the in-memory buffer back to
--- the target. Panics if the target is deeper than the buffer — the
--- recovery path is to restart dbsync so the disk snapshot can be
--- reloaded at the rollback point.
+-- | Production rollback handler. Walks the in-memory buffer back to
+-- the target on the common shallow case; on a deeper rollback the
+-- buffer can't reach the target, so we persist the target on
+-- @dbsync_sync_state.pending_rollback_slot@ and exit. The next boot
+-- sees the marker and runs the cascade + snapshot cleanup from a
+-- usable on-disk snapshot.
 handleRollback :: LedgerEnv -> Watchdog -> CardanoPoint -> IO ()
 handleRollback env wd p = do
   setWorkerNote wd "worker: rollback (loadLedgerAtPoint)"
   result <- runAppM env (loadLedgerAtPoint p)
   case result of
-    Right _ ->
+    Right _ -> do
       traceWith (leTracer env) $ LogMsg Info "LedgerWorker"
         ("rolled back to " <> show p) Nothing
-    Left _ ->
-      panic $
-        "LedgerWorker: rollback target "
-          <> show p
-          <> " is beyond the in-memory buffer (~100 blocks). "
-          <> "Restart dbsync to recover from a disk snapshot."
-  bumpWorker wd (pointSlotNo p)
+      bumpWorker wd (pointSlotNo p)
+    Left _ -> do
+      let SlotNo targetSlot = pointSlotNo p
+      runAppM env (writePendingRollbackSlot targetSlot)
+      traceWith (leTracer env) $ LogMsg Error "LedgerWorker"
+        ( "rollback target " <> show p
+            <> " is past the in-memory buffer; marker written to "
+            <> "dbsync_sync_state.pending_rollback_slot = "
+            <> show targetSlot
+            <> ". Restarting dbsync will replay the rollback from a "
+            <> "disk snapshot."
+        ) Nothing
+      throwLedger $
+        "rollback to slot " <> show targetSlot
+          <> " is past the in-memory buffer; recovery deferred to next boot"
 
 -- | Generic ChainSyncMsg dispatch loop. Production wires real
 -- handlers ('applyForward', 'handleRollback') around this; tests

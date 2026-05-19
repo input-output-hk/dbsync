@@ -11,6 +11,7 @@ module DbSync.Schema.SyncStateSpec (spec) where
 
 import Cardano.Prelude
 
+import Data.Algorithm.Diff (Diff, PolyDiff (..), getDiff)
 import Data.List (last, lookup)
 import qualified Data.Text as T
 
@@ -61,7 +62,7 @@ spec = describe "DbSync.Db.Schema.SyncState" $ do
     it "updated_at defaults to now()" $
       lookup "updated_at" (tdColumnDefaults syncStateTableDef) `shouldBe` Just "now()"
 
-    it "last_committed_* and last_snapshot_slot columns are nullable" $ do
+    it "state-marker columns (last_committed_*, last_snapshot_slot, pending_rollback_slot) are nullable" $ do
       let nullableByName =
             [ (cdName col, cdNullable col)
             | col <- tdColumns syncStateTableDef
@@ -70,6 +71,7 @@ spec = describe "DbSync.Db.Schema.SyncState" $ do
                 , "last_committed_block_no"
                 , "last_committed_block_hash"
                 , "last_snapshot_slot"
+                , "pending_rollback_slot"
                 ]
             ]
       nullableByName `shouldBe`
@@ -77,14 +79,15 @@ spec = describe "DbSync.Db.Schema.SyncState" $ do
         , ("last_committed_block_no", True)
         , ("last_committed_block_hash", True)
         , ("last_snapshot_slot", True)
+        , ("pending_rollback_slot", True)
         ]
 
   describe "syncStateColumns" $ do
     it "matches the table's column order" $
       syncStateColumns `shouldBe` map cdName (tdColumns syncStateTableDef)
 
-    it "contains 37 columns (id + 3 last_committed + last_snapshot_slot + 28 counters + 4 metadata)" $
-      length syncStateColumns `shouldBe` 37
+    it "contains 38 columns (id + 3 last_committed + last_snapshot_slot + 28 counters + 4 metadata + pending_rollback_slot)" $
+      length syncStateColumns `shouldBe` 38
 
     it "starts with id" $
       head syncStateColumns `shouldBe` Just "id"
@@ -149,8 +152,9 @@ spec = describe "DbSync.Db.Schema.SyncState" $ do
               filter (T.isInfixOf "last_committed_slot") (T.lines ddl)
       slotLine `shouldSatisfy` (not . T.isInfixOf "NOT NULL")
 
-    it "matches the golden DDL byte-for-byte" $
-      ddl `shouldBe` goldenDdl
+    -- Line-by-line so a mismatch prints only the differing lines.
+    it "matches the golden DDL line-by-line" $
+      diffLines ddl goldenDdl `shouldBe` []
 
 -- | The expected CREATE TABLE output. Updating this string is the
 -- canonical way to change the on-disk schema: edit 'syncStateTableDef',
@@ -196,8 +200,18 @@ goldenDdl = T.unlines
   , "  \"schema_version_applied\" INTEGER NOT NULL,"
   , "  \"ledger_enabled\" BOOLEAN NOT NULL,"
   , "  \"sync_complete\" BOOLEAN NOT NULL DEFAULT false,"
+  , "  \"pending_rollback_slot\" BIGINT,"
   , "  \"updated_at\" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),"
   , "  PRIMARY KEY (\"id\"),"
   , "  CHECK (\"id\" = 1)"
   , ");"
   ]
+
+-- | Line-level diff. Drops common lines so a mismatch failure
+-- prints only the differing ones.
+diffLines :: Text -> Text -> [Diff Text]
+diffLines actual expected =
+  filter notCommon (getDiff (T.lines actual) (T.lines expected))
+  where
+    notCommon (Both _ _) = False
+    notCommon _          = True

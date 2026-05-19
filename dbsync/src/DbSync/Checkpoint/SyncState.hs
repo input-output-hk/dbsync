@@ -25,6 +25,11 @@ module DbSync.Checkpoint.SyncState
   , markSnapshotComplete
   , markSyncComplete
 
+    -- * Pending-rollback marker
+  , readPendingRollbackSlot
+  , writePendingRollbackSlot
+  , clearPendingRollbackSlot
+
     -- * Boot-time canonicalisation
   , fetchBlockHashAtSlot
 
@@ -54,10 +59,13 @@ import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Timing (fmtDuration, fmtRows)
 import DbSync.Trace.Types (LogMsg (..), Severity (..))
 import DbSync.Db.Statement.SyncState
-  ( markSnapshotCompleteStmt
+  ( clearPendingRollbackSlotStmt
+  , markSnapshotCompleteStmt
   , markSyncCompleteStmt
+  , readPendingRollbackSlotStmt
   , readSyncStateStmt
   , seedSyncStateStmt
+  , writePendingRollbackSlotStmt
   , writeSyncStateStmt
   )
 import DbSync.Error (throwDb)
@@ -154,6 +162,29 @@ markSyncComplete
 markSyncComplete = do
   n <- runCtrlStmt "markSyncComplete" () markSyncCompleteStmt
   expectOneRowAffected "markSyncComplete" n
+
+-- | Read the pending rollback marker. 'Nothing' is the normal case.
+readPendingRollbackSlot
+  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  => m (Maybe Word64)
+readPendingRollbackSlot =
+  runCtrlStmt "readPendingRollbackSlot" () readPendingRollbackSlotStmt
+
+-- | Persist a rollback target that must run on next boot.
+writePendingRollbackSlot
+  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  => Word64 -> m ()
+writePendingRollbackSlot slot = do
+  n <- runCtrlStmt "writePendingRollbackSlot" slot writePendingRollbackSlotStmt
+  expectOneRowAffected "writePendingRollbackSlot" n
+
+-- | Drop the marker after the recovery rollback has committed.
+clearPendingRollbackSlot
+  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  => m ()
+clearPendingRollbackSlot = do
+  n <- runCtrlStmt "clearPendingRollbackSlot" () clearPendingRollbackSlotStmt
+  expectOneRowAffected "clearPendingRollbackSlot" n
 
 -- ---------------------------------------------------------------------------
 -- * Boot-time canonicalisation

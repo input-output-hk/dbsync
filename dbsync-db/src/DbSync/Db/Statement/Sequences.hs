@@ -3,7 +3,7 @@
 -- | DDL builders for the sequence-reset pass.
 --
 -- @IngestChainHistory@ assigns IDs from in-process counters (see
--- 'DbSync.Id.Counter'), so the @\<table\>_id_seq@ sequence created
+-- 'DbSync.Phase.Ingest.Counter'), so the @\<table\>_id_seq@ sequence created
 -- during the schema-mode flip is left at its default starting value.
 -- 'FollowingChainTip' uses @nextval@ on those sequences directly,
 -- so before handing over we set each sequence to

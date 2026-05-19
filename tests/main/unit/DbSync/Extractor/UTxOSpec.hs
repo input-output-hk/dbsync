@@ -35,7 +35,7 @@ import DbSync.Extractor.UTxO
   , rawHasScript
   , utxoExtractor
   )
-import DbSync.Id.DedupMap (newMaps)
+import DbSync.Phase.Ingest.DedupMap (newMaps)
 import DbSync.Block.Pipeline (processBlock)
 import DbSync.Address.Buffer
   ( EpochAddressBuffer (..)

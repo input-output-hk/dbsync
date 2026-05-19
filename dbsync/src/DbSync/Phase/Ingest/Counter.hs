@@ -3,7 +3,7 @@
 -- During 'IngestChainHistory', all IDs are assigned in-process using
 -- monotonic counters. Since we are the sole writer, every ID is deterministic.
 -- PostgreSQL sequences are not used until 'FollowingChainTip'.
-module DbSync.Id.Counter
+module DbSync.Phase.Ingest.Counter
   ( -- * Types
     IdCounter (..)
   , IdCounters (..)

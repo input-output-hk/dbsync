@@ -5,7 +5,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 {- |
-Module      : DbSync.Era.Shelley.StakeDist
+Module      : DbSync.Ledger.StakeDist
 Description : Era-agnostic stake-distribution slice types and helpers.
 
 Two halves to this module:
@@ -21,7 +21,7 @@ Slices are anchored on the /next/ epoch: we read the \"mark\" snapshot
 whose values activate on @current epoch + 1@, so the 'sliceEpochNo'
 returned by every helper is @nesEL + 1@.
 -}
-module DbSync.Era.Shelley.StakeDist
+module DbSync.Ledger.StakeDist
   ( -- * Types
     StakeSliceRes (..)
   , StakeSlice (..)

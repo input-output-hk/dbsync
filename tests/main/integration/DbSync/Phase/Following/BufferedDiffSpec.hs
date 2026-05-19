@@ -33,7 +33,7 @@ import qualified Hasql.Session as Sess
 import Test.Hspec (Spec, afterAll_, beforeAll_, before_, describe, it, shouldBe)
 
 import DbSync.Block.Types (GenericBlock)
-import DbSync.Db.Phase (SyncPhase (..))
+import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Db.Transaction (withTransactionOn)
 import DbSync.Extractor (ExtractorDef, emptyBlockLedgerData)
 import DbSync.Extractor.Cbor (cborExtractor)

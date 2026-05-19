@@ -40,7 +40,7 @@ import Ouroboros.Network.Block (pattern BlockPoint)
 import DbSync.AppM (FollowM, runAppM)
 import DbSync.Block.Parser (parseBlock)
 import DbSync.Block.Types (CardanoPoint, GenericBlock (..))
-import DbSync.Db.Phase (SyncPhase (..), renderSyncPhase)
+import DbSync.Phase.Type (SyncPhase (..), renderPhase)
 import DbSync.Db.Statement.SyncState (writeSyncStateSlotStmt)
 import DbSync.Db.Statement.Transaction (beginSql, commitSql, rollbackSql)
 
@@ -158,7 +158,7 @@ waitForMsgOrHeartbeat q phaseRef micros = do
 -- reflects whether we are catching up or steady-state, so a reader
 -- can tell at a glance.
 readPhaseComponent :: CurrentPhase -> IO Text
-readPhaseComponent = fmap renderSyncPhase . readCurrentPhase
+readPhaseComponent = fmap renderPhase . readCurrentPhase
 
 -- | Apply one forward block inside one PG transaction.
 --

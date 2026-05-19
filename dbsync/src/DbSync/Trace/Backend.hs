@@ -21,7 +21,7 @@ import Control.Tracer (Tracer (..), nullTracer)
 import Data.IORef (IORef, modifyIORef')
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
-import DbSync.Db.Phase (SyncPhase, isFollowPath)
+import DbSync.Phase.Type (SyncPhase, isFollowPath)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 import System.IO (hPutStrLn)
 

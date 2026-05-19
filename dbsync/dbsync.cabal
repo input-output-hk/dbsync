@@ -61,7 +61,10 @@ library
     DbSync.Trace.Timing
     DbSync.Trace.Watchdog
     DbSync.Phase.Current
+    DbSync.Phase.Type
     DbSync.Phase.Ingest.Consumer
+    DbSync.Phase.Ingest.Counter
+    DbSync.Phase.Ingest.DedupMap
     DbSync.Phase.Ingest.ReceiverStats
     DbSync.Phase.Ingest.Resolver
     DbSync.Phase.Ingest.Writer
@@ -109,22 +112,19 @@ library
     DbSync.StateQuery.ObservedSummary
     DbSync.StateQuery.Types
     DbSync.Writer
-    DbSync.Id.Counter
-    DbSync.Id.DedupMap
     DbSync.Checkpoint.Manager
     DbSync.Checkpoint.Resume
     DbSync.Checkpoint.SyncState
     DbSync.Checkpoint.Types
     DbSync.Checkpoint.Serialise
-    DbSync.Era.Shelley
-    DbSync.Era.Shelley.EpochUpdate
-    DbSync.Era.Shelley.ProtoParams
-    DbSync.Era.Shelley.Rewards
-    DbSync.Era.Shelley.StakeDist
     DbSync.Ledger.DepositAccumulator
+    DbSync.Ledger.EpochUpdate
     DbSync.Ledger.Event
     DbSync.Ledger.Keys
+    DbSync.Ledger.ProtoParams
+    DbSync.Ledger.Rewards
     DbSync.Ledger.Snapshot
+    DbSync.Ledger.StakeDist
     DbSync.Ledger.State
     DbSync.Ledger.Types
     DbSync.Ledger.Worker

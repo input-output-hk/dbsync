@@ -21,8 +21,8 @@ import qualified Cardano.Ledger.BaseTypes as Ledger
 import Cardano.Slotting.Slot (EpochNo (..), EpochSize (..), SlotNo (..))
 import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 
-import qualified DbSync.Era.Shelley.EpochUpdate as Generic
-import qualified DbSync.Era.Shelley.StakeDist as Generic
+import qualified DbSync.Ledger.EpochUpdate as Generic
+import qualified DbSync.Ledger.StakeDist as Generic
 import DbSync.Ledger.State
   ( applyToEpochBlockNo
   , ledgerDbCheckpointBufferSize

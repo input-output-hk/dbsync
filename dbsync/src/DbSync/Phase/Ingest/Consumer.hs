@@ -79,18 +79,18 @@ import DbSync.Block.Parser (parseBlock)
 import DbSync.Block.Types (GenericBlock (..))
 import DbSync.Checkpoint.Manager (mkBoundarySyncStateRow)
 import DbSync.Checkpoint.SyncState (ControlConnection (..), writeSyncState)
-import DbSync.Id.Counter (IdCounters)
+import DbSync.Phase.Ingest.Counter (IdCounters)
 import DbSync.Config.Types (LedgerConfig (..), SyncConfig (..))
 import DbSync.Db.Loader (LoaderStream (..))
-import DbSync.Db.Phase (SyncPhase (..))
 import DbSync.Db.Schema.EpochSyncStats (EpochSyncStats (..))
 import DbSync.Db.Schema.Ids (BlockId (..))
 import DbSync.Env (CoreEnv (..), HasConfig (..), IngestEnv (..))
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Extractor.EpochBoundary (runEpochBoundary)
-import DbSync.Id.DedupMap (dedupMapSizes)
+import DbSync.Phase.Ingest.DedupMap (dedupMapSizes)
 import DbSync.Block.Pipeline (processBlock)
 import DbSync.Phase.Ingest.ReceiverStats (EpochSnapshot (..), readAndResetEpoch)
+import DbSync.Phase.Type (SyncPhase (..), renderPhase)
 import DbSync.Ledger.DepositAccumulator (drainCompletedEpochs, flushEpochParams)
 import DbSync.Ledger.Types
   ( ApplyResult (..)
@@ -442,7 +442,7 @@ runConsumer = do
                   , epochSyncStatsBlocksPerSec    = blocksPerSec
                   , epochSyncStatsElapsedSec      = elapsedSec
                   , epochSyncStatsSyncedAt        = now
-                  , epochSyncStatsPhase           = IngestChainHistory
+                  , epochSyncStatsPhase           = renderPhase IngestChainHistory
                   }
             liftIO $ writeEpochSyncStats writer essId ess
 

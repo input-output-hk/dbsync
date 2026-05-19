@@ -77,7 +77,7 @@ import DbSync.Db.Schema.Init
   )
 import DbSync.Env (CoreEnv (..), FollowEnv (..), IngestEnv (..), mkFollowEnvFromIngest)
 import DbSync.Extractor (ExtractState, ExtractorDef (..), freshExtractState)
-import DbSync.Id.DedupMap (newMaps)
+import DbSync.Phase.Ingest.DedupMap (newMaps)
 import DbSync.Phase.Ingest.Consumer (runConsumer)
 import DbSync.Phase.Ingest.ReceiverStats (newReceiverStats)
 import DbSync.Ledger.Snapshot (runLedgerStateWriteThread)
@@ -104,7 +104,7 @@ import DbSync.App.Boot
   , renderBootError
   , resumeContextFrom
   )
-import DbSync.Db.Phase (SyncPhase (..))
+import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Phase.Current (setCurrentPhase)
 import qualified DbSync.Phase.Preparing.Run as Prep
 import DbSync.Phase.Preparing.Tuning (defaultPrepTuning)

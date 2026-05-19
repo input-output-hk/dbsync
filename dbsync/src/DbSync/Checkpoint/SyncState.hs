@@ -61,7 +61,7 @@ import DbSync.Db.Statement.SyncState
   , writeSyncStateStmt
   )
 import DbSync.Error (throwDb)
-import DbSync.Id.DedupMap
+import DbSync.Phase.Ingest.DedupMap
   ( DedupMap
   , DedupMaps (..)
   , insertExisting

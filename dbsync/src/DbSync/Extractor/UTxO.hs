@@ -26,7 +26,7 @@ import Data.List (zip3)
 
 import DbSync.Block.Types (GenericTx (..), GenericTxIn (..))
 import qualified DbSync.Block.Types as G
-import DbSync.Db.Phase (isFollowPath)
+import DbSync.Phase.Type (isFollowPath)
 import DbSync.Db.Schema.Address (Address (..), addressTableDef)
 import DbSync.Db.Schema.Ids (AddressId, StakeAddressId, TxId (..))
 import DbSync.Db.Schema.UTxO

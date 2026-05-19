@@ -86,7 +86,7 @@ import DbSync.Extractor.Pool (poolExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Extractor.UTxO (utxoExtractor)
 import DbSync.Block.Pipeline (processBlock)
-import DbSync.Db.Phase (SyncPhase (..))
+import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.AppM (runAppM)
 import qualified DbSync.Phase.Following.Rollback as Rollback
 import DbSync.App.Boot (mkCardanoPoint)

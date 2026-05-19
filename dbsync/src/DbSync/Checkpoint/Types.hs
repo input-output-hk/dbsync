@@ -17,7 +17,7 @@ import Cardano.Prelude
 import Cardano.Slotting.Block (BlockNo)
 import Cardano.Slotting.Slot (EpochNo, SlotNo)
 
-import DbSync.Id.Counter (IdCounters)
+import DbSync.Phase.Ingest.Counter (IdCounters)
 
 -- ---------------------------------------------------------------------------
 -- * Types

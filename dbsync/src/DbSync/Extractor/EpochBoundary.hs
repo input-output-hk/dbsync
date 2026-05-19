@@ -46,7 +46,7 @@ import qualified Cardano.Ledger.State as Ledger
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import qualified Data.Strict.Maybe as Strict
 
-import qualified DbSync.Era.Shelley.EpochUpdate as Generic
+import qualified DbSync.Ledger.EpochUpdate as Generic
 import DbSync.Db.Schema.AdaPots (AdaPots (..), adaPotsTableDef)
 import DbSync.Db.Schema.Ids (BlockId)
 import DbSync.Extractor (ExtractorDef (..))

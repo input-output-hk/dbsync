@@ -18,7 +18,7 @@ import Cardano.Prelude
 import Control.Concurrent.STM (TVar, newTVarIO, readTVar, readTVarIO, writeTVar)
 import Control.Tracer (traceWith)
 
-import DbSync.Db.Phase (SyncPhase, renderSyncPhase)
+import DbSync.Phase.Type (SyncPhase, renderPhase)
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (LogMsg (..), Severity (..))
 
@@ -48,7 +48,7 @@ setCurrentPhase (CurrentPhase v) next = do
     pure cur
   when (prev /= next) $
     liftIO $ traceWith tracer $ LogMsg Info "Phase"
-      ("phase " <> renderSyncPhase prev <> " -> " <> renderSyncPhase next)
+      ("phase " <> renderPhase prev <> " -> " <> renderPhase next)
       Nothing
 
 -- ---------------------------------------------------------------------------

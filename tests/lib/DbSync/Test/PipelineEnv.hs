@@ -25,7 +25,7 @@ import DbSync.Extractor
   , HasLedgerData (..)
   , emptyBlockLedgerData
   )
-import DbSync.Db.Phase (SyncPhase (..))
+import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Phase.Current (HasCurrentPhase (..))
 import DbSync.Resolver (HasResolver (..), IdResolver)
 import DbSync.Writer (HasWriter (..), Writer)

@@ -38,7 +38,7 @@ import DbSync.Checkpoint.SyncState
   , writeSyncState
   )
 import DbSync.Db.Loader (LoaderStream (..), closeLoaderStream, mkLoaderStream)
-import DbSync.Db.Phase (SyncPhase (..))
+import DbSync.Phase.Type (SyncPhase (..), renderPhase)
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
 import DbSync.Db.Schema.EpochSyncStats
   ( EpochSyncStats (..)
@@ -49,7 +49,7 @@ import DbSync.Db.Schema.Ids (EpochSyncStatsId (..))
 import DbSync.Db.Schema.Init (dropSchema, initSchema)
 import DbSync.Db.Schema.SyncState (syncStateTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
-import DbSync.Id.DedupMap (DedupMaps (..), lookupOrInsert, size)
+import DbSync.Phase.Ingest.DedupMap (DedupMaps (..), lookupOrInsert, size)
 import DbSync.Db.Loader.Encoder
   ( buildCopyRow
   , bBool
@@ -201,7 +201,7 @@ populateEpochSyncStats bs n =
           , epochSyncStatsBlocksPerSec    = 500.0
           , epochSyncStatsElapsedSec      = 0.2
           , epochSyncStatsSyncedAt        = sampleTime
-          , epochSyncStatsPhase           = IngestChainHistory
+          , epochSyncStatsPhase           = renderPhase IngestChainHistory
           }
 
 -- ---------------------------------------------------------------------------

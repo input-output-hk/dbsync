@@ -28,8 +28,8 @@ import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 
 import Test.Hspec (Spec, describe, expectationFailure, it, shouldBe)
 
-import qualified DbSync.Era.Shelley.EpochUpdate as Generic
-import qualified DbSync.Era.Shelley.StakeDist as Generic
+import qualified DbSync.Ledger.EpochUpdate as Generic
+import qualified DbSync.Ledger.StakeDist as Generic
 import DbSync.Db.Schema.AdaPots (AdaPots, adaPotsTableDef)
 import DbSync.Db.Schema.Ids (AdaPotsId (..), BlockId (..))
 import DbSync.Db.Schema.Types (TableDef (..))

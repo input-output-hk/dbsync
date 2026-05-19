@@ -79,13 +79,13 @@ import Ouroboros.Consensus.Ledger.Abstract (AuxLedgerEvent)
 import Ouroboros.Consensus.Shelley.Ledger (ShelleyBlock, ShelleyLedgerEvent (..))
 import Ouroboros.Consensus.TypeFamilyWrappers
 
-import qualified DbSync.Era.Shelley.Rewards as Generic
-import DbSync.Era.Shelley.Rewards
+import qualified DbSync.Ledger.Rewards as Generic
+import DbSync.Ledger.Rewards
   ( RewardSource (..)
   , rewardTypeToSource
   )
 import DbSync.Ledger.Keys (PoolKeyHash, StakeCred)
-import DbSync.Db.Phase (SyncPhase)
+import DbSync.Phase.Type (SyncPhase)
 
 -- ---------------------------------------------------------------------------
 -- * Types

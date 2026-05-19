@@ -3,7 +3,7 @@
 {-# LANGUAGE RankNTypes #-}
 
 {- |
-Module      : DbSync.Era.Shelley.ProtoParams
+Module      : DbSync.Ledger.ProtoParams
 Description : Era-agnostic protocol parameters + per-era builders.
 
 The era-collapsed 'ProtoParams' record holds every protocol parameter
@@ -16,7 +16,7 @@ can leave them empty.
 out of an 'ExtLedgerState'; the per-era @fromXxxParams@ helpers do
 the era-specific extraction.
 -}
-module DbSync.Era.Shelley.ProtoParams
+module DbSync.Ledger.ProtoParams
   ( ProtoParams (..)
   , Deposits (..)
   , epochProtoParams

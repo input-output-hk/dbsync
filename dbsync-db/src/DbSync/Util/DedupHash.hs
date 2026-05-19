@@ -1,6 +1,6 @@
 -- | Fixed-size key derivation for in-memory dedup maps.
 --
--- A dedup map ('DbSync.Id.DedupMap.DedupMap') stores one entry per
+-- A dedup map ('DbSync.Phase.Ingest.DedupMap.DedupMap') stores one entry per
 -- unique entity ever seen, and never evicts. For maps whose natural
 -- key is already a 28-byte cryptographic hash (pool key, stake
 -- credential, script hash) the raw key is fine. For maps whose

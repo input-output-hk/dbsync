@@ -23,8 +23,8 @@ import qualified Data.ByteString.Short as SBS
 
 import DbSync.Db.Schema.Ids
 import DbSync.Extractor (ExtractState (..))
-import DbSync.Id.Counter (IdCounters (..), nextId)
-import DbSync.Id.DedupMap (DedupMaps (..), lookupOrInsert)
+import DbSync.Phase.Ingest.Counter (IdCounters (..), nextId)
+import DbSync.Phase.Ingest.DedupMap (DedupMaps (..), lookupOrInsert)
 import DbSync.Resolver (IdResolver (..))
 import DbSync.Address.Buffer
   ( AddressBufferRef

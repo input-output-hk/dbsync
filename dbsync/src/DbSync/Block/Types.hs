@@ -4,8 +4,10 @@
 --
 -- These types are the era-independent representation of blocks and transactions.
 -- Era-specific converters (fromShelleyBlock, fromConwayBlock, etc.) produce
--- these types from raw cardano-ledger types. Adapted from the existing
--- @Cardano.DbSync.Era.Shelley.Generic@ module hierarchy.
+-- these types from raw cardano-ledger types. Adapted from the original
+-- project's @Cardano.DbSync.Era.Shelley.Generic@ module hierarchy
+-- (here flattened into "DbSync.Block.Types" plus the projection modules
+-- under "DbSync.Ledger").
 --
 -- All fields match the original @cardano-db-sync@ Generic types, ensuring
 -- full schema parity with the existing database.
@@ -67,9 +69,10 @@ data BlockEra
 -- | Era-independent block representation.
 -- Produced by era-specific converters from cardano-ledger types.
 --
--- Fields match the original @Cardano.DbSync.Era.Shelley.Generic.Block@
--- plus @SlotDetails@ fields (@blkEpochSlotNo@, @blkTime@) that the
--- original computes separately but we fold in during parsing.
+-- Fields match the original project's
+-- @Cardano.DbSync.Era.Shelley.Generic.Block@ plus @SlotDetails@ fields
+-- (@blkEpochSlotNo@, @blkTime@) that the original computes separately
+-- but we fold in during parsing.
 data GenericBlock = GenericBlock
   { blkEra           :: !BlockEra
   , blkHash          :: !ByteString       -- ^ 32-byte block header hash
@@ -93,8 +96,9 @@ data GenericBlock = GenericBlock
 
 -- | Era-independent transaction representation.
 -- Contains all data extractable from a transaction across all eras.
--- Fields match the original @Cardano.DbSync.Era.Shelley.Generic.Tx@
--- ensuring full schema parity with the @tx@ database table.
+-- Fields match the original project's
+-- @Cardano.DbSync.Era.Shelley.Generic.Tx@ ensuring full schema parity
+-- with the @tx@ database table.
 data GenericTx = GenericTx
   { txHash              :: !ByteString     -- ^ 32-byte transaction hash
   , txBlockIndex        :: !Word64         -- ^ Index within the block (word31type in DB)

@@ -30,7 +30,6 @@ import qualified Data.ByteString.Char8 as BS8
 import qualified Data.Text.Encoding as TE
 import Data.Time.Clock (UTCTime)
 
-import DbSync.Db.Phase (SyncPhase (..), renderSyncPhase)
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Types
@@ -56,7 +55,7 @@ data EpochSyncStats = EpochSyncStats
   , epochSyncStatsBlocksPerSec    :: !Double
   , epochSyncStatsElapsedSec      :: !Double
   , epochSyncStatsSyncedAt        :: !UTCTime
-  , epochSyncStatsPhase           :: !SyncPhase
+  , epochSyncStatsPhase           :: !Text
   }
   deriving stock (Eq, Show)
 
@@ -125,7 +124,7 @@ encodeEpochSyncStatsCopy (EpochSyncStatsId essid) ess =
     , Just $ bDouble (epochSyncStatsBlocksPerSec ess)
     , Just $ bDouble (epochSyncStatsElapsedSec ess)
     , Just $ bUTCTime (epochSyncStatsSyncedAt ess)
-    , Just $ bPhase (epochSyncStatsPhase ess)
+    , Just $ byteString (TE.encodeUtf8 (epochSyncStatsPhase ess))
     ]
 
 encodeEpochSyncTimeCopy :: EpochSyncTimeId -> EpochSyncTime -> ByteString
@@ -143,11 +142,3 @@ encodeEpochSyncTimeCopy (EpochSyncTimeId estid) est =
 
 bDouble :: Double -> Builder
 bDouble = byteString . BS8.pack . show
-
--- | The consumer never commits an epoch boundary in
--- 'PreparingForVolatileTail', so reaching the encoder in that phase
--- is an orchestrator bug.
-bPhase :: SyncPhase -> Builder
-bPhase PreparingForVolatileTail =
-  panic "EpochSyncStats.bPhase: PreparingForVolatileTail reached the consumer"
-bPhase p = byteString (TE.encodeUtf8 (renderSyncPhase p))

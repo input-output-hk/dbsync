@@ -148,9 +148,9 @@ import DbSync.AppM (LedgerM)
 import DbSync.Checkpoint.SyncState (ControlConnection)
 import DbSync.Config.Types (LedgerBackend (..))
 import DbSync.Db.Types (DbLovelace (..))
-import qualified DbSync.Era.Shelley.EpochUpdate as Generic
-import qualified DbSync.Era.Shelley.ProtoParams as Generic
-import qualified DbSync.Era.Shelley.StakeDist as Generic
+import qualified DbSync.Ledger.EpochUpdate as Generic
+import qualified DbSync.Ledger.ProtoParams as Generic
+import qualified DbSync.Ledger.StakeDist as Generic
 import DbSync.Ledger.DepositAccumulator
   ( EpochParams (..)
   , newEpochParamsRef

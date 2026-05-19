@@ -1,5 +1,5 @@
 {- |
-Module      : DbSync.Era.Shelley.Rewards
+Module      : DbSync.Ledger.Rewards
 Description : Era-agnostic reward value types.
 
 These are the era-collapsed shapes produced by the per-era
@@ -14,7 +14,7 @@ ledger code only uses it for building
 (added when the @reward@ projection is wired up) can depend on this
 module just as easily as the other way round.
 -}
-module DbSync.Era.Shelley.Rewards
+module DbSync.Ledger.Rewards
   ( -- * Reward source tag
     RewardSource (..)
 

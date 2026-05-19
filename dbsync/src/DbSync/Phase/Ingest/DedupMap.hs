@@ -18,7 +18,7 @@
 -- Maps use mutable 'BasicHashTable' from the @hashtables@ package
 -- rather than immutable 'HashMap'. This eliminates path-copying GC
 -- pressure (~300 bytes of short-lived garbage per insert with HashMap).
-module DbSync.Id.DedupMap
+module DbSync.Phase.Ingest.DedupMap
   ( -- * Types
     DedupMap
   , DedupMaps (..)

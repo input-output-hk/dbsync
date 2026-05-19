@@ -109,9 +109,9 @@ import qualified Ouroboros.Consensus.Storage.LedgerDB.V2.LedgerSeq as Consensus 
 import Prelude (id)
 
 import DbSync.Config.Types (LedgerBackend)
-import qualified DbSync.Era.Shelley.EpochUpdate as Generic
-import qualified DbSync.Era.Shelley.ProtoParams as Generic
-import qualified DbSync.Era.Shelley.StakeDist as Generic
+import qualified DbSync.Ledger.EpochUpdate as Generic
+import qualified DbSync.Ledger.ProtoParams as Generic
+import qualified DbSync.Ledger.StakeDist as Generic
 import DbSync.Ledger.Event (LedgerEvent)
 import DbSync.Ledger.Keys (PoolKeyHash)
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock)

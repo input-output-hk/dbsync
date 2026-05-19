@@ -42,7 +42,7 @@ import DbSync.Extractor
   , TxContext (..)
   )
 import DbSync.Ledger.Types (lookupDepositsMap)
-import DbSync.Db.Phase (isFollowPath)
+import DbSync.Phase.Type (isFollowPath)
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
 import DbSync.Util (coinToInt64)
 import DbSync.Writer (HasWriter (..), Writer (..))

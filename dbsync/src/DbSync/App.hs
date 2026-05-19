@@ -32,7 +32,7 @@ import DbSync.Config.Types
   , SyncOptions (..)
   , SyncConfig (..)
   )
-import DbSync.Db.Phase (SyncPhase (..))
+import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Env (CoreEnv (..))
 import DbSync.Error (throwInternal)
 import DbSync.Metrics (Metrics (..))

@@ -1,5 +1,5 @@
 {- |
-Module      : DbSync.Era.Shelley.EpochUpdate
+Module      : DbSync.Ledger.EpochUpdate
 Description : Era-agnostic per-epoch update and new-epoch summary.
 
 'NewEpoch' is the summary we emit once per epoch boundary during
@@ -12,7 +12,7 @@ The two main entry points are 'epochUpdate', which reads from the
 current 'ExtLedgerState', and 'extractEpochNonce', which digs into
 the header state for the per-epoch VRF nonce.
 -}
-module DbSync.Era.Shelley.EpochUpdate
+module DbSync.Ledger.EpochUpdate
   ( NewEpoch (..)
   , EpochUpdate (..)
   , epochUpdate
@@ -39,7 +39,7 @@ import Ouroboros.Consensus.Ledger.Extended (ExtLedgerState (..))
 import Ouroboros.Consensus.Protocol.Praos as Consensus
 import qualified Ouroboros.Consensus.Protocol.TPraos as Consensus
 
-import DbSync.Era.Shelley.ProtoParams (ProtoParams, epochProtoParams)
+import DbSync.Ledger.ProtoParams (ProtoParams, epochProtoParams)
 import DbSync.Ledger.Keys (PoolKeyHash)
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock)
 import DbSync.Util (maybeToStrictMaybe)

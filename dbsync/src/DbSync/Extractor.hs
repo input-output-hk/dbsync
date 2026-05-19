@@ -39,11 +39,11 @@ import Cardano.Ledger.BaseTypes (Network)
 import Cardano.Ledger.Coin (Coin)
 
 import DbSync.Block.Types (GenericBlock, GenericTx)
-import DbSync.Id.Counter (IdCounters, freshIdCounters)
+import DbSync.Phase.Ingest.Counter (IdCounters, freshIdCounters)
 import DbSync.Db.Schema.Ids (BlockId, PoolHashId, SlotLeaderId, StakeAddressId, TxId, TxOutId)
 import DbSync.Db.Schema.Types (TableDef)
 import DbSync.Ledger.Types (DepositsMap, emptyDepositsMap)
-import DbSync.Db.Phase (SyncPhase)
+import DbSync.Phase.Type (SyncPhase)
 import DbSync.Resolver (HasResolver)
 import DbSync.Writer (HasWriter)
 

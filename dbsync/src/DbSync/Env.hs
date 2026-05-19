@@ -65,7 +65,7 @@ import DbSync.Extractor
   , HasNetwork (..)
   , emptyBlockLedgerData
   )
-import DbSync.Id.DedupMap (DedupMaps)
+import DbSync.Phase.Ingest.DedupMap (DedupMaps)
 import DbSync.Phase.Ingest.ReceiverStats (ReceiverStats)
 import DbSync.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..))
 import DbSync.Metrics (HasMetrics (..), Metrics)

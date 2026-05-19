@@ -52,8 +52,8 @@ import Ouroboros.Network.Block (pointSlot)
 
 import DbSync.AppM (LedgerM, runAppM)
 import DbSync.Block.Types (CardanoPoint)
-import DbSync.Db.Phase (isFollowPath)
-import qualified DbSync.Era.Shelley.EpochUpdate as Generic
+import DbSync.Phase.Type (isFollowPath)
+import qualified DbSync.Ledger.EpochUpdate as Generic
 import DbSync.Ledger.State
   ( applyBlockAndSnapshot
   , getTopLevelConfig

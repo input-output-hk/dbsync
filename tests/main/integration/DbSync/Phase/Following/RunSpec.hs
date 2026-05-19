@@ -74,7 +74,7 @@ import DbSync.Extractor.Pool (poolExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Extractor.UTxO (utxoExtractor)
 import DbSync.Block.Pipeline (processBlock)
-import DbSync.Db.Phase (SyncPhase (..))
+import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Phase.Following.Resolver (mkFollowResolver)
 import DbSync.Test.Database
   ( queryTestDb

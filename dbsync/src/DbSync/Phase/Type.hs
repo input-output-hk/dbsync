@@ -1,8 +1,6 @@
--- | The runtime sync-phase value.
---
--- Shared between the orchestrator FSM and the
--- @epoch_sync_stats.phase@ column so they cannot drift.
-module DbSync.Db.Phase
+-- | The runtime sync-phase value used by the orchestrator FSM, log
+-- component names, and the @epoch_sync_stats.phase@ column.
+module DbSync.Phase.Type
   ( -- * Phase
     SyncPhase (..)
 
@@ -11,8 +9,8 @@ module DbSync.Db.Phase
   , isIngestPath
 
     -- * Rendering
-  , renderSyncPhase
-  , parseSyncPhase
+  , renderPhase
+  , parsePhase
   ) where
 
 import Cardano.Prelude
@@ -44,16 +42,16 @@ isIngestPath _                  = False
 
 -- | Used as the log component name and as the @epoch_sync_stats.phase@
 -- column value.
-renderSyncPhase :: SyncPhase -> Text
-renderSyncPhase = \case
+renderPhase :: SyncPhase -> Text
+renderPhase = \case
   IngestChainHistory       -> "IngestChainHistory"
   PreparingForVolatileTail -> "PreparingForVolatileTail"
   FollowingVolatileTail    -> "FollowingVolatileTail"
   FollowingChainTip        -> "FollowingChainTip"
 
--- | Inverse of 'renderSyncPhase'.
-parseSyncPhase :: Text -> Maybe SyncPhase
-parseSyncPhase = \case
+-- | Inverse of 'renderPhase'.
+parsePhase :: Text -> Maybe SyncPhase
+parsePhase = \case
   "IngestChainHistory"       -> Just IngestChainHistory
   "PreparingForVolatileTail" -> Just PreparingForVolatileTail
   "FollowingVolatileTail"    -> Just FollowingVolatileTail

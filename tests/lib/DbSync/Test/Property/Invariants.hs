@@ -48,7 +48,7 @@ import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()  -- LedgerSupports
 
 import DbSync.Block.Parser (parseBlock)
 import DbSync.Extractor (ExtractorDef, freshExtractState)
-import DbSync.Id.DedupMap (DedupMaps, newMaps)
+import DbSync.Phase.Ingest.DedupMap (DedupMaps, newMaps)
 import DbSync.Block.Pipeline (processBlock)
 import DbSync.Address.Buffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)

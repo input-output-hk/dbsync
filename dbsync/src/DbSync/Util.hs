@@ -5,7 +5,7 @@ Description : Small generic helpers shared across db-sync.
 Keep this module lean: only prelude-style conversions and other
 utilities that have no natural home in a feature module belong
 here. Ledger-specific helpers stay co-located with their types
-(e.g. 'DbSync.Era.Shelley.Rewards' owns reward-type
+(e.g. 'DbSync.Ledger.Rewards' owns reward-type
 conversions). Helpers are added on demand rather than up-front.
 -}
 module DbSync.Util
@@ -43,7 +43,8 @@ import DbSync.Db.Types (DbLovelace (..))
 --
 -- This is __not__ the same type as @cardano-ledger@\'s @StrictMaybe@ —
 -- that is @Cardano.Ledger.BaseTypes.StrictMaybe@. This helper covers
--- the @data-strict@ flavour used by 'DbSync.Era.Shelley'.
+-- the @data-strict@ flavour used by the projection modules under
+-- 'DbSync.Ledger' (e.g. 'DbSync.Ledger.EpochUpdate').
 maybeToStrictMaybe :: Maybe a -> Strict.Maybe a
 maybeToStrictMaybe Nothing  = Strict.Nothing
 maybeToStrictMaybe (Just a) = Strict.Just a

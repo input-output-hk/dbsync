@@ -27,7 +27,7 @@ import Cardano.Prelude
 import DbSync.Checkpoint.SyncState (HasControlConnection, SyncStateRow (..), writeSyncState)
 import DbSync.Db.Loader (LoaderStream (..), HasLoaderStream (..))
 import DbSync.Extractor (ExtractState (..))
-import DbSync.Id.Counter (IdCounter (..), IdCounters (..), mkIdCounter)
+import DbSync.Phase.Ingest.Counter (IdCounter (..), IdCounters (..), mkIdCounter)
 
 -- | Perform an atomic epoch-boundary commit.
 --

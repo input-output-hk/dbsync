@@ -9,7 +9,7 @@ module DbSync.Checkpoint.Serialise
 
 import Cardano.Prelude
 
-import DbSync.Id.DedupMap (DedupMaps)
+import DbSync.Phase.Ingest.DedupMap (DedupMaps)
 
 -- | Serialise dedup maps to a compact binary format.
 serialiseDedupMaps :: DedupMaps -> ByteString

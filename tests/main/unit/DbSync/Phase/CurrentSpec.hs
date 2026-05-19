@@ -11,7 +11,7 @@ import Control.Tracer (Tracer (..))
 import Test.Hspec (Spec, describe, it, shouldBe)
 
 import DbSync.AppM (runAppM)
-import DbSync.Db.Phase (SyncPhase (..))
+import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Phase.Current
   ( newCurrentPhase
   , readCurrentPhase

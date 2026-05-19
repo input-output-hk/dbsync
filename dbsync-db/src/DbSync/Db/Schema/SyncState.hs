@@ -25,6 +25,9 @@ module DbSync.Db.Schema.SyncState
   , syncStateColumns
   , syncStateCounterColumns
 
+    -- * Table-to-counter mapping
+  , idCounterByTable
+
     -- * Hasql encoders \/ decoders
   , syncStateRowEncoder
   , syncStateRowDecoder
@@ -36,11 +39,45 @@ import Data.Functor.Contravariant ((>$<))
 import qualified Hasql.Decoders as D
 import qualified Hasql.Encoders as E
 
+import DbSync.Db.Schema.AdaPots (adaPotsTableDef)
+import DbSync.Db.Schema.Address (addressTableDef)
+import DbSync.Db.Schema.CBOR (txCborTableDef)
+import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
+import DbSync.Db.Schema.EpochSyncStats (epochSyncStatsTableDef)
+import DbSync.Db.Schema.Metadata (txMetadataTableDef)
+import DbSync.Db.Schema.MultiAsset
+  ( maTxMintTableDef
+  , maTxOutTableDef
+  , multiAssetTableDef
+  )
+import DbSync.Db.Schema.Pool
+  ( poolHashTableDef
+  , poolMetadataRefTableDef
+  , poolOwnerTableDef
+  , poolRelayTableDef
+  , poolRetireTableDef
+  , poolUpdateTableDef
+  )
+import DbSync.Db.Schema.ScriptsDatums (scriptTableDef)
+import DbSync.Db.Schema.StakeDelegation
+  ( delegationTableDef
+  , stakeAddressTableDef
+  , stakeDeregistrationTableDef
+  , stakeRegistrationTableDef
+  , withdrawalTableDef
+  )
 import DbSync.Db.Schema.Types
   ( ColumnDef (..)
   , PgType (..)
   , TableDef (..)
   , TableMode (..)
+  )
+import DbSync.Db.Schema.UTxO
+  ( collateralTxInTableDef
+  , collateralTxOutTableDef
+  , referenceTxInTableDef
+  , txInTableDef
+  , txOutTableDef
   )
 
 -- ---------------------------------------------------------------------------
@@ -98,9 +135,12 @@ data SyncStateRow = SyncStateRow
 syncStateTableName :: Text
 syncStateTableName = "dbsync_sync_state"
 
--- | DDL definition. Counters default to 1 so a freshly-seeded row is
--- usable without further writes; @sync_complete@ defaults to false;
--- @updated_at@ tracks the last write via @now()@.
+-- | DDL definition. The counter columns are derived from
+-- 'idCounterByTable' below, so the SQL shape stays in lock-step
+-- with the cleanup mapping. Counters default to 1 so a freshly
+-- seeded row is usable without further writes; @sync_complete@
+-- defaults to false; @updated_at@ tracks the last write via
+-- @now()@.
 syncStateTableDef :: TableDef
 syncStateTableDef = TableDef
   { tdName    = syncStateTableName
@@ -110,35 +150,10 @@ syncStateTableDef = TableDef
       , ColumnDef "last_committed_block_no"         PgBigInt      True
       , ColumnDef "last_committed_block_hash"       PgBytea       True
       , ColumnDef "last_snapshot_slot"              PgBigInt      True
-      , ColumnDef "block_id_counter"                PgBigInt      False
-      , ColumnDef "tx_id_counter"                   PgBigInt      False
-      , ColumnDef "tx_out_id_counter"               PgBigInt      False
-      , ColumnDef "tx_in_id_counter"                PgBigInt      False
-      , ColumnDef "collateral_tx_in_id_counter"     PgBigInt      False
-      , ColumnDef "reference_tx_in_id_counter"      PgBigInt      False
-      , ColumnDef "tx_metadata_id_counter"          PgBigInt      False
-      , ColumnDef "ma_tx_mint_id_counter"           PgBigInt      False
-      , ColumnDef "ma_tx_out_id_counter"            PgBigInt      False
-      , ColumnDef "slot_leader_id_counter"          PgBigInt      False
-      , ColumnDef "address_id_counter"              PgBigInt      False
-      , ColumnDef "stake_address_id_counter"        PgBigInt      False
-      , ColumnDef "pool_hash_id_counter"            PgBigInt      False
-      , ColumnDef "multi_asset_id_counter"          PgBigInt      False
-      , ColumnDef "script_id_counter"               PgBigInt      False
-      , ColumnDef "stake_registration_id_counter"   PgBigInt      False
-      , ColumnDef "stake_deregistration_id_counter" PgBigInt      False
-      , ColumnDef "delegation_id_counter"           PgBigInt      False
-      , ColumnDef "withdrawal_id_counter"           PgBigInt      False
-      , ColumnDef "pool_update_id_counter"          PgBigInt      False
-      , ColumnDef "pool_metadata_ref_id_counter"    PgBigInt      False
-      , ColumnDef "pool_owner_id_counter"           PgBigInt      False
-      , ColumnDef "pool_retire_id_counter"          PgBigInt      False
-      , ColumnDef "pool_relay_id_counter"           PgBigInt      False
-      , ColumnDef "tx_cbor_id_counter"              PgBigInt      False
-      , ColumnDef "epoch_sync_stats_id_counter"     PgBigInt      False
-      , ColumnDef "ada_pots_id_counter"             PgBigInt      False
-      , ColumnDef "collateral_tx_out_id_counter"    PgBigInt      False
-      , ColumnDef "schema_version_applied"          PgInteger     False
+      ]
+      <> counterColumnDefs
+      <>
+      [ ColumnDef "schema_version_applied"          PgInteger     False
       , ColumnDef "ledger_enabled"                  PgBoolean     False
       , ColumnDef "sync_complete"                   PgBoolean     False
       , ColumnDef "updated_at"                      PgTimestampTz False
@@ -155,6 +170,9 @@ syncStateTableDef = TableDef
   , tdGeneratedColumns = []
   , tdForeignKeys = []
   }
+  where
+    counterColumnDefs =
+      [ ColumnDef col PgBigInt False | col <- syncStateCounterColumns ]
 
 -- ---------------------------------------------------------------------------
 -- * Column-name helpers
@@ -164,38 +182,60 @@ syncStateTableDef = TableDef
 syncStateColumns :: [Text]
 syncStateColumns = map cdName (tdColumns syncStateTableDef)
 
--- | The @*_id_counter@ subset, in golden order. One per current
--- 'DbSync.Id.Counter.IdCounters' field.
+-- | The @*_id_counter@ subset, in golden order. Derived from
+-- 'idCounterByTable' so a new entry there flows automatically into
+-- the DDL and the COPY-defaults list.
 syncStateCounterColumns :: [Text]
-syncStateCounterColumns =
-  [ "block_id_counter"
-  , "tx_id_counter"
-  , "tx_out_id_counter"
-  , "tx_in_id_counter"
-  , "collateral_tx_in_id_counter"
-  , "reference_tx_in_id_counter"
-  , "tx_metadata_id_counter"
-  , "ma_tx_mint_id_counter"
-  , "ma_tx_out_id_counter"
-  , "slot_leader_id_counter"
-  , "address_id_counter"
-  , "stake_address_id_counter"
-  , "pool_hash_id_counter"
-  , "multi_asset_id_counter"
-  , "script_id_counter"
-  , "stake_registration_id_counter"
-  , "stake_deregistration_id_counter"
-  , "delegation_id_counter"
-  , "withdrawal_id_counter"
-  , "pool_update_id_counter"
-  , "pool_metadata_ref_id_counter"
-  , "pool_owner_id_counter"
-  , "pool_retire_id_counter"
-  , "pool_relay_id_counter"
-  , "tx_cbor_id_counter"
-  , "epoch_sync_stats_id_counter"
-  , "ada_pots_id_counter"
-  , "collateral_tx_out_id_counter"
+syncStateCounterColumns = map ((<> "_id_counter") . fst) idCounterByTable
+
+-- ---------------------------------------------------------------------------
+-- * Table-to-counter mapping
+-- ---------------------------------------------------------------------------
+
+-- | Data-table to its @next-id-to-assign@ selector on
+-- 'SyncStateRow'. The single source of truth for which counter goes
+-- with which table — drives both the resume-time cleanup in
+-- 'DbSync.Checkpoint.Resume.deleteRowsPastSlot' and the derived
+-- 'syncStateCounterColumns' / DDL above.
+--
+-- Order matches the field order in 'SyncStateRow' and the encoder /
+-- decoder below; reordering here without matching those breaks the
+-- on-disk schema layout.
+--
+-- @address@ is included even though its counter is owned by the
+-- @AddressResolver@ worker rather than 'IdCounters': the worker's
+-- own writes can leave rows past the @sync_state@ snapshot when a
+-- crash lands between an INSERT and the next 'writeSyncState'.
+idCounterByTable :: [(Text, SyncStateRow -> Int64)]
+idCounterByTable =
+  [ (tdName blockTableDef,                ssrBlockIdCounter)
+  , (tdName txTableDef,                   ssrTxIdCounter)
+  , (tdName txOutTableDef,                ssrTxOutIdCounter)
+  , (tdName txInTableDef,                 ssrTxInIdCounter)
+  , (tdName collateralTxInTableDef,       ssrCollateralTxInIdCounter)
+  , (tdName referenceTxInTableDef,        ssrReferenceTxInIdCounter)
+  , (tdName txMetadataTableDef,           ssrTxMetadataIdCounter)
+  , (tdName maTxMintTableDef,             ssrMaTxMintIdCounter)
+  , (tdName maTxOutTableDef,              ssrMaTxOutIdCounter)
+  , (tdName slotLeaderTableDef,           ssrSlotLeaderIdCounter)
+  , (tdName addressTableDef,              ssrAddressIdCounter)
+  , (tdName stakeAddressTableDef,         ssrStakeAddressIdCounter)
+  , (tdName poolHashTableDef,             ssrPoolHashIdCounter)
+  , (tdName multiAssetTableDef,           ssrMultiAssetIdCounter)
+  , (tdName scriptTableDef,               ssrScriptIdCounter)
+  , (tdName stakeRegistrationTableDef,    ssrStakeRegistrationIdCounter)
+  , (tdName stakeDeregistrationTableDef,  ssrStakeDeregistrationIdCounter)
+  , (tdName delegationTableDef,           ssrDelegationIdCounter)
+  , (tdName withdrawalTableDef,           ssrWithdrawalIdCounter)
+  , (tdName poolUpdateTableDef,           ssrPoolUpdateIdCounter)
+  , (tdName poolMetadataRefTableDef,      ssrPoolMetadataRefIdCounter)
+  , (tdName poolOwnerTableDef,            ssrPoolOwnerIdCounter)
+  , (tdName poolRetireTableDef,           ssrPoolRetireIdCounter)
+  , (tdName poolRelayTableDef,            ssrPoolRelayIdCounter)
+  , (tdName txCborTableDef,               ssrTxCborIdCounter)
+  , (tdName epochSyncStatsTableDef,       ssrEpochSyncStatsIdCounter)
+  , (tdName adaPotsTableDef,              ssrAdaPotsIdCounter)
+  , (tdName collateralTxOutTableDef,      ssrCollateralTxOutIdCounter)
   ]
 
 -- ---------------------------------------------------------------------------

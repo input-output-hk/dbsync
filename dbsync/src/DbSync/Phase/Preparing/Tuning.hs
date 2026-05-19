@@ -23,10 +23,10 @@ module DbSync.Phase.Preparing.Tuning
 
 import Cardano.Prelude
 
-import qualified Data.Text as T
 import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 
+import DbSync.Db.Statement.Tuning (prepGucSql)
 import DbSync.Db.Transaction (HasHasqlConnection (..))
 
 -- | Tuning applied at the start of the post-load pass. Defaults are
@@ -88,8 +88,8 @@ setPrepSessionGUCs t = do
     Left  e  -> panic $ "Phase.Preparing.Tuning: " <> show e
 
 gucSql :: PrepTuning -> Text
-gucSql t = T.unlines
-  [ "SET maintenance_work_mem = '" <> ptMaintenanceWorkMem t <> "';"
-  , "SET max_parallel_maintenance_workers = " <> show (ptMaxParallelMaintenance t) <> ";"
-  , "SET synchronous_commit = " <> (if ptAsyncCommit t then "off" else "on") <> ";"
-  ]
+gucSql t =
+  prepGucSql
+    (ptMaintenanceWorkMem t)
+    (ptMaxParallelMaintenance t)
+    (ptAsyncCommit t)

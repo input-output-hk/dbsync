@@ -148,10 +148,12 @@ test-suite dbsync-test
     DbSync.Phase.Following.RollbackSpec
     DbSync.Phase.Following.RunSpec
     DbSync.Phase.FollowAtTipSpec
+    DbSync.Phase.FollowPerfRealisticSpec
     DbSync.Phase.FollowPerfSpec
     DbSync.Phase.FollowRestartSpec
     DbSync.Phase.FollowRollbackOnBootSpec
     DbSync.Phase.IngestPrepFollowSpec
+    DbSync.Phase.IngestRestartSpec
     DbSync.Phase.MockChainSpec
     DbSync.Phase.MockNodeSpec
     DbSync.Phase.Preparing.RunSpec

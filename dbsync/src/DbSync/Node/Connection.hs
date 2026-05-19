@@ -565,15 +565,18 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
             -- the position and continue.
             isConfirmingRollback <- atomicModifyIORef' (ssHaveSeenBlock ss)
               (\seen -> (True, not seen))
-            -- Confirming rollbacks log at Info (benign protocol step);
+            -- Confirming rollbacks log at Debug (benign protocol
+            -- step; same severity as the regular per-block trace);
             -- real chain reorgs log at Warning (downstream consumers
             -- are about to see DELETEs).
-            let sev = if isConfirmingRollback then Info else Warning
-                suffix
-                  | isConfirmingRollback = " (confirming intersect; not propagated)"
-                  | otherwise            = ""
-            traceWith appTracer $ LogMsg sev "ChainSync"
-              ("Rollback to " <> show point <> suffix) Nothing
+            let sev = if isConfirmingRollback then Debug else Warning
+                logText
+                  | isConfirmingRollback =
+                      "Rollback to " <> show point
+                        <> " (confirming intersect — protocol step, no rows deleted)"
+                  | otherwise =
+                      "Rollback to " <> show point
+            traceWith appTracer $ LogMsg sev "ChainSync" logText Nothing
             atomicWriteIORef latestPointRef (Just point)
             publishRollbackBoundary tip
             unless isConfirmingRollback $ do

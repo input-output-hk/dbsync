@@ -71,7 +71,9 @@ library
     DbSync.Db.Statement.CollateralTxOut
     DbSync.Db.Statement.Delegation
     DbSync.Db.Statement.EpochParamPending
+    DbSync.Db.Statement.IdAllocator
     DbSync.Db.Statement.Indexes
+    DbSync.Db.Statement.Loader
     DbSync.Db.Statement.MaTxMint
     DbSync.Db.Statement.MaTxOut
     DbSync.Db.Statement.MultiAsset
@@ -91,6 +93,8 @@ library
     DbSync.Db.Statement.StakeDeregistration
     DbSync.Db.Statement.StakeRegistration
     DbSync.Db.Statement.SyncState
+    DbSync.Db.Statement.Transaction
+    DbSync.Db.Statement.Tuning
     DbSync.Db.Statement.Tx
     DbSync.Db.Statement.TxCbor
     DbSync.Db.Statement.TxIn

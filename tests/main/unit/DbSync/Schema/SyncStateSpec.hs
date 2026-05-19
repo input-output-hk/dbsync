@@ -18,7 +18,8 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 import DbSync.Db.Schema.Generate (generateCreateTable)
 import DbSync.Db.Schema.SyncState
-  ( syncStateColumns
+  ( idCounterByTable
+  , syncStateColumns
   , syncStateCounterColumns
   , syncStateTableDef
   , syncStateTableName
@@ -97,6 +98,27 @@ spec = describe "DbSync.Db.Schema.SyncState" $ do
 
     it "is a subset of syncStateColumns" $
       all (`elem` syncStateColumns) syncStateCounterColumns `shouldBe` True
+
+  describe "idCounterByTable" $ do
+    -- The table-name half of 'idCounterByTable' drives the resume
+    -- cleanup's counter pass. Adding a counter column without a
+    -- matching entry leaves rows past the recorded id on the next
+    -- boot — the exact bug the cleanup exists to fix. Both
+    -- directions are pinned so renaming a table without updating
+    -- the counter list also fails.
+    it "has the same number of entries as syncStateCounterColumns" $
+      length idCounterByTable `shouldBe` length syncStateCounterColumns
+
+    it "pairs each entry with its <table>_id_counter column, in order" $ do
+      let derivedColumns = map ((<> "_id_counter") . fst) idCounterByTable
+      derivedColumns `shouldBe` syncStateCounterColumns
+
+    it "covers every _id_counter column on the table" $ do
+      let tableCounters =
+            filter (T.isSuffixOf "_id_counter")
+              (map cdName (tdColumns syncStateTableDef))
+          derived = map ((<> "_id_counter") . fst) idCounterByTable
+      derived `shouldBe` tableCounters
 
   describe "generateCreateTable syncStateTableDef" $ do
     let ddl = generateCreateTable syncStateTableDef

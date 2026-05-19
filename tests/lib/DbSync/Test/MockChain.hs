@@ -39,6 +39,11 @@ module DbSync.Test.MockChain
   , fillEpochs
   , registerStakeCreds
 
+    -- * Realistic block content
+  , RealisticBlockShape (..)
+  , mainnetAverageShape
+  , buildRealisticTxs
+
     -- * Pipeline integration
   , parseAndProcess
   , reseedStateQueryFromLedger
@@ -69,6 +74,7 @@ import qualified Cardano.Node.Protocol.Shelley as NodeShelley
 import Cardano.Node.Types (ProtocolFilepaths (..))
 
 import qualified Cardano.Mock.Forging.Interpreter as Mock
+import qualified Cardano.Mock.Forging.Tx.Conway as Conway
 import qualified Cardano.Mock.Forging.Types as Mock
 
 import DbSync.Block.Parser (parseBlock)
@@ -211,6 +217,71 @@ fillEpochs mc n = concat <$> replicateM n (forgeUntilNextEpoch mc)
 -- the prerequisite for any reward/delegation/governance scenario.
 registerStakeCreds :: MockChain -> IO (CardanoBlock StandardCrypto)
 registerStakeCreds mc = Mock.forgeWithStakeCreds (mcInterpreter mc)
+
+-- ---------------------------------------------------------------------------
+-- * Realistic block content
+-- ---------------------------------------------------------------------------
+
+-- | Descriptor for the realistic-block builder. Sized to roughly
+-- match a mid-traffic mainnet block.
+--
+-- Each payment tx is a "rename": one input UTxO is consumed and one
+-- change output at the same address is produced. No fresh target
+-- outputs, so the UTxO set's value distribution stays predictable
+-- across blocks (every entry holds roughly @genesisValue − N·fees@
+-- after the @N@th touch). That's the property the perf test
+-- depends on — small "target" outputs would otherwise drain to
+-- negative change once a later block re-picked them.
+--
+-- The shape exists as a record so future enrichments (delegations,
+-- multi-asset mints, governance txs) can be added as fields without
+-- breaking call sites once the corresponding forging primitives no
+-- longer require carrying state across blocks.
+data RealisticBlockShape = RealisticBlockShape
+  { rbsPaymentTxCount :: !Int
+    -- ^ Payment txs per block. Bounded by the size of the live UTxO
+    -- map at the time the block is built; on the Conway test genesis
+    -- that starts at 10 and grows by zero per block (one in, one out
+    -- per tx), so 10 is the safe ceiling.
+  }
+  deriving stock (Eq, Show)
+
+-- | Default shape: 10 payment txs per block.
+--
+-- Per block: 10 tx rows, 10 tx_in rows, 10 tx_out rows (change only).
+-- Comparable to a mid-traffic mainnet block in tx count and a clear
+-- step up from the empty-block 'FollowPerfSpec'. Address diversity
+-- is intentionally low (output goes back to source address) so the
+-- UTxO set stays bounded; mainnet-shape address diversity needs a
+-- richer forging primitive that's tracked in @FOLLOW-PERF.md@.
+mainnetAverageShape :: RealisticBlockShape
+mainnetAverageShape =
+  RealisticBlockShape
+    { rbsPaymentTxCount = 10
+    }
+
+-- | Per-tx fee in lovelace. Above the @minFeeA = 1@ per byte
+-- minimum for a ~200-byte payment tx with comfortable slack.
+realisticTxFee :: Integer
+realisticTxFee = 1000
+
+-- | Build the tx list for one realistic block against the
+-- interpreter's current ledger state. Resolves all UTxO indices
+-- inside a single 'withConwayLedgerState' so the txs share a
+-- consistent snapshot — each spends a distinct @UTxOIndex@ value
+-- and produces a same-address change output, so the live UTxO map
+-- stays balanced across iterations.
+buildRealisticTxs :: MockChain -> RealisticBlockShape -> IO [Mock.TxEra]
+buildRealisticTxs mc shape =
+  Mock.withConwayLedgerState (mcInterpreter mc) $ \state' -> do
+    payments <- forM [0 .. rbsPaymentTxCount shape - 1] $ \i ->
+      Conway.mkPaymentTx'
+        (Mock.UTxOIndex i)
+        []                          -- no fresh targets; change only
+        realisticTxFee
+        0                           -- no donation
+        state'
+    pure (map Mock.TxConway payments)
 
 -- ---------------------------------------------------------------------------
 -- * Pipeline integration

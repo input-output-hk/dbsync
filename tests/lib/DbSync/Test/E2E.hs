@@ -38,6 +38,9 @@ import System.Timeout (timeout)
 import DbSync.App.Args (AppArgs)
 import DbSync.App.Run (runApp)
 import DbSync.Config.Types (SyncConfig)
+import DbSync.Db.Schema.Core (blockTableDef)
+import DbSync.Db.Schema.SyncState (syncStateTableDef)
+import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Test.AppHarness
   ( mkAppArgsFromMockNode
   , mkAppArgsFromMockNodeResume
@@ -46,7 +49,7 @@ import DbSync.Test.AppHarness
 import DbSync.Test.Database (execTestDb, queryTestDb)
 import DbSync.Test.Helpers (waitFor)
 import DbSync.Test.MockNode (MockNode, forgeAndPushBlocks)
-import DbSync.Test.PgAssertions (countRows)
+import DbSync.Test.PgAssertions (countRows, tableColumn)
 import DbSync.Trace.Types (AppTracer, LogMsg)
 
 -- | Conway test config bundle. Short epoch (500 slots) and small
@@ -101,7 +104,11 @@ withAppSessionResume = runApp' mkAppArgsFromMockNodeResume
 -- or prior spec dropped the schema).
 clearSyncCompleteFlag :: IO ()
 clearSyncCompleteFlag =
-  execTestDb "UPDATE dbsync_sync_state SET sync_complete = false WHERE id = 1"
+  execTestDb
+    ( "UPDATE " <> tdName syncStateTableDef
+        <> " SET " <> tableColumn syncStateTableDef "sync_complete" <> " = false"
+        <> " WHERE " <> tableColumn syncStateTableDef "id" <> " = 1"
+    )
     `catch` \(_ :: SomeException) -> pure ()
 
 -- | Shared bracket body used by 'withAppSession' /
@@ -145,7 +152,11 @@ awaitShutdown name app = do
 syncCompleteTrue :: IO Bool
 syncCompleteTrue = do
   t <-
-    (T.strip <$> queryTestDb "SELECT sync_complete FROM dbsync_sync_state LIMIT 1")
+    ( T.strip <$> queryTestDb
+        ( "SELECT " <> tableColumn syncStateTableDef "sync_complete"
+            <> " FROM " <> tdName syncStateTableDef <> " LIMIT 1"
+        )
+    )
       `catch` \(_ :: SomeException) -> pure ""
   pure (t == "t")
 
@@ -161,8 +172,8 @@ forgeAndWaitForBlocks
 forgeAndWaitForBlocks mn n minTotal timeoutSec = do
   _ <- forgeAndPushBlocks mn n
   waitFor
-    ("block table to reach " <> show minTotal <> " rows")
-    (do tot <- countRows "block"; pure (tot >= minTotal))
+    (tdName blockTableDef <> " table to reach " <> show minTotal <> " rows")
+    (do tot <- countRows (tdName blockTableDef); pure (tot >= minTotal))
     timeoutSec
 
 -- | Poll the captured-log 'IORef' until any 'LogMsg' satisfies

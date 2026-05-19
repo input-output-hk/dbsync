@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Reset every @<table>_id_seq@ to @MAX(id) + 1@ so that
 -- 'FollowingChainTip' can allocate IDs from the sequence rather
 -- than from in-process counters.
@@ -14,14 +12,11 @@ module DbSync.Phase.Preparing.Sequences
 import Cardano.Prelude
 
 import qualified Hasql.Connection as Conn
-import qualified Hasql.Decoders as D
-import qualified Hasql.Encoders as E
 import qualified Hasql.Pipeline as Pipeline
 import qualified Hasql.Session as Sess
-import qualified Hasql.Statement as Stmt
 
 import DbSync.Db.Schema.Types (TableDef (..), TableMode (..))
-import DbSync.Db.Statement.Sequences (resetSequenceSql)
+import DbSync.Db.Statement.Sequences (resetSequenceStmt)
 import DbSync.Db.Transaction (HasHasqlConnection (..))
 
 -- | Run @setval@ on every @<table>_id_seq@ owned by an UNLOGGED
@@ -38,12 +33,5 @@ resetSequences tables = do
     Right () -> pure ()
     Left  e  -> panic $ "Phase.Preparing.Sequences: " <> show e
   where
-    pipelineSetval td = void (Pipeline.statement () (setvalStmt td))
-
-    -- setval(…) is a SELECT, not a command — drain the returned row
-    -- and discard the new sequence value.
-    setvalStmt td =
-      Stmt.unpreparable
-        (resetSequenceSql (tdName td))
-        E.noParams
-        (D.singleRow (D.column (D.nonNullable D.int8)))
+    pipelineSetval td =
+      void (Pipeline.statement () (resetSequenceStmt (tdName td)))

@@ -23,11 +23,15 @@
 -- the @+ 1@ is correct for both empty and non-empty tables.
 module DbSync.Db.Statement.Sequences
   ( resetSequenceSql
+  , resetSequenceStmt
   ) where
 
 import Cardano.Prelude
 
 import qualified Data.Text as T
+import qualified Hasql.Decoders as D
+import qualified Hasql.Encoders as E
+import qualified Hasql.Statement as Stmt
 
 import DbSync.Db.Sql (quoteIdent, quoteLiteral)
 
@@ -45,3 +49,17 @@ resetSequenceSql tableName =
     ]
   where
     seqName = tableName <> "_id_seq"
+
+-- | The 'resetSequenceSql' command wrapped as an unprepareable
+-- 'Stmt.Statement' that drains the single 'Int64' @setval@ returns.
+--
+-- Unprepareable because the SQL embeds the table name as a literal
+-- rather than a parameter — each table is its own prepared
+-- statement under hasql\'s caching, which is fine for the one-shot
+-- per-table @setval@ but means there's no benefit to preparing.
+resetSequenceStmt :: Text -> Stmt.Statement () Int64
+resetSequenceStmt tableName =
+  Stmt.unpreparable
+    (resetSequenceSql tableName)
+    E.noParams
+    (D.singleRow (D.column (D.nonNullable D.int8)))

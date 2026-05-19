@@ -27,6 +27,12 @@ import System.FilePath ((</>))
 
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
+import DbSync.Db.Schema.Address (addressTableDef)
+import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef)
+import DbSync.Db.Schema.Pool (poolHashTableDef)
+import DbSync.Db.Schema.StakeDelegation (stakeAddressTableDef)
+import DbSync.Db.Schema.SyncState (syncStateTableDef)
+import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Trace.Backend (mkTestTracer)
 import DbSync.Trace.Types (LogMsg (..))
 import DbSync.Test.AppHarness
@@ -45,7 +51,7 @@ import DbSync.Test.E2E
   )
 import DbSync.Test.Helpers (waitFor)
 import DbSync.Test.MockNode (forgeAndPushBlocks, withMockNode)
-import DbSync.Test.PgAssertions (countRows)
+import DbSync.Test.PgAssertions (countRows, tableColumn)
 
 spec :: Spec
 spec = describe "FollowingChainTip fast-path rollback on boot" $
@@ -55,17 +61,25 @@ spec = describe "FollowingChainTip fast-path rollback on boot" $
         firstLogs <- newIORef []
         let firstTracer = mkTestTracer firstLogs
 
-        -- ~5 slots per block at activeSlotsCoeff=0.2; epoch length
-        -- 500. 400 forged blocks ≈ 2000 slots = ~4 epoch boundaries,
-        -- enough for the test profile's snapshot threshold of 2 to
-        -- write at least two header files we can choose between.
+        -- ~5 slots per block at activeSlotsCoeff=0.2, epoch length
+        -- 500, k=10. 400 forged blocks gives Ingest enough chain to
+        -- exit naturally at tip-k and run Prep, but Ingest itself
+        -- never writes a snapshot — 'shouldSnapshotAtEpoch' restricts
+        -- the Ingest cadence to epochs divisible by 10. Snapshots
+        -- here therefore have to come from Follow, which writes one
+        -- per epoch boundary at this profile's near-tip threshold
+        -- of 2.
         _ <- forgeAndPushBlocks mn 400
 
         (preBlocks, preDedupCounts, lastCommitted, snapshotsAfterFirst) <-
           withAppSession firstTracer ledgerEnabledTestProfile mn ledgerDir $ \_ -> do
             waitForSyncComplete 90
-            forgeAndWaitForBlocks mn 100 500 90
-            blockCount       <- countRows "block"
+            -- 250 Follow blocks ≈ 1300 slots, enough to cross two
+            -- epoch boundaries (~slot 2500, ~slot 3000) and so write
+            -- two snapshots we can choose between in the rollback
+            -- step below.
+            forgeAndWaitForBlocks mn 250 650 90
+            blockCount       <- countRows (tdName blockTableDef)
             dedupCounts      <- traverse countRows dedupTables
             committedSlot    <- readLastCommittedSlot
             snapshotEntries  <- listLedgerSnapshots ledgerDir
@@ -102,8 +116,8 @@ spec = describe "FollowingChainTip fast-path rollback on boot" $
           -- return to its pre-restart size — the simplest evidence
           -- that the rollback was followed by a successful re-sync.
           waitFor
-            ("block count returns to " <> show preBlocks)
-            (do n <- countRows "block"; pure (n >= preBlocks))
+            (tdName blockTableDef <> " count returns to " <> show preBlocks)
+            (do n <- countRows (tdName blockTableDef); pure (n >= preBlocks))
             60
 
           afterReSyncSlot <- readLastCommittedSlot
@@ -119,7 +133,7 @@ spec = describe "FollowingChainTip fast-path rollback on boot" $
           let target = preBlocks + 20
           forgeAndWaitForBlocks mn 20 target 90
 
-          finalBlocks <- countRows "block"
+          finalBlocks <- countRows (tdName blockTableDef)
           finalBlocks `shouldSatisfy` (>= target)
 
         -- Log-message assertion: the rollback path emitted both the
@@ -138,7 +152,12 @@ spec = describe "FollowingChainTip fast-path rollback on boot" $
 -- cascade leaves them alone. The re-insert path finds the rows via
 -- SELECT-then-nextval instead of allocating new ids.
 dedupTables :: [Text]
-dedupTables = ["address", "slot_leader", "pool_hash", "stake_address"]
+dedupTables = map tdName
+  [ addressTableDef
+  , slotLeaderTableDef
+  , poolHashTableDef
+  , stakeAddressTableDef
+  ]
 
 -- | Read @dbsync_sync_state.last_committed_slot@ as a 'Word64'.
 -- Panics on the unexpected case where the column is NULL (the row
@@ -147,7 +166,9 @@ dedupTables = ["address", "slot_leader", "pool_hash", "stake_address"]
 readLastCommittedSlot :: IO Word64
 readLastCommittedSlot = do
   raw <- T.strip <$> queryTestDb
-    "SELECT COALESCE(last_committed_slot::text, '') FROM dbsync_sync_state LIMIT 1"
+    ( "SELECT COALESCE(" <> tableColumn syncStateTableDef "last_committed_slot"
+        <> "::text, '') FROM " <> tdName syncStateTableDef <> " LIMIT 1"
+    )
   case readMaybe (T.unpack raw) of
     Just n  -> pure n
     Nothing -> panic $ "last_committed_slot was empty / unparseable: " <> raw

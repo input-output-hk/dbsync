@@ -30,13 +30,13 @@ module DbSync.Db.Loader.Connection
 
 import Cardano.Prelude hiding (handle)
 
-import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
-import qualified Data.Text.Encoding as TE
 
 import qualified Database.PostgreSQL.LibPQ as PQ
 
-import DbSync.Db.Schema.Types (ColumnDef (..), TableDef (..))
+import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Statement.Loader (copyFromStdinSql, copyableColumnList)
+import DbSync.Db.Statement.Transaction (beginSqlBs, commitSqlBs)
 import DbSync.Error (throwDb)
 
 -- ---------------------------------------------------------------------------
@@ -70,7 +70,7 @@ openLoaderConnection connStr tableDef = do
       <> tdName tableDef <> ": "
       <> maybe "(no error message)" (toS . BS8.unpack) errMsg
 
-  let colList = buildColumnList tableDef
+  let colList = copyableColumnList tableDef
       bc = LoaderConnection
         { bcConnection = conn
         , bcTableName  = tdName tableDef
@@ -96,8 +96,7 @@ closeLoaderConnection bc = PQ.finish (bcConnection bc)
 -- statement.
 beginStream :: HasCallStack => LoaderConnection -> IO ()
 beginStream bc = do
-  let sql = "COPY \"" <> TE.encodeUtf8 (bcTableName bc)
-            <> "\" (" <> bcColumnList bc <> ") FROM STDIN"
+  let sql = copyFromStdinSql (bcTableName bc) (bcColumnList bc)
   result <- PQ.exec (bcConnection bc) sql
   checkResult bc "beginStream" result
 
@@ -146,31 +145,18 @@ endStream bc = do
 -- | Begin a transaction on this connection.
 beginTransaction :: HasCallStack => LoaderConnection -> IO ()
 beginTransaction bc = do
-  result <- PQ.exec (bcConnection bc) "BEGIN"
+  result <- PQ.exec (bcConnection bc) beginSqlBs
   checkResult bc "BEGIN" result
 
 -- | Commit the current transaction on this connection.
 commitTransaction :: HasCallStack => LoaderConnection -> IO ()
 commitTransaction bc = do
-  result <- PQ.exec (bcConnection bc) "COMMIT"
+  result <- PQ.exec (bcConnection bc) commitSqlBs
   checkResult bc "COMMIT" result
 
 -- ---------------------------------------------------------------------------
 -- * Internal helpers
 -- ---------------------------------------------------------------------------
-
--- | Build the column list for a COPY statement from a 'TableDef'.
--- E.g. @"id", "hash", "epoch_no", "slot_no", ...@
---
--- Columns listed in 'tdGeneratedColumns' are excluded so PostgreSQL
--- computes them on insert.
-buildColumnList :: TableDef -> ByteString
-buildColumnList td =
-  BS.intercalate ", " $
-    map (TE.encodeUtf8 . (\c -> "\"" <> cdName c <> "\"")) ingestable
-  where
-    generatedNames = map fst (tdGeneratedColumns td)
-    ingestable = filter (\c -> cdName c `notElem` generatedNames) (tdColumns td)
 
 -- | Check that a @libpq@ result is not an error.
 checkResult :: HasCallStack => LoaderConnection -> Text -> Maybe PQ.Result -> IO ()

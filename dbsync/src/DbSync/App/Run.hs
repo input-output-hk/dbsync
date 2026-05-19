@@ -570,6 +570,17 @@ handoffToFollow
           _ -> "at genesis"
     logInfo $
       "Prep complete; handing off to FollowingChainTip " <> resumeDesc
+    -- The Ingest receiver was cancelled before Prep ran. A new one
+    -- opens below and re-intersects from the latestPointRef the
+    -- previous receiver wrote. ChainSync will respond with a
+    -- protocol-mandated confirming MsgRollBackward to that point —
+    -- the receiver tags it 'confirming intersect; not propagated' and
+    -- does not enqueue a MsgRollback, so no DB rows are deleted.
+    logInfo $
+      "Reconnecting chainsync at post-Ingest position; the\
+      \ \"Rollback to …\" line that follows is the protocol's\
+      \ confirming rollback to the chosen intersection point\
+      \ — no rows are deleted from PG."
 
     -- The Ingest receiver kept reading from the node while the
     -- consumer was draining the rollback boundary; whatever it

@@ -241,7 +241,11 @@ stakeAddressTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
-  , tdUniqueConstraints = []
+    -- Unique by 28-byte credential hash. The Follow dedup resolver
+    -- SELECTs on this column for every unique stake address per
+    -- block; without the index every resolve sequential-scans the
+    -- whole table.
+  , tdUniqueConstraints = [pure "hash_raw"]
   , tdGeneratedColumns = []
   , tdForeignKeys = []
   }

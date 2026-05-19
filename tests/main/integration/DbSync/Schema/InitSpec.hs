@@ -11,8 +11,9 @@ module DbSync.Schema.InitSpec (spec) where
 
 import Cardano.Prelude
 
-import qualified Data.Text as T
+import qualified Data.List as List
 import qualified Data.List.NonEmpty as NE
+import qualified Data.Text as T
 
 import Test.Hspec
   ( Spec
@@ -47,6 +48,13 @@ testConnStr = "dbname=dbsync_test"
 -- | The three core TableDefs.
 coreTables :: [TableDef]
 coreTables = [blockTableDef, txTableDef, slotLeaderTableDef]
+
+-- | Comma-separated single-quoted SQL list of 'coreTables' names,
+-- suitable for embedding in @WHERE tablename IN (...)@ /
+-- @WHERE relname IN (...)@ clauses.
+coreTablesInList :: Text
+coreTablesInList =
+  T.intercalate ", " (map (\td -> "'" <> tdName td <> "'") coreTables)
 
 -- | Extractor version entries for the core tables.
 coreVersions :: [(Text, Int)]
@@ -134,47 +142,56 @@ spec = describe "DbSync.Db.Schema.Init" $ do
 
       it "creates tables that exist in pg_class" $ do
         initSchema coreTables coreVersions testConnStr
-        result <- queryPsql testConnStr
-          "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('block', 'tx', 'slot_leader') ORDER BY tablename;"
+        result <- queryPsql testConnStr $
+          "SELECT tablename FROM pg_tables"
+            <> " WHERE schemaname = 'public' AND tablename IN ("
+            <> coreTablesInList <> ") ORDER BY tablename;"
         let tables = T.lines (T.strip result)
-        tables `shouldBe` ["block", "slot_leader", "tx"]
+        tables `shouldBe` List.sort (map tdName coreTables)
 
       it "creates tables as UNLOGGED" $ do
         -- pg_class.relpersistence: 'u' = UNLOGGED, 'p' = permanent (LOGGED)
-        result <- queryPsql testConnStr
-          "SELECT relname, relpersistence FROM pg_class WHERE relname IN ('block', 'tx', 'slot_leader') ORDER BY relname;"
+        result <- queryPsql testConnStr $
+          "SELECT relname, relpersistence FROM pg_class"
+            <> " WHERE relname IN (" <> coreTablesInList
+            <> ") ORDER BY relname;"
         let rows = T.lines (T.strip result)
-        -- psql output: "block|u", "slot_leader|u", "tx|u"
-        length rows `shouldBe` 3
+        length rows `shouldBe` length coreTables
         -- All should be UNLOGGED
         rows `shouldSatisfy` all (T.isInfixOf "|u")
 
       it "creates block table with correct column count" $ do
-        result <- queryPsql testConnStr
-          "SELECT count(*) FROM information_schema.columns WHERE table_name = 'block' AND table_schema = 'public';"
-        T.strip result `shouldBe` "16"
+        result <- queryPsql testConnStr $
+          "SELECT count(*) FROM information_schema.columns"
+            <> " WHERE table_name = '" <> tdName blockTableDef
+            <> "' AND table_schema = 'public';"
+        T.strip result `shouldBe` T.pack (show (length (tdColumns blockTableDef)))
 
       it "creates tx table with correct column count" $ do
-        result <- queryPsql testConnStr
-          "SELECT count(*) FROM information_schema.columns WHERE table_name = 'tx' AND table_schema = 'public';"
-        T.strip result `shouldBe` "13"
+        result <- queryPsql testConnStr $
+          "SELECT count(*) FROM information_schema.columns"
+            <> " WHERE table_name = '" <> tdName txTableDef
+            <> "' AND table_schema = 'public';"
+        T.strip result `shouldBe` T.pack (show (length (tdColumns txTableDef)))
 
       it "creates the id column as bigint NOT NULL" $ do
         result <- queryPsql testConnStr $
           "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
-          <> "WHERE table_name = 'block' AND column_name = 'id';"
+          <> "WHERE table_name = '" <> tdName blockTableDef <> "' AND column_name = 'id';"
         T.strip result `shouldBe` "id|bigint|NO"
 
       it "creates nullable columns correctly" $ do
         result <- queryPsql testConnStr $
           "SELECT column_name, is_nullable FROM information_schema.columns "
-          <> "WHERE table_name = 'block' AND column_name = 'epoch_no';"
+          <> "WHERE table_name = '" <> tdName blockTableDef
+          <> "' AND column_name = 'epoch_no';"
         T.strip result `shouldBe` "epoch_no|YES"
 
       it "dropSchema removes all tables" $ do
         dropSchema coreTables coreVersions testConnStr
-        result <- queryPsql testConnStr
-          "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('block', 'tx', 'slot_leader');"
+        result <- queryPsql testConnStr $
+          "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename IN ("
+            <> coreTablesInList <> ");"
         T.strip result `shouldBe` "0"
         -- Re-create for the afterAll_ cleanup to be idempotent
         initSchema coreTables coreVersions testConnStr
@@ -184,8 +201,9 @@ spec = describe "DbSync.Db.Schema.Init" $ do
     afterAll_  (dropSchema coreTables coreVersions testConnStr) $ do
 
       it "creates a schema_version table" $ do
-        result <- queryPsql testConnStr
-          "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename = 'schema_version';"
+        result <- queryPsql testConnStr $
+          "SELECT count(*) FROM pg_tables"
+            <> " WHERE schemaname = 'public' AND tablename = 'schema_version';"
         T.strip result `shouldBe` "1"
 
       it "records extractor name and version" $ do
@@ -227,9 +245,11 @@ spec = describe "DbSync.Db.Schema.Init" $ do
 
       it "creates the expected tables on a clean DB" $ do
         initSchema coreTables coreVersions testConnStr
-        result <- queryPsql testConnStr
-          "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('block', 'tx', 'slot_leader');"
-        T.strip result `shouldBe` "3"
+        result <- queryPsql testConnStr $
+          "SELECT count(*) FROM pg_tables"
+            <> " WHERE schemaname = 'public' AND tablename IN ("
+            <> coreTablesInList <> ");"
+        T.strip result `shouldBe` T.pack (show (length coreTables))
 
       it "fails if called on a populated DB (no longer drops + recreates)" $ do
         -- After the previous test the schema is in place; calling initSchema

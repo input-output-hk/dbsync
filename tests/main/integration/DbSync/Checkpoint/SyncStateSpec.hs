@@ -37,6 +37,8 @@ import DbSync.Checkpoint.SyncState
   , writeSyncState
   )
 import DbSync.Db.Schema.Init (dropSchema, initSchema)
+import DbSync.Db.Schema.SyncState (syncStateTableDef)
+import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Error (AppError (..))
 import DbSync.Test.Database (queryTestDb, testConnStr, testHasqlSettings)
 
@@ -86,7 +88,8 @@ spec = describe "DbSync.Checkpoint.SyncState" $
           runAppM conn (seedSyncState 1 False)
           runAppM conn (seedSyncState 1 False)
           runAppM conn (seedSyncState 1 True)    -- different args — still a no-op
-          rowCount <- T.strip <$> queryTestDb "SELECT count(*) FROM dbsync_sync_state;"
+          rowCount <- T.strip <$> queryTestDb
+            ("SELECT count(*) FROM " <> tdName syncStateTableDef <> ";")
           rowCount `shouldBe` "1"
           -- And the first seeding wins (ledger_enabled stays False)
           mRow <- runAppM conn readSyncState
@@ -213,7 +216,9 @@ resetSyncStateTable :: IO ()
 resetSyncStateTable = do
   _ <- System.Process.readProcessWithExitCode
     "psql"
-    [T.unpack testConnStr, "-q", "-c", "TRUNCATE TABLE dbsync_sync_state;"]
+    [ T.unpack testConnStr, "-q", "-c"
+    , "TRUNCATE TABLE " <> T.unpack (tdName syncStateTableDef) <> ";"
+    ]
     ""
   pure ()
 
@@ -230,8 +235,9 @@ tryRaisingInsert = do
     , "-q"
     , "-v", "ON_ERROR_STOP=1"
     , "-c"
-    , "INSERT INTO dbsync_sync_state (id, schema_version_applied, ledger_enabled) \
-      \VALUES (2, 1, false);"
+    , T.unpack $
+        "INSERT INTO " <> tdName syncStateTableDef
+          <> " (id, schema_version_applied, ledger_enabled) VALUES (2, 1, false);"
     ]
     ""
   case exit of

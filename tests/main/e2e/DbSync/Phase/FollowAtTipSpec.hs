@@ -24,6 +24,8 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 import Ouroboros.Network.Block (pattern BlockPoint)
 
+import DbSync.Db.Schema.Core (blockTableDef)
+import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Trace.Backend (mkTestTracer)
 import DbSync.Trace.Types (AppTracer, LogMsg (..))
 import DbSync.Test.AppHarness
@@ -68,14 +70,14 @@ spec = describe "FollowingChainTip at-tip behaviour" $ do
       -- pushes. Three seconds is well past one receiver round-trip
       -- through the chainsync 'SendMsgRequestNext' wait, so each
       -- cycle starts with the receiver genuinely idle.
-      baselineBlocks <- countRows "block"
+      baselineBlocks <- countRows (tdName blockTableDef)
       for_ [1 .. (5 :: Int)] $ \i -> do
         threadDelay 3_000_000
         _ <- forgeAndPushBlocks mn 1
         let expectedTotal = baselineBlocks + i
         waitFor
           ("block " <> show i <> " lands after at-tip idle")
-          (do n <- countRows "block"; pure (n >= expectedTotal))
+          (do n <- countRows (tdName blockTableDef); pure (n >= expectedTotal))
           15
 
   it "rollback at FollowingChainTip drops phase back and recovers" $
@@ -90,7 +92,7 @@ spec = describe "FollowingChainTip at-tip behaviour" $ do
         Network.Tip slot hash _bn ->
           pure (BlockPoint slot hash)
 
-      beforeFork <- countRows "block"
+      beforeFork <- countRows (tdName blockTableDef)
 
       -- Forge the to-be-rolled-back tail and wait for the consumer to
       -- catch up. Per-block "applied block" logs at tip prove the
@@ -109,8 +111,8 @@ spec = describe "FollowingChainTip at-tip behaviour" $ do
         (\m -> T.isPrefixOf "rollback to " (lmMessage m))
         20
 
-      waitFor "block count returns to pre-fork value"
-        (do n <- countRows "block"; pure (n == beforeFork))
+      waitFor (tdName blockTableDef <> " count returns to pre-fork value")
+        (do n <- countRows (tdName blockTableDef); pure (n == beforeFork))
         30
 
       -- Forge a fresh 4-block fork; consumer applies them and we
@@ -130,11 +132,11 @@ spec = describe "FollowingChainTip at-tip behaviour" $ do
       -- Five single-block pushes with a small gap between each. The
       -- per-block log at 'FollowingChainTip' must fire for every one.
       for_ [1 .. (5 :: Int)] $ \i -> do
-        before <- countRows "block"
+        before <- countRows (tdName blockTableDef)
         _ <- forgeAndPushBlocks mn 1
         waitFor
           ("block " <> show i <> " lands during slow stream")
-          (do n <- countRows "block"; pure (n > before))
+          (do n <- countRows (tdName blockTableDef); pure (n > before))
           15
         threadDelay 1_000_000
 
@@ -169,7 +171,7 @@ runAtTipScenario body =
       withAppSession tracer defaultTestProfile mn ledgerDir $ \_app -> do
         waitForSyncComplete 90
 
-        ingestBlocks <- countRows "block"
+        ingestBlocks <- countRows (tdName blockTableDef)
         forgeAndWaitForBlocks mn 20 (ingestBlocks + 20) 60
 
         waitForLogMatch logsRef "flip to FollowingChainTip"

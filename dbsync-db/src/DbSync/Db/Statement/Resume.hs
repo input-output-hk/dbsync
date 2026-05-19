@@ -14,7 +14,7 @@ module DbSync.Db.Statement.Resume
   ( -- * Cleanup deletes
     deleteBySlotStmt
   , deleteByBlockSlotStmt
-  , deleteDedupByCounterStmt
+  , deleteByIdCounterStmt
 
     -- * Dedup-map rebuild selects
   , selectDedupSingleStmt
@@ -60,11 +60,13 @@ deleteByBlockSlotStmt tableName =
     encoder = fromIntegral >$< E.param (E.nonNullable E.int8)
 
 -- | @DELETE FROM <table> WHERE id >= $1@. Returns rows affected.
--- For dedup tables with no slot or block reference; the @$1@
--- parameter is the corresponding @*_id_counter@ from
--- @dbsync_sync_state@ (\"next id to assign\").
-deleteDedupByCounterStmt :: Text -> Stmt.Statement Int64 Int64
-deleteDedupByCounterStmt tableName =
+-- The @$1@ parameter is the corresponding @*_id_counter@ from
+-- @dbsync_sync_state@ (\"next id to assign\"); the resume cleanup
+-- uses this to prune rows the previous run wrote past the
+-- last-recorded counter — covers both dedup tables and any other
+-- counter-tracked data table that lacks a slot or block reference.
+deleteByIdCounterStmt :: Text -> Stmt.Statement Int64 Int64
+deleteByIdCounterStmt tableName =
   Stmt.unpreparable sql encoder D.rowsAffected
   where
     sql = T.concat

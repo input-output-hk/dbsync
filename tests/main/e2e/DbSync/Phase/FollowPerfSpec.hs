@@ -38,6 +38,8 @@ import System.IO (hPutStrLn)
 
 import Test.Hspec (Spec, describe, it, shouldSatisfy)
 
+import DbSync.Db.Schema.Core (blockTableDef)
+import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Test.AppHarness
   ( defaultTestProfile
   , quietTracer
@@ -65,7 +67,7 @@ spec = describe "FollowingChainTip throughput" $ do
         withAppSession tracer defaultTestProfile mn ledgerDir $ \_ -> do
           waitForSyncComplete 60
 
-          ingestBlocks <- countRows "block"
+          ingestBlocks <- countRows (tdName blockTableDef)
           -- Small batch so every requested slot is inside the
           -- safe-zone window of the seeded interpreter; otherwise
           -- 'getSlotDetailsIO' falls through to the node's LSQ
@@ -119,7 +121,7 @@ drainUpTo minTotal timeoutSec = do
   go start
   where
     go startedAt = do
-      n <- countRows "block"
+      n <- countRows (tdName blockTableDef)
       if n >= minTotal
         then pure n
         else do

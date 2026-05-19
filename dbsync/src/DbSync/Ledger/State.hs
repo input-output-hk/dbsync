@@ -719,17 +719,21 @@ ledgerEpochNo env st =
 
 -- | Pure decision: should we save a snapshot at this epoch boundary?
 --
--- Mirrors upstream's cadence:
+-- Cadence:
 --
 --   * Only fires on epoch boundaries (when @apNewEpoch@ is 'Just').
 --   * Never fires at epoch @0@ (the boot epoch — there's nothing to
 --     snapshot yet).
---   * Otherwise: every epoch when consistent + near tip; every 10
---     epochs when lagging; every epoch unconditionally past the
---     near-tip-epoch threshold.
+--   * Ingest (@consistent = False@): every 10 epochs, full stop. The
+--     near-tip-epoch threshold doesn't apply here — Ingest stays on
+--     the same coarse cadence whether the resume point is epoch 5 or
+--     epoch 1200.
+--   * Follow (@consistent = True@): every epoch when @nearTip@, or
+--     once we cross the @thresholdEpoch@ (which is meant to catch
+--     the "Follow but slightly lagging chain tip" case).
 shouldSnapshotAtEpoch
   :: ApplyResult
-  -> Bool         -- ^ consistent with chain tip
+  -> Bool         -- ^ consistent with chain tip (Follow path)
   -> Bool         -- ^ near tip (e.g. within ~10 days of head)
   -> Word64       -- ^ near-tip-epoch threshold (e.g. 580)
   -> Bool
@@ -740,8 +744,8 @@ shouldSnapshotAtEpoch result consistent nearTip thresholdEpoch =
       let n = unEpochNo (Generic.neEpoch ne)
        in n > 0
             && ( (consistent && nearTip)
+                 || (consistent && n >= thresholdEpoch)
                  || n `mod` 10 == 0
-                 || n >= thresholdEpoch
                )
 
 -- | Approximate "is the chain tip near the current wall-clock time?"

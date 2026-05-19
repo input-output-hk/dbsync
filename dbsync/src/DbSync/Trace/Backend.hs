@@ -10,6 +10,9 @@ module DbSync.Trace.Backend
     mkStdErrTracer
   , mkNullTracer
   , mkTestTracer
+
+    -- * Phase-aware filter
+  , withPhaseFilter
   ) where
 
 import Cardano.Prelude hiding (hPutStrLn)
@@ -18,6 +21,7 @@ import Control.Tracer (Tracer (..), nullTracer)
 import Data.IORef (IORef, modifyIORef')
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
+import DbSync.Db.Phase (SyncPhase, isFollowPath)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 import System.IO (hPutStrLn)
 
@@ -42,6 +46,21 @@ mkNullTracer = nullTracer
 mkTestTracer :: IORef [LogMsg] -> AppTracer
 mkTestTracer ref = Tracer $ \msg ->
   modifyIORef' ref (msg :)
+
+-- * Phase-aware filter
+
+-- | Drop Debug messages unless we're in a Follow phase. Info+ always
+-- passes.
+withPhaseFilter :: IO SyncPhase -> AppTracer -> AppTracer
+withPhaseFilter readPhase inner =
+  Tracer $ \msg ->
+    if lmSeverity msg >= Info
+      then traceWith inner msg
+      else do
+        phase <- readPhase
+        when (isFollowPath phase) $ traceWith inner msg
+  where
+    traceWith (Tracer f) = f
 
 -- * Internal
 

@@ -85,6 +85,12 @@ mkIngestResolver stRef dedupMaps addrBufRef = IdResolver
   , recordTxOutAddress = recordTxOut addrBufRef
   , recordCollateralTxOutAddress = recordCollateralTxOut addrBufRef
 
+    -- Follow-only entry point. Ingest extractors must record via the
+    -- async worker so @tx_out.address_id@ is filled in one bulk UPDATE
+    -- an epoch later rather than per-row.
+  , resolveAddressId = \_ _ ->
+      panic "Phase.Ingest.Resolver: resolveAddressId is Follow-only; use recordTxOutAddress"
+
     -- UTxO IDs
   , assignTxInId = atomicModifyIORef' stRef $ \st ->
       let (iid, ctr') = nextId (icTxInId $ esIdCounters st)

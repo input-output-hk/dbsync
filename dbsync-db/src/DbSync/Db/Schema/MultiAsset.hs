@@ -101,7 +101,10 @@ multiAssetTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
-  , tdUniqueConstraints = []
+    -- Unique by (policy, name). The Follow dedup resolver SELECTs on
+    -- this pair for every unique multi-asset per block; without the
+    -- index every resolve sequential-scans the whole table.
+  , tdUniqueConstraints = ["policy" :| ["name"]]
   , tdGeneratedColumns = []
   , tdForeignKeys = []
   }

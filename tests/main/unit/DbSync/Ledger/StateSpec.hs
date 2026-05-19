@@ -127,6 +127,22 @@ spec = do
         (mkResult (Strict.Just (newEpoch 7))) False True 580
         `shouldBe` False
 
+    it "Ingest stays on every-10 cadence past the near-tip threshold" $ do
+      -- Bug fix: the threshold only relaxes the cadence during
+      -- Follow. During Ingest (consistent = False) it stays at
+      -- every 10 epochs regardless of epoch number, so resuming
+      -- from a high-epoch snapshot doesn't trigger a snapshot
+      -- per epoch.
+      shouldSnapshotAtEpoch
+        (mkResult (Strict.Just (newEpoch 581))) False False 580
+        `shouldBe` False
+      shouldSnapshotAtEpoch
+        (mkResult (Strict.Just (newEpoch 840))) False False 580
+        `shouldBe` True   -- 840 `mod` 10 == 0
+      shouldSnapshotAtEpoch
+        (mkResult (Strict.Just (newEpoch 845))) False False 580
+        `shouldBe` False
+
   -- Exercise the underlying polymorphic spine logic on plain Ints.
   -- 'pruneLedgerDb' is a one-line wrapper around 'pruneStrictSeq',
   -- and constructing real 'DbSyncStateRef' values just to test

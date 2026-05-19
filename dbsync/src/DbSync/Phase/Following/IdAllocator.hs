@@ -25,11 +25,8 @@ import Cardano.Prelude
 
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import qualified Hasql.Connection as Conn
-import qualified Hasql.Decoders as D
-import qualified Hasql.Encoders as E
 import qualified Hasql.Pipeline as Pipeline
 import qualified Hasql.Session as Sess
-import qualified Hasql.Statement as Stmt
 
 import DbSync.Db.Schema.Ids
   ( CollateralTxInId (..)
@@ -52,7 +49,8 @@ import DbSync.Db.Schema.Ids
   , TxOutId (..)
   , WithdrawalId (..)
   )
-import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Schema.Types (TableDef)
+import DbSync.Db.Statement.IdAllocator (bulkNextvalStmt)
 import DbSync.Db.Schema.UTxO
   ( collateralTxInTableDef
   , collateralTxOutTableDef
@@ -218,7 +216,8 @@ runOrPanic = \case
 --
 -- Non-zero case: @SELECT nextval(seq) FROM generate_series(1, $1)@
 -- returns N rows in one statement; the pipeline batches it with
--- the other tables' allocations.
+-- the other tables' allocations. The SQL itself lives in
+-- 'DbSync.Db.Statement.IdAllocator'.
 allocFor
   :: TableDef
   -> Int                          -- ^ How many IDs to allocate (may be 0).
@@ -227,18 +226,3 @@ allocFor
 allocFor _  0 _    = pure []
 allocFor td n ctor =
   Pipeline.statement (fromIntegral n) (bulkNextvalStmt td ctor)
-
--- | @SELECT nextval('foo_id_seq') FROM generate_series(1, $1)@
--- returning N freshly allocated ids as a typed list.
-bulkNextvalStmt
-  :: TableDef
-  -> (Int64 -> a)
-  -> Stmt.Statement Int32 [a]
-bulkNextvalStmt td ctor =
-  Stmt.preparable sql encoder decoder
-  where
-    sql =
-      "SELECT nextval('" <> tdName td <> "_id_seq') \
-      \FROM generate_series(1, $1)"
-    encoder = E.param (E.nonNullable E.int4)
-    decoder = D.rowList (ctor <$> D.column (D.nonNullable D.int8))

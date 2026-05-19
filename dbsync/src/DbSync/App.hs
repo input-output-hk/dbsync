@@ -37,7 +37,8 @@ import DbSync.Env (CoreEnv (..))
 import DbSync.Error (throwInternal)
 import DbSync.Metrics (Metrics (..))
 import DbSync.Extractor (ExtractorDef (..))
-import DbSync.Phase.Current (newCurrentPhase)
+import DbSync.Phase.Current (newCurrentPhase, readCurrentPhase)
+import DbSync.Trace.Backend (withPhaseFilter)
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Extractor.UTxO (utxoExtractor)
 import DbSync.Extractor.Metadata (metadataExtractor)
@@ -68,8 +69,9 @@ buildCoreEnv tracer syncCfg nodeCfg network = do
     Left err  -> throwInternal err
     Right xs  -> pure xs
   curPhase <- newCurrentPhase IngestChainHistory
+  let phaseAwareTracer = withPhaseFilter (readCurrentPhase curPhase) tracer
   pure CoreEnv
-    { ceTracer       = tracer
+    { ceTracer       = phaseAwareTracer
     , ceMinSeverity  = severityFromText (lgLevel (scLogging syncCfg))
     , ceMetrics      = placeholderMetrics
     , ceConfig       = syncCfg

@@ -105,6 +105,7 @@ import DbSync.Test.Database
   )
 import DbSync.Test.Fixtures (byronBlock, producerBlock, spendingBlock)
 import DbSync.Test.Hasql (withTestConnection)
+import DbSync.Test.PgAssertions (tableColumn)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import DbSync.Trace.Backend (mkNullTracer)
 import qualified DbSync.Phase.Ingest.Writer as IngestWriter
@@ -279,7 +280,7 @@ spec = describe "DbSync.Db.Statement.Backfill" $
         -- The rewritten shape filters tx first (selective predicate),
         -- then looks up collateral via index. The old shape was a
         -- HashAggregate over all collateral_tx_in.
-        plan `shouldMention` "tx"
+        plan `shouldMention` tdName txTableDef
         plan `shouldNotMention` "HashAggregate"
 
       it "looks up collateral inputs via the pre-resolve index" $ do
@@ -293,7 +294,7 @@ spec = describe "DbSync.Db.Statement.Backfill" $
     describe "backfillByronFeeStmt plan" $ do
       it "drives off the block.proto_major filter, not the tx_in aggregate" $ do
         plan <- explainOf backfillByronFeeSql
-        plan `shouldMention` "proto_major"
+        plan `shouldMention` tableColumn blockTableDef "proto_major"
         plan `shouldNotMention` "HashAggregate"
 
       it "looks up Byron tx inputs via tx_in_tx_in_id_idx" $ do
@@ -324,7 +325,7 @@ spec = describe "DbSync.Db.Statement.Backfill" $
         -- fails. Plan should be a Seq Scan / Index Scan on tx and
         -- nothing else.
         plan <- explainOf backfillPhaseTwoDepositSql
-        plan `shouldMention` "tx"
+        plan `shouldMention` tdName txTableDef
         plan `shouldNotMention` "Subquery"
         plan `shouldNotMention` "HashAggregate"
 

@@ -12,9 +12,11 @@
 --   IDs pre-allocated in one pipeline at start of block;
 --   @resolve*@ still SELECTs synchronously but checks a per-block
 --   in-process map first (so a SELECT seeing a sibling's
---   not-yet-flushed INSERT still finds it). @recordTxOutAddress@
---   queues the dependent @UPDATE@ on the shared 'WriteBuffer'.
---   Used in production.
+--   not-yet-flushed INSERT still finds it). @resolveAddressId@
+--   returns the id synchronously and queues the @address@ INSERT
+--   (when new) on the shared 'WriteBuffer'; the caller then writes
+--   the tx_out row with @address_id@ already populated. Used in
+--   production.
 --
 -- Both share the same dedup contracts and the same FK invariants;
 -- the diff test confirms identical rows in PG.
@@ -42,10 +44,7 @@ import DbSync.Db.Statement.Address
   )
 import DbSync.Db.Statement.Block (nextBlockIdStmt)
 import DbSync.Db.Statement.CollateralTxIn (nextCollateralTxInIdStmt)
-import DbSync.Db.Statement.CollateralTxOut
-  ( nextCollateralTxOutIdStmt
-  , updateCollateralTxOutAddressIdStmt
-  )
+import DbSync.Db.Statement.CollateralTxOut (nextCollateralTxOutIdStmt)
 import DbSync.Db.Statement.Delegation (nextDelegationIdStmt)
 import DbSync.Db.Statement.MaTxMint (nextMaTxMintIdStmt)
 import DbSync.Db.Statement.MaTxOut (nextMaTxOutIdStmt)
@@ -78,7 +77,6 @@ import DbSync.Db.Statement.TxMetadata (nextTxMetadataIdStmt)
 import DbSync.Db.Statement.TxOut
   ( nextTxOutIdStmt
   , queryOutputValueStmt
-  , updateTxOutAddressIdStmt
   )
 import DbSync.Db.Statement.Withdrawal (nextWithdrawalIdStmt)
 import DbSync.Phase.Following.IdAllocator (PreAllocatedIds (..), popHead)
@@ -109,15 +107,15 @@ resolver conn lastBlock = IdResolver
 
   , assignTxId = run conn () nextTxIdStmt
 
-    -- Address recording: resolve the FK synchronously and UPDATE the
-    -- row that 'writeTxOut' has just inserted with @address_id = NULL@.
-    -- See 'resolveAddressId'.
-  , recordTxOutAddress = \txOutId rawBytes addr -> do
-      aid <- resolveAddressId conn rawBytes addr
-      run conn (aid, txOutId) updateTxOutAddressIdStmt
-  , recordCollateralTxOutAddress = \outId rawBytes addr -> do
-      aid <- resolveAddressId conn rawBytes addr
-      run conn (aid, outId) updateCollateralTxOutAddressIdStmt
+    -- Async-worker entry points. Follow extractors must use
+    -- 'resolveAddressId' so the tx_out row carries @address_id@
+    -- from the start.
+  , recordTxOutAddress = \_ _ _ ->
+      panic "Phase.Following.Resolver: recordTxOutAddress is Ingest-only"
+  , recordCollateralTxOutAddress = \_ _ _ ->
+      panic "Phase.Following.Resolver: recordCollateralTxOutAddress is Ingest-only"
+
+  , resolveAddressId = lookupOrInsertAddress conn
 
     -- UTxO IDs (no resolver-side dedup — straight nextval per row)
   , assignTxOutId            = run conn () nextTxOutIdStmt
@@ -198,12 +196,10 @@ run conn p stmt = do
     Right b -> pure b
     Left e  -> panic $ "Follow resolver session failed: " <> show e
 
--- | Look up an existing @address.id@ by raw bytes, or insert a new
--- row and return its allocated id. Used by @recordTxOutAddress@ and
--- @recordCollateralTxOutAddress@ to obtain the FK value before the
--- subsequent UPDATE.
-resolveAddressId :: Conn.Connection -> ByteString -> Address -> IO AddressId
-resolveAddressId conn rawBytes addr = do
+-- | SELECT-by-bytes; on miss, allocate from the sequence and run the
+-- @address@ INSERT inline. Used by the un-buffered resolver.
+lookupOrInsertAddress :: Conn.Connection -> ByteString -> Address -> IO AddressId
+lookupOrInsertAddress conn rawBytes addr = do
   mId <- run conn rawBytes queryAddressIdStmt
   case mId of
     Just aid -> pure aid
@@ -221,14 +217,9 @@ todo name = pure $ panic $ "Phase.Following.Resolver." <> name <> " not yet impl
 
 -- | Per-block in-process dedup cache.
 --
--- Keeps the @SELECT@-then-@INSERT@ contract intact when the INSERTs
--- are deferred to the end-of-block buffer flush: a second resolve
--- of the same hash within the block finds the previously-allocated
--- id in the map without consulting PG.
---
--- Lifetime is one block; a new cache is built for every
--- 'processForward' invocation. Cross-block reuse is Stage 2; here
--- each cache starts empty and is discarded after COMMIT.
+-- Shadows not-yet-flushed INSERTs: a second resolve of the same key
+-- within the block finds the previously-allocated id without
+-- consulting PG. Built fresh per block, discarded after COMMIT.
 data BlockDedupCache = BlockDedupCache
   { bdcSlotLeader   :: !(IORef (Map ByteString SlotLeaderId))
   , bdcPoolHash     :: !(IORef (Map ByteString PoolHashId))
@@ -245,19 +236,18 @@ newBlockDedupCache = BlockDedupCache
   <*> newIORef Map.empty
   <*> newIORef Map.empty
 
--- | Buffered Follow resolver. Same observable behaviour as
+-- | Buffered Follow resolver. Same observable rows as
 -- 'mkFollowResolver'; the difference is where the work lands:
 --
---   * @assign*Id@ pops from per-sequence queues in
---     'PreAllocatedIds' (no network round-trip).
---   * dedup @resolve*@ checks the per-block cache first; on miss,
---     does the same @SELECT@ then @nextval@ pattern as the
---     immediate resolver. The corresponding INSERT is queued via
---     the 'Writer' as today; the per-block cache shadows the
---     not-yet-flushed row.
---   * @recordTxOutAddress@\/@recordCollateralTxOutAddress@ queue
---     their INSERT (when new) and UPDATE on the supplied
---     'WriteBuffer' rather than running them inline.
+--   * @assign*Id@ pops from per-sequence queues in 'PreAllocatedIds'
+--     (zero round-trips).
+--   * Dedup @resolve*@ checks the per-block cache first; on miss
+--     does @SELECT@ then @nextval@. The corresponding INSERT is
+--     queued via the 'Writer' as today; the per-block cache shadows
+--     the not-yet-flushed row.
+--   * @resolveAddressId@ resolves synchronously, queuing the
+--     @address@ INSERT (when new) on the shared 'WriteBuffer'. The
+--     extractor writes the tx_out row with @address_id@ filled in.
 mkBufferedFollowResolver
   :: Conn.Connection
   -> PreAllocatedIds
@@ -276,9 +266,8 @@ bufferedResolver
   -> BlockDedupCache
   -> IdResolver IO
 bufferedResolver conn preAlloc buf lastBlock cache = IdResolver
-  { -- Block ID: still uses 'nextBlockIdStmt' synchronously because
-    -- there's exactly one per block (no batching to be done) and
-    -- 'resolvePrevBlock' below needs the value materialised.
+  { -- Block ID stays synchronous: one per block, and 'resolvePrevBlock'
+    -- below needs the value materialised.
     assignBlockId = do
       bid <- run conn () nextBlockIdStmt
       writeIORef lastBlock (Just bid)
@@ -372,15 +361,15 @@ bufferedResolver conn preAlloc buf lastBlock cache = IdResolver
         queryPoolHashIdStmt
         nextPoolHashIdStmt
 
-  , recordTxOutAddress = \txOutId rawBytes addr -> do
-      aid <- resolveAddressIdBuffered conn buf (bdcAddress cache) rawBytes addr
-      -- The @tx_out@ row was queued by 'writeTxOut' a few lines
-      -- earlier with @address_id = NULL@. The UPDATE that fills it
-      -- in joins that queue here so they flush together.
-      append buf (Pipeline.statement (aid, txOutId) updateTxOutAddressIdStmt)
-  , recordCollateralTxOutAddress = \outId rawBytes addr -> do
-      aid <- resolveAddressIdBuffered conn buf (bdcAddress cache) rawBytes addr
-      append buf (Pipeline.statement (aid, outId) updateCollateralTxOutAddressIdStmt)
+    -- Async-worker entry points. Follow extractors must use
+    -- 'resolveAddressId' so the tx_out / collateral_tx_out row
+    -- carries @address_id@ from the start.
+  , recordTxOutAddress = \_ _ _ ->
+      panic "Phase.Following.Resolver: recordTxOutAddress is Ingest-only"
+  , recordCollateralTxOutAddress = \_ _ _ ->
+      panic "Phase.Following.Resolver: recordCollateralTxOutAddress is Ingest-only"
+
+  , resolveAddressId = resolveAddressIdBuffered conn buf (bdcAddress cache)
 
   , -- Stubs reserved for extractors that haven't landed; their fields
     -- are evaluated only when those extractors fire. Keeping them
@@ -391,14 +380,13 @@ bufferedResolver conn preAlloc buf lastBlock cache = IdResolver
 
   , -- @resolveInputValues@ stays per-pair for now. The pairs could
     -- be batched into one pipeline at the cost of some interface
-    -- restructuring; deferred to Stage 2.
+    -- restructuring.
     resolveInputValues = \pairs ->
-      forM pairs $ \pair -> run conn pair queryOutputValueStmt
+      forM pairs $ \pair ->
+        run conn pair queryOutputValueStmt
   }
 
--- | Look up an existing dedup id by its raw key; allocate a fresh
--- one on miss. Returns the (id, isNew) pair the existing extractor
--- pattern uses to decide whether to fire 'writeXxx'.
+-- | SELECT-on-key, allocate-on-miss with per-block cache shadowing.
 resolveDedupSimple
   :: Ord key
   => Conn.Connection
@@ -422,9 +410,10 @@ resolveDedupSimple conn key mapRef queryStmt nextStmt = do
           cacheInsert mapRef key i
           pure (i, True)
 
--- | Same shape as the immediate 'resolveAddressId' but the INSERT
--- (when new) is queued on the 'WriteBuffer' instead of running
--- inline.
+-- | Same shape as 'lookupOrInsertAddress' but the INSERT (when new)
+-- is queued on the 'WriteBuffer' instead of running inline. The cache
+-- shadows the not-yet-flushed row so a sibling resolve within the
+-- block finds the id without re-querying PG.
 resolveAddressIdBuffered
   :: Conn.Connection
   -> WriteBuffer

@@ -31,7 +31,7 @@ import DbSync.Db.Loader (LoaderStream (..), closeLoaderStream, mkLoaderStream)
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
 import DbSync.Db.Schema.Init (dropSchema, initSchema)
 import DbSync.Db.Schema.Pool (poolHashTableDef)
-import DbSync.Db.Schema.Types (TableDef)
+import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Extractor (freshExtractState)
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Id.DedupMap (newMaps)
@@ -54,7 +54,7 @@ coreVersions :: [(Text, Int)]
 coreVersions = [("core", 1)]
 
 coreTableNames :: [Text]
-coreTableNames = ["tx", "block", "slot_leader", "pool_hash"]
+coreTableNames = map tdName coreTables
 
 spec :: Spec
 spec = describe "DbSync.Db.Loader (multi-threaded, full pipeline)" $
@@ -65,47 +65,50 @@ spec = describe "DbSync.Db.Loader (multi-threaded, full pipeline)" $
       it "writes 1 block, 0 txs, 1 slot_leader to PostgreSQL" $ do
         truncateAllTables coreTableNames
         runPipelineToDb [emptyBlock]
-        blockCount <- queryTestDb "SELECT count(*) FROM block;"
-        txCount    <- queryTestDb "SELECT count(*) FROM tx;"
-        slCount    <- queryTestDb "SELECT count(*) FROM slot_leader;"
-        T.strip blockCount `shouldBe` "1"
-        T.strip txCount    `shouldBe` "0"
-        T.strip slCount    `shouldBe` "1"
+        blockCount <- queryCount blockTableDef
+        txCount    <- queryCount txTableDef
+        slCount    <- queryCount slotLeaderTableDef
+        blockCount `shouldBe` "1"
+        txCount    `shouldBe` "0"
+        slCount    `shouldBe` "1"
 
       it "writes block with 3 transactions" $ do
         truncateAllTables coreTableNames
         runPipelineToDb [blockWith3Txs]
-        blockCount <- queryTestDb "SELECT count(*) FROM block;"
-        txCount    <- queryTestDb "SELECT count(*) FROM tx;"
-        T.strip blockCount `shouldBe` "1"
-        T.strip txCount    `shouldBe` "3"
+        blockCount <- queryCount blockTableDef
+        txCount    <- queryCount txTableDef
+        blockCount `shouldBe` "1"
+        txCount    `shouldBe` "3"
 
     describe "multiple blocks" $ do
       it "writes 2 blocks with correct IDs" $ do
         truncateAllTables coreTableNames
         runPipelineToDb [emptyBlock, emptyBlock2]
-        result <- queryTestDb "SELECT id FROM block ORDER BY id;"
+        result <- queryTestDb $
+          "SELECT id FROM " <> tdName blockTableDef <> " ORDER BY id;"
         T.strip result `shouldBe` "1\n2"
 
       it "links previous_id correctly" $ do
         truncateAllTables coreTableNames
         runPipelineToDb [emptyBlock, emptyBlock2]
-        result <- queryTestDb
-          "SELECT id, previous_id FROM block ORDER BY id;"
+        result <- queryTestDb $
+          "SELECT id, previous_id FROM " <> tdName blockTableDef <> " ORDER BY id;"
         let rows = T.lines (T.strip result)
         rows `shouldBe` ["1|", "2|1"]
 
       it "tx IDs are monotonic across blocks" $ do
         truncateAllTables coreTableNames
         runPipelineToDb [blockWith3Txs, blockWith2Txs]
-        result <- queryTestDb "SELECT id FROM tx ORDER BY id;"
+        result <- queryTestDb $
+          "SELECT id FROM " <> tdName txTableDef <> " ORDER BY id;"
         let txIds = T.lines (T.strip result)
         txIds `shouldBe` ["1", "2", "3", "4", "5"]
 
       it "tx block_id references the correct block" $ do
         truncateAllTables coreTableNames
         runPipelineToDb [blockWith3Txs, blockWith2Txs]
-        result <- queryTestDb "SELECT block_id FROM tx ORDER BY id;"
+        result <- queryTestDb $
+          "SELECT block_id FROM " <> tdName txTableDef <> " ORDER BY id;"
         let blockRefs = T.lines (T.strip result)
         -- First 3 txs belong to block 1, next 2 to block 2
         blockRefs `shouldBe` ["1", "1", "1", "2", "2"]
@@ -114,15 +117,15 @@ spec = describe "DbSync.Db.Loader (multi-threaded, full pipeline)" $
       it "same leader across 2 blocks produces 1 slot_leader row" $ do
         truncateAllTables coreTableNames
         runPipelineToDb [emptyBlock, emptyBlock2]
-        slCount <- queryTestDb "SELECT count(*) FROM slot_leader;"
-        T.strip slCount `shouldBe` "1"
+        slCount <- queryCount slotLeaderTableDef
+        slCount `shouldBe` "1"
 
       it "different leaders produce separate rows" $ do
         truncateAllTables coreTableNames
         let diffLeader = emptyBlock2 { blkSlotLeader = BS.replicate 28 0xff }
         runPipelineToDb [emptyBlock, diffLeader]
-        slCount <- queryTestDb "SELECT count(*) FROM slot_leader;"
-        T.strip slCount `shouldBe` "2"
+        slCount <- queryCount slotLeaderTableDef
+        slCount `shouldBe` "2"
 
     describe "epoch boundary (commit + reopen)" $ do
       it "data survives commit + reopen cycle" $ do
@@ -144,24 +147,31 @@ spec = describe "DbSync.Db.Loader (multi-threaded, full pipeline)" $
         lsCommit bs
         closeLoaderStream bs
 
-        blockCount <- queryTestDb "SELECT count(*) FROM block;"
-        T.strip blockCount `shouldBe` "2"
+        blockCount <- queryCount blockTableDef
+        blockCount `shouldBe` "2"
 
     describe "data integrity" $ do
       it "NULL values round-trip correctly" $ do
         truncateAllTables coreTableNames
         runPipelineToDb [emptyBlock]
-        result <- queryTestDb
-          "SELECT previous_id FROM block WHERE id = 1;"
+        result <- queryTestDb $
+          "SELECT previous_id FROM " <> tdName blockTableDef <> " WHERE id = 1;"
         T.strip result `shouldBe` ""  -- NULL
 
       it "bytea hash round-trips correctly" $ do
         truncateAllTables coreTableNames
         runPipelineToDb [emptyBlock]
-        result <- queryTestDb
-          "SELECT encode(hash, 'hex') FROM slot_leader WHERE id = 1;"
+        result <- queryTestDb $
+          "SELECT encode(hash, 'hex') FROM " <> tdName slotLeaderTableDef
+            <> " WHERE id = 1;"
         -- blkSlotLeader is BS.replicate 28 0xab = 28 bytes = 56 hex chars
         T.strip result `shouldBe` T.replicate 28 "ab"
+
+-- | Strip-and-count helper. Returns the bare count string so callers
+-- can compare against the small numeric literals they already use.
+queryCount :: TableDef -> IO Text
+queryCount td = T.strip <$>
+  queryTestDb ("SELECT count(*) FROM " <> tdName td <> ";")
 
 -- ---------------------------------------------------------------------------
 -- Test runner helpers

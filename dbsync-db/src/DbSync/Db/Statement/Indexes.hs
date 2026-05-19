@@ -56,20 +56,19 @@ import DbSync.Db.Sql (quoteIdent)
 import DbSync.Db.Sql.Refs (columnRef)
 
 -- | Produce the @CREATE INDEX@ statements for the given table. One
--- element per index. Empty list if the table declares no PK and no
--- unique constraints. The 'Concurrency' argument chooses between
--- @CREATE INDEX@ (callers with no concurrent writers; full parallel
--- maintenance worker support) and @CREATE INDEX CONCURRENTLY@
--- (callers running against a live database that cannot tolerate
--- @ShareLock@).
+-- entry for the primary key (defaulting to @id@ when 'tdPrimaryKey'
+-- is 'Nothing') plus one per unique constraint. The 'Concurrency'
+-- argument chooses between @CREATE INDEX@ (callers with no
+-- concurrent writers; full parallel maintenance worker support) and
+-- @CREATE INDEX CONCURRENTLY@ (callers running against a live
+-- database that cannot tolerate @ShareLock@).
 tableIndexStatements :: Concurrency -> TableDef -> [Text]
 tableIndexStatements conc td =
-  pkStatement <> uniqueStatements
+  pkStatement : uniqueStatements
   where
-    pkStatement = case tdPrimaryKey td of
-      Nothing   -> []
-      Just cols ->
-        [renderIndex conc Unique (tdName td <> "_pkey_idx") (tdName td) cols]
+    pkCols = fromMaybe ["id"] (tdPrimaryKey td)
+    pkStatement =
+      renderIndex conc Unique (tdName td <> "_pkey_idx") (tdName td) pkCols
 
     uniqueStatements =
       zipWith

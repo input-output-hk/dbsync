@@ -30,6 +30,9 @@ module DbSync.Test.PgAssertions
     -- * Settle-state polling
   , waitForSchemaSettled
 
+    -- * Schema-driven SQL fragments
+  , tableColumn
+
     -- * Generic decoders
   , readNullableInt
   ) where
@@ -38,6 +41,9 @@ import Cardano.Prelude
 
 import qualified Data.Text as T
 
+import DbSync.Db.Schema.Core (blockTableDef)
+import DbSync.Db.Schema.SyncState (syncStateTableDef)
+import DbSync.Db.Schema.Types (ColumnDef (..), TableDef (..))
 import DbSync.Test.Database (queryTestDb)
 import DbSync.Test.Helpers (waitFor)
 
@@ -155,23 +161,43 @@ waitForSchemaSettled tables indexes =
 -- committed.
 readSyncStateLast :: IO (Maybe Int, Maybe Int)
 readSyncStateLast = do
-  slot  <- readNullableInt
-    "SELECT COALESCE(last_committed_slot::text, '') \
-    \  FROM dbsync_sync_state LIMIT 1;"
-  block <- readNullableInt
-    "SELECT COALESCE(last_committed_block_no::text, '') \
-    \  FROM dbsync_sync_state LIMIT 1;"
+  slot  <- readNullableInt $
+    "SELECT COALESCE(" <> tableColumn syncStateTableDef "last_committed_slot"
+      <> "::text, '') FROM " <> tdName syncStateTableDef <> " LIMIT 1;"
+  block <- readNullableInt $
+    "SELECT COALESCE(" <> tableColumn syncStateTableDef "last_committed_block_no"
+      <> "::text, '') FROM " <> tdName syncStateTableDef <> " LIMIT 1;"
   pure (slot, block)
 
 -- | @(MAX(slot_no), MAX(block_no))@ from the @block@ table. 'Nothing'
 -- on each component when the table is empty.
 readBlockMax :: IO (Maybe Int, Maybe Int)
 readBlockMax = do
-  slot  <- readNullableInt
-    "SELECT COALESCE(MAX(slot_no)::text, '') FROM block;"
-  block <- readNullableInt
-    "SELECT COALESCE(MAX(block_no)::text, '') FROM block;"
+  slot  <- readNullableInt $
+    "SELECT COALESCE(MAX(" <> tableColumn blockTableDef "slot_no"
+      <> ")::text, '') FROM " <> tdName blockTableDef <> ";"
+  block <- readNullableInt $
+    "SELECT COALESCE(MAX(" <> tableColumn blockTableDef "block_no"
+      <> ")::text, '') FROM " <> tdName blockTableDef <> ";"
   pure (slot, block)
+
+-- ---------------------------------------------------------------------------
+-- * Schema-driven SQL fragments
+-- ---------------------------------------------------------------------------
+
+-- | Look up a column name on a 'TableDef'. Returns the @cdName@
+-- value (which equals @name@ on success) so it composes directly
+-- into SQL fragments via @\<>@. Panics with the list of declared
+-- columns when @name@ isn't on the table — surfaces schema drift
+-- the moment a test runs, without waiting for the PG round-trip
+-- that would otherwise report @column \"foo\" does not exist@.
+tableColumn :: HasCallStack => TableDef -> Text -> Text
+tableColumn td name =
+  case find ((== name) . cdName) (tdColumns td) of
+    Just c  -> cdName c
+    Nothing -> panic $
+      "tableColumn: \"" <> name <> "\" not in " <> tdName td
+        <> "; have: " <> T.intercalate ", " (map cdName (tdColumns td))
 
 -- ---------------------------------------------------------------------------
 -- * Generic decoders

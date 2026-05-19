@@ -18,6 +18,12 @@ import Cardano.Prelude
 import Test.Hspec (Spec, describe, it, shouldSatisfy)
 
 import DbSync.Config.Types (SyncConfig)
+import DbSync.Db.Schema.Address (addressTableDef)
+import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
+import DbSync.Db.Schema.Pool (poolHashTableDef)
+import DbSync.Db.Schema.StakeDelegation (stakeAddressTableDef)
+import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Schema.UTxO (txOutTableDef)
 import DbSync.Test.AppHarness
   ( defaultTestProfile
   , ledgerEnabledTestProfile
@@ -54,14 +60,14 @@ spec = describe "FollowingChainTip restart" $ do
 -- from PG sequences during Follow and live with the "stale counter"
 -- the cleanup bug used to wipe. Pre / post counts must match.
 preservedTables :: [Text]
-preservedTables =
-  [ "block"
-  , "slot_leader"
-  , "pool_hash"
-  , "tx"
-  , "tx_out"
-  , "address"
-  , "stake_address"
+preservedTables = map tdName
+  [ blockTableDef
+  , slotLeaderTableDef
+  , poolHashTableDef
+  , txTableDef
+  , txOutTableDef
+  , addressTableDef
+  , stakeAddressTableDef
   ]
 
 data SnapshotRequirement = RequireSnapshot | RequireNoSnapshot

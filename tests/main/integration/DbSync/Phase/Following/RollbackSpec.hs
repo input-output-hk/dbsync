@@ -68,6 +68,7 @@ import DbSync.Db.Schema.StakeDelegation
   , stakeRegistrationTableDef
   , withdrawalTableDef
   )
+import DbSync.Db.Schema.SyncState (syncStateTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Schema.UTxO
   ( collateralTxInTableDef
@@ -232,7 +233,7 @@ cascadeSpec = describe "Rollback.rollbackToPoint" $
       runFollow [block1WithTx, block2WithTxMeta, block3WithTx]
 
       -- Sanity: all three blocks were ingested.
-      blockN <- T.strip <$> queryTestDb "SELECT count(*) FROM block;"
+      blockN <- countOf blockTableDef
       blockN `shouldBe` "3"
 
       -- Roll back to the first block. block2 and block3 should be
@@ -240,16 +241,16 @@ cascadeSpec = describe "Rollback.rollbackToPoint" $
       -- first block stays.
       withTestConnection $ \conn ->
         runAppM conn (Rollback.rollbackToPoint tables target)
-      blockN' <- T.strip <$> queryTestDb "SELECT count(*) FROM block;"
+      blockN' <- countOf blockTableDef
       blockN' `shouldBe` "1"
 
-      txN <- T.strip <$> queryTestDb "SELECT count(*) FROM tx;"
+      txN <- countOf txTableDef
       txN `shouldBe` "1"
 
-      txOutN <- T.strip <$> queryTestDb "SELECT count(*) FROM tx_out;"
+      txOutN <- countOf txOutTableDef
       txOutN `shouldBe` "1"
 
-      metaN <- T.strip <$> queryTestDb "SELECT count(*) FROM tx_metadata;"
+      metaN <- countOf txMetadataTableDef
       -- block2's metadata is gone.
       metaN `shouldBe` "0"
 
@@ -257,35 +258,42 @@ cascadeSpec = describe "Rollback.rollbackToPoint" $
       runFollow [block1WithTx, block2WithTxMeta, block3WithTx]
 
       -- One unique address shared across all blocks ⇒ one address row.
-      addrBefore <- T.strip <$> queryTestDb "SELECT count(*) FROM address;"
-      slBefore   <- T.strip <$> queryTestDb "SELECT count(*) FROM slot_leader;"
+      addrBefore <- countOf addressTableDef
+      slBefore   <- countOf slotLeaderTableDef
 
       withTestConnection $ \conn ->
         runAppM conn (Rollback.rollbackToPoint tables target)
 
-      addrAfter <- T.strip <$> queryTestDb "SELECT count(*) FROM address;"
-      slAfter   <- T.strip <$> queryTestDb "SELECT count(*) FROM slot_leader;"
+      addrAfter <- countOf addressTableDef
+      slAfter   <- countOf slotLeaderTableDef
       addrAfter `shouldBe` addrBefore
       slAfter   `shouldBe` slBefore
 
     it "advances dbsync_sync_state.last_committed_slot to the target" $ do
       runFollow [block1WithTx, block2WithTxMeta, block3WithTx]
       -- Seed the sync-state row so the UPDATE has somewhere to land.
-      _ <- queryTestDb
-        "INSERT INTO dbsync_sync_state (schema_version_applied, ledger_enabled) \
-        \VALUES (1, false) ON CONFLICT (id) DO NOTHING;"
+      _ <- queryTestDb $
+        "INSERT INTO " <> tdName syncStateTableDef
+          <> " (schema_version_applied, ledger_enabled)"
+          <> " VALUES (1, false) ON CONFLICT (id) DO NOTHING;"
 
       withTestConnection $ \conn ->
         runAppM conn (Rollback.rollbackToPoint tables target)
 
-      result <- T.strip <$>
-        queryTestDb
-          "SELECT last_committed_slot, last_committed_block_no, \
-          \       encode(last_committed_block_hash, 'hex') \
-          \FROM dbsync_sync_state;"
+      result <- T.strip <$> queryTestDb
+        ( "SELECT last_committed_slot, last_committed_block_no,"
+            <> " encode(last_committed_block_hash, 'hex')"
+            <> " FROM " <> tdName syncStateTableDef <> ";"
+        )
       -- block1: slot 100, blockNo 1, hash 0x00..00 (32 bytes).
       result `shouldBe`
         "100|1|0000000000000000000000000000000000000000000000000000000000000000"
+
+-- | Bare row-count via @psql@. Returns the count as 'Text' so callers
+-- compare directly against the numeric literals they already use.
+countOf :: TableDef -> IO Text
+countOf td = T.strip <$>
+  queryTestDb ("SELECT count(*) FROM " <> tdName td <> ";")
 
 -- ---------------------------------------------------------------------------
 -- Runner

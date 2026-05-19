@@ -18,6 +18,15 @@ import qualified Data.Text as T
 
 import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe, shouldSatisfy)
 
+import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
+import DbSync.Db.Schema.SyncState (syncStateTableDef)
+import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Schema.UTxO
+  ( collateralTxInTableDef
+  , referenceTxInTableDef
+  , txInTableDef
+  , txOutTableDef
+  )
 import DbSync.Test.AppHarness
   ( defaultTestProfile
   , profileExpectedIndexes
@@ -41,6 +50,7 @@ import DbSync.Test.PgAssertions
   , readBlockMax
   , readSyncStateLast
   , sequenceAdvanced
+  , tableColumn
   , waitForSchemaSettled
   )
 
@@ -68,7 +78,9 @@ spec = describe "IngestChainHistory \x2192 PreparingForVolatileTail \x2192 Follo
 
           syncComplete <-
             T.strip <$> queryTestDb
-              "SELECT sync_complete FROM dbsync_sync_state LIMIT 1"
+              ( "SELECT " <> tableColumn syncStateTableDef "sync_complete"
+                  <> " FROM " <> tdName syncStateTableDef <> " LIMIT 1"
+              )
           syncComplete `shouldBe` "t"
 
           let expectedTables  = profileTableNames defaultTestProfile
@@ -92,9 +104,15 @@ spec = describe "IngestChainHistory \x2192 PreparingForVolatileTail \x2192 Follo
           -- columns. The Conway test chain produces no real inputs
           -- (genesis seed only) but the asserts still guard against
           -- future schema regressions.
-          txInNulls  <- countNulls "tx_in"            "tx_out_id"
-          colInNulls <- countNulls "collateral_tx_in" "tx_out_id"
-          refInNulls <- countNulls "reference_tx_in"  "tx_out_id"
+          txInNulls <- countNulls
+            (tdName txInTableDef)
+            (tableColumn txInTableDef "tx_out_id")
+          colInNulls <- countNulls
+            (tdName collateralTxInTableDef)
+            (tableColumn collateralTxInTableDef "tx_out_id")
+          refInNulls <- countNulls
+            (tdName referenceTxInTableDef)
+            (tableColumn referenceTxInTableDef "tx_out_id")
           txInNulls  `shouldBe` 0
           colInNulls `shouldBe` 0
           refInNulls `shouldBe` 0
@@ -121,10 +139,10 @@ spec = describe "IngestChainHistory \x2192 PreparingForVolatileTail \x2192 Follo
 
           -- Snapshot Ingest-era counts so the post-Follow assertions
           -- have a stable baseline.
-          ingestBlock      <- countRows "block"
-          ingestTx         <- countRows "tx"
-          ingestTxOut      <- countRows "tx_out"
-          ingestSlotLeader <- countRows "slot_leader"
+          ingestBlock      <- countRows (tdName blockTableDef)
+          ingestTx         <- countRows (tdName txTableDef)
+          ingestTxOut      <- countRows (tdName txOutTableDef)
+          ingestSlotLeader <- countRows (tdName slotLeaderTableDef)
           ingestBlock `shouldSatisfy` (>= 140)
 
           -- Forge more blocks. Follow's in-process receiver picks
@@ -137,10 +155,10 @@ spec = describe "IngestChainHistory \x2192 PreparingForVolatileTail \x2192 Follo
           -- slot-leader strictly grow; tx / tx_out at minimum hold
           -- steady because the Conway test chain forges empty blocks
           -- (no tx → no tx_out).
-          followBlock      <- countRows "block"
-          followTx         <- countRows "tx"
-          followTxOut      <- countRows "tx_out"
-          followSlotLeader <- countRows "slot_leader"
+          followBlock      <- countRows (tdName blockTableDef)
+          followTx         <- countRows (tdName txTableDef)
+          followTxOut      <- countRows (tdName txOutTableDef)
+          followSlotLeader <- countRows (tdName slotLeaderTableDef)
           followBlock      `shouldSatisfy` (> ingestBlock)
           followSlotLeader `shouldSatisfy` (>= ingestSlotLeader)
           followTx         `shouldSatisfy` (>= ingestTx)
@@ -160,10 +178,12 @@ spec = describe "IngestChainHistory \x2192 PreparingForVolatileTail \x2192 Follo
 -- tables and that it sits at 1 on empty ones, so the list is limited
 -- to tables the Conway test chain reliably populates.
 pkSequenceTables :: [(Text, Text)]
-pkSequenceTables =
-  [ ("block",       "block_id_seq")
-  , ("tx",          "tx_id_seq")
-  , ("tx_out",      "tx_out_id_seq")
-  , ("tx_in",       "tx_in_id_seq")
-  , ("slot_leader", "slot_leader_id_seq")
+pkSequenceTables = map withSeq
+  [ blockTableDef
+  , txTableDef
+  , txOutTableDef
+  , txInTableDef
+  , slotLeaderTableDef
   ]
+  where
+    withSeq td = (tdName td, tdName td <> "_id_seq")

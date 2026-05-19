@@ -32,6 +32,7 @@ import qualified Hasql.Connection as Conn
 import qualified Hasql.Pipeline as Pipeline
 import qualified Hasql.Session as Sess
 
+
 import Ouroboros.Consensus.Block (blockSlot)
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
 import Ouroboros.Network.Block (pattern BlockPoint)
@@ -41,7 +42,8 @@ import DbSync.Block.Parser (parseBlock)
 import DbSync.Block.Types (CardanoPoint, GenericBlock (..))
 import DbSync.Db.Phase (SyncPhase (..), renderSyncPhase)
 import DbSync.Db.Statement.SyncState (writeSyncStateSlotStmt)
-import DbSync.Db.Transaction (withTransactionOn)
+import DbSync.Db.Statement.Transaction (beginSql, commitSql, rollbackSql)
+
 import DbSync.Env (CoreEnv (..), FollowEnv (..))
 import DbSync.Extractor (ExtractorDef (..))
 import DbSync.Block.Pipeline (processBlock)
@@ -158,29 +160,20 @@ waitForMsgOrHeartbeat q phaseRef micros = do
 readPhaseComponent :: CurrentPhase -> IO Text
 readPhaseComponent = fmap renderSyncPhase . readCurrentPhase
 
--- | Apply one forward block.
+-- | Apply one forward block inside one PG transaction.
 --
--- Five steps inside one PG transaction:
---
---   1. Walk the parsed block to count the IDs the extractors will
---      need ('countAssignableIds').
---   2. Allocate every assignable ID in one libpq pipeline
---      ('allocateAllIds') — one network round-trip for the lot.
---   3. Run extractors with a buffered resolver + writer. Dedup
+--   1. Count the IDs the extractors will need ('countAssignableIds')
+--      and allocate them in a single libpq pipeline
+--      ('allocateAllIds').
+--   2. Run extractors with a buffered resolver + writer. Dedup
 --      resolves still hit PG synchronously (one SELECT plus a
 --      possible @nextval@ on miss) but consult a per-block dedup
---      cache so siblings find each other. All INSERTs land on a
---      single 'WriteBuffer' instead of going out one by one.
---   4. Flush the buffer plus the @last_committed_*@ UPDATE in one
---      pipeline — one round-trip closes out all the deferred
---      writes.
---   5. COMMIT (cheap with @synchronous_commit = off@).
---
--- A typical mainnet block (20 txs, 70 outputs, 50 inputs) drops
--- from ~175 round-trips with the per-row immediate writer to
--- ~30 — the bulk of the savings coming from the writes; dedup
--- resolves are still synchronous and are the obvious Stage 2
--- target.
+--      cache so siblings find each other. INSERTs land on a single
+--      'WriteBuffer'.
+--   3. BEGIN, pipeline-flush the writes plus the @last_committed_*@
+--      UPDATE, COMMIT. The three Sessions are inlined here so the
+--      'onException' rolls back cleanly without masking the original
+--      exception.
 processForward :: IORef FollowProgress -> CardanoBlock StandardCrypto -> FollowM ()
 processForward progressRef cardanoBlock = do
   env@FollowEnv
@@ -205,17 +198,38 @@ processForward progressRef cardanoBlock = do
     resolver     <- mkBufferedFollowResolver feHasqlConnection preAllocated buf
     let writer      = mkBufferedWriter buf
         bufferedEnv = env { feResolver = resolver, feWriter = writer }
-    withTransactionOn feHasqlConnection $ do
-      runAppM bufferedEnv (processBlock genBlock)
-      writes <- drain buf
-      let flushAndAdvance =
-            writes *> void (Pipeline.statement triple writeSyncStateSlotStmt)
-      sessR <- Conn.use feHasqlConnection (Sess.pipeline flushAndAdvance)
-      case sessR of
-        Right () -> pure ()
-        Left e   -> panic $ "Following: per-block flush: " <> show e
+    runAppM bufferedEnv (processBlock genBlock)
+    writes <- drain buf
+    let flushAndAdvance =
+          writes *> void (Pipeline.statement triple writeSyncStateSlotStmt)
+    setConsumerNote feWatchdog "follow: BEGIN"
+    runSession feHasqlConnection (Sess.script beginSql) "BEGIN"
+    setConsumerNote feWatchdog "follow: flush pipeline"
+    let runFlush = runSession feHasqlConnection
+          (Sess.pipeline flushAndAdvance) "flush"
+    runFlush `onException` rollbackQuiet feHasqlConnection
+    setConsumerNote feWatchdog "follow: COMMIT"
+    runSession feHasqlConnection (Sess.script commitSql) "COMMIT"
   maybeFlipToTip (blkSlotNo genBlock)
   maybeLogProgress progressRef genBlock
+
+-- | Run a hasql 'Session' against the supplied connection, panicking
+-- with a labelled message on failure. Used by 'processForward' to
+-- inline the BEGIN/flush/COMMIT segments with separate timing while
+-- preserving the exception semantics of 'withTransactionOn'.
+runSession :: Conn.Connection -> Sess.Session () -> Text -> IO ()
+runSession conn sess label = do
+  r <- Conn.use conn sess
+  case r of
+    Right () -> pure ()
+    Left e   -> panic $ "Following: " <> label <> ": " <> show e
+
+-- | Best-effort ROLLBACK. Swallows its own errors so a failed
+-- rollback doesn't mask the original exception that triggered it.
+rollbackQuiet :: Conn.Connection -> IO ()
+rollbackQuiet conn =
+  void (Conn.use conn (Sess.script rollbackSql))
+    `catch` \(_ :: SomeException) -> pure ()
 
 -- | Flip the phase from 'FollowingVolatileTail' to
 -- 'FollowingChainTip' once the consumer has caught the receiver's

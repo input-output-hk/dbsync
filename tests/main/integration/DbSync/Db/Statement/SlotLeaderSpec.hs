@@ -11,7 +11,7 @@ import Test.Hspec (Spec, afterAll_, beforeAll_, before_, describe, it, shouldBe)
 
 import DbSync.Db.Schema.Core (SlotLeader (..), slotLeaderTableDef)
 import DbSync.Db.Schema.Ids (SlotLeaderId (..), PoolHashId (..))
-import DbSync.Db.Schema.Types (TableDef)
+import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Statement.SlotLeader
   ( insertSlotLeaderStmt
   , querySlotLeaderCountStmt
@@ -24,6 +24,7 @@ import DbSync.Test.Database
   , truncateAllTables
   )
 import DbSync.Test.Hasql (runStatement, withTestConnection)
+import DbSync.Test.PgAssertions (tableColumn)
 
 tables :: [TableDef]
 tables = [slotLeaderTableDef]
@@ -32,7 +33,7 @@ spec :: Spec
 spec = describe "DbSync.Db.Statement.SlotLeader" $
   beforeAll_ (setupFollowTipSchema tables [("core", 1)]) $
   afterAll_  (teardownSchema tables) $
-  before_    (truncateAllTables ["slot_leader"]) $ do
+  before_    (truncateAllTables (map tdName tables)) $ do
 
     describe "insertSlotLeaderStmt" $ do
       it "returns id 1 for the first insert" $
@@ -51,14 +52,19 @@ spec = describe "DbSync.Db.Statement.SlotLeader" $
         withTestConnection $ \conn -> do
           let row = sampleNoPool { slotLeaderPoolHashId = Just (PoolHashId 42) }
           _ <- runStatement conn row insertSlotLeaderStmt
-          phid <- T.strip <$> queryTestDb "SELECT pool_hash_id FROM slot_leader LIMIT 1;"
+          phid <- T.strip <$> queryTestDb
+            ( "SELECT " <> tableColumn slotLeaderTableDef "pool_hash_id"
+                <> " FROM " <> tdName slotLeaderTableDef <> " LIMIT 1;"
+            )
           phid `shouldBe` "42"
 
       it "preserves NULL pool_hash_id" $
         withTestConnection $ \conn -> do
           _ <- runStatement conn sampleNoPool insertSlotLeaderStmt
-          isNull <- T.strip <$>
-            queryTestDb "SELECT pool_hash_id IS NULL FROM slot_leader LIMIT 1;"
+          isNull <- T.strip <$> queryTestDb
+            ( "SELECT " <> tableColumn slotLeaderTableDef "pool_hash_id"
+                <> " IS NULL FROM " <> tdName slotLeaderTableDef <> " LIMIT 1;"
+            )
           isNull `shouldBe` "t"
 
     describe "querySlotLeaderIdStmt" $ do

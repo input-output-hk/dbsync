@@ -12,6 +12,8 @@ import qualified Hasql.Session as Sess
 
 import Control.Monad.IO.Unlift (MonadUnliftIO, withRunInIO)
 
+import DbSync.Db.Statement.Transaction (beginSql, commitSql, rollbackSql)
+
 -- | Per-phase hasql connection used for INSERTs and the rollback
 -- cascade. Implemented by 'FollowEnv'.
 class HasHasqlConnection env where
@@ -44,9 +46,9 @@ withTransactionOn
   -> m a
 withTransactionOn conn action =
   withRunInIO $ \run -> do
-    runSql conn "BEGIN"
+    runSql conn beginSql
     result <- run action `onException` rollbackQuiet conn
-    runSql conn "COMMIT"
+    runSql conn commitSql
     pure result
 
 runSql :: Conn.Connection -> Text -> IO ()
@@ -58,5 +60,5 @@ runSql conn sql = do
 
 rollbackQuiet :: Conn.Connection -> IO ()
 rollbackQuiet conn =
-  void (Conn.use conn (Sess.script "ROLLBACK"))
+  void (Conn.use conn (Sess.script rollbackSql))
     `catch` \(_ :: SomeException) -> pure ()

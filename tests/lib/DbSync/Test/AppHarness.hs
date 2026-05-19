@@ -48,6 +48,7 @@ import qualified Data.List as List
 
 import DbSync.App (buildExtractors)
 import DbSync.App.Args (AppArgs (..))
+import DbSync.Db.Schema.SyncState (syncStateTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Statement.Indexes (uniqueConstraintIndexName)
 import DbSync.Extractor (ExtractorDef (..))
@@ -72,6 +73,7 @@ import DbSync.Test.Database (queryTestDb, testDbName)
 import DbSync.Test.Helpers (waitFor)
 import DbSync.Test.MockChain (MockChain (..))
 import DbSync.Test.MockNode (MockNode (..))
+import DbSync.Test.PgAssertions (tableColumn)
 
 -- ---------------------------------------------------------------------------
 -- * Profile builders
@@ -320,7 +322,10 @@ waitForSyncComplete = waitFor "sync_complete=true" syncCompletePredicate
   where
     syncCompletePredicate = do
       result <-
-        queryTestDb "SELECT sync_complete FROM dbsync_sync_state LIMIT 1"
+        queryTestDb
+          ( "SELECT " <> tableColumn syncStateTableDef "sync_complete"
+              <> " FROM " <> tdName syncStateTableDef <> " LIMIT 1"
+          )
           `catch` \(_ :: SomeException) -> pure ""
       pure (T.strip result == "t")
 

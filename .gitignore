@@ -20,6 +20,7 @@ result*
 # Logs
 log-dir/
 measurements/
+PLANS/
 
 # Serena (MCP code-navigation server)
 .serena/

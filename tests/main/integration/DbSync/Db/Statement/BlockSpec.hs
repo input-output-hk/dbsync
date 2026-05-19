@@ -28,7 +28,7 @@ import DbSync.Db.Schema.Core
   , slotLeaderTableDef
   )
 import DbSync.Db.Schema.Ids (BlockId (..), SlotLeaderId (..))
-import DbSync.Db.Schema.Types (TableDef)
+import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Statement.Block
   ( insertBlockStmt
   , queryBlockCountStmt
@@ -52,7 +52,7 @@ spec :: Spec
 spec = describe "DbSync.Db.Statement.Block" $
   beforeAll_ (setupFollowTipSchema tables [("core", 1)]) $
   afterAll_  (teardownSchema tables) $
-  before_    (truncateAllTables ["block", "slot_leader"]) $ do
+  before_    (truncateAllTables (map tdName tables)) $ do
 
     describe "insertBlockStmt" $ do
       it "returns id 1 for the first insert" $

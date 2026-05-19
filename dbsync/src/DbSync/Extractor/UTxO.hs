@@ -26,6 +26,7 @@ import Data.List (zip3)
 
 import DbSync.Block.Types (GenericTx (..), GenericTxIn (..))
 import qualified DbSync.Block.Types as G
+import DbSync.Db.Phase (isFollowPath)
 import DbSync.Db.Schema.Address (Address (..), addressTableDef)
 import DbSync.Db.Schema.Ids (AddressId, StakeAddressId, TxId (..))
 import DbSync.Db.Schema.UTxO
@@ -63,6 +64,7 @@ processUTxO :: ProcessBlockFn
 processUTxO ctx = do
   resolver <- asks getResolver
   writer   <- asks getWriter
+  let followPath = isFollowPath (bcSyncPhase ctx)
   forM_ (bcTxs ctx) $ \tc -> do
     let txId    = tcTxId tc
         gtx     = tcGenTx tc
@@ -71,23 +73,15 @@ processUTxO ctx = do
 
     if G.txValidContract gtx
       then do
-        -- Pipeline pre-resolves @stakeIds@ so the address record and
-        -- the tx_out row share the same StakeAddressId.
-        --
-        -- Each output appends its raw address + derived fields to the
-        -- per-epoch address buffer via 'recordTxOutAddress'; the
-        -- background 'AddressResolver' worker fills in
-        -- @tx_out.address_id@ an epoch later.
+        -- 'stakeIds' are pre-resolved by the pipeline so the address
+        -- record and the tx_out row share the same StakeAddressId.
         forM_ (zip3 outIds stakeIds (txOutputs gtx)) $ \(outId, mStakeId, gout) -> do
           let raw  = G.txOutAddressRaw gout
               addr = mkAddress mStakeId gout
-          -- Write the tx_out row with @address_id = Nothing@ first,
-          -- then hand the (id, raw, derived) tuple to the resolver.
-          -- The Follow resolver runs an UPDATE to fill in @address_id@
-          -- synchronously; the Ingest resolver appends the tuple to
-          -- a per-epoch buffer the worker drains an epoch later.
-          liftIO $ writeTxOut writer outId (mkTxOut txId Nothing mStakeId gout)
-          liftIO $ recordTxOutAddress resolver outId raw addr
+          mAid <- followAddressId followPath resolver raw addr
+          liftIO $ writeTxOut writer outId (mkTxOut txId mAid mStakeId gout)
+          unless followPath $
+            liftIO $ recordTxOutAddress resolver outId raw addr
 
         forM_ (txInputs gtx) $ \gin -> do
           inId <- liftIO $ assignTxInId resolver
@@ -106,8 +100,10 @@ processUTxO ctx = do
           mStakeId <- resolveCollateralStake gout
           let raw  = G.txOutAddressRaw gout
               addr = mkAddress mStakeId gout
-          liftIO $ writeCollateralTxOut writer outId (mkCollateralTxOut txId Nothing mStakeId gout)
-          liftIO $ recordCollateralTxOutAddress resolver outId raw addr
+          mAid <- followAddressId followPath resolver raw addr
+          liftIO $ writeCollateralTxOut writer outId (mkCollateralTxOut txId mAid mStakeId gout)
+          unless followPath $
+            liftIO $ recordCollateralTxOutAddress resolver outId raw addr
 
     -- Collateral inputs are written for every tx — valid txs record them
     -- as a script-witness commitment, failed txs record them as the
@@ -124,6 +120,17 @@ processUTxO ctx = do
         Nothing  -> pure Nothing
         Just cred ->
           Just <$> resolveAndWriteStakeAddress cred
+
+-- | In Follow, resolve @address_id@ synchronously so the (collateral_)tx_out
+-- row carries the FK from the start. In Ingest, return 'Nothing' — the row
+-- is written with @address_id = NULL@ and the async worker fills it via a
+-- bulk UPDATE an epoch later.
+followAddressId
+  :: MonadIO m
+  => Bool -> IdResolver IO -> ByteString -> Address -> m (Maybe AddressId)
+followAddressId followPath resolver raw addr
+  | followPath = Just <$> liftIO (resolveAddressId resolver raw addr)
+  | otherwise  = pure Nothing
 
 -- ---------------------------------------------------------------------------
 -- * Record builders

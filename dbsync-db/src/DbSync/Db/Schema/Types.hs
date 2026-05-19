@@ -90,9 +90,13 @@ data TableDef = TableDef
   , tdMode              :: !TableMode
       -- ^ LOGGED vs UNLOGGED
   , tdPrimaryKey        :: !(Maybe [Text])
-      -- ^ Optional primary key. 'Just cols' emits @PRIMARY KEY (col1, …)@
-      -- as a table-level constraint. 'Nothing' for extractor tables
-      -- (PK added later in 'PreparingForVolatileTail').
+      -- ^ Optional primary-key column list. 'Just cols' emits
+      -- @PRIMARY KEY (col1, …)@ in the @CREATE TABLE@ DDL (LOGGED
+      -- tables) and matches the index built in
+      -- 'PreparingForVolatileTail'. 'Nothing' is the conventional
+      -- default for extractor data tables: no PK clause is emitted
+      -- at @CREATE TABLE@ time (UNLOGGED COPY pays no index cost),
+      -- and the post-load index builder treats it as @["id"]@.
   , tdChecks            :: ![Text]
       -- ^ Zero or more table-level @CHECK@ constraint expressions,
       -- each emitted verbatim as @CHECK (expr)@.

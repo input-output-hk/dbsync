@@ -28,7 +28,8 @@ import qualified Data.Text as T
 import Test.Hspec (Spec, afterAll_, beforeAll_, before_, describe, it, shouldBe, shouldSatisfy)
 
 import DbSync.Db.Schema.Init (dropSchema, initSchema)
-import DbSync.Db.Schema.SyncState (SyncStateRow (..))
+import DbSync.Db.Schema.SyncState (SyncStateRow (..), syncStateTableDef)
+import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Statement.SyncState
   ( markSnapshotCompleteStmt
   , markSyncCompleteStmt
@@ -69,7 +70,8 @@ spec = describe "DbSync.Db.Statement.SyncState" $
           -- A second seed with different args is a no-op — the
           -- first seed's values win.
           runStatement conn (1, True)  seedSyncStateStmt
-          rowCount <- T.strip <$> queryTestDb "SELECT count(*) FROM dbsync_sync_state;"
+          rowCount <- T.strip <$> queryTestDb
+            ("SELECT count(*) FROM " <> tdName syncStateTableDef <> ";")
           rowCount `shouldBe` "1"
           row <- runStatement conn () readSyncStateStmt
           case row of
@@ -131,7 +133,7 @@ truncateSyncState = do
   -- Use psql via 'queryTestDb' rather than another hasql connection
   -- to keep this helper independent of 'runStatement' (the thing
   -- under test).
-  _ <- queryTestDb "TRUNCATE TABLE dbsync_sync_state;"
+  _ <- queryTestDb ("TRUNCATE TABLE " <> tdName syncStateTableDef <> ";")
   pure ()
 
 -- ---------------------------------------------------------------------------

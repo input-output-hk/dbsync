@@ -21,10 +21,10 @@ module DbSync.Phase.Following.Tuning
 
 import Cardano.Prelude
 
-import qualified Data.Text as T
 import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 
+import DbSync.Db.Statement.Tuning (followGucSql)
 import DbSync.Db.Transaction (HasHasqlConnection (..))
 
 -- | Tuning applied when the Follow connection is opened.
@@ -58,6 +58,4 @@ setFollowSessionGUCs t = do
     Left  e  -> panic $ "Phase.Following.Tuning: " <> show e
 
 gucSql :: FollowTuning -> Text
-gucSql t = T.unlines
-  [ "SET synchronous_commit = " <> (if ftAsyncCommit t then "off" else "on") <> ";"
-  ]
+gucSql t = followGucSql (ftAsyncCommit t)

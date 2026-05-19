@@ -82,8 +82,11 @@ spec :: Spec
 spec = describe "DbSync.Db.Statement.Indexes" $ do
 
   describe "tableIndexStatements Concurrent" $ do
-    it "emits no statements for a table with no PK and no UNIQUE" $
-      tableIndexStatements Concurrent plainTable `shouldBe` []
+    it "defaults Nothing PK to id" $
+      tableIndexStatements Concurrent plainTable `shouldBe`
+        [ "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"plain_pkey_idx\""
+            <> " ON \"plain\" (\"id\")"
+        ]
 
     it "emits a single PK index for a PK-only table" $
       tableIndexStatements Concurrent pkTable `shouldBe`
@@ -91,15 +94,19 @@ spec = describe "DbSync.Db.Statement.Indexes" $ do
             <> " ON \"pk_only\" (\"id\")"
         ]
 
-    it "emits one UNIQUE INDEX per single-column constraint" $
+    it "emits the default PK plus one UNIQUE INDEX per single-column constraint" $
       tableIndexStatements Concurrent uniqueOneCol `shouldBe`
-        [ "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"uniq_one_unique_1_idx\""
+        [ "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"uniq_one_pkey_idx\""
+            <> " ON \"uniq_one\" (\"id\")"
+        , "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"uniq_one_unique_1_idx\""
             <> " ON \"uniq_one\" (\"hash\")"
         ]
 
     it "lists every column of a multi-column UNIQUE in order" $
       tableIndexStatements Concurrent uniqueMultiCol `shouldBe`
-        [ "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"uniq_multi_unique_1_idx\""
+        [ "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"uniq_multi_pkey_idx\""
+            <> " ON \"uniq_multi\" (\"id\")"
+        , "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"uniq_multi_unique_1_idx\""
             <> " ON \"uniq_multi\" (\"addr_id\", \"pool_id\", \"epoch_no\")"
         ]
 

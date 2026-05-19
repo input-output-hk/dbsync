@@ -58,7 +58,7 @@ import DbSync.Db.Schema.StakeDelegation
   , stakeRegistrationTableDef
   , withdrawalTableDef
   )
-import DbSync.Db.Schema.Types (TableDef)
+import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Schema.UTxO
   ( collateralTxInTableDef
   , referenceTxInTableDef
@@ -137,32 +137,35 @@ extractorVersions =
   , ("cbor", 1)
   ]
 
+-- | Truncate order: dependent rows first, parent rows last. Hand-ordered
+-- so 'truncateAllTables' (which uses RESTART IDENTITY CASCADE) is safe
+-- against FK violations even without the CASCADE clause.
 tableNames :: [Text]
-tableNames =
-  [ "tx_out"
-  , "address"
-  , "tx_in"
-  , "collateral_tx_in"
-  , "reference_tx_in"
-  , "tx_metadata"
-  , "ma_tx_mint"
-  , "ma_tx_out"
-  , "multi_asset"
-  , "stake_registration"
-  , "stake_deregistration"
-  , "delegation"
-  , "withdrawal"
-  , "pool_owner"
-  , "pool_relay"
-  , "pool_retire"
-  , "pool_metadata_ref"
-  , "pool_update"
-  , "stake_address"
-  , "pool_hash"
-  , "tx_cbor"
-  , "tx"
-  , "block"
-  , "slot_leader"
+tableNames = map tdName
+  [ txOutTableDef
+  , addressTableDef
+  , txInTableDef
+  , collateralTxInTableDef
+  , referenceTxInTableDef
+  , txMetadataTableDef
+  , maTxMintTableDef
+  , maTxOutTableDef
+  , multiAssetTableDef
+  , stakeRegistrationTableDef
+  , stakeDeregistrationTableDef
+  , delegationTableDef
+  , withdrawalTableDef
+  , poolOwnerTableDef
+  , poolRelayTableDef
+  , poolRetireTableDef
+  , poolMetadataRefTableDef
+  , poolUpdateTableDef
+  , stakeAddressTableDef
+  , poolHashTableDef
+  , txCborTableDef
+  , txTableDef
+  , blockTableDef
+  , slotLeaderTableDef
   ]
 
 spec :: Spec
@@ -174,87 +177,94 @@ spec = describe "DbSync.Phase.Following.Run" $
     describe "single empty block" $
       it "writes 1 block + 1 slot_leader" $ do
         runFollow [emptyBlock]
-        blockCount <- T.strip <$> queryTestDb "SELECT count(*) FROM block;"
-        slCount    <- T.strip <$> queryTestDb "SELECT count(*) FROM slot_leader;"
+        blockCount <- countOf blockTableDef
+        slCount    <- countOf slotLeaderTableDef
         blockCount `shouldBe` "1"
         slCount    `shouldBe` "1"
 
     describe "two empty blocks, same leader" $ do
       it "produces 2 blocks and 1 deduped slot_leader" $ do
         runFollow [emptyBlock, emptyBlock2]
-        blockCount <- T.strip <$> queryTestDb "SELECT count(*) FROM block;"
-        slCount    <- T.strip <$> queryTestDb "SELECT count(*) FROM slot_leader;"
+        blockCount <- countOf blockTableDef
+        slCount    <- countOf slotLeaderTableDef
         blockCount `shouldBe` "2"
         slCount    `shouldBe` "1"
 
       it "links previous_id correctly" $ do
         runFollow [emptyBlock, emptyBlock2]
-        result <- T.strip <$>
-          queryTestDb "SELECT id, previous_id FROM block ORDER BY id;"
+        result <- T.strip <$> queryTestDb
+          ("SELECT id, previous_id FROM " <> tdName blockTableDef <> " ORDER BY id;")
         let rows = T.lines result
         rows `shouldBe` ["1|", "2|1"]
 
     describe "block with one tx" $ do
       it "writes 1 block and 1 tx" $ do
         runFollow [blockWith1Tx]
-        blockCount <- T.strip <$> queryTestDb "SELECT count(*) FROM block;"
-        txCount    <- T.strip <$> queryTestDb "SELECT count(*) FROM tx;"
+        blockCount <- countOf blockTableDef
+        txCount    <- countOf txTableDef
         blockCount `shouldBe` "1"
         txCount    `shouldBe` "1"
 
       it "tx.block_id references the inserted block" $ do
         runFollow [blockWith1Tx]
-        result <- T.strip <$> queryTestDb "SELECT block_id FROM tx;"
+        result <- T.strip <$> queryTestDb
+          ("SELECT block_id FROM " <> tdName txTableDef <> ";")
         result `shouldBe` "1"
 
     describe "block with one tx and one output" $ do
       it "writes 1 tx_out row" $ do
         runFollow [blockWith1Out]
-        n <- T.strip <$> queryTestDb "SELECT count(*) FROM tx_out;"
+        n <- countOf txOutTableDef
         n `shouldBe` "1"
 
       it "tx_out.tx_id references the new tx" $ do
         runFollow [blockWith1Out]
-        result <- T.strip <$> queryTestDb "SELECT tx_id FROM tx_out;"
+        result <- T.strip <$> queryTestDb
+          ("SELECT tx_id FROM " <> tdName txOutTableDef <> ";")
         result `shouldBe` "1"
 
       it "tx_out.index, value, address round-trip" $ do
         runFollow [blockWith1Out]
-        result <- T.strip <$>
-          queryTestDb
-            "SELECT tx_out.index, tx_out.value, address.address \
-            \FROM tx_out JOIN address ON address.id = tx_out.address_id;"
+        result <- T.strip <$> queryTestDb
+          ( "SELECT " <> tdName txOutTableDef <> ".index, "
+              <> tdName txOutTableDef <> ".value, "
+              <> tdName addressTableDef <> ".address"
+              <> " FROM " <> tdName txOutTableDef
+              <> " JOIN " <> tdName addressTableDef
+              <> " ON " <> tdName addressTableDef <> ".id = "
+              <> tdName txOutTableDef <> ".address_id;"
+          )
         result `shouldBe` "0|5000000|addr_test1xyz"
 
     describe "block with one tx and two outputs" $ do
       it "writes both tx_outs in order" $ do
         runFollow [blockWith2Outs]
-        result <- T.strip <$>
-          queryTestDb "SELECT id, tx_id, index FROM tx_out ORDER BY id;"
+        result <- T.strip <$> queryTestDb
+          ("SELECT id, tx_id, index FROM " <> tdName txOutTableDef <> " ORDER BY id;")
         let rows = T.lines result
         rows `shouldBe` ["1|1|0", "2|1|1"]
 
     describe "block with one tx and all input kinds" $ do
       it "writes 1 tx_in, 1 collateral_tx_in, 1 reference_tx_in" $ do
         runFollow [blockWithAllInputs]
-        txInN  <- T.strip <$> queryTestDb "SELECT count(*) FROM tx_in;"
-        colN   <- T.strip <$> queryTestDb "SELECT count(*) FROM collateral_tx_in;"
-        refN   <- T.strip <$> queryTestDb "SELECT count(*) FROM reference_tx_in;"
-        txInN  `shouldBe` "1"
-        colN   `shouldBe` "1"
-        refN   `shouldBe` "1"
+        txInN <- countOf txInTableDef
+        colN  <- countOf collateralTxInTableDef
+        refN  <- countOf referenceTxInTableDef
+        txInN `shouldBe` "1"
+        colN  `shouldBe` "1"
+        refN  `shouldBe` "1"
 
       it "tx_in.tx_in_id references the spending tx, tx_out_id is NULL" $ do
         runFollow [blockWithAllInputs]
-        result <- T.strip <$>
-          queryTestDb "SELECT tx_in_id, tx_out_id, tx_out_index FROM tx_in;"
+        result <- T.strip <$> queryTestDb
+          ("SELECT tx_in_id, tx_out_id, tx_out_index FROM " <> tdName txInTableDef <> ";")
         -- '|' between empty fields renders as "1||0" for NULL tx_out_id
         result `shouldBe` "1||0"
 
       it "tx_in.tx_out_hash carries the referenced tx hash" $ do
         runFollow [blockWithAllInputs]
-        result <- T.strip <$>
-          queryTestDb "SELECT encode(tx_out_hash, 'hex') FROM tx_in;"
+        result <- T.strip <$> queryTestDb
+          ("SELECT encode(tx_out_hash, 'hex') FROM " <> tdName txInTableDef <> ";")
         -- "spent_tx_hash_in" (16 ASCII bytes) padded to 32 bytes with NULs.
         result `shouldBe`
           "7370656e745f74785f686173685f696e00000000000000000000000000000000"
@@ -262,13 +272,15 @@ spec = describe "DbSync.Phase.Following.Run" $
     describe "block with one tx and metadata" $ do
       it "writes 1 tx_metadata row per metadata key" $ do
         runFollow [blockWithMetadata]
-        n <- T.strip <$> queryTestDb "SELECT count(*) FROM tx_metadata;"
+        n <- countOf txMetadataTableDef
         n `shouldBe` "1"
 
       it "stores key, no-schema JSON, single-key CBOR, and tx_id" $ do
         runFollow [blockWithMetadata]
-        result <- T.strip <$>
-          queryTestDb "SELECT key, json, encode(bytes, 'hex'), tx_id FROM tx_metadata;"
+        result <- T.strip <$> queryTestDb
+          ( "SELECT key, json, encode(bytes, 'hex'), tx_id FROM "
+              <> tdName txMetadataTableDef <> ";"
+          )
         -- key=42, json="\"hello\"", bytes=cbor({42: "hello"}), tx_id=1.
         -- CBOR breakdown: 0xa1 = 1-entry map, 0x18 0x2a = uint 42,
         -- 0x65 + "hello" bytes = 5-byte text string.
@@ -277,63 +289,66 @@ spec = describe "DbSync.Phase.Following.Run" $
     describe "block minting one multi-asset" $ do
       it "writes 1 multi_asset and 1 ma_tx_mint row" $ do
         runFollow [blockWithMint]
-        maN  <- T.strip <$> queryTestDb "SELECT count(*) FROM multi_asset;"
-        mtmN <- T.strip <$> queryTestDb "SELECT count(*) FROM ma_tx_mint;"
+        maN  <- countOf multiAssetTableDef
+        mtmN <- countOf maTxMintTableDef
         maN  `shouldBe` "1"
         mtmN `shouldBe` "1"
 
       it "multi_asset.policy and name round-trip via hex" $ do
         runFollow [blockWithMint]
-        result <- T.strip <$>
-          queryTestDb
-            "SELECT encode(policy, 'hex'), encode(name, 'hex') FROM multi_asset;"
+        result <- T.strip <$> queryTestDb
+          ( "SELECT encode(policy, 'hex'), encode(name, 'hex') FROM "
+              <> tdName multiAssetTableDef <> ";"
+          )
         -- "policy01" + 20 nulls = 28 bytes; "tokenA" raw = 6 bytes
         result `shouldBe` "706f6c69637930310000000000000000000000000000000000000000|746f6b656e41"
 
       it "ma_tx_mint.quantity carries a signed Integer (positive case)" $ do
         runFollow [blockWithMint]
-        result <- T.strip <$>
-          queryTestDb "SELECT quantity, tx_id, ident FROM ma_tx_mint;"
+        result <- T.strip <$> queryTestDb
+          ("SELECT quantity, tx_id, ident FROM " <> tdName maTxMintTableDef <> ";")
         result `shouldBe` "1000|1|1"
 
     describe "two transactions minting the same asset (dedup)" $
       it "produces 1 multi_asset and 2 ma_tx_mint rows" $ do
         runFollow [blockWithTwoMintsOfSameAsset]
-        maN  <- T.strip <$> queryTestDb "SELECT count(*) FROM multi_asset;"
-        mtmN <- T.strip <$> queryTestDb "SELECT count(*) FROM ma_tx_mint;"
+        maN  <- countOf multiAssetTableDef
+        mtmN <- countOf maTxMintTableDef
         maN  `shouldBe` "1"
         mtmN `shouldBe` "2"
 
     describe "block with a multi-asset tx output" $
       it "writes 1 multi_asset and 1 ma_tx_out row referencing the tx_out" $ do
         runFollow [blockWithMaOut]
-        maN <- T.strip <$> queryTestDb "SELECT count(*) FROM multi_asset;"
-        mao <- T.strip <$>
-          queryTestDb "SELECT quantity, tx_out_id, ident FROM ma_tx_out;"
+        maN <- countOf multiAssetTableDef
+        mao <- T.strip <$> queryTestDb
+          ("SELECT quantity, tx_out_id, ident FROM " <> tdName maTxOutTableDef <> ";")
         maN `shouldBe` "1"
         mao `shouldBe` "500|1|1"
 
     describe "block with a stake registration cert" $ do
       it "writes 1 stake_address and 1 stake_registration row" $ do
         runFollow [blockWithStakeReg]
-        saN <- T.strip <$> queryTestDb "SELECT count(*) FROM stake_address;"
-        srN <- T.strip <$> queryTestDb "SELECT count(*) FROM stake_registration;"
+        saN <- countOf stakeAddressTableDef
+        srN <- countOf stakeRegistrationTableDef
         saN `shouldBe` "1"
         srN `shouldBe` "1"
 
       it "stake_registration links addr_id, tx_id, epoch_no" $ do
         runFollow [blockWithStakeReg]
         result <- T.strip <$> queryTestDb
-          "SELECT addr_id, cert_index, epoch_no, tx_id, deposit FROM stake_registration;"
+          ( "SELECT addr_id, cert_index, epoch_no, tx_id, deposit FROM "
+              <> tdName stakeRegistrationTableDef <> ";"
+          )
         -- addr_id=1, cert_index=0, epoch_no=5 (from emptyBlock), tx_id=1, deposit NULL
         result `shouldBe` "1|0|5|1|"
 
     describe "stake registration + deregistration of same address" $
       it "deduplicates the stake_address row" $ do
         runFollow [blockWithRegThenDereg]
-        saN  <- T.strip <$> queryTestDb "SELECT count(*) FROM stake_address;"
-        srN  <- T.strip <$> queryTestDb "SELECT count(*) FROM stake_registration;"
-        sdN  <- T.strip <$> queryTestDb "SELECT count(*) FROM stake_deregistration;"
+        saN  <- countOf stakeAddressTableDef
+        srN  <- countOf stakeRegistrationTableDef
+        sdN  <- countOf stakeDeregistrationTableDef
         saN `shouldBe` "1"
         srN `shouldBe` "1"
         sdN `shouldBe` "1"
@@ -341,18 +356,18 @@ spec = describe "DbSync.Phase.Following.Run" $
     describe "block with a withdrawal" $
       it "writes 1 stake_address and 1 withdrawal" $ do
         runFollow [blockWithWithdrawal]
-        saN <- T.strip <$> queryTestDb "SELECT count(*) FROM stake_address;"
-        wd  <- T.strip <$>
-          queryTestDb "SELECT addr_id, tx_id, amount FROM withdrawal;"
+        saN <- countOf stakeAddressTableDef
+        wd  <- T.strip <$> queryTestDb
+          ("SELECT addr_id, tx_id, amount FROM " <> tdName withdrawalTableDef <> ";")
         saN `shouldBe` "1"
         wd  `shouldBe` "1|1|7000000"
 
     describe "block with a minimal pool registration" $ do
       it "writes 1 pool_update, 1 stake_address, and dedupes pool_hash" $ do
         runFollow [blockWithPoolReg]
-        phN <- T.strip <$> queryTestDb "SELECT count(*) FROM pool_hash;"
-        puN <- T.strip <$> queryTestDb "SELECT count(*) FROM pool_update;"
-        saN <- T.strip <$> queryTestDb "SELECT count(*) FROM stake_address;"
+        phN <- countOf poolHashTableDef
+        puN <- countOf poolUpdateTableDef
+        saN <- countOf stakeAddressTableDef
         -- 2 pool_hash rows: one for the slot leader (Shelley+ pipeline
         -- always writes one), one for the registered pool itself.
         phN `shouldBe` "2"
@@ -361,9 +376,9 @@ spec = describe "DbSync.Phase.Following.Run" $
 
       it "no pool_metadata_ref / pool_owner / pool_relay rows are written" $ do
         runFollow [blockWithPoolReg]
-        pmrN <- T.strip <$> queryTestDb "SELECT count(*) FROM pool_metadata_ref;"
-        poN  <- T.strip <$> queryTestDb "SELECT count(*) FROM pool_owner;"
-        prN  <- T.strip <$> queryTestDb "SELECT count(*) FROM pool_relay;"
+        pmrN <- countOf poolMetadataRefTableDef
+        poN  <- countOf poolOwnerTableDef
+        prN  <- countOf poolRelayTableDef
         pmrN `shouldBe` "0"
         poN  `shouldBe` "0"
         prN  `shouldBe` "0"
@@ -371,8 +386,10 @@ spec = describe "DbSync.Phase.Following.Run" $
     describe "block with a pool registration carrying metadata" $
       it "writes 1 pool_metadata_ref linked to the pool" $ do
         runFollow [blockWithPoolRegMeta]
-        pmr <- T.strip <$>
-          queryTestDb "SELECT pool_id, url, encode(hash, 'hex') FROM pool_metadata_ref;"
+        pmr <- T.strip <$> queryTestDb
+          ( "SELECT pool_id, url, encode(hash, 'hex') FROM "
+              <> tdName poolMetadataRefTableDef <> ";"
+          )
         -- pool_id = 2: the slot leader allocates id=1, the registered
         -- pool gets id=2.
         pmr `shouldBe` "2|https://pool.example.com/meta.json|6d657461686173685f33325f62797465735f70616464645f5f5f5f5f5f5f5f5f"
@@ -380,8 +397,8 @@ spec = describe "DbSync.Phase.Following.Run" $
     describe "block with a pool retirement cert" $
       it "writes 1 pool_retire row and dedupes pool_hash" $ do
         runFollow [blockWithPoolRetire]
-        phN <- T.strip <$> queryTestDb "SELECT count(*) FROM pool_hash;"
-        prN <- T.strip <$> queryTestDb "SELECT count(*) FROM pool_retire;"
+        phN <- countOf poolHashTableDef
+        prN <- countOf poolRetireTableDef
         -- 2 pool_hash rows: slot leader + retired pool.
         phN `shouldBe` "2"
         prN `shouldBe` "1"
@@ -389,11 +406,12 @@ spec = describe "DbSync.Phase.Following.Run" $
     describe "block with a delegation cert (cross-extractor flow)" $
       it "writes 1 stake_address and 1 delegation row, dedupes pool_hash" $ do
         runFollow [blockWithDelegation]
-        saN <- T.strip <$> queryTestDb "SELECT count(*) FROM stake_address;"
-        phN <- T.strip <$> queryTestDb "SELECT count(*) FROM pool_hash;"
-        d   <- T.strip <$>
-          queryTestDb
-            "SELECT addr_id, pool_hash_id, active_epoch_no, tx_id FROM delegation;"
+        saN <- countOf stakeAddressTableDef
+        phN <- countOf poolHashTableDef
+        d   <- T.strip <$> queryTestDb
+          ( "SELECT addr_id, pool_hash_id, active_epoch_no, tx_id FROM "
+              <> tdName delegationTableDef <> ";"
+          )
         saN `shouldBe` "1"
         -- 2 pool_hash rows: slot leader (id=1) + delegation target (id=2).
         phN `shouldBe` "2"
@@ -404,20 +422,28 @@ spec = describe "DbSync.Phase.Following.Run" $
     describe "block with a tx carrying CBOR bytes" $ do
       it "writes 1 tx_cbor row when txCborRaw is set" $ do
         runFollow [blockWithCbor]
-        n <- T.strip <$> queryTestDb "SELECT count(*) FROM tx_cbor;"
+        n <- countOf txCborTableDef
         n `shouldBe` "1"
 
       it "tx_cbor.tx_id and bytes round-trip" $ do
         runFollow [blockWithCbor]
-        result <- T.strip <$>
-          queryTestDb "SELECT tx_id, encode(bytes, 'hex') FROM tx_cbor;"
+        result <- T.strip <$> queryTestDb
+          ( "SELECT tx_id, encode(bytes, 'hex') FROM "
+              <> tdName txCborTableDef <> ";"
+          )
         -- "tx-cbor-payload" = 15 ASCII bytes
         result `shouldBe` "1|74782d63626f722d7061796c6f6164"
 
       it "no tx_cbor row when txCborRaw is Nothing (Byron-shape txs)" $ do
         runFollow [blockWith1Tx]
-        n <- T.strip <$> queryTestDb "SELECT count(*) FROM tx_cbor;"
+        n <- countOf txCborTableDef
         n `shouldBe` "0"
+
+-- | Bare row-count via @psql@. Returns the count as 'Text' so callers
+-- compare directly against the numeric literals they already use.
+countOf :: TableDef -> IO Text
+countOf td = T.strip <$>
+  queryTestDb ("SELECT count(*) FROM " <> tdName td <> ";")
 
 -- ---------------------------------------------------------------------------
 -- Runner

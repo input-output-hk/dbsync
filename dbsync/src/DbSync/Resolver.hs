@@ -63,21 +63,19 @@ data IdResolver m = IdResolver
     -- UTxO extractor IDs
     -- ---------------------------------------------------------------
 
-    -- | Record a tx_out's address for off-thread resolution.
-    --
-    -- The caller passes the @tx_out.id@ that has just been (or is
-    -- about to be) written, the raw address bytes, and the
-    -- precomputed 'Address' row (with Bech32 text, has-script flag,
-    -- payment credential, and any resolved @stake_address_id@).
-    --
-    -- During Ingest the 'AddressResolver' worker consumes the
-    -- per-epoch buffer one epoch later and fills @tx_out.address_id@
-    -- and the @address@ table accordingly. During Follow the
-    -- implementation resolves the FK synchronously (LRU + DB).
+    -- | Ingest-only: queue (tx_out_id, raw, derived address) for the
+    -- 'AddressResolver' worker, which bulk-fills @tx_out.address_id@
+    -- an epoch later. Panics in Follow.
   , recordTxOutAddress           :: !(TxOutId -> ByteString -> Address -> m ())
 
     -- | As 'recordTxOutAddress' but for @collateral_tx_out@.
   , recordCollateralTxOutAddress :: !(CollateralTxOutId -> ByteString -> Address -> m ())
+
+    -- | Follow-only: resolve raw bytes to an 'AddressId', queuing the
+    -- @address@ INSERT on the per-block buffer when the bytes are new.
+    -- Callers fill @tx_out.address_id@ at INSERT time rather than
+    -- INSERT-then-UPDATE. Panics in Ingest.
+  , resolveAddressId :: !(ByteString -> Address -> m AddressId)
 
     -- | Assign the next tx_in ID.
   , assignTxInId           :: !(m TxInId)

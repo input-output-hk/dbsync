@@ -72,7 +72,7 @@ import DbSync.Db.Schema.StakeDelegation
   , stakeRegistrationTableDef
   , withdrawalTableDef
   )
-import DbSync.Db.Schema.Types (TableDef)
+import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Schema.UTxO
   ( collateralTxInTableDef
   , collateralTxOutTableDef
@@ -213,17 +213,17 @@ spec = describe "DbSync.Phase.Preparing.Run" $
     describe "FK resolution" $ do
       it "tx_in.tx_out_id is populated from the producing tx's id" $ do
         result <- T.strip <$> queryTestDb
-          "SELECT tx_out_id FROM tx_in WHERE id = 1"
+          ("SELECT tx_out_id FROM " <> tdName txInTableDef <> " WHERE id = 1")
         result `shouldBe` "1"
 
       it "collateral_tx_in.tx_out_id is populated the same way" $ do
         result <- T.strip <$> queryTestDb
-          "SELECT tx_out_id FROM collateral_tx_in WHERE id = 1"
+          ("SELECT tx_out_id FROM " <> tdName collateralTxInTableDef <> " WHERE id = 1")
         result `shouldBe` "1"
 
       it "tx_out.consumed_by_tx_id is set on every spending tx_in" $ do
         result <- T.strip <$> queryTestDb
-          "SELECT id, consumed_by_tx_id FROM tx_out ORDER BY id"
+          ("SELECT id, consumed_by_tx_id FROM " <> tdName txOutTableDef <> " ORDER BY id")
         let rows = T.lines result
         rows `shouldBe`
           [ "1|2"  -- producer.0: spent by the Shelley consumer (tx 2)
@@ -236,12 +236,12 @@ spec = describe "DbSync.Phase.Preparing.Run" $
     describe "tx column backfill" $ do
       it "phase-2 failed tx.fee is collateral-in minus collateral-out" $ do
         result <- T.strip <$> queryTestDb
-          "SELECT fee FROM tx WHERE valid_contract = FALSE"
+          ("SELECT fee FROM " <> tdName txTableDef <> " WHERE valid_contract = FALSE")
         result `shouldBe` "3000000"
 
       it "phase-2 failed tx.deposit is set to 0" $ do
         result <- T.strip <$> queryTestDb
-          "SELECT deposit FROM tx WHERE valid_contract = FALSE"
+          ("SELECT deposit FROM " <> tdName txTableDef <> " WHERE valid_contract = FALSE")
         result `shouldBe` "0"
 
       it "valid-contract tx.deposit is inputs - outputs - fee - donation" $ do
@@ -249,7 +249,7 @@ spec = describe "DbSync.Phase.Preparing.Run" $
         --   - 0 (treasury_donation) = 300_000. The producer has no
         --   inputs so its deposit is left NULL by the fallback.
         result <- T.strip <$> queryTestDb
-          "SELECT deposit FROM tx WHERE block_id = 2 AND block_index = 0"
+          ("SELECT deposit FROM " <> tdName txTableDef <> " WHERE block_id = 2 AND block_index = 0")
         result `shouldBe` "300000"
 
       it "valid-contract tx.fee is left untouched" $ do
@@ -257,14 +257,14 @@ spec = describe "DbSync.Phase.Preparing.Run" $
         -- FALSE. The consumer's declared fee should be exactly what
         -- the parser wrote.
         result <- T.strip <$> queryTestDb
-          "SELECT fee FROM tx WHERE block_id = 2 AND block_index = 0"
+          ("SELECT fee FROM " <> tdName txTableDef <> " WHERE block_id = 2 AND block_index = 0")
         result `shouldBe` "200000"
 
       it "Byron tx.fee is computed as inputs - outputs" $ do
         -- The Byron tx spends producer.2 (value 2_000_000) and
         -- writes one output of 1_500_000. Expected fee = 500_000.
         result <- T.strip <$> queryTestDb
-          "SELECT fee FROM tx WHERE block_id = 3"
+          ("SELECT fee FROM " <> tdName txTableDef <> " WHERE block_id = 3")
         result `shouldBe` "500000"
 
     describe "schema-mode flip" $
@@ -274,10 +274,7 @@ spec = describe "DbSync.Phase.Preparing.Run" $
           (T.unwords
             [ "SELECT count(*) FROM pg_class"
             , "WHERE relkind = 'r'"
-            , "AND relname IN ('block', 'tx', 'tx_out', 'tx_in',"
-            , "  'collateral_tx_in', 'collateral_tx_out',"
-            , "  'reference_tx_in', 'address', 'slot_leader',"
-            , "  'withdrawal')"
+            , "AND relname IN (" <> sqlList loggedFlipTables <> ")"
             , "AND relpersistence = 'p'"
             ])
         result `shouldBe` "10"
@@ -285,11 +282,7 @@ spec = describe "DbSync.Phase.Preparing.Run" $
     describe "indexes" $ do
       it "the address.raw unique index is created" $ do
         result <- T.strip <$> queryTestDb
-          (T.unwords
-            [ "SELECT count(*) FROM pg_indexes"
-            , "WHERE tablename = 'address'"
-            , "AND indexname = 'address_unique_1_idx'"
-            ])
+          (indexExistsSql addressTableDef "address_unique_1_idx")
         result `shouldBe` "1"
 
       -- The next three assertions confirm the pre-resolve index build
@@ -299,29 +292,17 @@ spec = describe "DbSync.Phase.Preparing.Run" $
       -- IF NOT EXISTS guard makes the second emission a no-op.
       it "tx (hash) is indexed for the post-load join-on-hash UPDATEs" $ do
         result <- T.strip <$> queryTestDb
-          (T.unwords
-            [ "SELECT count(*) FROM pg_indexes"
-            , "WHERE tablename = 'tx'"
-            , "AND indexname = 'tx_unique_1_idx'"
-            ])
+          (indexExistsSql txTableDef "tx_unique_1_idx")
         result `shouldBe` "1"
 
       it "tx_out (tx_id, index) is indexed for consumed-by + backfill JOINs" $ do
         result <- T.strip <$> queryTestDb
-          (T.unwords
-            [ "SELECT count(*) FROM pg_indexes"
-            , "WHERE tablename = 'tx_out'"
-            , "AND indexname = 'tx_out_tx_id_index_idx'"
-            ])
+          (indexExistsSql txOutTableDef "tx_out_tx_id_index_idx")
         result `shouldBe` "1"
 
       it "tx_in (tx_out_id, tx_out_index) is indexed for the merge-join inner" $ do
         result <- T.strip <$> queryTestDb
-          (T.unwords
-            [ "SELECT count(*) FROM pg_indexes"
-            , "WHERE tablename = 'tx_in'"
-            , "AND indexname = 'tx_in_tx_out_idx'"
-            ])
+          (indexExistsSql txInTableDef "tx_in_tx_out_idx")
         result `shouldBe` "1"
 
       -- The four perf indexes that support the rewritten backfill
@@ -329,64 +310,82 @@ spec = describe "DbSync.Phase.Preparing.Run" $
       -- aggregate-then-filter and the post-load pass hangs at scale.
       it "collateral_tx_in (tx_in_id) is indexed for phase-2 fee lookup" $ do
         result <- T.strip <$> queryTestDb
-          (T.unwords
-            [ "SELECT count(*) FROM pg_indexes"
-            , "WHERE tablename = 'collateral_tx_in'"
-            , "AND indexname = 'collateral_tx_in_tx_in_id_idx'"
-            ])
+          (indexExistsSql collateralTxInTableDef "collateral_tx_in_tx_in_id_idx")
         result `shouldBe` "1"
 
       it "collateral_tx_out (tx_id) is indexed for phase-2 fee lookup" $ do
         result <- T.strip <$> queryTestDb
-          (T.unwords
-            [ "SELECT count(*) FROM pg_indexes"
-            , "WHERE tablename = 'collateral_tx_out'"
-            , "AND indexname = 'collateral_tx_out_tx_id_idx'"
-            ])
+          (indexExistsSql collateralTxOutTableDef "collateral_tx_out_tx_id_idx")
         result `shouldBe` "1"
 
       it "tx_in (tx_in_id) is indexed for Byron fee + deposit lookup" $ do
         result <- T.strip <$> queryTestDb
-          (T.unwords
-            [ "SELECT count(*) FROM pg_indexes"
-            , "WHERE tablename = 'tx_in'"
-            , "AND indexname = 'tx_in_tx_in_id_idx'"
-            ])
+          (indexExistsSql txInTableDef "tx_in_tx_in_id_idx")
         result `shouldBe` "1"
 
       it "withdrawal (tx_id) is indexed for deposit lookup" $ do
         result <- T.strip <$> queryTestDb
-          (T.unwords
-            [ "SELECT count(*) FROM pg_indexes"
-            , "WHERE tablename = 'withdrawal'"
-            , "AND indexname = 'withdrawal_tx_id_idx'"
-            ])
+          (indexExistsSql withdrawalTableDef "withdrawal_tx_id_idx")
         result `shouldBe` "1"
 
     describe "sequence reset" $ do
       it "tx_id_seq's next value is MAX(id) + 1" $ do
         -- Four txs landed: producer, valid-contract spender, phase-2
         -- failure, Byron spender. MAX(id) = 4, next allocation = 5.
-        result <- T.strip <$> queryTestDb "SELECT nextval('tx_id_seq')"
+        result <- T.strip <$> queryTestDb (nextvalSql txTableDef)
         result `shouldBe` "5"
 
       it "tx_out_id_seq's next value is MAX(id) + 1" $ do
         -- Producer wrote three outputs; consumer wrote one; Byron
         -- wrote one; phase-2 wrote none. MAX(id) = 5, next = 6.
-        result <- T.strip <$> queryTestDb "SELECT nextval('tx_out_id_seq')"
+        result <- T.strip <$> queryTestDb (nextvalSql txOutTableDef)
         result `shouldBe` "6"
 
       it "tx_in_id_seq's next value is MAX(id) + 1" $ do
         -- Two tx_in rows: consumer's spend + Byron's spend.
-        result <- T.strip <$> queryTestDb "SELECT nextval('tx_in_id_seq')"
+        result <- T.strip <$> queryTestDb (nextvalSql txInTableDef)
         result `shouldBe` "3"
 
       it "an empty table's sequence still starts at 1" $ do
         -- No reference_tx_in rows were produced; setval(seq, 0+1, false)
         -- leaves nextval at 1.
-        result <- T.strip <$>
-          queryTestDb "SELECT nextval('reference_tx_in_id_seq')"
+        result <- T.strip <$> queryTestDb (nextvalSql referenceTxInTableDef)
         result `shouldBe` "1"
+
+-- | The 10 tables checked for the UNLOGGED -> LOGGED flip after Prep.
+-- The Conway test chain populates these; tables that stay empty
+-- (e.g. @stake_registration@) are excluded so the count is stable.
+loggedFlipTables :: [TableDef]
+loggedFlipTables =
+  [ blockTableDef
+  , txTableDef
+  , txOutTableDef
+  , txInTableDef
+  , collateralTxInTableDef
+  , collateralTxOutTableDef
+  , referenceTxInTableDef
+  , addressTableDef
+  , slotLeaderTableDef
+  , withdrawalTableDef
+  ]
+
+-- | Comma-separated single-quoted SQL list of table names.
+sqlList :: [TableDef] -> Text
+sqlList tds = T.intercalate ", " (map (\td -> "'" <> tdName td <> "'") tds)
+
+-- | @SELECT count(*) FROM pg_indexes WHERE tablename = 't' AND indexname = 'idx'@.
+-- The index name stays as a string literal because the test suite
+-- has no 'IndexDef' analogue yet.
+indexExistsSql :: TableDef -> Text -> Text
+indexExistsSql td idxName = T.unwords
+  [ "SELECT count(*) FROM pg_indexes"
+  , "WHERE tablename = '" <> tdName td <> "'"
+  , "AND indexname = '" <> idxName <> "'"
+  ]
+
+-- | @SELECT nextval('<table>_id_seq')@.
+nextvalSql :: TableDef -> Text
+nextvalSql td = "SELECT nextval('" <> tdName td <> "_id_seq')"
 
 -- ---------------------------------------------------------------------------
 -- Fixtures live in 'DbSync.Test.Fixtures'; shared with 'BackfillSpec'.

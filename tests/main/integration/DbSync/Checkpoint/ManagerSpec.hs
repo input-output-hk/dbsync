@@ -35,7 +35,8 @@ import DbSync.Db.Loader (LoaderStream (..), closeLoaderStream, mkLoaderStream)
 import DbSync.Env (LoaderWithControl (..))
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
 import DbSync.Db.Schema.Init (dropSchema, initSchema)
-import DbSync.Db.Schema.Types (TableDef)
+import DbSync.Db.Schema.SyncState (syncStateTableDef)
+import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Loader.Encoder
   ( buildCopyRow
   , bBool
@@ -68,7 +69,7 @@ coreVersions :: [(Text, Int)]
 coreVersions = [("core", 1)]
 
 coreTableNames :: [Text]
-coreTableNames = ["block", "tx", "slot_leader"]
+coreTableNames = map tdName coreTables
 
 -- | A SyncStateRow representing "epoch 5 just committed". Used both
 -- for writes and for comparison on read.
@@ -138,7 +139,7 @@ withControlConnection =
 writeOneOfEach :: LoaderStream -> Int64 -> IO ()
 writeOneOfEach bs baseId = do
   -- slot_leader (id, hash, pool_hash_id, description)
-  lsWriteRow bs "slot_leader" $
+  lsWriteRow bs (tdName slotLeaderTableDef) $
     buildCopyRow
       [ Just $ bInt64 baseId
       , Just $ bHex (BS.replicate 28 0xab)     -- 28-byte placeholder hash
@@ -146,7 +147,7 @@ writeOneOfEach bs baseId = do
       , Just $ bText "leader"
       ]
   -- block — 16 columns (matches blockTableDef)
-  lsWriteRow bs "block" $
+  lsWriteRow bs (tdName blockTableDef) $
     buildCopyRow
       [ Just $ bInt64 baseId                           -- id
       , Just $ bHex (BS.replicate 32 0xaa)             -- hash
@@ -166,7 +167,7 @@ writeOneOfEach bs baseId = do
       , Nothing                                        -- op_cert_counter
       ]
   -- tx — 13 columns (matches txTableDef)
-  lsWriteRow bs "tx" $
+  lsWriteRow bs (tdName txTableDef) $
     buildCopyRow
       [ Just $ bInt64 baseId                  -- id
       , Just $ bHex (BS.replicate 32 0xbb)    -- hash
@@ -206,9 +207,9 @@ spec = describe "DbSync.Checkpoint.Manager.commitEpoch" $
         runAppM (LoaderWithControl bs ctrl) (commitEpoch epoch5Row)
         closeLoaderStream bs
         -- Assert: all three data tables now have one row.
-        blockCount <- T.strip <$> queryTestDb "SELECT count(*) FROM block;"
-        txCount    <- T.strip <$> queryTestDb "SELECT count(*) FROM tx;"
-        slCount    <- T.strip <$> queryTestDb "SELECT count(*) FROM slot_leader;"
+        blockCount <- countOf blockTableDef
+        txCount    <- countOf txTableDef
+        slCount    <- countOf slotLeaderTableDef
         blockCount `shouldBe` "1"
         txCount    `shouldBe` "1"
         slCount    `shouldBe` "1"
@@ -249,7 +250,7 @@ spec = describe "DbSync.Checkpoint.Manager.commitEpoch" $
         writeOneOfEach bs 2
         runAppM env (commitEpoch epoch6Row)
         closeLoaderStream bs
-        blockCount <- T.strip <$> queryTestDb "SELECT count(*) FROM block;"
+        blockCount <- countOf blockTableDef
         blockCount `shouldBe` "2"
 
     it "when sync-state write fails, data rows stay committed (resume cleans up on boot)" $
@@ -265,7 +266,7 @@ spec = describe "DbSync.Checkpoint.Manager.commitEpoch" $
           Left (_ :: SomeException) -> pure ()
           Right ()                  -> panic "commitEpoch should have thrown"
         -- Data is present (I1's soft variant: sync state ≤ data tip).
-        blockCount <- T.strip <$> queryTestDb "SELECT count(*) FROM block;"
+        blockCount <- countOf blockTableDef
         blockCount `shouldBe` "1"
         -- Sync state is still empty (was never seeded + write failed).
         mRow <- runAppM ctrl readSyncState
@@ -279,6 +280,15 @@ spec = describe "DbSync.Checkpoint.Manager.commitEpoch" $
       truncateAllTables coreTableNames
       _ <- System.Process.readProcessWithExitCode
         "psql"
-        [T.unpack testConnStr, "-q", "-c", "TRUNCATE TABLE dbsync_sync_state;"]
+        [ T.unpack testConnStr, "-q", "-c"
+        , "TRUNCATE TABLE " <> T.unpack (tdName syncStateTableDef) <> ";"
+        ]
         ""
       pure ()
+
+-- | Count rows in a table via @psql@. Returns the bare count string
+-- (e.g. @"2"@) so callers compare against the small numeric literals
+-- they already use.
+countOf :: TableDef -> IO Text
+countOf td = T.strip <$>
+  queryTestDb ("SELECT count(*) FROM " <> tdName td <> ";")

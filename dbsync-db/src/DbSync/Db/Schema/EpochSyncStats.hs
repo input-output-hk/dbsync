@@ -86,7 +86,7 @@ epochSyncStatsTableDef = TableDef
       , ColumnDef "phase"            PgText      False
       ]
   , tdMode    = TableUnlogged
-  , tdPrimaryKey     = Just ["id"]
+  , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
   , tdUniqueConstraints = [pure "epoch_no"]

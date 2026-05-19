@@ -68,7 +68,7 @@ import DbSync.Db.Schema.StakeDelegation
   , stakeRegistrationTableDef
   , withdrawalTableDef
   )
-import DbSync.Db.Schema.Types (TableDef)
+import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Schema.UTxO
   ( collateralTxInTableDef
   , collateralTxOutTableDef
@@ -197,31 +197,38 @@ contentSamples = do
   details <-
     traverse
       (\(label, sql) -> (label,) . T.strip <$> queryTestDb sql)
-      [ ("block hashes",       "SELECT string_agg(encode(hash, 'hex'),    ',' ORDER BY id) FROM block")
-      , ("tx hashes",          "SELECT string_agg(encode(hash, 'hex'),    ',' ORDER BY id) FROM tx")
-      , ("tx fees",            "SELECT string_agg(fee::text,              ',' ORDER BY id) FROM tx")
-      , ("tx_out values",      "SELECT string_agg(value::text,            ',' ORDER BY id) FROM tx_out")
-      , ("tx_out address_ids", "SELECT string_agg(coalesce(address_id::text, 'NULL'), ',' ORDER BY id) FROM tx_out")
-      , ("address raws",       "SELECT string_agg(encode(raw, 'hex'),     ',' ORDER BY id) FROM address")
-      , ("slot leader hashes", "SELECT string_agg(encode(hash, 'hex'),    ',' ORDER BY id) FROM slot_leader")
+      [ ("block hashes",       stringAgg "encode(hash, 'hex')" blockTableDef)
+      , ("tx hashes",          stringAgg "encode(hash, 'hex')" txTableDef)
+      , ("tx fees",            stringAgg "fee::text"           txTableDef)
+      , ("tx_out values",      stringAgg "value::text"         txOutTableDef)
+      , ("tx_out address_ids", stringAgg "coalesce(address_id::text, 'NULL')" txOutTableDef)
+      , ("address raws",       stringAgg "encode(raw, 'hex')"  addressTableDef)
+      , ("slot leader hashes", stringAgg "encode(hash, 'hex')" slotLeaderTableDef)
       ]
   pure (counts ++ details)
 
+-- | @SELECT string_agg(<expr>, ',' ORDER BY id) FROM <table>@.
+-- One-row aggregate; ordering by @id@ keeps the comparison stable
+-- across runs of the same fixture.
+stringAgg :: Text -> TableDef -> Text
+stringAgg expr td =
+  "SELECT string_agg(" <> expr <> ", ',' ORDER BY id) FROM " <> tdName td
+
 sampleTables :: [Text]
-sampleTables =
-  [ "block"
-  , "tx"
-  , "slot_leader"
-  , "tx_out"
-  , "tx_in"
-  , "collateral_tx_in"
-  , "address"
-  , "stake_address"
-  , "pool_hash"
-  , "tx_metadata"
-  , "multi_asset"
-  , "ma_tx_out"
-  , "ma_tx_mint"
+sampleTables = map tdName
+  [ blockTableDef
+  , txTableDef
+  , slotLeaderTableDef
+  , txOutTableDef
+  , txInTableDef
+  , collateralTxInTableDef
+  , addressTableDef
+  , stakeAddressTableDef
+  , poolHashTableDef
+  , txMetadataTableDef
+  , multiAssetTableDef
+  , maTxOutTableDef
+  , maTxMintTableDef
   ]
 
 -- ---------------------------------------------------------------------------
@@ -281,31 +288,34 @@ extractorVersions =
   , ("cbor", 1)
   ]
 
+-- | Truncate order: dependent rows first, parent rows last. Hand-ordered
+-- so 'truncateAllTables' (which uses RESTART IDENTITY CASCADE) is safe
+-- against FK violations even without the CASCADE clause.
 tableNames :: [Text]
-tableNames =
-  [ "tx_out"
-  , "address"
-  , "tx_in"
-  , "collateral_tx_in"
-  , "collateral_tx_out"
-  , "reference_tx_in"
-  , "tx_metadata"
-  , "ma_tx_mint"
-  , "ma_tx_out"
-  , "multi_asset"
-  , "stake_registration"
-  , "stake_deregistration"
-  , "delegation"
-  , "withdrawal"
-  , "pool_owner"
-  , "pool_relay"
-  , "pool_retire"
-  , "pool_metadata_ref"
-  , "pool_update"
-  , "stake_address"
-  , "pool_hash"
-  , "tx_cbor"
-  , "tx"
-  , "block"
-  , "slot_leader"
+tableNames = map tdName
+  [ txOutTableDef
+  , addressTableDef
+  , txInTableDef
+  , collateralTxInTableDef
+  , collateralTxOutTableDef
+  , referenceTxInTableDef
+  , txMetadataTableDef
+  , maTxMintTableDef
+  , maTxOutTableDef
+  , multiAssetTableDef
+  , stakeRegistrationTableDef
+  , stakeDeregistrationTableDef
+  , delegationTableDef
+  , withdrawalTableDef
+  , poolOwnerTableDef
+  , poolRelayTableDef
+  , poolRetireTableDef
+  , poolMetadataRefTableDef
+  , poolUpdateTableDef
+  , stakeAddressTableDef
+  , poolHashTableDef
+  , txCborTableDef
+  , txTableDef
+  , blockTableDef
+  , slotLeaderTableDef
   ]

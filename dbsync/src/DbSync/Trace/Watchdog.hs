@@ -5,6 +5,12 @@
 -- their own counter per block; a sampler reads them every
 -- 'watchdogInterval' and traces deltas plus per-thread note slots.
 --
+-- During 'IngestChainHistory' the sampler also reads the consumer's
+-- 'PipelineStats' and the receiver's 'ReceiverStats' to surface
+-- drain-size averages and the writes-blocked count as interval
+-- deltas. These additional samples are 'Nothing' in 'FollowingChainTip'
+-- where the COPY pipeline isn't running.
+--
 -- The per-sample line traces at 'Debug'. When a thread fails to
 -- advance for 'stallWarnThreshold' consecutive intervals the sampler
 -- escalates to one 'Warning' line per stuck thread so the alert is
@@ -17,6 +23,7 @@ module DbSync.Trace.Watchdog
   ( -- * Types
     Watchdog (..)
   , WatchdogState (..)
+  , WatchdogIngestSamples (..)
   , HasWatchdog (..)
   , newWatchdog
 
@@ -43,6 +50,9 @@ import Control.Concurrent.STM (TBQueue)
 import Control.Tracer (traceWith)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
 
+import DbSync.Phase.Ingest.PipelineStats (PipelineStats (..))
+import qualified DbSync.Phase.Ingest.ReceiverStats as Recv
+import DbSync.Phase.Ingest.ReceiverStats (ReceiverStats)
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 
@@ -72,6 +82,13 @@ data WatchdogState = WatchdogState
   , wsReceiverBlocks :: !(IORef Word64)
   , wsReceiverSlot   :: !(IORef Word64)
   , wsReceiverNote   :: !(IORef Text)
+  }
+
+-- | Optional Ingest-only samples surfaced by the watchdog.
+-- 'Nothing' in 'FollowingChainTip' (no COPY pipeline running).
+data WatchdogIngestSamples = WatchdogIngestSamples
+  { wisPipelineStats :: !(IORef PipelineStats)
+  , wisReceiverStats :: !ReceiverStats
   }
 
 -- | Enabled if the configured minimum severity admits 'Debug'.
@@ -177,8 +194,31 @@ advanceThread ts curBlocks =
                     && streak' >= stallWarnThreshold
     }
   where
-    !delta   = curBlocks - tsPrevBlocks ts
+    !delta   = monotonicDelta (tsPrevBlocks ts) curBlocks
     !streak' = if delta == 0 then tsStreak ts + 1 else 0
+
+-- | Previously-seen pipeline / receiver counters carried between
+-- sampler iterations so the next iteration can compute interval
+-- deltas. Mirrors 'PipelineStats' + the receiver writes-blocked
+-- counter.
+data PipelineSample = PipelineSample
+  { psPrevDrainTotal   :: !Word64
+  , psPrevDrainCount   :: !Word64
+  , psPrevSingleDrains :: !Word64
+  , psPrevFullDrains   :: !Word64
+  , psPrevWritesBlocked :: !Word64
+  }
+
+emptyPipelineSample :: PipelineSample
+emptyPipelineSample = PipelineSample 0 0 0 0 0
+
+-- | Subtract @prev@ from @cur@, treating @cur < prev@ as a fresh
+-- counter (return @cur@). Handles the consumer's per-epoch reset of
+-- 'PipelineStats' without producing nonsense deltas.
+monotonicDelta :: Word64 -> Word64 -> Word64
+monotonicDelta prev cur
+  | cur >= prev = cur - prev
+  | otherwise   = cur
 
 -- | Background loop: every 'watchdogInterval' seconds, sample every
 -- counter and log one Debug context line. Per-thread stall streaks
@@ -193,11 +233,13 @@ runWatchdog
   -- ^ block queue (receiver → consumer)
   -> Maybe (TBQueue b)
   -- ^ ledger queue (receiver → worker), or 'Nothing' when ledger disabled
+  -> Maybe WatchdogIngestSamples
+  -- ^ Ingest-only samples; 'Nothing' in Follow phase
   -> m ()
-runWatchdog blockQ mLedgerQ = do
+runWatchdog blockQ mLedgerQ mSamples = do
   tracer  <- asks getTracer
   wd      <- asks getWatchdog
-  liftIO (runWatchdogIO tracer wd blockQ mLedgerQ)
+  liftIO (runWatchdogIO tracer wd blockQ mLedgerQ mSamples)
 
 -- | Bare-IO entry point. The polymorphic 'runWatchdog' delegates to
 -- this; direct callers should prefer the polymorphic one.
@@ -206,9 +248,10 @@ runWatchdogIO
   -> Watchdog
   -> TBQueue a
   -> Maybe (TBQueue b)
+  -> Maybe WatchdogIngestSamples
   -> IO ()
-runWatchdogIO _      WatchdogDisabled    _      _        = pure ()
-runWatchdogIO tracer (WatchdogEnabled s) blockQ mLedgerQ = do
+runWatchdogIO _      WatchdogDisabled    _      _        _        = pure ()
+runWatchdogIO tracer (WatchdogEnabled s) blockQ mLedgerQ mSamples = do
   -- Seed: capture the initial counter values so the first interval
   -- reports a real delta rather than the lifetime total.
   initConsumerB <- readIORef (wsConsumerBlocks s)
@@ -216,8 +259,9 @@ runWatchdogIO tracer (WatchdogEnabled s) blockQ mLedgerQ = do
   initReceiverB <- readIORef (wsReceiverBlocks s)
   let seed b = ThreadSample { tsPrevBlocks = b, tsStreak = 0 }
   loop (seed initConsumerB) (seed initWorkerB) (seed initReceiverB)
+       emptyPipelineSample
   where
-    loop !consumerPrev !workerPrev !receiverPrev = do
+    loop !consumerPrev !workerPrev !receiverPrev !pipelinePrev = do
       threadDelay (watchdogInterval * 1_000_000)
 
       consumerB    <- readIORef (wsConsumerBlocks s)
@@ -233,6 +277,11 @@ runWatchdogIO tracer (WatchdogEnabled s) blockQ mLedgerQ = do
       qBlock   <- atomically $ STM.lengthTBQueue blockQ
       qLedger  <- traverse (atomically . STM.lengthTBQueue) mLedgerQ
 
+      -- Pipeline + receiver samples for the Ingest path. In Follow
+      -- mode 'mSamples' is 'Nothing' and we emit only the liveness
+      -- fields.
+      mPipelineNow <- traverse readPipeline mSamples
+
       let consumerAdv = advanceThread consumerPrev consumerB
           workerAdv   = advanceThread workerPrev   workerB
           receiverAdv = advanceThread receiverPrev receiverB
@@ -244,30 +293,44 @@ runWatchdogIO tracer (WatchdogEnabled s) blockQ mLedgerQ = do
           anyStalled = dConsumer == 0 || dWorker == 0 || dReceiver == 0
           marker     = if anyStalled then " [STALL]" else ""
 
+          (pipelineSeg, pipelineNext) = case mPipelineNow of
+            Nothing -> ("", pipelinePrev)
+            Just now ->
+              let dBlocked = monotonicDelta (psPrevWritesBlocked pipelinePrev)
+                                            (psPrevWritesBlocked now)
+                  drainSeg = renderDrain pipelinePrev now
+                  blockedSeg
+                    | dBlocked == 0 = ""
+                    | otherwise = " blocked=+" <> show dBlocked
+              in ( blockedSeg <> drainSeg, now )
+
+          -- One tip-slot reference rather than three identical
+          -- 'slot:S' fields. The receiver's slot is the leading edge
+          -- of what we know about the chain.
+          tipSlot = receiverS
+
           renderQ :: Text -> Maybe Natural -> Text
           renderQ name Nothing  = name <> "=-"
           renderQ name (Just n) = name <> "=" <> show n
 
-          renderThread :: Text -> Word64 -> Word64 -> Word64 -> Text -> Text
-          renderThread name slot blocks delta note =
-            name <> "=slot:" <> show slot
-              <> " blk:" <> show blocks
-              <> " (+" <> show delta <> ")"
-              <> " note=" <> note
-
-          msg =
-            renderThread "recv" receiverS receiverB dReceiver receiverNote
-              <> " | "
-              <> renderThread "worker" workerS workerB dWorker workerNote
-              <> " | "
-              <> renderThread "consumer" consumerS consumerB dConsumer consumerNote
-              <> " | qd "
-              <> renderQ "block" (Just qBlock)
-              <> " "
-              <> renderQ "ledger" qLedger
+          headline =
+            "tip=" <> show tipSlot
+              <> " | recv +" <> show dReceiver
+              <> " | worker +" <> show dWorker
+              <> " | consumer +" <> show dConsumer
+              <> pipelineSeg
+              <> " | qd " <> renderQ "block" (Just qBlock)
+              <> " " <> renderQ "ledger" qLedger
               <> marker
 
-      traceWith tracer $ LogMsg Debug "Watchdog" msg Nothing
+          notesLine
+            | allStart consumerNote workerNote receiverNote = ""
+            | otherwise =
+                "\nnotes: recv=\"" <> receiverNote
+                  <> "\" worker=\""  <> workerNote
+                  <> "\" consumer=\"" <> consumerNote <> "\""
+
+      traceWith tracer $ LogMsg Debug "Watchdog" (headline <> notesLine) Nothing
 
       when (taCrossed receiverAdv) $
         emitStallWarning "receiver" receiverS receiverNote
@@ -277,6 +340,45 @@ runWatchdogIO tracer (WatchdogEnabled s) blockQ mLedgerQ = do
         emitStallWarning "consumer" consumerS consumerNote
 
       loop (taNext consumerAdv) (taNext workerAdv) (taNext receiverAdv)
+           pipelineNext
+
+    -- Render the consumer-side drain segment as
+    -- @ drain avg=A max=M (full=+F single=+S)@. Returns @""@ if no
+    -- drains occurred this interval — there's nothing useful to
+    -- report.
+    renderDrain :: PipelineSample -> PipelineSample -> Text
+    renderDrain prev now
+      | dCount == 0 = ""
+      | otherwise =
+          " drain avg=" <> show (dTotal `div` dCount)
+            <> " (full=+" <> show dFull
+            <> " single=+" <> show dSingle <> ")"
+      where
+        dTotal  = monotonicDelta (psPrevDrainTotal prev)   (psPrevDrainTotal now)
+        dCount  = monotonicDelta (psPrevDrainCount prev)   (psPrevDrainCount now)
+        dSingle = monotonicDelta (psPrevSingleDrains prev) (psPrevSingleDrains now)
+        dFull   = monotonicDelta (psPrevFullDrains prev)   (psPrevFullDrains now)
+
+    -- Read the current absolute counter values from PipelineStats +
+    -- ReceiverStats and stash them in a 'PipelineSample' so the next
+    -- iteration can compute a delta.
+    readPipeline :: WatchdogIngestSamples -> IO PipelineSample
+    readPipeline (WatchdogIngestSamples psRef rs) = do
+      ps   <- readIORef psRef
+      rsSn <- Recv.readSnapshot rs
+      pure PipelineSample
+        { psPrevDrainTotal    = psDrainTotal ps
+        , psPrevDrainCount    = psDrainCount ps
+        , psPrevSingleDrains  = psSingleDrains ps
+        , psPrevFullDrains    = psFullDrains ps
+        , psPrevWritesBlocked = Recv.snWritesBlocked rsSn
+        }
+
+    -- Suppress the notes line when no thread has ever written a real
+    -- note. Avoids two near-empty lines at startup before anything
+    -- has happened.
+    allStart :: Text -> Text -> Text -> Bool
+    allStart a b c = a == "(start)" && b == "(start)" && c == "(start)"
 
     emitStallWarning :: Text -> Word64 -> Text -> IO ()
     emitStallWarning threadName slot note =

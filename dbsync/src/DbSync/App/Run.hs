@@ -81,6 +81,7 @@ import DbSync.Env (CoreEnv (..), FollowEnv (..), IngestEnv (..), mkFollowEnvFrom
 import DbSync.Extractor (ExtractState, ExtractorDef (..), freshExtractState)
 import DbSync.Phase.Ingest.DedupMap (newMaps)
 import DbSync.Phase.Ingest.Consumer (runConsumer)
+import DbSync.Phase.Ingest.PipelineStats (emptyPipelineStats)
 import DbSync.Phase.Ingest.ReceiverStats (newReceiverStats)
 import DbSync.Ledger.Snapshot (deleteNewerSnapshots, runLedgerStateWriteThread)
 import DbSync.Ledger.State
@@ -125,7 +126,12 @@ import DbSync.Config.Types (SyncOptions (..), UtxoOption (..))
 import DbSync.StateQuery (StateQueryVar, newStateQueryVar, seedInterpreterFromLedgerState)
 import DbSync.Trace.Timing (withHeartbeatIO)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
-import DbSync.Trace.Watchdog (Watchdog, newWatchdog, runWatchdogIO)
+import DbSync.Trace.Watchdog
+  ( Watchdog
+  , WatchdogIngestSamples (..)
+  , newWatchdog
+  , runWatchdogIO
+  )
 import qualified DbSync.Phase.Ingest.Writer as IngestWriter
 import qualified DbSync.Phase.Following.Writer as FollowingWriter
 
@@ -380,6 +386,7 @@ runApp tracer args = do
     loaderStream     <- mkLoaderStream connStr tableDefs
     blockQueue       <- newTBQueueIO 500
     receiverStats    <- newReceiverStats
+    pipelineStats    <- newIORef emptyPipelineStats
     watchdog         <- newWatchdog (ceMinSeverity coreEnv)
     addrBuffer       <- newAddressBufferRef
     txOutWorker      <- mkTxOutWorker tracer hasqlSettings initialAddressId
@@ -409,6 +416,7 @@ runApp tracer args = do
           , ieWriter                  = writer
           , ieExtractState            = stRef
           , ieReceiverStats           = receiverStats
+          , iePipelineStats           = pipelineStats
           , ieControlConnection       = consumerCtrlConn
           , ieLastCommittedSlotAtBoot = replayBoundary
           , ieReplayStartSlot         = replayStart
@@ -464,9 +472,15 @@ runApp tracer args = do
           LedgerEnabled lenv -> Just (leLedgerQueue lenv)
           LedgerDisabled _   -> Nothing
 
+    let watchdogSamples = WatchdogIngestSamples
+          { wisPipelineStats = pipelineStats
+          , wisReceiverStats = receiverStats
+          }
     withIOManager (\iomgr ->
       withLedgerThreads hasLedgerEnv replayBoundary stateQueryVar watchdog $
-        withAsync (runWatchdogIO tracer watchdog blockQueue mLedgerQueue) $ \watchdogThread -> do
+        withAsync
+          (runWatchdogIO tracer watchdog blockQueue mLedgerQueue (Just watchdogSamples))
+          $ \watchdogThread -> do
           link watchdogThread
           withAsync (runAppM ingestEnv $ connectToNode iomgr topLevelCfg networkMagic socketPath intersectReq) $ \nodeThread -> do
             link nodeThread
@@ -818,7 +832,7 @@ runFollowFastPath
           Nothing      -> followAction
           Just waitSig -> void (race waitSig followAction)
 
-    withAsync (runWatchdogIO tracer watchdog blockQueue mLedgerQueue) $ \watchdogThread -> do
+    withAsync (runWatchdogIO tracer watchdog blockQueue mLedgerQueue Nothing) $ \watchdogThread -> do
       link watchdogThread
       withAsync (runAppM followEnv $ connectToNode iomgr topLevelCfg networkMagic socketPath intersectReq) $ \nodeThread -> do
         link nodeThread

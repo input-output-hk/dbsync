@@ -68,6 +68,7 @@ import DbSync.Extractor
   , emptyBlockLedgerData
   )
 import DbSync.Phase.Ingest.DedupMap (DedupMaps)
+import DbSync.Phase.Ingest.PipelineStats (PipelineStats)
 import DbSync.Phase.Ingest.ReceiverStats (ReceiverStats)
 import DbSync.Phase.Ingest.UtxoCache (UtxoCache)
 import DbSync.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..))
@@ -222,10 +223,13 @@ data IngestEnv = IngestEnv
     -- ^ Per-block extraction state — carries the 'IdCounters' through
     -- 'atomicModifyIORef'' so the resolver can hand out fresh IDs.
   , ieReceiverStats :: !ReceiverStats
-    -- ^ Receiver-thread statistics (blocks received, writes blocked).
-    -- Mutated by the chainsync receiver, read+reset per epoch by the
-    -- consumer for the @Ingest:@ log line. See
-    -- 'DbSync.Phase.Ingest.ReceiverStats' for rationale.
+    -- ^ Cumulative receiver-thread counters (blocks received, writes
+    -- blocked). Mutated by the chainsync receiver; sampled by the
+    -- watchdog at each interval for Debug diagnostics.
+  , iePipelineStats :: !(IORef PipelineStats)
+    -- ^ Per-epoch drain-size counters. Consumer increments on every
+    -- queue drain and resets at each epoch boundary; the watchdog
+    -- samples for interval deltas.
   , ieControlConnection :: !ControlConnection
     -- ^ PG connection used by the consumer to advance
     -- @dbsync_sync_state@ at each epoch boundary via 'commitEpoch'.

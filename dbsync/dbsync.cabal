@@ -65,6 +65,7 @@ library
     DbSync.Phase.Ingest.Consumer
     DbSync.Phase.Ingest.Counter
     DbSync.Phase.Ingest.DedupMap
+    DbSync.Phase.Ingest.PipelineStats
     DbSync.Phase.Ingest.ReceiverStats
     DbSync.Phase.Ingest.Resolver
     DbSync.Phase.Ingest.UtxoCache

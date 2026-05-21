@@ -13,29 +13,26 @@
 -- @chain_tip − k@ boundary, and the consumer exits at the boundary);
 -- if one slips through, panic.
 --
--- == Pipeline diagnostics
+-- == Per-epoch progress log
 --
--- At each epoch boundary, the consumer logs one consolidated line:
+-- At each epoch boundary the consumer emits one summary line:
 --
 -- @
--- Epoch 265 | 21,427 blk in 41s (526 blk/s) | recv 526/s blocked=0 | drain 85/100 (full=180 single=2) | commit 0.45s | EXTRACT GROWING (55x vs e2)
+-- Epoch 265 | 21,427 blk in 41s (526 blk/s) | (~63.21%) | HEALTHY
 -- @
 --
--- Reading the line:
+-- The bracketed percentage is the current block's position relative
+-- to the rollback boundary (@nodeTip − k@) — how close
+-- 'IngestChainHistory' is to its exit point. The segment is omitted
+-- while the chain is still shorter than @k@ blocks. The @blk in X@
+-- duration is end-to-end: it spans the previous boundary's
+-- post-commit reset through this boundary's post-commit reset, so
+-- the @blk/s@ rate reflects what the operator actually sees.
 --
--- * @recv X\/s blocked=N@ — receiver-side: blocks delivered by the node
---   per second this epoch, plus how many times the receiver had to wait
---   on a full block queue. @blocked=0@ with low @drain@ averages means
---   the upstream node is the bottleneck. @blocked>0@ means the consumer
---   side is occasionally the bottleneck.
--- * @drain X\/100@ is the /average/ drain size; the @full=@ and
---   @single=@ counts let you distinguish a steady mid-range average (low
---   variance) from a bimodal pattern of bursty fills and starvations
---   (high variance). When @single@ dominates, the queue is empty most
---   of the time we look at it.
---
--- Diagnostics use only drain-size counters (zero per-block overhead)
--- and epoch-level wall-clock timing. No per-block system calls.
+-- Detailed pipeline diagnostics (queue depths, drain-size
+-- distribution, receiver writes-blocked counter, per-thread activity
+-- notes) live on the watchdog at 'Debug' level rather than this
+-- user-facing line.
 module DbSync.Phase.Ingest.Consumer
   ( -- * Running
     runConsumer
@@ -53,6 +50,9 @@ module DbSync.Phase.Ingest.Consumer
 
     -- * Rollback-boundary predicate (exported for tests)
   , rollbackBoundaryReached
+
+    -- * Boundary-percent rendering (exported for tests)
+  , renderBoundaryPercent
 
     -- * Ingest-time rollback panic (exported for tests)
   , ingestRollbackPanicMessage
@@ -88,8 +88,8 @@ import DbSync.Env (CoreEnv (..), HasConfig (..), IngestEnv (..))
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Extractor.EpochBoundary (runEpochBoundary)
 import DbSync.Phase.Ingest.DedupMap (dedupMapSizes)
+import DbSync.Phase.Ingest.PipelineStats (PipelineStats (..), emptyPipelineStats)
 import DbSync.Block.Pipeline (processBlock)
-import DbSync.Phase.Ingest.ReceiverStats (EpochSnapshot (..), readAndResetEpoch)
 import DbSync.Phase.Type (SyncPhase (..), renderPhase)
 import DbSync.Ledger.DepositAccumulator (drainCompletedEpochs, flushEpochParams)
 import DbSync.Ledger.Types
@@ -127,19 +127,6 @@ import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()  -- 'LedgerSupport
 -- ---------------------------------------------------------------------------
 -- * Pipeline statistics (zero per-block overhead)
 -- ---------------------------------------------------------------------------
-
--- | Per-epoch pipeline statistics. Only tracks drain sizes (integer
--- increments, no system calls). Reset at each epoch boundary.
-data PipelineStats = PipelineStats
-  { psDrainTotal   :: !Word64  -- ^ Sum of all drain sizes
-  , psDrainCount   :: !Word64  -- ^ Number of drain calls
-  , psDrainMax     :: !Int     -- ^ Largest drain size seen
-  , psSingleDrains :: !Word64  -- ^ Times drain returned exactly 1 block
-  , psFullDrains   :: !Word64  -- ^ Times drain returned batchSize blocks
-  }
-
-emptyPipelineStats :: PipelineStats
-emptyPipelineStats = PipelineStats 0 0 0 0 0
 
 -- | Baseline blocks/sec captured from the first fast epoch.
 -- Used to detect slowdowns via the "Nx vs baseline" indicator.
@@ -226,7 +213,8 @@ runConsumer = do
   prevEpochRef  <- liftIO $ newIORef (Nothing :: Maybe EpochNo)
   blockCountRef <- liftIO $ newIORef (0 :: Word64)
   epochStartRef <- liftIO $ getCurrentTime >>= newIORef
-  statsRef      <- liftIO $ newIORef emptyPipelineStats
+  -- Shared with the watchdog (see 'iePipelineStats' on 'IngestEnv').
+  statsRef      <- asks iePipelineStats
   baselineRef   <- liftIO $ newIORef (Nothing :: Maybe BaselineRef)
   -- (slot, blockNo, hash) of the most recently processed block;
   -- the resume point captured by 'commitEpoch' at each boundary.
@@ -367,7 +355,6 @@ runConsumer = do
       resolver      <- asks ieResolver
       writer        <- asks ieWriter
       loaderStream  <- asks ieLoaderStream
-      receiverStats <- asks ieReceiverStats
       hasLedger     <- asks ieHasLedgerEnv
       extractStRef  <- asks ieExtractState
       dedupMaps     <- asks ieDedupMaps
@@ -378,6 +365,8 @@ runConsumer = do
       bootSlot      <- asks ieLastCommittedSlotAtBoot
       replayStart   <- asks ieReplayStartSlot
       watchdog      <- asks ieWatchdog
+      boundaryVar   <- asks ieRollbackBoundary
+      securityParam <- asks (ceSecurityParam . ieCore)
       cfg           <- asks getConfig
       let ledgerEnabledCfg = lcEnabled (scLedger cfg)
           schemaVersion    = 1 :: Int
@@ -443,29 +432,8 @@ runConsumer = do
         prevEpoch <- liftIO $ readIORef prevEpochRef
         case prevEpoch of
           Just prev | prev /= blockEpoch -> do
-            -- Wall-clock for the entire epoch (one syscall)
-            now        <- liftIO getCurrentTime
             epochStart <- liftIO $ readIORef epochStartRef
             blockCount <- liftIO $ readIORef blockCountRef
-            let elapsed = diffUTCTime now epochStart
-                blocksPerSec :: Double
-                blocksPerSec = if elapsed > 0
-                  then fromIntegral blockCount / realToFrac elapsed
-                  else 0
-                elapsedSec :: Double
-                elapsedSec = realToFrac elapsed
-
-            -- Write epoch sync stats to DB (before commit)
-            essId <- liftIO $ assignEpochSyncStatsId resolver
-            let ess = EpochSyncStats
-                  { epochSyncStatsEpochNo        = unEpochNo prev
-                  , epochSyncStatsBlocksProcessed = blockCount
-                  , epochSyncStatsBlocksPerSec    = blocksPerSec
-                  , epochSyncStatsElapsedSec      = elapsedSec
-                  , epochSyncStatsSyncedAt        = now
-                  , epochSyncStatsPhase           = renderPhase IngestChainHistory
-                  }
-            liftIO $ writeEpochSyncStats writer essId ess
 
             -- Snapshot the last fully-extracted block + ID counters
             -- of the just-finished epoch. Persisted to
@@ -484,7 +452,6 @@ runConsumer = do
             -- epoch in parallel with the consumer's ingest of the
             -- next one — see the @PendingBoundary@ Haddock for the
             -- crash-safety reasoning.
-            commitStart <- liftIO getCurrentTime
             (buf, mConsumedBuf) <- liftIO $ do
               -- 1. Flush loader streams — tx_outs durable, address_id = NULL.
               setConsumerNote watchdog "consumer: lsCommit (flushing loader stream)"
@@ -561,27 +528,52 @@ runConsumer = do
               setConsumerNote watchdog "consumer: lsReopen"
               lsReopen loaderStream
               setConsumerNote watchdog "consumer: post-commit"
-            commitEnd <- liftIO getCurrentTime
-            let commitSec :: NominalDiffTime
-                commitSec = diffUTCTime commitEnd commitStart
 
-            -- Epoch boundary commit just completed. Run major GC if this was a heavy epoch.
-            -- Gated at >10s to avoid penalizing fast Byron epochs (2-3s each).
+            -- End-to-end timing: spans the previous boundary's
+            -- post-commit reset through this boundary's post-commit
+            -- reset, so the @blk/s@ rate reflects what the operator
+            -- actually sees rather than the ingestion-only window.
+            epochEnd <- liftIO getCurrentTime
+            let elapsed = diffUTCTime epochEnd epochStart
+                blocksPerSec :: Double
+                blocksPerSec
+                  | elapsed > 0 = fromIntegral blockCount / realToFrac elapsed
+                  | otherwise   = 0
+                elapsedSec :: Double
+                elapsedSec = realToFrac elapsed
+
+            -- 9. Record per-epoch sync stats. Writing after 'lsReopen'
+            --    queues the row into the *next* epoch's stream, so it
+            --    durabilises at the next boundary. Acceptable for a
+            --    stats-only table with no FK dependants — losing a
+            --    single row on crash is preferable to recording a
+            --    different elapsed time than the user-facing log.
+            essId <- liftIO $ assignEpochSyncStatsId resolver
+            let ess = EpochSyncStats
+                  { epochSyncStatsEpochNo        = unEpochNo prev
+                  , epochSyncStatsBlocksProcessed = blockCount
+                  , epochSyncStatsBlocksPerSec    = blocksPerSec
+                  , epochSyncStatsElapsedSec      = elapsedSec
+                  , epochSyncStatsSyncedAt        = epochEnd
+                  , epochSyncStatsPhase           = renderPhase IngestChainHistory
+                  }
+            liftIO $ writeEpochSyncStats writer essId ess
+
+            -- Major GC on heavy epochs only. Gated at >10s to avoid
+            -- penalising fast Byron epochs (2-3s each).
             when (elapsedSec > 10.0) $ liftIO performMajorGC
 
-            -- Log single consolidated line
             ps       <- liftIO $ readIORef statsRef
             baseline <- liftIO $ readIORef baselineRef
-            recvSnap <- liftIO $ readAndResetEpoch receiverStats
 
-            let status = diagnose batchSize blocksPerSec ps baseline
-                recvPerSec :: Int
-                recvPerSec
-                  | elapsedSec > 0 =
-                      round (fromIntegral (esBlocksReceived recvSnap) / elapsedSec :: Double)
-                  | otherwise = 0
+            -- Progress percentage against the current node tip
+            -- (derived from the published rollback boundary + k).
+            -- Omitted while the chain is still shorter than k.
+            mBoundary <- liftIO $ readTVarIO boundaryVar
+            let pctSeg = renderBoundaryPercent mBoundary securityParam
+                          (fmap (\(_, b, _) -> b) mLastBlock)
+                status = diagnose batchSize blocksPerSec ps baseline
 
-            -- Capture baseline from first fast epoch
             when (isNothing baseline && blocksPerSec > 500) $
               liftIO $ writeIORef baselineRef (Just (BaselineRef blocksPerSec (unEpochNo prev)))
 
@@ -589,12 +581,7 @@ runConsumer = do
               ( "Epoch " <> show (unEpochNo prev)
                 <> " | " <> fmtInt blockCount <> " blk in " <> fmtDuration elapsedSec
                 <> " (" <> show (round blocksPerSec :: Int) <> " blk/s)"
-                <> " | recv " <> show recvPerSec <> "/s blocked="
-                <> fmtInt (esWritesBlocked recvSnap)
-                <> " | drain " <> show (avgDrain ps) <> "/" <> show batchSize
-                <> " (full=" <> fmtInt (psFullDrains ps)
-                <> " single=" <> fmtInt (psSingleDrains ps) <> ")"
-                <> " | commit " <> fmtF2 (realToFrac commitSec :: Double) <> "s"
+                <> pctSeg
                 <> " | " <> status
               ) Nothing
 
@@ -619,7 +606,7 @@ runConsumer = do
             -- Reset for next epoch
             liftIO $ writeIORef statsRef emptyPipelineStats
             liftIO $ writeIORef blockCountRef 0
-            liftIO $ writeIORef epochStartRef commitEnd  -- start AFTER commit completes
+            liftIO $ writeIORef epochStartRef epochEnd
           _ -> pure ()
 
         -- Run extractors + write to COPY queues
@@ -807,6 +794,22 @@ ingestRollbackPanicMessage point =
 -- short replays silent while still flagging liveness on long ones.
 progressLogInterval :: NominalDiffTime
 progressLogInterval = 5
+
+-- | Render the Ingest progress segment of the form @\" | (~87.32%)\"@.
+-- The percentage is the current block's position relative to the
+-- current node tip (derived from the published rollback boundary
+-- plus @k@). Returns @\"\"@ when the boundary is still 'Nothing'
+-- (chain shorter than @k@ blocks), when no block has been processed
+-- yet, or when the derived tip is zero.
+renderBoundaryPercent :: Maybe BlockNo -> Word64 -> Maybe Word64 -> Text
+renderBoundaryPercent (Just (BlockNo boundary)) k (Just curBlock)
+  | tip > 0 =
+      let raw     = (fromIntegral curBlock / fromIntegral tip :: Double) * 100
+          clamped = max 0 (min 100 raw)
+      in " | (~" <> fmtF2 clamped <> "%)"
+  where
+    tip = boundary + k
+renderBoundaryPercent _ _ _ = ""
 
 -- | Render a slot-progress percentage of the form @\" (~37%)\"@.
 -- Empty string when bounds are missing or the window has zero

@@ -39,8 +39,9 @@ import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Phase.Ingest.DedupMap (newMaps)
 import DbSync.Block.Pipeline (processBlock)
 import DbSync.Phase.Type (SyncPhase (..))
-import DbSync.Address.Buffer (newAddressBufferRef)
+import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
+import DbSync.Phase.Ingest.UtxoCache (defaultCacheCapacity, newUtxoCache)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv, mkTestPipelineEnvWith)
 import DbSync.Test.Writer (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 
@@ -123,8 +124,9 @@ runPoolBlocks blocks = do
   stRef <- newIORef freshExtractState
   dedup <- newMaps
   addrBuf <- newAddressBufferRef
+  utxoCache <- newUtxoCache defaultCacheCapacity
   wrRef <- newIORef emptyTestWriterState
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedup addrBuf)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedup addrBuf utxoCache Nothing)
                               (mkTestWriter wrRef)
                               [coreExtractor, stakeDelegationExtractor, poolExtractor]
   for_ blocks $ \b -> runReaderT (processBlock b) env
@@ -140,9 +142,10 @@ runPoolWithBlocks bld blocks = do
   stRef <- newIORef freshExtractState
   dedup <- newMaps
   addrBuf <- newAddressBufferRef
+  utxoCache <- newUtxoCache defaultCacheCapacity
   wrRef <- newIORef emptyTestWriterState
   let env = mkTestPipelineEnvWith Mainnet
-              (mkIngestResolver stRef dedup addrBuf) (mkTestWriter wrRef)
+              (mkIngestResolver stRef dedup addrBuf utxoCache Nothing) (mkTestWriter wrRef)
               [coreExtractor, stakeDelegationExtractor, poolExtractor]
               (\_ -> pure bld) IngestChainHistory
   for_ blocks $ \b -> runReaderT (processBlock b) env

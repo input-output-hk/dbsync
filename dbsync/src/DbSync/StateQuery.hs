@@ -5,38 +5,54 @@
 -- | Local state query integration for epoch\/slot computation.
 --
 -- Computes 'SlotDetails' (epoch, time, slot-within-epoch, epoch size)
--- via a 'History.Interpreter' wrapping a hard-fork 'Summary'. Two
--- sources of truth, in priority order:
+-- via a 'History.Interpreter' wrapping a hard-fork 'Summary'.
 --
--- 1. /Node-authoritative/. As soon as the node finishes replaying its
---    LedgerDB, we acquire its 'GetInterpreter' result and cache it.
---    Always preferred when available.
--- 2. /Locally-observed/. While the node is still replaying, we build a
---    'History.Summary' incrementally by observing the era of each
---    incoming block via 'observeBlockSTM'. The era boundaries are
---    computed from per-era 'EraParams' (sourced from the consensus
---    library) and the slot of each first-of-era block. Same point of
---    truth as the node, just observed from ChainSync rather than from
---    a replayed LedgerDB.
+-- == Fallback order
 --
--- If the locally-observed summary cannot answer (e.g. dbsync resumed
--- from a non-Byron tip without observing the preceding transitions),
--- 'getSlotDetails' falls back to the existing retry-with-backoff
--- against the node — matching pre-existing behaviour.
+-- 'getSlotDetailsIO' tries three sources, in order, before throwing:
+--
+-- 1. /Cached interpreter/ ('sqvInterpreterVar'). Seeded at boot from a
+--    loaded snapshot via 'seedInterpreterFromLedgerState', then
+--    re-seeded by the ledger worker after every block apply. The hot
+--    path.
+--
+-- 2. /Locally-observed summary/ ('sqvObservedVar'). Built incrementally
+--    by 'observeBlockSTM' as ChainSync delivers blocks. Skipped when
+--    'isObservationBroken' is set — a broken summary would still
+--    answer (its current era is 'EraUnbounded'), but with the wrong
+--    era classification because the past-era list is missing entries.
+--    On a clean genesis sync where every transition is observed it's
+--    a free local answer; on a resume from a non-Byron tip it's
+--    bypassed and we go straight to (3).
+--
+-- 3. /Node 'GetInterpreter'/ via the LSQ protocol. Last resort:
+--    round-trips through the node's LedgerDB. Validated against the
+--    requested slot before being cached; if the node's LedgerDB is
+--    still behind the chain tip, the response cannot answer and we
+--    back off and retry instead of poisoning the cache.
+--
+-- The retry on (3) is the safety net for the parallel-sync workflow
+-- where dbsync's ChainSync stream runs ahead of cardano-node's
+-- LedgerDB replay: the node's interpreter is then a snapshot of an
+-- early-replay state and cannot answer slots the consumer is
+-- processing. Each retry re-checks the local sources first so the
+-- moment the ledger worker lands a fresh seed in 'sqvInterpreterVar'
+-- we use it instead of going back to the node.
 module DbSync.StateQuery
   ( -- * Types
     SlotDetails (..)
   , CardanoInterpreter
   , StateQueryVar (..)
+  , RetryConfig (..)
 
     -- * Construction
   , newStateQueryVar
+  , defaultRetryConfig
 
     -- * Querying
   , getSlotDetails
   , getSlotDetailsIO
-  , getHistoryInterpreter
-  , getHistoryInterpreterIO
+  , getSlotDetailsIOWith
   , isInterpreterCached
 
     -- * Local observation
@@ -197,6 +213,38 @@ observeBlockSTM sqv blk = do
   pure result
 
 -- ---------------------------------------------------------------------------
+-- * Retry policy
+-- ---------------------------------------------------------------------------
+
+-- | Retry policy for the node-interpreter fallback in 'getSlotDetailsIOWith'.
+--
+-- The fallback is taken when neither the cached interpreter nor the
+-- observed summary can answer for the requested slot. Each attempt
+-- queries the node, validates the response against that slot, and (on
+-- failure) sleeps for @'rcBackoffMicros' n@ microseconds before
+-- attempt @n + 1@.
+data RetryConfig = RetryConfig
+  { rcMaxAttempts   :: !Int
+    -- ^ Total number of node-query attempts. The last attempt does
+    -- not back off; if it fails the call throws.
+  , rcBackoffMicros :: !(Int -> Int)
+    -- ^ Microseconds to wait between attempts. Argument is the
+    -- zero-based index of the attempt that just failed (so the wait
+    -- before attempt @n + 1@).
+  }
+
+-- | Production retry policy: 10 attempts; geometric backoff capped at
+-- 300 seconds; the nine backoffs between the ten attempts sum to
+-- 1,800 seconds (= 30 minutes).
+--
+-- Sequence: 20, 40, 80, 160, 300, 300, 300, 300, 300 seconds.
+defaultRetryConfig :: RetryConfig
+defaultRetryConfig = RetryConfig
+  { rcMaxAttempts   = 10
+  , rcBackoffMicros = \n -> 1_000_000 * min 300 (20 * (2 ^ min n (4 :: Int)))
+  }
+
+-- ---------------------------------------------------------------------------
 -- * Querying
 -- ---------------------------------------------------------------------------
 
@@ -227,21 +275,8 @@ getSlotDetails slot = do
 -- 'StateQueryVar') can still reach it without spinning up an
 -- 'IngestM' action.
 --
--- Resolution order:
---
--- 1. If the node's authoritative interpreter has been cached
---    ('sqvInterpreterVar' = 'Just'), use it.
--- 2. Otherwise, use the locally-observed summary
---    ('sqvObservedVar') unless it's marked broken or returns
---    'PastHorizonException' for the requested slot.
--- 3. As a last resort, fall back to 'getHistoryInterpreterIO' which
---    blocks until the node becomes ready (existing retry-with-backoff
---    behaviour).
---
--- The observed-summary path is the hot path during the brief window
--- where the node is still replaying. The cached node path takes over
--- as soon as the node is ready (typically within ~10–30 minutes for
--- mainnet from genesis).
+-- Uses 'defaultRetryConfig' for the node fallback; tests inject a
+-- faster schedule via 'getSlotDetailsIOWith'.
 getSlotDetailsIO
   :: HasCallStack
   => AppTracer
@@ -249,90 +284,164 @@ getSlotDetailsIO
   -> SystemStart
   -> SlotNo
   -> IO SlotDetails
-getSlotDetailsIO tracer sqv systemStart slot = do
-  mInterp <- atomically $ readTVar (sqvInterpreterVar sqv)
-  case mInterp of
-    Just interp ->
-      case evalSlotDetails interp of
-        Right sd -> insertCurrentTime sd
-        Left _ ->
-          -- The cached interpreter is stale (e.g. chain progressed
-          -- past its summary). Refresh from the node.
-          fetchAndEval
-    Nothing -> do
-      observed <- atomically $ readTVar (sqvObservedVar sqv)
-      if isObservationBroken observed
-        then fetchAndEval
-        else case evalSlotDetails (currentInterpreter observed) of
-          Right sd -> insertCurrentTime sd
-          -- Observed summary cannot answer (e.g. resume from non-Byron
-          -- tip without observing transitions). Fall back to the node.
-          Left _ -> fetchAndEval
-  where
-    evalSlotDetails :: CardanoInterpreter -> Either PastHorizonException SlotDetails
-    evalSlotDetails interp = interpretQuery interp (querySlotDetails systemStart slot)
+getSlotDetailsIO = getSlotDetailsIOWith defaultRetryConfig
 
-    fetchAndEval :: IO SlotDetails
-    fetchAndEval = do
-      interp <- getHistoryInterpreterIO tracer sqv
-      case evalSlotDetails interp of
-        Left err -> throwBlock $
-          "getSlotDetails: " <> show err
-        Right sd -> insertCurrentTime sd
+-- | 'getSlotDetailsIO' with a caller-supplied 'RetryConfig'. Production
+-- code uses 'getSlotDetailsIO' (= 'defaultRetryConfig'); tests pass a
+-- microsecond-scale config to keep the suite fast.
+--
+-- Resolution order:
+--
+-- 1. Cached interpreter ('sqvInterpreterVar'). On success, return.
+-- 2. Locally-observed summary ('sqvObservedVar'), unless
+--    'isObservationBroken' is set. A broken summary would answer
+--    (its current era is unbounded) but with the wrong era
+--    classification, so we skip it and go to (3) instead.
+-- 3. Node 'GetInterpreter' via the LSQ request channel. Validated
+--    against the requested slot; if too narrow, do not cache, back off
+--    per 'RetryConfig', and retry. Each retry re-checks the local
+--    sources first.
+--
+-- Throws 'AppBlockError' if all attempts in (3) fail, or if the LSQ
+-- channel returns an unexpected 'AcquireFailure' other than
+-- 'AcquireFailurePointTooOld'.
+getSlotDetailsIOWith
+  :: HasCallStack
+  => RetryConfig
+  -> AppTracer
+  -> StateQueryVar
+  -> SystemStart
+  -> SlotNo
+  -> IO SlotDetails
+getSlotDetailsIOWith rc tracer sqv systemStart slot = do
+  mLocal <- tryLocalInterpreters sqv evalSlot
+  case mLocal of
+    Just sd -> insertCurrentTime sd
+    Nothing -> fetchFromNodeWithRetry rc tracer sqv systemStart slot
+  where
+    evalSlot :: CardanoInterpreter -> Either PastHorizonException SlotDetails
+    evalSlot interp = interpretQuery interp (querySlotDetails systemStart slot)
 
     insertCurrentTime :: SlotDetails -> IO SlotDetails
     insertCurrentTime sd = do
       now <- getCurrentTime
       pure sd { sdCurrentTime = now }
 
--- | Query the node for a 'CardanoInterpreter'.
+-- | Try the cached interpreter and then the observed summary. Returns
+-- 'Just sd' the first time either source can answer; 'Nothing' if
+-- neither can.
 --
--- Reads the tracer and 'StateQueryVar' from env; defers to
--- 'getHistoryInterpreterIO' for the actual retry loop.
-getHistoryInterpreter
-  :: ( HasCallStack
-     , HasTracer env
-     , HasStateQueryVar env
-     , MonadReader env m
-     , MonadIO m
-     )
-  => m CardanoInterpreter
-getHistoryInterpreter = do
-  tracer <- asks getTracer
-  sqv    <- asks getStateQueryVar
-  liftIO $ getHistoryInterpreterIO tracer sqv
+-- The observed summary is skipped when 'isObservationBroken' is set:
+-- a broken summary still has its current era as 'EraUnbounded' and
+-- would happily answer any slot — but with the /wrong/ era
+-- classification, since past-era transitions are missing. Returning a
+-- wrong 'SlotDetails' is worse than going to the node, so we only
+-- trust the observed summary when it has tracked every era boundary
+-- since genesis.
+tryLocalInterpreters
+  :: StateQueryVar
+  -> (CardanoInterpreter -> Either PastHorizonException SlotDetails)
+  -> IO (Maybe SlotDetails)
+tryLocalInterpreters sqv eval = do
+  mInterp <- atomically $ readTVar (sqvInterpreterVar sqv)
+  case mInterp >>= rightToMaybe . eval of
+    Just sd -> pure (Just sd)
+    Nothing -> do
+      observed <- atomically $ readTVar (sqvObservedVar sqv)
+      if isObservationBroken observed
+        then pure Nothing
+        else pure $ rightToMaybe (eval (currentInterpreter observed))
 
--- | Query the node for a 'CardanoInterpreter' (raw 'IO' bridge),
--- retrying with capped exponential backoff if the node's LedgerDB is
--- still replaying.
-getHistoryInterpreterIO :: HasCallStack => AppTracer -> StateQueryVar -> IO CardanoInterpreter
-getHistoryInterpreterIO tracer sqv = go (0 :: Int)
+-- | Acquire an interpreter from the node, retrying on too-narrow
+-- horizon and on transient 'AcquireFailurePointTooOld' replies.
+--
+-- The retry loop re-checks the local sources at the start of every
+-- iteration: if the ledger worker (or chainsync observer) has
+-- advanced state during the previous backoff, we use it instead of
+-- going back to the node.
+--
+-- A response interpreter is only written to 'sqvInterpreterVar' once
+-- it has been validated against the requested slot. Caching a too-narrow
+-- interpreter would make every subsequent 'getSlotDetailsIO' call fail
+-- until the worker re-seeded, which historically manifested as a hard
+-- crash mid-ingest against a node still replaying its LedgerDB.
+fetchFromNodeWithRetry
+  :: HasCallStack
+  => RetryConfig
+  -> AppTracer
+  -> StateQueryVar
+  -> SystemStart
+  -> SlotNo
+  -> IO SlotDetails
+fetchFromNodeWithRetry rc tracer sqv systemStart slot = go (0 :: Int)
   where
     go n = do
-      when (n == 0) $
-        traceWith tracer $ LogMsg Info "StateQuery"
-          "Acquiring history interpreter from node…" Nothing
-      respVar <- newEmptyTMVarIO
-      atomically $ putTMVar (sqvRequestVar sqv) (BlockQuery $ QueryHardFork GetInterpreter, respVar)
-      res <- atomically $ takeTMVar respVar
-      case res of
-        Right interp -> do
+      mLocal <- tryLocalInterpreters sqv evalSlot
+      case mLocal of
+        Just sd -> do
           when (n > 0) $
             traceWith tracer $ LogMsg Info "StateQuery"
-              ("Node ledger ready; interpreter acquired after "
-                <> show n <> " retries") Nothing
-          atomically $ writeTVar (sqvInterpreterVar sqv) (Just interp)
-          pure interp
-        -- Treat as "node not ready yet": back off and retry.
-        Left AcquireFailurePointTooOld -> do
-          let backoffSecs = min 60 (2 * 2 ^ min n 5 :: Int)
-          traceWith tracer $ LogMsg Info "StateQuery"
-            ("Node ledger still replaying (attempt " <> show (n + 1)
-              <> "); retrying in " <> show backoffSecs <> "s") Nothing
-          threadDelay (backoffSecs * 1_000_000)
-          go (n + 1)
+              ( "local interpreter caught up while waiting for node; "
+                  <> "slot " <> show (unSlotNo slot)
+                  <> " resolved after " <> show n <> " backoff(s)"
+              ) Nothing
+          insertCurrentTime sd
+        Nothing -> queryNode n
+
+    queryNode n = do
+      when (n == 0) $
+        traceWith tracer $ LogMsg Info "StateQuery"
+          ( "Acquiring history interpreter from node for slot "
+              <> show (unSlotNo slot) <> "…"
+          ) Nothing
+      respVar <- newEmptyTMVarIO
+      atomically $ putTMVar (sqvRequestVar sqv)
+        (BlockQuery $ QueryHardFork GetInterpreter, respVar)
+      res <- atomically $ takeTMVar respVar
+      case res of
+        Right interp -> case evalSlot interp of
+          Right sd -> do
+            when (n > 0) $
+              traceWith tracer $ LogMsg Info "StateQuery"
+                ( "Node ledger caught up; interpreter acquired after "
+                    <> show n <> " retry(s)"
+                ) Nothing
+            atomically $ writeTVar (sqvInterpreterVar sqv) (Just interp)
+            insertCurrentTime sd
+          Left _ -> backoff n
+            "Node interpreter horizon is behind the requested slot \
+            \(cardano-node LedgerDB still catching up to the chain tip)"
+        Left AcquireFailurePointTooOld -> backoff n
+          "Node ledger still replaying (AcquireFailurePointTooOld)"
         Left err -> throwBlock $
-          "getHistoryInterpreter: " <> show err
+          "getSlotDetails: unexpected LSQ acquire failure: " <> show err
+
+    backoff n reason
+      | n + 1 >= rcMaxAttempts rc = throwBlock $
+          "getSlotDetails: unable to resolve slot "
+            <> show (unSlotNo slot)
+            <> " after " <> show (rcMaxAttempts rc)
+            <> " attempts; cardano-node LedgerDB appears stuck behind"
+            <> " the chain tip (last reason: " <> reason <> ")"
+      | otherwise = do
+          let micros = rcBackoffMicros rc n
+              secs   = micros `div` 1_000_000
+          traceWith tracer $ LogMsg Warning "StateQuery"
+            ( reason
+                <> " (attempt " <> show (n + 1)
+                <> "/" <> show (rcMaxAttempts rc)
+                <> "); retrying in " <> show secs <> "s"
+            ) Nothing
+          threadDelay micros
+          go (n + 1)
+
+    evalSlot :: CardanoInterpreter -> Either PastHorizonException SlotDetails
+    evalSlot interp = interpretQuery interp (querySlotDetails systemStart slot)
+
+    insertCurrentTime :: SlotDetails -> IO SlotDetails
+    insertCurrentTime sd = do
+      now <- getCurrentTime
+      pure sd { sdCurrentTime = now }
 
 -- ---------------------------------------------------------------------------
 -- * Query expression

@@ -33,6 +33,7 @@
 module DbSync.Db.Statement.Indexes
   ( tableIndexStatements
   , preResolveIndexStatements
+  , postResolveIndexStatements
   , uniqueConstraintIndexName
   , columnRef
   , Concurrency (..)
@@ -88,23 +89,15 @@ uniqueConstraintIndexName :: TableDef -> Int -> Text
 uniqueConstraintIndexName td n =
   tdName td <> "_unique_" <> show n <> "_idx"
 
--- | Indexes built before the post-load resolves and CTE backfills.
+-- | Indexes built before the CTAS resolve runs.
+--
+-- Only the indexes the CTAS @LEFT JOIN@ depends on and the indexes
+-- on tables the CTAS does /not/ rebuild — building them here saves
+-- a second pass.
+--
 -- Non-@CONCURRENTLY@ because the tables are still UNLOGGED at this
 -- point: a one-pass build skips both the WAL writes and the
 -- second-pass scan that @CONCURRENTLY@ would force.
---
--- The first entry is named to match what 'tableIndexStatements'
--- will later emit from @txTableDef.tdUniqueConstraints@, so the
--- post-flip concurrent re-build becomes an @IF NOT EXISTS@ no-op.
--- The others are non-unique perf indexes with no schema-level
--- declaration; only this pass emits them.
---
--- The four @_id_idx@ entries support the rewritten post-load
--- backfill UPDATEs: each backfill drives off a small (or at least
--- bounded) filtered set of @tx@ rows and looks up each row's
--- collateral / inputs / withdrawals via these indexes, replacing
--- the previous "aggregate everything, then filter to a handful"
--- pattern that scaled with input count rather than output count.
 preResolveIndexStatements :: [Text]
 preResolveIndexStatements =
   [ renderIndex NonConcurrent Unique
@@ -118,27 +111,28 @@ preResolveIndexStatements =
       , columnRef txOutTableDef "index"
       ]
   , renderIndex NonConcurrent NonUnique
-      "tx_in_tx_out_idx"
-      (tdName txInTableDef)
-      [ columnRef txInTableDef "tx_out_id"
-      , columnRef txInTableDef "tx_out_index"
-      ]
-  , renderIndex NonConcurrent NonUnique
-      "collateral_tx_in_tx_in_id_idx"
-      (tdName collateralTxInTableDef)
-      [columnRef collateralTxInTableDef "tx_in_id"]
-  , renderIndex NonConcurrent NonUnique
       "collateral_tx_out_tx_id_idx"
       (tdName collateralTxOutTableDef)
       [columnRef collateralTxOutTableDef "tx_id"]
   , renderIndex NonConcurrent NonUnique
+      "withdrawal_tx_id_idx"
+      (tdName withdrawalTableDef)
+      [columnRef withdrawalTableDef "tx_id"]
+  ]
+
+-- | Perf indexes built /after/ the CTAS rebuilds. The CTAS DROPs and
+-- replaces @tx_in@ and @collateral_tx_in@, so any index on those
+-- tables built before the rebuild would be lost.
+postResolveIndexStatements :: [Text]
+postResolveIndexStatements =
+  [ renderIndex NonConcurrent NonUnique
       "tx_in_tx_in_id_idx"
       (tdName txInTableDef)
       [columnRef txInTableDef "tx_in_id"]
   , renderIndex NonConcurrent NonUnique
-      "withdrawal_tx_id_idx"
-      (tdName withdrawalTableDef)
-      [columnRef withdrawalTableDef "tx_id"]
+      "collateral_tx_in_tx_in_id_idx"
+      (tdName collateralTxInTableDef)
+      [columnRef collateralTxInTableDef "tx_in_id"]
   ]
 
 -- ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@
 -- anything this module already built.
 module DbSync.Phase.Preparing.PreResolveIndexes
   ( createPreResolveIndexes
+  , createPostResolveIndexes
   ) where
 
 import Cardano.Prelude
@@ -19,7 +20,10 @@ import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 
 import DbSync.AppM (LoggingM)
-import DbSync.Db.Statement.Indexes (preResolveIndexStatements)
+import DbSync.Db.Statement.Indexes
+  ( postResolveIndexStatements
+  , preResolveIndexStatements
+  )
 import DbSync.Db.Transaction (HasHasqlConnection (..))
 import DbSync.Trace.Timing (timedTrace_)
 
@@ -29,9 +33,23 @@ createPreResolveIndexes
   :: (LoggingM env m, HasHasqlConnection env)
   => m ()
 createPreResolveIndexes =
-  for_ (zip [1 :: Int ..] preResolveIndexStatements) $ \(i, ddl) ->
+  runStatements "pre-resolve index" preResolveIndexStatements
+
+-- | Indexes on the input tables that the CTAS resolve replaces. Built
+-- after the CTAS so they survive the @DROP TABLE@.
+createPostResolveIndexes
+  :: (LoggingM env m, HasHasqlConnection env)
+  => m ()
+createPostResolveIndexes =
+  runStatements "post-resolve index" postResolveIndexStatements
+
+runStatements
+  :: (LoggingM env m, HasHasqlConnection env)
+  => Text -> [Text] -> m ()
+runStatements label stmts =
+  for_ (zip [1 :: Int ..] stmts) $ \(i, ddl) ->
     timedTrace_ "PreparingForVolatileTail"
-      ("pre-resolve index " <> show i)
+      (label <> " " <> show i)
       (runDdl ddl)
 
 runDdl

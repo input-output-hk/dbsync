@@ -68,6 +68,7 @@ library
     DbSync.Db.Statement.CollateralTxIn
     DbSync.Db.Statement.Common
     DbSync.Db.Statement.CollateralTxOut
+    DbSync.Db.Statement.ConsumedBy
     DbSync.Db.Statement.Delegation
     DbSync.Db.Statement.EpochParamPending
     DbSync.Db.Statement.IdAllocator

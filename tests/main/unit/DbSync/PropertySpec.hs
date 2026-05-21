@@ -14,20 +14,27 @@ module DbSync.PropertySpec (spec) where
 
 import Cardano.Prelude
 
+import qualified Data.Set as Set
+
 import Test.Hspec (Spec, describe)
 import Test.Hspec.QuickCheck (modifyMaxSize, modifyMaxSuccess, prop)
 import Test.QuickCheck (Property, ioProperty, (===))
 
 import Test.Consensus.Cardano.Generators ()  -- Arbitrary (CardanoBlock StandardCrypto)
 
+import Ouroboros.Consensus.Block (blockSlot)
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
 
+import qualified DbSync.Block.Types as G
+import DbSync.Block.Parser (parseBlock)
+import qualified DbSync.Db.Schema.Core as SC
 import DbSync.Db.Schema.Ids (BlockId (..))
 import DbSync.Extractor (ExtractorDef)
-import DbSync.Extractor.Core (coreExtractor)
+import DbSync.Extractor.Core (coreExtractor, hasNoDepositActivity)
 import DbSync.Test.Property.Invariants
   ( runPureExtract
   , runPureExtractMany
+  , syntheticSlotDetails
   )
 import DbSync.Test.Writer (TestWriterState (..))
 
@@ -51,6 +58,9 @@ spec = describe "DbSync.PropertySpec (Arbitrary CardanoBlock)" $
     modifyMaxSize (const 15) $ modifyMaxSuccess (const 30) $
       prop "block IDs are monotonic and gap-free across blocks"
         prop_blockIdsMonotonic
+
+    prop "plain-transfer valid-contract txs get deposit = Just 0"
+      prop_plainTransfersGetZeroDeposit
 
 -- ---------------------------------------------------------------------------
 -- Properties
@@ -114,6 +124,31 @@ prop_blockIdsMonotonic blocks = ioProperty $ do
   where
     unBlockId :: BlockId -> Int64
     unBlockId (BlockId n) = n
+
+-- | Every valid-contract tx with no certs, withdrawals or treasury
+-- donation receives @txDeposit = Just 0@ from the Ingest pipeline
+-- — the conservation short-circuit in
+-- 'Extractor.Core.computeTxFinancials' fires before any deposit
+-- lookup, so the post-load backfill never sees these rows.
+prop_plainTransfersGetZeroDeposit
+  :: CardanoBlock StandardCrypto -> Property
+prop_plainTransfersGetZeroDeposit block = ioProperty $ do
+  let sd       = syntheticSlotDetails (blockSlot block)
+      genBlock = parseBlock sd block
+      plainTxHashes = Set.fromList
+        [ G.txHash gtx
+        | gtx <- G.blkTxs genBlock
+        , G.txValidContract gtx
+        , hasNoDepositActivity gtx
+        ]
+  s <- runPureExtract enabledExtractors block
+  let offenders =
+        [ (SC.txHash t, SC.txDeposit t)
+        | (_, t) <- twTxs s
+        , SC.txHash t `Set.member` plainTxHashes
+        , SC.txDeposit t /= Just 0
+        ]
+  pure $ offenders === []
 
 -- ---------------------------------------------------------------------------
 -- Pipeline configuration

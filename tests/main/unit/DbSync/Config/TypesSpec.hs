@@ -23,6 +23,8 @@ import DbSync.Config.Types
   , SyncConfig (..)
   , SyncMode (..)
   , SyncSettings (..)
+  , UtxoOption (..)
+  , UtxoStrategy (..)
   , defaultLedgerBackend
   )
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
@@ -51,7 +53,7 @@ spec = describe "DbSync.Config" $ do
           lcEnabled (scLedger cfg) `shouldBe` True
 
           -- db_options: every key listed in the fixture is on, the rest are off.
-          prEnabled (pcUtxo (scOptions cfg))            `shouldBe` True
+          uoEnabled (pcUtxo (scOptions cfg))            `shouldBe` True
           prEnabled (pcEpochBoundary (scOptions cfg))   `shouldBe` True
           prEnabled (pcCbor (scOptions cfg))            `shouldBe` False  -- omitted
           prEnabled (pcCurrentState (scOptions cfg))    `shouldBe` False  -- omitted
@@ -86,7 +88,12 @@ spec = describe "DbSync.Config" $ do
           -- All optional extractors default to OFF (opt-in semantics).
           -- The unconditional 'core' extractor isn't represented in
           -- SyncOptions — it's added by buildExtractors regardless.
-          prEnabled (pcUtxo (scOptions cfg))            `shouldBe` False
+          uoEnabled (pcUtxo (scOptions cfg))            `shouldBe` False
+          -- Per-utxo defaults — opt-in extractor, but back-pointer
+          -- on by default once enabled, tx_in populated, archive.
+          uoConsumedByTxId (pcUtxo (scOptions cfg))     `shouldBe` True
+          uoTxIn (pcUtxo (scOptions cfg))               `shouldBe` True
+          uoStrategy (pcUtxo (scOptions cfg))           `shouldBe` StrategyArchive
           prEnabled (pcMultiAsset (scOptions cfg))      `shouldBe` False
           prEnabled (pcMetadata (scOptions cfg))        `shouldBe` False
           prEnabled (pcStakeDelegation (scOptions cfg)) `shouldBe` False
@@ -113,7 +120,7 @@ spec = describe "DbSync.Config" $ do
           prEnabled (pcMetadata (scOptions cfg))        `shouldBe` True
           prEnabled (pcStakeDelegation (scOptions cfg)) `shouldBe` True
           -- Not listed → off (opt-in)
-          prEnabled (pcUtxo (scOptions cfg))            `shouldBe` False
+          uoEnabled (pcUtxo (scOptions cfg))            `shouldBe` False
           prEnabled (pcGovernance (scOptions cfg))      `shouldBe` False
           prEnabled (pcPool (scOptions cfg))            `shouldBe` False
 
@@ -157,3 +164,28 @@ spec = describe "DbSync.Config" $ do
           panic "Expected parse failure for ledger.backend = \"inmemory\""
         Left err ->
           Text.pack (show err) `shouldSatisfy` ("inmemory" `Text.isInfixOf`)
+
+  describe "utxo parser rejects values without an implementation" $ do
+    it "rejects tx_in: false (deposit backfill joins through tx_in)" $ do
+      result <- parseConfig "fixtures/utxo-tx-in-disabled.json"
+      case result of
+        Right _ ->
+          panic "Expected parse failure for utxo.tx_in = false"
+        Left err ->
+          Text.pack (show err) `shouldSatisfy` ("tx_in" `Text.isInfixOf`)
+
+    it "rejects strategy: prune" $ do
+      result <- parseConfig "fixtures/utxo-strategy-prune.json"
+      case result of
+        Right _ ->
+          panic "Expected parse failure for utxo.strategy = \"prune\""
+        Left err ->
+          Text.pack (show err) `shouldSatisfy` ("prune" `Text.isInfixOf`)
+
+    it "rejects strategy: from_ledger" $ do
+      result <- parseConfig "fixtures/utxo-strategy-from-ledger.json"
+      case result of
+        Right _ ->
+          panic "Expected parse failure for utxo.strategy = \"from_ledger\""
+        Left err ->
+          Text.pack (show err) `shouldSatisfy` ("from_ledger" `Text.isInfixOf`)

@@ -23,7 +23,15 @@ import DbSync.App
 import DbSync.AppM (runAppM)
 import DbSync.Config (parseConfig)
 import DbSync.Config.Node (parseNodeConfig)
-import DbSync.Config.Types (NodeConfig, SyncConfig (..), SyncOptions (..), SyncOption (..), defaultSyncOptions)
+import DbSync.Config.Types
+  ( NodeConfig
+  , SyncConfig (..)
+  , SyncOptions (..)
+  , SyncOption (..)
+  , UtxoOption (..)
+  , defaultSyncOptions
+  , defaultUtxoOption
+  )
 import DbSync.Config.Validation (validateConfig)
 import DbSync.Env (CoreEnv (..))
 import DbSync.Error (AppError (..))
@@ -43,7 +51,7 @@ loadTestConfigs = do
 -- | Build SyncOptions with selected extractors enabled.
 optionsWith :: [Text] -> SyncOptions
 optionsWith enabled = SyncOptions
-  { pcUtxo            = mk "utxo"
+  { pcUtxo            = defaultUtxoOption { uoEnabled = "utxo" `elem` enabled }
   , pcMultiAsset      = mk "multi_asset"
   , pcMetadata        = mk "metadata"
   , pcStakeDelegation = mk "stake_delegation"

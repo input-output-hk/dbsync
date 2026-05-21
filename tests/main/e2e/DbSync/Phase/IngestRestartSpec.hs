@@ -34,7 +34,7 @@ import DbSync.Test.Database (execTestDb, queryTestDb)
 import DbSync.Test.E2E (conwayConfigDir, syncCompleteTrue, withAppSessionResume)
 import DbSync.Test.Helpers (waitFor)
 import DbSync.Test.MockNode (MockNode, forgeAndPushBlocks, withMockNode)
-import DbSync.Test.PgAssertions (countRows, tableColumn)
+import DbSync.Test.PgAssertions (countRows, tableColumn, waitForTableQueryable)
 import DbSync.Trace.Types (AppTracer)
 
 spec :: Spec
@@ -64,6 +64,7 @@ spec = describe "IngestChainHistory restart" $
         withAppSessionResume tracer defaultTestProfile mn ledgerDir $ \_ ->
           waitForSyncComplete 90
 
+        waitForTableQueryable (tdName epochSyncStatsTableDef) 30
         duplicates <- T.strip <$> queryTestDb
           ( "SELECT COUNT(*) FROM ("
               <> " SELECT id FROM " <> tdName epochSyncStatsTableDef
@@ -99,6 +100,7 @@ runMidIngestSession tracer mn ledgerDir = do
     complete <- syncCompleteTrue
     complete `shouldBe` False
 
+    waitForTableQueryable (tdName epochSyncStatsTableDef) 30
     n <- countRows (tdName epochSyncStatsTableDef)
     cancel app
     pure n

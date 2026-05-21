@@ -38,6 +38,7 @@ import qualified DbSync.Extractor.PoolSpec as ExtractorPoolSpec
 import qualified DbSync.Extractor.StakeDelegationSpec as ExtractorStakeDelegationSpec
 import qualified DbSync.Extractor.UTxOSpec as ExtractorUTxOSpec
 import qualified DbSync.Phase.Ingest.ConsumerSpec as IngestConsumerSpec
+import qualified DbSync.Phase.Ingest.UtxoCacheSpec as IngestUtxoCacheSpec
 import qualified DbSync.Block.PipelineSpec as BlockPipelineSpec
 import qualified DbSync.Ledger.DepositAccumulatorSpec as LedgerDepositAccumulatorSpec
 import qualified DbSync.Ledger.StateSpec as LedgerStateSpec
@@ -54,13 +55,14 @@ import qualified DbSync.Schema.RewardSpec as SchemaRewardSpec
 import qualified DbSync.Schema.ScriptsDatumsSpec as SchemaScriptsDatumsSpec
 import qualified DbSync.Schema.SyncStateSpec as SchemaSyncStateSpec
 import qualified DbSync.StateQuery.ObservedSummarySpec as ObservedSummarySpec
+import qualified DbSync.StateQuery.SlotDetailsSpec as SlotDetailsSpec
 import qualified DbSync.Block.MetadataSpec as BlockMetadataSpec
 import qualified DbSync.Util.Bech32Spec as UtilBech32Spec
 import qualified DbSync.Util.DedupHashSpec as UtilDedupHashSpec
 
 -- Property tests
 import qualified DbSync.PropertySpec as PropertySpec
-import qualified DbSync.Address.WorkerSpec as AddressWorkerSpec
+import qualified DbSync.Worker.TxOutSpec as WorkerTxOutSpec
 
 -- Database integration
 import qualified DbSync.Checkpoint.ManagerSpec as CheckpointManagerSpec
@@ -125,6 +127,7 @@ main = hspec $ do
     ExtractorStakeDelegationSpec.spec
     ExtractorUTxOSpec.spec
     IngestConsumerSpec.spec
+    IngestUtxoCacheSpec.spec
     BlockPipelineSpec.spec
     LedgerDepositAccumulatorSpec.spec
     LedgerStateSpec.spec
@@ -141,10 +144,11 @@ main = hspec $ do
     SchemaScriptsDatumsSpec.spec
     SchemaSyncStateSpec.spec
     ObservedSummarySpec.spec
+    SlotDetailsSpec.spec
     UtilBech32Spec.spec
     UtilDedupHashSpec.spec
     BlockMetadataSpec.spec
-    AddressWorkerSpec.spec
+    WorkerTxOutSpec.spec
     PhaseRollbackSpec.schemaWalkSpec
 
   describe "Property tests" $ withTimeoutSeconds unitTimeoutSeconds $

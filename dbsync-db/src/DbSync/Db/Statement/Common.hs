@@ -61,14 +61,12 @@ nextIdStmt td ctor =
 data LookupColumn
   = ByHash      -- ^ The @hash@ column (block, tx, slot_leader).
   | ByHashRaw   -- ^ The @hash_raw@ column (pool_hash, stake_address).
-  | ByRaw       -- ^ The @raw@ column (address).
   deriving stock (Eq, Show)
 
 lookupColumnName :: LookupColumn -> Text
 lookupColumnName = \case
   ByHash    -> "hash"
   ByHashRaw -> "hash_raw"
-  ByRaw     -> "raw"
 
 -- | @SELECT id FROM \<table\> WHERE \<column\> = $1@ for a 'ByteString'
 -- key. Used by every \"look up the id of a previously-inserted row\"

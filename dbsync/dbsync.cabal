@@ -67,6 +67,7 @@ library
     DbSync.Phase.Ingest.DedupMap
     DbSync.Phase.Ingest.ReceiverStats
     DbSync.Phase.Ingest.Resolver
+    DbSync.Phase.Ingest.UtxoCache
     DbSync.Phase.Ingest.Writer
     DbSync.Phase.Preparing.Backfill
     DbSync.Phase.Preparing.Indexes
@@ -106,8 +107,9 @@ library
     DbSync.Db.Loader.Connection
     DbSync.Db.Transaction
     DbSync.Resolver
-    DbSync.Address.Buffer
-    DbSync.Address.Worker
+    DbSync.Worker.TxOut
+    DbSync.Worker.TxOut.AddressBuffer
+    DbSync.Worker.TxOut.ConsumedByBuffer
     DbSync.StateQuery
     DbSync.StateQuery.ObservedSummary
     DbSync.StateQuery.Types

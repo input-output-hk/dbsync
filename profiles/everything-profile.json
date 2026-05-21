@@ -15,7 +15,12 @@
     "enabled": true
   },
   "db_options": {
-    "utxo": true,
+    "utxo": {
+      "enabled": true,
+      "consumed_by_tx_id": true,
+      "tx_in": true,
+      "strategy": "archive"
+    },
     "multi_asset": true,
     "metadata": true,
     "stake_delegation": true,

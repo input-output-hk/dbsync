@@ -1,11 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Tests for the 'AddressResolver' worker loop using in-memory
--- hooks. They cover the queue/in-flight coordination and the
--- per-job processing: bulk address resolution, bulk tx_out FK
--- updates, and bulk collateral_tx_out FK updates. No PostgreSQL is
--- required.
-module DbSync.Address.WorkerSpec (spec) where
+-- | Tests for the 'TxOutWorker' loop using in-memory hooks. Covers
+-- the queue / in-flight coordination and the per-job processing:
+-- bulk address resolution, bulk @tx_out.address_id@ updates, bulk
+-- @collateral_tx_out.address_id@ updates, and the optional
+-- @tx_out.consumed_by_tx_id@ arm. No PostgreSQL is required.
+module DbSync.Worker.TxOutSpec (spec) where
 
 import Cardano.Prelude
 
@@ -19,8 +19,8 @@ import qualified Data.Map.Strict as Map
 import Test.Hspec (Spec, describe, it, shouldBe)
 
 import DbSync.Db.Schema.Address (Address (..))
-import DbSync.Db.Schema.Ids (AddressId (..), CollateralTxOutId (..), TxOutId (..))
-import DbSync.Address.Buffer
+import DbSync.Db.Schema.Ids (AddressId (..), CollateralTxOutId (..), TxId (..), TxOutId (..))
+import DbSync.Worker.TxOut.AddressBuffer
   ( EpochAddressBuffer (..)
   , emptyEpochAddressBuffer
   , newAddressBufferRef
@@ -28,10 +28,15 @@ import DbSync.Address.Buffer
   , recordTxOut
   , takeAndReset
   )
-import DbSync.Address.Worker
-  ( ResolveJob (..)
-  , WorkerHooks (..)
-  , runAddressResolverWith
+import DbSync.Worker.TxOut.ConsumedByBuffer
+  ( EpochConsumedByBuffer (..)
+  , emptyEpochConsumedByBuffer
+  )
+import qualified DbSync.Worker.TxOut.ConsumedByBuffer as ConsumedByBuffer
+import DbSync.Worker.TxOut
+  ( TxOutHooks (..)
+  , TxOutJob (..)
+  , runTxOutWorkerWith
   )
 
 import qualified Data.ByteString as BS
@@ -43,32 +48,32 @@ import qualified Data.ByteString as BS
 -- | Capture every bulk-hook invocation in an 'IORef' so tests can
 -- inspect the worker's effect after a job completes.
 data Captured = Captured
-  { capResolveCalls :: ![[(ShortByteString, Address)]]
-    -- ^ One entry per bulk-resolve call, in invocation order. Each
-    -- entry is the full @(key, addr)@ list the hook received.
-  , capTxOutCalls   :: ![[(TxOutId, AddressId)]]
-  , capCollCalls    :: ![[(CollateralTxOutId, AddressId)]]
+  { capResolveCalls    :: ![[(ShortByteString, Address)]]
+    -- ^ One entry per bulk-resolve call, in invocation order.
+  , capTxOutCalls      :: ![[(TxOutId, AddressId)]]
+  , capCollCalls       :: ![[(CollateralTxOutId, AddressId)]]
+  , capConsumedByCalls :: ![[(TxOutId, TxId)]]
   }
   deriving stock (Eq, Show)
 
 emptyCaptured :: Captured
-emptyCaptured = Captured [] [] []
+emptyCaptured = Captured [] [] [] []
 
--- | Total number of unique addresses resolved across all bulk calls.
 capUniqueAddresses :: Captured -> Int
 capUniqueAddresses = sum . map length . capResolveCalls
 
--- | Total number of tx_out updates across all bulk calls.
 capTxOutUpdates :: Captured -> Int
 capTxOutUpdates = sum . map length . capTxOutCalls
 
--- | Total number of collateral_tx_out updates across all bulk calls.
 capCollUpdates :: Captured -> Int
 capCollUpdates = sum . map length . capCollCalls
 
-mkCapturingHooks :: IORef Captured -> IORef Int64 -> WorkerHooks
-mkCapturingHooks capRef idCounter = WorkerHooks
-  { whBulkResolveAddresses = \entries -> do
+capConsumedByUpdates :: Captured -> Int
+capConsumedByUpdates = sum . map length . capConsumedByCalls
+
+mkCapturingHooks :: IORef Captured -> IORef Int64 -> TxOutHooks
+mkCapturingHooks capRef idCounter = TxOutHooks
+  { thBulkResolveAddresses = \entries -> do
       atomicModifyIORef' capRef $ \c ->
         (c { capResolveCalls = capResolveCalls c ++ [entries] }, ())
       -- Mirror the production hook's semantics: allocate a fresh
@@ -78,12 +83,15 @@ mkCapturingHooks capRef idCounter = WorkerHooks
             aid <- atomicModifyIORef' idCounter $ \n -> (n + 1, AddressId n)
             pure $! Map.insert key aid acc
       foldrM assign Map.empty (map fst entries)
-  , whBulkUpdateTxOut = \pairs ->
+  , thBulkUpdateTxOut = \pairs ->
       atomicModifyIORef' capRef $ \c ->
         (c { capTxOutCalls = capTxOutCalls c ++ [pairs] }, ())
-  , whBulkUpdateCollateral = \pairs ->
+  , thBulkUpdateCollateral = \pairs ->
       atomicModifyIORef' capRef $ \c ->
         (c { capCollCalls = capCollCalls c ++ [pairs] }, ())
+  , thBulkUpdateConsumedBy = \pairs ->
+      atomicModifyIORef' capRef $ \c ->
+        (c { capConsumedByCalls = capConsumedByCalls c ++ [pairs] }, ())
   }
 
 -- ---------------------------------------------------------------------------
@@ -147,7 +155,7 @@ spec = do
       buf <- takeAndReset ref
       length (eabCollateralTxOutAddresses buf) `shouldBe` 1
 
-  describe "AddressResolver worker loop (bulk hooks)" $ do
+  describe "TxOutWorker loop (bulk hooks)" $ do
     it "folds one job into one bulk-resolve + one bulk-update call" $ do
       bufRef <- newAddressBufferRef
       recordTxOut bufRef (TxOutId 10) addr1 (mkAddr addr1)
@@ -158,7 +166,7 @@ spec = do
       idCounter <- newIORef 1
       let hooks = mkCapturingHooks capRef idCounter
 
-      runOneJob hooks (ResolveJob (EpochNo 5) buf)
+      runOneJob hooks (TxOutJob (EpochNo 5) buf Nothing)
 
       cap <- readIORef capRef
       length (capResolveCalls cap) `shouldBe` 1
@@ -167,6 +175,7 @@ spec = do
       capUniqueAddresses cap       `shouldBe` 2
       capTxOutUpdates cap          `shouldBe` 2
       capCollUpdates cap           `shouldBe` 0
+      capConsumedByUpdates cap     `shouldBe` 0
 
     it "reuses the same AddressId for repeated raws in the same job" $ do
       bufRef <- newAddressBufferRef
@@ -178,7 +187,7 @@ spec = do
       idCounter <- newIORef 1
       let hooks = mkCapturingHooks capRef idCounter
 
-      runOneJob hooks (ResolveJob (EpochNo 1) buf)
+      runOneJob hooks (TxOutJob (EpochNo 1) buf Nothing)
 
       cap <- readIORef capRef
       capUniqueAddresses cap       `shouldBe` 1
@@ -203,10 +212,11 @@ spec = do
       -- still mark them complete).
       mapM_ (\e -> STM.atomically $ do
                STM.modifyTVar' inFlight (+ 1)
-               STM.writeTBQueue queue (ResolveJob (EpochNo e) emptyEpochAddressBuffer))
+               STM.writeTBQueue queue
+                 (TxOutJob (EpochNo e) emptyEpochAddressBuffer Nothing))
         [1, 2]
 
-      worker <- async (runAddressResolverWith Nothing hooks queue inFlight)
+      worker <- async (runTxOutWorkerWith Nothing hooks queue inFlight)
 
       -- Wait until both have been consumed.
       STM.atomically $ do
@@ -228,7 +238,7 @@ spec = do
       idCounter <- newIORef 100
       let hooks = mkCapturingHooks capRef idCounter
 
-      runOneJob hooks (ResolveJob (EpochNo 9) buf)
+      runOneJob hooks (TxOutJob (EpochNo 9) buf Nothing)
 
       cap <- readIORef capRef
       case capResolveCalls cap of
@@ -239,18 +249,80 @@ spec = do
       capTxOutUpdates cap `shouldBe` 2
       capCollUpdates cap  `shouldBe` 1
 
+  describe "TxOutWorker consumed-by arm" $ do
+    it "invokes the consumed-by hook when tjConsumedBy is Just" $ do
+      cbRef <- ConsumedByBuffer.newConsumedByBufferRef
+      ConsumedByBuffer.recordConsumedBy cbRef (TxOutId 100) (TxId 200)
+      ConsumedByBuffer.recordConsumedBy cbRef (TxOutId 101) (TxId 201)
+      cb <- ConsumedByBuffer.takeAndReset cbRef
+
+      capRef <- newIORef emptyCaptured
+      idCounter <- newIORef 1
+      let hooks = mkCapturingHooks capRef idCounter
+
+      runOneJob hooks (TxOutJob (EpochNo 3) emptyEpochAddressBuffer (Just cb))
+
+      cap <- readIORef capRef
+      length (capConsumedByCalls cap) `shouldBe` 1
+      capConsumedByUpdates cap        `shouldBe` 2
+
+    it "skips the consumed-by hook when tjConsumedBy is Nothing" $ do
+      capRef <- newIORef emptyCaptured
+      idCounter <- newIORef 1
+      let hooks = mkCapturingHooks capRef idCounter
+
+      runOneJob hooks (TxOutJob (EpochNo 3) emptyEpochAddressBuffer Nothing)
+
+      cap <- readIORef capRef
+      capConsumedByUpdates cap `shouldBe` 0
+      length (capConsumedByCalls cap) `shouldBe` 0
+
+    it "preserves consumed-by pair alignment passed to the hook" $ do
+      cbRef <- ConsumedByBuffer.newConsumedByBufferRef
+      ConsumedByBuffer.recordConsumedBy cbRef (TxOutId 7) (TxId 70)
+      cb <- ConsumedByBuffer.takeAndReset cbRef
+
+      capRef <- newIORef emptyCaptured
+      idCounter <- newIORef 1
+      let hooks = mkCapturingHooks capRef idCounter
+
+      runOneJob hooks (TxOutJob (EpochNo 0) emptyEpochAddressBuffer (Just cb))
+
+      cap <- readIORef capRef
+      case capConsumedByCalls cap of
+        [[(out, consumer)]] -> do
+          out      `shouldBe` TxOutId 7
+          consumer `shouldBe` TxId 70
+        other -> panic ("expected one consumed-by pair, got: " <> show other)
+
+  describe "EpochConsumedByBuffer" $ do
+    it "records one pair per call" $ do
+      ref <- ConsumedByBuffer.newConsumedByBufferRef
+      ConsumedByBuffer.recordConsumedBy ref (TxOutId 1) (TxId 10)
+      ConsumedByBuffer.recordConsumedBy ref (TxOutId 2) (TxId 11)
+      buf <- ConsumedByBuffer.takeAndReset ref
+      length (ecbProducerTxOutIds buf) `shouldBe` 2
+      length (ecbConsumerTxIds buf)    `shouldBe` 2
+
+    it "takeAndReset leaves the buffer empty" $ do
+      ref <- ConsumedByBuffer.newConsumedByBufferRef
+      ConsumedByBuffer.recordConsumedBy ref (TxOutId 1) (TxId 10)
+      _ <- ConsumedByBuffer.takeAndReset ref
+      buf <- ConsumedByBuffer.takeAndReset ref
+      buf `shouldBe` emptyEpochConsumedByBuffer
+
 -- ---------------------------------------------------------------------------
 -- * Helpers
 -- ---------------------------------------------------------------------------
 
 -- | Run the worker for exactly one job by enqueueing the job, kicking
 -- the worker, and waiting for inFlight to drop to 0.
-runOneJob :: WorkerHooks -> ResolveJob -> IO ()
+runOneJob :: TxOutHooks -> TxOutJob -> IO ()
 runOneJob hooks job = do
   queue    <- STM.newTBQueueIO 1
   inFlight <- STM.newTVarIO 1
   STM.atomically $ STM.writeTBQueue queue job
-  worker <- async (runAddressResolverWith Nothing hooks queue inFlight)
+  worker <- async (runTxOutWorkerWith Nothing hooks queue inFlight)
   STM.atomically $ do
     n <- STM.readTVar inFlight
     when (n /= 0) STM.retry

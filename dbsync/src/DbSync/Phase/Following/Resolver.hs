@@ -76,6 +76,7 @@ import DbSync.Db.Statement.TxIn (nextTxInIdStmt)
 import DbSync.Db.Statement.TxMetadata (nextTxMetadataIdStmt)
 import DbSync.Db.Statement.TxOut
   ( nextTxOutIdStmt
+  , queryInputUtxoStmt
   , queryOutputValueStmt
   )
 import DbSync.Db.Statement.Withdrawal (nextWithdrawalIdStmt)
@@ -187,6 +188,13 @@ resolver conn lastBlock = IdResolver
     -- Inline value resolution: per-pair SELECT against tx_out.
   , resolveInputValues = \pairs ->
       forM pairs $ \pair -> run conn pair queryOutputValueStmt
+
+  , resolveInputUtxo = \hash idx ->
+      run conn (hash, idx) queryInputUtxoStmt
+
+  , recordTxOutputs = \_ _ -> pure ()
+
+  , recordConsumed = \_ _ -> pure ()
   }
 
 run :: Conn.Connection -> a -> Stmt.Statement a b -> IO b
@@ -384,6 +392,13 @@ bufferedResolver conn preAlloc buf lastBlock cache = IdResolver
     resolveInputValues = \pairs ->
       forM pairs $ \pair ->
         run conn pair queryOutputValueStmt
+
+  , resolveInputUtxo = \hash idx ->
+      run conn (hash, idx) queryInputUtxoStmt
+
+  , recordTxOutputs = \_ _ -> pure ()
+
+  , recordConsumed = \_ _ -> pure ()
   }
 
 -- | SELECT-on-key, allocate-on-miss with per-block cache shadowing.

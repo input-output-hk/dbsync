@@ -120,15 +120,25 @@ mkLoaderStream connStr tableDefs = do
             atomically $ writeTBQueue (chQueue ch) (Just rowBytes)
 
     , lsCommit = do
-        -- 1. Send sentinel to all queues
-        forM_ channelMap $ \ch ->
-          atomically $ writeTBQueue (chQueue ch) Nothing
-        -- 2. Wait for all writers to signal ready (drained + endStream)
-        forM_ channelMap $ \ch ->
-          takeMVar (chReady ch)
-        -- 3. COMMIT on all connections
-        forM_ channelMap $ \ch ->
-          commitTransaction (chConnection ch)
+        -- After a prior lsCommit and before the next lsReopen the
+        -- writer threads have exited (post putMVar) and their
+        -- replacements have not been spawned yet. A sentinel sent
+        -- in that window has no consumer, so takeMVar would block
+        -- forever — and there is nothing to commit either, since
+        -- the prior lsCommit already drained and committed. Skip.
+        allLive <- fmap and . forM (Map.elems channelMap) $ \ch -> do
+          w <- readIORef (chWorker ch)
+          isNothing <$> poll w
+        when allLive $ do
+          -- 1. Send sentinel to all queues
+          forM_ channelMap $ \ch ->
+            atomically $ writeTBQueue (chQueue ch) Nothing
+          -- 2. Wait for all writers to signal ready (drained + endStream)
+          forM_ channelMap $ \ch ->
+            takeMVar (chReady ch)
+          -- 3. COMMIT on all connections
+          forM_ channelMap $ \ch ->
+            commitTransaction (chConnection ch)
 
     , lsReopen = do
         -- Begin new transaction + loader stream on each connection

@@ -14,7 +14,10 @@ module DbSync.Block.Pipeline
 
 import Cardano.Prelude
 
+import qualified Data.Sequence as Seq
+
 import DbSync.Block.Types (BlockEra (..), GenericBlock (..), GenericTx (..), GenericTxOut (..))
+import DbSync.Db.Types (DbLovelace (..))
 import DbSync.Env (HasNetwork (..))
 import DbSync.Extractor
   ( BlockContext (..)
@@ -31,6 +34,7 @@ import DbSync.Extractor.SharedDedup
 import DbSync.Extractor.UTxO (extractStakeCred)
 import DbSync.Db.Schema.Ids (PoolHashId, StakeAddressId)
 import DbSync.Phase.Current (HasCurrentPhase (..))
+import DbSync.Phase.Ingest.UtxoCache (UtxoTxEntry (..))
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
 import DbSync.Writer (HasWriter (..))
 
@@ -78,10 +82,30 @@ processBlock block = do
   blockId <- liftIO $ assignBlockId resolver
 
   -- Per-tx and per-output IDs plus the per-output stake-address FK.
+  -- Recording each tx in the cache before extractors run lets the
+  -- UTxO extractor resolve intra-block inputs (a later tx in the same
+  -- block spending an earlier tx's output) without ordering games.
+  -- The cache stores (tx_out.id, value) per output so the consumed-by
+  -- UPDATE matches by PK rather than (tx_id, index).
+  --
+  -- The bang on @v@ forces the Word64 before the tuple is built. Without
+  -- it the tuple's second field is a thunk that retains its captured
+  -- @o :: GenericTxOut@ (and through it the raw address ByteString), so
+  -- the cache transitively pins ~1.8 GB of GenericTxOut + ByteString +
+  -- ARR_WORDS for every retained tx. Heap profiling traced the leak to
+  -- this exact site.
   txCtxs <- forM (blkTxs block) $ \gtx -> do
     txId <- liftIO $ assignTxId resolver
     outIds <- forM (txOutputs gtx) $ \_ -> liftIO $ assignTxOutId resolver
     stakeIds <- forM (txOutputs gtx) resolveOutStakeId
+    liftIO $ recordTxOutputs resolver (txHash gtx) UtxoTxEntry
+      { uteTxId    = txId
+      , uteOutputs = Seq.fromList
+          [ let !v = txOutValue o
+            in (outId, DbLovelace v)
+          | (outId, o) <- zip outIds (txOutputs gtx)
+          ]
+      }
     pure $ TxContext txId gtx outIds stakeIds
 
   network <- asks getNetwork

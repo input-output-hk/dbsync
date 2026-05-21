@@ -50,8 +50,9 @@ import DbSync.Block.Parser (parseBlock)
 import DbSync.Extractor (ExtractorDef, freshExtractState)
 import DbSync.Phase.Ingest.DedupMap (DedupMaps, newMaps)
 import DbSync.Block.Pipeline (processBlock)
-import DbSync.Address.Buffer (newAddressBufferRef)
+import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
+import DbSync.Phase.Ingest.UtxoCache (defaultCacheCapacity, newUtxoCache)
 import DbSync.StateQuery.Types (SlotDetails (..))
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import DbSync.Test.Writer (TestWriterState, emptyTestWriterState, mkTestWriter)
@@ -80,8 +81,9 @@ runPureExtractMany extractors blocks = do
   stRef     <- newIORef freshExtractState
   dedupMaps <- newMaps :: IO DedupMaps
   addrBuf   <- newAddressBufferRef
+  utxoCache <- newUtxoCache defaultCacheCapacity
   ref       <- newIORef emptyTestWriterState
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoCache Nothing)
                               (mkTestWriter ref) extractors
   for_ blocks $ \block -> do
     let sd        = syntheticSlotDetails (blockSlot block)

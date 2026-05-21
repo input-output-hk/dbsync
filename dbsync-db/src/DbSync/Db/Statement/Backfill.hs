@@ -62,7 +62,12 @@ import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
 import DbSync.Db.Schema.Core (blockTableDef, txTableDef)
-import DbSync.Db.Schema.StakeDelegation (withdrawalTableDef)
+import DbSync.Db.Schema.Pool (poolRetireTableDef, poolUpdateTableDef)
+import DbSync.Db.Schema.StakeDelegation
+  ( stakeDeregistrationTableDef
+  , stakeRegistrationTableDef
+  , withdrawalTableDef
+  )
 import DbSync.Db.Schema.UTxO
   ( collateralTxInTableDef
   , collateralTxOutTableDef
@@ -134,30 +139,51 @@ backfillPhaseTwoDepositSql = T.unwords
   ]
 
 -- | Compute @deposit = inputs + withdrawals - outputs - fee -
--- treasury_donation@ for valid-contract txs whose @deposit@ is
--- still NULL. This is the ledger-disabled fallback; ledger-enabled
--- runs receive deposits from the worker before this UPDATE sees
--- the row.
+-- treasury_donation@ for valid-contract activity txs whose
+-- @deposit@ is still NULL after the extractor pass.
 --
--- Requires 'resolveTxInStmt' to have populated @tx_in.tx_out_id@
--- so input values can be looked up via @tx_out@.
+-- Plain transfers ship with @0@ from
+-- 'Extractor.Core.computeTxFinancials' (the identity formula is
+-- 0 by conservation when a tx has no certs, withdrawals or
+-- treasury donation) so they bypass this UPDATE entirely.
 --
--- Aggregate-then-join shape is retained on purpose: in
--- ledger-disabled mode every valid tx needs the calc, so the
--- target set is the whole table. Bulk-scan locality beats per-row
--- random I/O at that scale. The planner needs accurate statistics
--- for @tx@ / @tx_in@ / @tx_out@ / @withdrawal@ to choose Hash Join
--- here; 'Phase.Preparing.Run.run' runs an explicit ANALYZE
--- between resolve and backfill so the stats reflect the post-resolve
--- cardinalities rather than what autovacuum last saw mid-ingest.
+-- Requires 'resolveTxInStmt' to have populated @tx_in.tx_out_id@.
+-- 'Phase.Preparing.Run.run' ANALYZEs between resolve and backfill
+-- so the planner has fresh stats for the @tx_in@ / @tx_out@ join.
 backfillValidContractDepositStmt :: Stmt.Statement () Int64
 backfillValidContractDepositStmt =
   Stmt.preparable backfillValidContractDepositSql E.noParams D.rowsAffected
 
 -- | SQL string behind 'backfillValidContractDepositStmt'.
+--
+-- @affected_txs@ unions the tx ids of every activity-bearing tx
+-- (stake reg/dereg, pool reg/retire, withdrawal, treasury
+-- donation); @targets@ narrows that to the valid-contract,
+-- NULL-deposit subset. Extend the @affected_txs@ UNION when
+-- adding new activity tables.
 backfillValidContractDepositSql :: Text
 backfillValidContractDepositSql = T.unwords
-  [ "WITH in_sum AS ("
+  [ "WITH affected_txs AS ("
+  , "  SELECT", col stakeRegistrationTableDef "tx_id"
+  , "  FROM",   table stakeRegistrationTableDef
+  , "  UNION SELECT", col stakeDeregistrationTableDef "tx_id"
+  , "  FROM",   table stakeDeregistrationTableDef
+  , "  UNION SELECT", col poolUpdateTableDef "registered_tx_id"
+  , "  FROM",   table poolUpdateTableDef
+  , "  UNION SELECT", col poolRetireTableDef "announced_tx_id"
+  , "  FROM",   table poolRetireTableDef
+  , "  UNION SELECT", col withdrawalTableDef "tx_id"
+  , "  FROM",   table withdrawalTableDef
+  , "  UNION SELECT", col txTableDef "id"
+  , "  FROM",   table txTableDef
+  , "  WHERE",  col txTableDef "treasury_donation", "> 0"
+  , "), targets AS ("
+  , "  SELECT a.tx_id"
+  , "  FROM affected_txs a"
+  , "  JOIN", table txTableDef, "ON tx.", col txTableDef "id", "= a.tx_id"
+  , "  WHERE tx.", col txTableDef "valid_contract", "= TRUE"
+  , "    AND tx.", col txTableDef "deposit", "IS NULL"
+  , "), in_sum AS ("
   , "  SELECT", qcol "ti" txInTableDef "tx_in_id", "AS tx_id,"
   , "         SUM(producing.", col txOutTableDef "value", ") AS total"
   , "  FROM",  table txInTableDef, "ti"
@@ -166,11 +192,15 @@ backfillValidContractDepositSql = T.unwords
   ,        "=", qcol "ti" txInTableDef "tx_out_id"
   , "   AND producing.", col txOutTableDef "index"
   ,        "=", qcol "ti" txInTableDef "tx_out_index"
+  , "  WHERE", qcol "ti" txInTableDef "tx_in_id"
+  ,        "IN (SELECT tx_id FROM targets)"
   , "  GROUP BY", qcol "ti" txInTableDef "tx_in_id"
   , "), withdraw_sum AS ("
   , "  SELECT", col withdrawalTableDef "tx_id", ","
   , "         SUM(", col withdrawalTableDef "amount", ") AS total"
   , "  FROM",  table withdrawalTableDef
+  , "  WHERE", col withdrawalTableDef "tx_id"
+  ,        "IN (SELECT tx_id FROM targets)"
   , "  GROUP BY", col withdrawalTableDef "tx_id"
   , ")"
   , "UPDATE", table txTableDef
@@ -182,8 +212,6 @@ backfillValidContractDepositSql = T.unwords
   , "FROM in_sum i"
   , "LEFT JOIN withdraw_sum w ON w.tx_id = i.tx_id"
   , "WHERE tx.", col txTableDef "id", "= i.tx_id"
-  , "  AND tx.", col txTableDef "valid_contract", "= TRUE"
-  , "  AND tx.", col txTableDef "deposit", "IS NULL"
   ]
 
 -- | Compute @fee = inputs - outputs@ for Byron-era txs whose @fee@

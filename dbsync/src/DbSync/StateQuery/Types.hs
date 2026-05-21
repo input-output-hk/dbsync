@@ -62,9 +62,9 @@ type CardanoInterpreter = Interpreter (CardanoEras StandardCrypto)
 --
 -- Three slots:
 --
--- * 'sqvRequestVar' — used by 'DbSync.StateQuery.getHistoryInterpreter'
---   (the slow, blocking path) to request an interpreter from the node
---   via 'DbSync.StateQuery.localStateQueryHandler'.
+-- * 'sqvRequestVar' — used by 'DbSync.StateQuery.getSlotDetailsIO's
+--   node-fallback path to request an interpreter from the node via
+--   'DbSync.StateQuery.localStateQueryHandler'.
 -- * 'sqvInterpreterVar' — caches the node's authoritative interpreter
 --   once acquired. 'Just' means we have it; 'Nothing' means we don't.
 -- * 'sqvObservedVar' — locally-observed summary, updated by

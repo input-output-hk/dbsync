@@ -14,6 +14,7 @@ import DbSync.Config.Types
   , SyncOption (..)
   , SyncOptions (..)
   , SyncConfig (..)
+  , UtxoOption (..)
   )
 
 -- | Validate a parsed config, returning accumulated errors or the valid config.
@@ -68,7 +69,7 @@ checkCurrentStateRequiresLedger cfg
 -- If UTxO is disabled, multi_asset data has no parent rows to reference.
 checkMultiAssetRequiresUtxo :: SyncConfig -> [ConfigError]
 checkMultiAssetRequiresUtxo cfg
-  | prEnabled (pcMultiAsset extractors) && not (prEnabled (pcUtxo extractors)) =
+  | prEnabled (pcMultiAsset extractors) && not (uoEnabled (pcUtxo extractors)) =
       [ ConfigValidationError
           "multi_asset extractor requires utxo extractor to be enabled. \
           \multi_asset data (ma_tx_mint, ma_tx_out) references tx_out rows \

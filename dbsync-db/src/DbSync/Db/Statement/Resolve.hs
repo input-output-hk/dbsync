@@ -1,21 +1,35 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Hasql 'Statement' bindings for the post-load FK resolution pass.
+-- | Post-load FK resolution for the three input tables.
 --
--- The ingest path COPYs into UNLOGGED tables with the @tx_out_id@
--- columns left NULL on the four input tables, plus
--- @tx_out.consumed_by_tx_id@ left NULL on every output. Each row
--- carries the spent transaction's hash and output index instead;
--- these statements join back through @tx@ to populate the FK
--- columns once all data is on disk.
+-- During Ingest, the 'UtxoCache' resolves the bulk of inputs at COPY
+-- time and the rows go in with @tx_out_id@ already populated. Inputs
+-- that missed the cache land with @tx_out_id = NULL@; this module
+-- rebuilds the input tables via @CREATE … LIKE@ + @INSERT … SELECT
+-- LEFT JOIN@ + @DROP@ + @RENAME@ to fill those NULLs in one
+-- sequential pass.
 --
--- Each statement is a single bulk @UPDATE … FROM …@ that returns the
--- number of rows it touched. PG decides the join strategy; on a
--- mainnet-sized DB it will be a hash join against @tx.hash@.
+-- CTAS is preferred to a column UPDATE because:
+--
+--   * UPDATE rewrites the heap MVCC-style and churns every pre-built
+--     B-tree index on the table; CTAS writes a fresh heap with no
+--     indexes attached, then the schema-wide index pass builds them
+--     once at the end.
+--   * Sequential writes hit a multiple of the random-write rate.
+--   * Orphan inputs (no matching @tx.hash@) are preserved as
+--     @tx_out_id = NULL@ via the @LEFT JOIN@.
+--
+-- The @consumed_by_tx_id@ column on @tx_out@ stays on an UPDATE:
+-- it touches a much smaller residual (only rows the
+-- 'ConsumedByWorker' didn't write live) and the @tx_out@ table has
+-- no indexes worth churning during Prep.
 module DbSync.Db.Statement.Resolve
-  ( resolveTxInStmt
-  , resolveCollateralTxInStmt
-  , resolveReferenceTxInStmt
+  ( -- * SQL scripts
+    resolveTxInScript
+  , resolveCollateralTxInScript
+  , resolveReferenceTxInScript
+
+    -- * Single-statement UPDATEs
   , resolveConsumedByTxIdStmt
   ) where
 
@@ -26,24 +40,46 @@ import qualified Hasql.Decoders as D
 import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
-import DbSync.Db.Sql (quoteIdent)
+-- | CTAS script for @tx_in@. The five-column projection matches the
+-- @tx_in@ schema (id, tx_in_id, tx_out_id, tx_out_index, tx_out_hash,
+-- redeemer_id).
+resolveTxInScript :: Text
+resolveTxInScript =
+  ctasScript "tx_in"
+    [ "id"
+    , "tx_in_id"
+    , "tx_out_index"
+    , "tx_out_hash"
+    , "redeemer_id"
+    ]
 
--- | Match @tx_in.tx_out_hash@ against @tx.hash@ to populate
--- @tx_in.tx_out_id@. Skips rows already resolved.
-resolveTxInStmt :: Stmt.Statement () Int64
-resolveTxInStmt = resolveInputTableStmt "tx_in"
+-- | CTAS for @collateral_tx_in@. Same shape without @redeemer_id@.
+resolveCollateralTxInScript :: Text
+resolveCollateralTxInScript =
+  ctasScript "collateral_tx_in"
+    [ "id"
+    , "tx_in_id"
+    , "tx_out_index"
+    , "tx_out_hash"
+    ]
 
--- | Same shape as 'resolveTxInStmt' for the collateral input table.
-resolveCollateralTxInStmt :: Stmt.Statement () Int64
-resolveCollateralTxInStmt = resolveInputTableStmt "collateral_tx_in"
+-- | CTAS for @reference_tx_in@. Same shape as collateral.
+resolveReferenceTxInScript :: Text
+resolveReferenceTxInScript =
+  ctasScript "reference_tx_in"
+    [ "id"
+    , "tx_in_id"
+    , "tx_out_index"
+    , "tx_out_hash"
+    ]
 
--- | Same shape as 'resolveTxInStmt' for the reference input table.
-resolveReferenceTxInStmt :: Stmt.Statement () Int64
-resolveReferenceTxInStmt = resolveInputTableStmt "reference_tx_in"
-
--- | Walk the resolved inputs and stamp each producing
--- @tx_out.consumed_by_tx_id@ with the consuming tx. Run after the
--- three input-side updates so @tx_in.tx_out_id@ is populated.
+-- | Walk all resolved inputs and stamp each producing
+-- @tx_out.consumed_by_tx_id@ with the consuming tx id. Runs after
+-- the three CTAS rebuilds so @tx_in.tx_out_id@ is fully populated.
+--
+-- The per-epoch background worker covers the bulk during Ingest
+-- (cache-hit inputs); this statement fills the residual on
+-- cache-miss inputs.
 resolveConsumedByTxIdStmt :: Stmt.Statement () Int64
 resolveConsumedByTxIdStmt =
   Stmt.preparable sql E.noParams D.rowsAffected
@@ -61,17 +97,28 @@ resolveConsumedByTxIdStmt =
 -- * Internals
 -- ---------------------------------------------------------------------------
 
--- | Shared shape for the three input tables: walk the table, JOIN
--- @tx@ on hash equality, copy @tx.id@ into @tx_out_id@.
-resolveInputTableStmt :: Text -> Stmt.Statement () Int64
-resolveInputTableStmt table =
-  Stmt.preparable sql E.noParams D.rowsAffected
+-- | Build a CTAS script for one of the input tables.
+--
+-- @passthrough@ is every column except @tx_out_id@. The @tx_out_id@
+-- column is resolved via @COALESCE(orig.tx_out_id, tx.id)@: cache
+-- hits keep their pre-populated value, misses get the join result,
+-- orphan inputs stay NULL.
+ctasScript :: Text -> [Text] -> Text
+ctasScript table passthrough = T.unlines
+  [ "CREATE UNLOGGED TABLE " <> newName <> " (LIKE " <> table <> " INCLUDING DEFAULTS);"
+  , "INSERT INTO " <> newName <> " (" <> T.intercalate ", " allCols <> ")"
+  , "SELECT " <> T.intercalate ", " selExprs
+  , "  FROM " <> table <> " src"
+  , "  LEFT JOIN tx ON tx.hash = src.tx_out_hash;"
+  , "DROP TABLE " <> table <> ";"
+  , "ALTER TABLE " <> newName <> " RENAME TO " <> table <> ";"
+  ]
   where
-    qt = quoteIdent table
-    sql = T.unwords
-      [ "UPDATE", qt
-      , "SET tx_out_id = tx.id"
-      , "FROM tx"
-      , "WHERE tx.hash =", qt <> ".tx_out_hash"
-      , "AND", qt <> ".tx_out_id IS NULL"
-      ]
+    newName = table <> "_new"
+    insertIdx = 2  -- "id", "tx_in_id", THEN tx_out_id
+    (before, after) = splitAt insertIdx passthrough
+    allCols = before ++ ["tx_out_id"] ++ after
+    selExprs =
+      map (\c -> "src." <> c) before
+        ++ ["COALESCE(src.tx_out_id, tx.id) AS tx_out_id"]
+        ++ map (\c -> "src." <> c) after

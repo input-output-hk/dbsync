@@ -29,6 +29,7 @@ module DbSync.Test.PgAssertions
 
     -- * Settle-state polling
   , waitForSchemaSettled
+  , waitForTableQueryable
 
     -- * Schema-driven SQL fragments
   , tableColumn
@@ -151,6 +152,20 @@ waitForSchemaSettled tables indexes =
       nonLogged <- countNonLoggedTables tables
       missing   <- listMissingIndexes indexes
       pure (nonLogged == 0 && null missing)
+
+-- | Block until a @SELECT 1 FROM @\<table\>@ LIMIT 1@ succeeds on a
+-- fresh psql connection. Guards strict-equality reads against the
+-- @aaResyncFromGenesis=True@ boot's dropSchema → initSchema window
+-- and against the post-Prep catalog-propagation lag.
+waitForTableQueryable :: Text -> Int -> IO ()
+waitForTableQueryable table =
+  waitFor ("table " <> table <> " queryable") queryable
+  where
+    queryable = do
+      result <- try $ queryTestDb ("SELECT 1 FROM " <> table <> " LIMIT 1;")
+      pure $ case (result :: Either SomeException Text) of
+        Right _ -> True
+        Left  _ -> False
 
 -- ---------------------------------------------------------------------------
 -- * Sync-state ↔ block consistency

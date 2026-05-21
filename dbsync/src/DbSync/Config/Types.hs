@@ -25,7 +25,8 @@ module DbSync.Config.Types
     -- * Sync options
   , SyncOptions (..)
   , SyncOption (..)
-  , UTxOVariant (..)
+  , UtxoOption (..)
+  , UtxoStrategy (..)
   , MetadataFormat (..)
   , GovernanceVariant (..)
 
@@ -37,6 +38,7 @@ module DbSync.Config.Types
   , defaultMetricsConfig
   , defaultLoggingConfig
   , defaultSyncOptions
+  , defaultUtxoOption
 
     -- * DB-sync node config (from db-sync-config.json)
   , DbSyncNodeConfig (..)
@@ -74,11 +76,11 @@ instance FromJSON SyncConfig where
   parseJSON = Aeson.withObject "SyncConfig" $ \o ->
     SyncConfig
       <$> o .:  "database"
-      <*> o .:? "sync"       .!= defaultSyncSettings
-      <*> o .:? "ledger"     .!= defaultLedgerConfig
-      <*> o .:? "db_options" .!= defaultSyncOptions
-      <*> o .:? "metrics"    .!= defaultMetricsConfig
-      <*> o .:? "logging"    .!= defaultLoggingConfig
+      <*> o .:? "sync"           .!= defaultSyncSettings
+      <*> o .:? "ledger"         .!= defaultLedgerConfig
+      <*> o .:? "db_options"     .!= defaultSyncOptions
+      <*> o .:? "metrics"        .!= defaultMetricsConfig
+      <*> o .:? "logging"        .!= defaultLoggingConfig
 
 -- | PostgreSQL connection configuration.
 data DatabaseConfig = DatabaseConfig
@@ -265,17 +267,13 @@ instance FromJSON LogFormat where
 --
 -- Opt-in: every option defaults to disabled. Omit a key to disable;
 -- set @"key": true@ to enable. The @core@ extractor is unconditional
--- and is therefore not represented here at all — its tables
--- (block, tx, slot_leader) are referenced by every other extractor's
--- foreign keys, so toggling it makes no sense. It is added
--- unconditionally by @DbSync.App.buildExtractors@.
+-- (every other extractor's tables reference its block / tx /
+-- slot_leader rows via FK) and is added by @buildExtractors@.
 --
--- The single-field 'SyncOption' wrapper is preserved so individual
--- options can grow richer variants (allowlists, formats — see
--- 'UTxOVariant', 'MetadataFormat', 'GovernanceVariant') without
--- churning every call site.
+-- 'pcUtxo' is structured because the UTxO extractor has multiple
+-- knobs that route different Prep paths; the rest are flat bools.
 data SyncOptions = SyncOptions
-  { pcUtxo            :: !SyncOption
+  { pcUtxo            :: !UtxoOption
   , pcMultiAsset      :: !SyncOption
   , pcMetadata        :: !SyncOption
   , pcStakeDelegation :: !SyncOption
@@ -292,7 +290,7 @@ data SyncOptions = SyncOptions
 instance FromJSON SyncOptions where
   parseJSON = Aeson.withObject "SyncOptions" $ \o ->
     SyncOptions
-      <$> o .:? "utxo"             .!= disabled
+      <$> o .:? "utxo"             .!= defaultUtxoOption
       <*> o .:? "multi_asset"      .!= disabled
       <*> o .:? "metadata"         .!= disabled
       <*> o .:? "stake_delegation" .!= disabled
@@ -311,7 +309,7 @@ instance FromJSON SyncOptions where
 -- extractor is added by @buildExtractors@ and is not represented here.
 defaultSyncOptions :: SyncOptions
 defaultSyncOptions = SyncOptions
-  { pcUtxo            = SyncOption False
+  { pcUtxo            = defaultUtxoOption
   , pcMultiAsset      = SyncOption False
   , pcMetadata        = SyncOption False
   , pcStakeDelegation = SyncOption False
@@ -335,17 +333,86 @@ data SyncOption = SyncOption
   }
   deriving stock (Eq, Show)
 
--- | Parse a sync option from a plain JSON boolean (e.g. @"utxo": true@).
+-- | Parse a sync option from a plain JSON boolean (e.g. @"multi_asset": true@).
 instance FromJSON SyncOption where
   parseJSON = Aeson.withBool "SyncOption" (pure . SyncOption)
 
--- | UTxO storage variants.
-data UTxOVariant
-  = UTxOFull
-  | UTxOPruned
-  | UTxOConsumed
-  | UTxOAddressNormalised
+-- ---------------------------------------------------------------------------
+-- * UTxO extractor option
+-- ---------------------------------------------------------------------------
+
+-- | UTxO extractor configuration.
+--
+-- * 'uoEnabled' — whether the extractor runs; @false@ leaves
+--   @tx_in@, @tx_out@, and @ma_tx_out@ empty.
+-- * 'uoConsumedByTxId' — whether @tx_out.consumed_by_tx_id@ is
+--   populated. The per-epoch 'ConsumedByWorker' covers most rows
+--   during Ingest; a Prep residual UPDATE catches cache-misses.
+-- * 'uoTxIn' — whether @tx_in@ rows are written.
+-- * 'uoStrategy' — see 'UtxoStrategy'.
+data UtxoOption = UtxoOption
+  { uoEnabled        :: !Bool
+  , uoConsumedByTxId :: !Bool
+  , uoTxIn           :: !Bool
+  , uoStrategy       :: !UtxoStrategy
+  }
   deriving stock (Eq, Show)
+
+-- | What @tx_out@ contains and how it gets filled.
+data UtxoStrategy
+  = -- | Every output ever; per-tx COPY during Ingest.
+    StrategyArchive
+  | -- | Live UTxO only; DELETE consumed rows at Prep.
+    StrategyPrune
+  | -- | Live UTxO only; skip @tx_out@ writes during Ingest,
+    -- bulk-load from the ledger state at Prep.
+    StrategyFromLedger
+  deriving stock (Eq, Show)
+
+-- | Extractor off; back-pointer on; tx_in populated; archive coverage.
+defaultUtxoOption :: UtxoOption
+defaultUtxoOption = UtxoOption
+  { uoEnabled        = False
+  , uoConsumedByTxId = True
+  , uoTxIn           = True
+  , uoStrategy       = StrategyArchive
+  }
+
+instance FromJSON UtxoOption where
+  parseJSON = Aeson.withObject "UtxoOption" $ \o -> do
+    enabled        <- o .:? "enabled"           .!= uoEnabled defaultUtxoOption
+    consumedByTxId <- o .:? "consumed_by_tx_id" .!= uoConsumedByTxId defaultUtxoOption
+    txIn           <- o .:? "tx_in"             .!= uoTxIn defaultUtxoOption
+    strategy       <- o .:? "strategy"          .!= uoStrategy defaultUtxoOption
+    unless txIn $
+      Aeson.parseFail
+        "utxo.tx_in: false is not yet implemented. The deposit backfill \
+        \joins through tx_in.tx_out_id; an alternate backfill via \
+        \tx_out.consumed_by_tx_id is planned but not landed."
+    case strategy of
+      StrategyArchive    -> pure ()
+      StrategyPrune      -> Aeson.parseFail
+        "utxo.strategy: \"prune\" is not yet implemented. The Prep \
+        \step that DELETEs consumed tx_out rows has not landed."
+      StrategyFromLedger -> Aeson.parseFail
+        "utxo.strategy: \"from_ledger\" is not yet implemented. The \
+        \Prep step that bulk-loads live UTxO from the ledger state \
+        \has not landed."
+    pure UtxoOption
+      { uoEnabled        = enabled
+      , uoConsumedByTxId = consumedByTxId
+      , uoTxIn           = txIn
+      , uoStrategy       = strategy
+      }
+
+instance FromJSON UtxoStrategy where
+  parseJSON = Aeson.withText "UtxoStrategy" $ \case
+    "archive"     -> pure StrategyArchive
+    "prune"       -> pure StrategyPrune
+    "from_ledger" -> pure StrategyFromLedger
+    other         -> Aeson.parseFail $
+      "unexpected utxo.strategy: " <> show other
+        <> ". Expected \"archive\", \"prune\", or \"from_ledger\"."
 
 -- | Metadata storage format.
 data MetadataFormat

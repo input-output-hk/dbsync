@@ -28,6 +28,7 @@ import DbSync.Db.Schema.MultiAsset (MultiAsset)
 import DbSync.Db.Schema.Pool (PoolHash)
 import DbSync.Db.Schema.StakeDelegation (StakeAddress)
 import DbSync.Db.Types (DbLovelace)
+import DbSync.Phase.Ingest.UtxoCache (UtxoTxEntry)
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -179,9 +180,30 @@ data IdResolver m = IdResolver
     -- ---------------------------------------------------------------
 
     -- | Look up output values by (producing tx hash, output index).
-    -- 'Nothing' for any pair the resolver cannot fulfil. Ingest
-    -- panics: value resolution is post-load only there.
+    -- 'Nothing' for any pair the resolver cannot fulfil. During Ingest,
+    -- the value comes from the 'UtxoCache' (cache hit) or 'Nothing' (cache
+    -- miss, deferred to the post-load resolve).
   , resolveInputValues :: !([(ByteString, Word16)] -> m [Maybe DbLovelace])
+
+    -- | Look up the producing tx's id, the producer-output's tx_out
+    -- row id, and the output value in one call. 'Nothing' on miss.
+    -- Used by the UTxO extractor to write @tx_in.tx_out_id@ at COPY
+    -- time, to enqueue the consumed-by triple keyed by the output's
+    -- 'TxOutId', and to accumulate input values for the deposit
+    -- calculation. Follow resolves via SQL; Ingest reads from the
+    -- in-process 'UtxoCache'.
+  , resolveInputUtxo :: !(ByteString -> Word16 -> m (Maybe (TxId, TxOutId, DbLovelace)))
+
+    -- | Record a tx's outputs in the Ingest 'UtxoCache' so later
+    -- inputs spending them resolve at COPY time. No-op in Follow.
+  , recordTxOutputs :: !(ByteString -> UtxoTxEntry -> m ())
+
+    -- | Buffer a @(producer_tx_out_id, consumer_tx_id)@ pair for the
+    -- 'TxOutWorker'. Called by the UTxO extractor on a cache hit; the
+    -- worker fans these into a bulk UPDATE against
+    -- @tx_out.consumed_by_tx_id@ at the next epoch boundary. No-op
+    -- when @utxo.consumed_by_tx_id@ is off and in Follow.
+  , recordConsumed :: !(TxOutId -> TxId -> m ())
   }
 
 -- ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ import DbSync.Db.Schema.Types
 import DbSync.Db.Statement.Indexes
   ( Concurrency (..)
   , columnRef
+  , postResolveIndexStatements
   , preResolveIndexStatements
   , tableIndexStatements
   , uniqueConstraintIndexName
@@ -150,20 +151,14 @@ spec = describe "DbSync.Db.Statement.Indexes" $ do
         `shouldThrow` anyException
 
   describe "preResolveIndexStatements" $ do
-    it "covers tx.hash plus the four per-tx-id lookups the backfills probe" $
+    it "covers tx.hash plus the lookups the CTAS join and backfills need" $
       preResolveIndexStatements `shouldBe`
         [ "CREATE UNIQUE INDEX IF NOT EXISTS \"tx_unique_1_idx\""
             <> " ON \"tx\" (\"hash\")"
         , "CREATE INDEX IF NOT EXISTS \"tx_out_tx_id_index_idx\""
             <> " ON \"tx_out\" (\"tx_id\", \"index\")"
-        , "CREATE INDEX IF NOT EXISTS \"tx_in_tx_out_idx\""
-            <> " ON \"tx_in\" (\"tx_out_id\", \"tx_out_index\")"
-        , "CREATE INDEX IF NOT EXISTS \"collateral_tx_in_tx_in_id_idx\""
-            <> " ON \"collateral_tx_in\" (\"tx_in_id\")"
         , "CREATE INDEX IF NOT EXISTS \"collateral_tx_out_tx_id_idx\""
             <> " ON \"collateral_tx_out\" (\"tx_id\")"
-        , "CREATE INDEX IF NOT EXISTS \"tx_in_tx_in_id_idx\""
-            <> " ON \"tx_in\" (\"tx_in_id\")"
         , "CREATE INDEX IF NOT EXISTS \"withdrawal_tx_id_idx\""
             <> " ON \"withdrawal\" (\"tx_id\")"
         ]
@@ -173,3 +168,12 @@ spec = describe "DbSync.Db.Statement.Indexes" $ do
       -- so a matching name here is what makes the later
       -- 'tableIndexStatements' build a no-op via @IF NOT EXISTS@.
       uniqueConstraintIndexName txTableDef 1 `shouldBe` "tx_unique_1_idx"
+
+  describe "postResolveIndexStatements" $
+    it "covers the input-table indexes the CTAS rebuilds drop" $
+      postResolveIndexStatements `shouldBe`
+        [ "CREATE INDEX IF NOT EXISTS \"tx_in_tx_in_id_idx\""
+            <> " ON \"tx_in\" (\"tx_in_id\")"
+        , "CREATE INDEX IF NOT EXISTS \"collateral_tx_in_tx_in_id_idx\""
+            <> " ON \"collateral_tx_in\" (\"tx_in_id\")"
+        ]

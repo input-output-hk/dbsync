@@ -114,7 +114,7 @@ test-suite dbsync-test
     DbSync.Db.Statement.SyncStateSpec
     DbSync.Db.TypesSpec
     DbSync.PropertySpec
-    DbSync.Address.WorkerSpec
+    DbSync.Worker.TxOutSpec
     DbSync.Schema.AdaPotsSpec
     DbSync.Schema.AddressSpec
     DbSync.Schema.CoreSpec
@@ -133,6 +133,7 @@ test-suite dbsync-test
     DbSync.Extractor.UTxOSpec
     DbSync.Block.PipelineSpec
     DbSync.Phase.Ingest.ConsumerSpec
+    DbSync.Phase.Ingest.UtxoCacheSpec
     DbSync.Schema.InitSpec
     DbSync.Db.LoaderSpec
     DbSync.Ledger.DepositAccumulatorSpec
@@ -158,6 +159,7 @@ test-suite dbsync-test
     DbSync.Phase.MockNodeSpec
     DbSync.Phase.Preparing.RunSpec
     DbSync.StateQuery.ObservedSummarySpec
+    DbSync.StateQuery.SlotDetailsSpec
   build-depends:
       base
     , aeson
@@ -187,9 +189,11 @@ test-suite dbsync-test
     , ouroboros-consensus:cardano
     , ouroboros-consensus:unstable-cardano-testlib
     , ouroboros-network:api
+    , ouroboros-network:protocols
     , process
     , QuickCheck
     , scientific
+    , sop-extras
     , stm
     , strict
     , text

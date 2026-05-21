@@ -25,12 +25,15 @@ import DbSync.Db.Schema.Ids
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Phase.Ingest.Counter (IdCounters (..), nextId)
 import DbSync.Phase.Ingest.DedupMap (DedupMaps (..), lookupOrInsert)
+import DbSync.Phase.Ingest.UtxoCache (UtxoCache)
+import qualified DbSync.Phase.Ingest.UtxoCache as UtxoCache
 import DbSync.Resolver (IdResolver (..))
-import DbSync.Address.Buffer
+import DbSync.Worker.TxOut.AddressBuffer
   ( AddressBufferRef
   , recordCollateralTxOut
   , recordTxOut
   )
+import DbSync.Worker.TxOut.ConsumedByBuffer (ConsumedByBufferRef, recordConsumedBy)
 
 -- ---------------------------------------------------------------------------
 -- * Construction
@@ -51,8 +54,16 @@ import DbSync.Address.Buffer
 -- the per-epoch 'AddressBufferRef'; the background 'AddressResolver'
 -- worker reads the buffer one epoch later, writes the @address@ rows,
 -- and fills in @tx_out.address_id@\/@collateral_tx_out.address_id@.
-mkIngestResolver :: IORef ExtractState -> DedupMaps -> AddressBufferRef -> IdResolver IO
-mkIngestResolver stRef dedupMaps addrBufRef = IdResolver
+mkIngestResolver
+  :: IORef ExtractState
+  -> DedupMaps
+  -> AddressBufferRef
+  -> UtxoCache
+  -> Maybe ConsumedByBufferRef
+  -- ^ 'Just' enables 'recordConsumed' to enqueue triples; 'Nothing'
+  -- (feature off) drops them silently.
+  -> IdResolver IO
+mkIngestResolver stRef dedupMaps addrBufRef utxoCache mConsumedByBuf = IdResolver
   { -- Core shared IDs
     assignBlockId = atomicModifyIORef' stRef $ \st ->
       let (bid, ctr') = nextId (icBlockId $ esIdCounters st)
@@ -209,8 +220,19 @@ mkIngestResolver stRef dedupMaps addrBufRef = IdResolver
           st' = st { esIdCounters = (esIdCounters st) { icAdaPotsId = ctr' } }
       in (st', AdaPotsId i)
 
-    -- Inline value resolution: forbidden during Ingest. Extractors
-    -- must rely on the post-load SQL backfill instead.
-  , resolveInputValues = \_ ->
-      panic "Phase.Ingest.Resolver: resolveInputValues is post-load only"
+    -- UTxO lookups consult the in-process cache. A miss returns
+    -- 'Nothing' and the row is written with @tx_out_id = NULL@; the
+    -- post-load resolve handles the residual on cache-miss inputs.
+  , resolveInputValues = \pairs ->
+      forM pairs $ \(hash, idx) -> do
+        m <- UtxoCache.lookupInput utxoCache hash idx
+        pure (fmap (\(_, _, v) -> v) m)
+
+  , resolveInputUtxo = UtxoCache.lookupInput utxoCache
+
+  , recordTxOutputs = UtxoCache.recordTx utxoCache
+
+  , recordConsumed = case mConsumedByBuf of
+      Just ref -> recordConsumedBy ref
+      Nothing  -> \_ _ -> pure ()
   }

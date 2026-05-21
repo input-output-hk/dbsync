@@ -25,10 +25,13 @@ import Cardano.Ledger.Coin (Coin (..))
 
 import DbSync.Block.Types
   ( BlockEra (..)
+  , CertAction (..)
   , GenericBlock (..)
   , GenericTx (..)
+  , GenericTxCertificate (..)
   , GenericTxIn (..)
   , GenericTxOut (..)
+  , GenericTxWithdrawal (..)
   )
 import qualified DbSync.Block.Types as G
 import DbSync.Db.Schema.Core (Block (..), SlotLeader (..))
@@ -41,14 +44,15 @@ import DbSync.Extractor
   , emptyBlockLedgerData
   , freshExtractState
   )
-import DbSync.Extractor.Core (coreExtractor)
+import DbSync.Extractor.Core (coreExtractor, hasNoDepositActivity)
 import DbSync.Block.Pipeline (processBlock)
 import DbSync.Phase.Ingest.DedupMap (newMaps)
 import DbSync.Ledger.Types (DepositsMap (..))
 import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Resolver (IdResolver (..))
-import DbSync.Address.Buffer (newAddressBufferRef)
+import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
+import DbSync.Phase.Ingest.UtxoCache (defaultCacheCapacity, newUtxoCache)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv, mkTestPipelineEnvWith)
 import DbSync.Test.Writer (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 import Test.Hspec (shouldSatisfy)
@@ -181,8 +185,18 @@ spec = do
             SC.txDeposit tx `shouldBe` Just 0
           _ -> panic "expected exactly one tx"
 
-    describe "valid contract, ledger ON" $ do
-      it "fills deposit from bcDepositsMap when the tx has a deposit event" $ do
+    describe "plain transfer (no certs, withdrawals, donations)" $ do
+      it "Ingest + ledger OFF gets Just 0 from the conservation short-circuit" $ do
+        written <- runCoreWith emptyBlockLedgerData IngestChainHistory
+                     [] (blockWithTx validTx)
+        case twTxs written of
+          [(_, tx)] -> SC.txDeposit tx `shouldBe` Just 0
+          _ -> panic "expected exactly one tx"
+
+      it "Ingest + ledger ON gets Just 0 even when a deposits-map entry exists" $ do
+        -- A plain transfer cannot have a deposit event in a real chain;
+        -- the short-circuit fires before the lookup and ignores the
+        -- stale entry. Keeps the post-load backfill targets minimal.
         let bld = (emptyBlockLedgerData :: BlockLedgerData)
               { bldLedgerEnabled = True
               , bldDepositsMap   = DepositsMap
@@ -190,39 +204,86 @@ spec = do
               }
         written <- runCoreWith bld IngestChainHistory [] (blockWithTx validTx)
         case twTxs written of
+          [(_, tx)] -> SC.txDeposit tx `shouldBe` Just 0
+          _ -> panic "expected exactly one tx"
+
+      it "Follow path also short-circuits without input resolution" $ do
+        -- The Follow identity formula would also compute 0 for a plain
+        -- transfer (conservation); skipping it saves a resolver call.
+        written <- runCoreWith emptyBlockLedgerData FollowingChainTip
+                     [] (blockWithTx validTx)
+        case twTxs written of
+          [(_, tx)] -> SC.txDeposit tx `shouldBe` Just 0
+          _ -> panic "expected exactly one tx"
+
+    describe "activity-bearing tx, ledger ON" $ do
+      it "fills deposit from bcDepositsMap when the lookup succeeds" $ do
+        let bld = (emptyBlockLedgerData :: BlockLedgerData)
+              { bldLedgerEnabled = True
+              , bldDepositsMap   = DepositsMap
+                  (Map.singleton (G.txHash regTx) (Coin 2_000_000))
+              }
+        written <- runCoreWith bld IngestChainHistory [] (blockWithTx regTx)
+        case twTxs written of
           [(_, tx)] -> SC.txDeposit tx `shouldBe` Just 2_000_000
           _ -> panic "expected exactly one tx"
 
-      it "leaves deposit NULL for plain txs (no deposit event)" $ do
+      it "leaves deposit NULL when the deposits map has no entry" $ do
+        -- Activity tx + empty deposits map = ledger event missing.
+        -- The post-load backfill picks it up via the identity formula.
         let bld = emptyBlockLedgerData { bldLedgerEnabled = True }
-        written <- runCoreWith bld IngestChainHistory [] (blockWithTx validTx)
+        written <- runCoreWith bld IngestChainHistory [] (blockWithTx regTx)
         case twTxs written of
           [(_, tx)] -> SC.txDeposit tx `shouldBe` Nothing
           _ -> panic "expected exactly one tx"
 
-    describe "valid contract, ledger OFF" $ do
-      it "Follow computes deposit via the inputs - outputs identity" $ do
+    describe "activity-bearing tx, ledger OFF" $ do
+      it "Follow computes deposit via the inputs + withdrawals identity" $ do
+        -- 10_000_000 (in) + 0 (wd) - 9_000_000 (out) - 200_000 (fee)
+        --   - 0 (donation) = 800_000. The cert is what makes the tx
+        --   activity-bearing so the identity formula runs instead of
+        --   short-circuiting to 0.
         let inValues = [Just (DbLovelace 10_000_000)]
-            tx = validTx
-              { G.txInputs   = [GenericTxIn (BS.replicate 32 0xaa) 0]
-              , G.txOutSum   = 9_000_000
-              , G.txFee      = 200_000
-              , G.txOutputs  = [outFor 9_000_000]
+            tx = regTx
+              { G.txInputs  = [GenericTxIn (BS.replicate 32 0xaa) 0]
+              , G.txOutSum  = 9_000_000
+              , G.txFee     = 200_000
+              , G.txOutputs = [outFor 9_000_000]
               }
         written <- runCoreWith emptyBlockLedgerData FollowingChainTip
                      inValues (blockWithTx tx)
         case twTxs written of
-          [(_, t)] ->
-            -- 10_000_000 - 9_000_000 - 200_000 - 0 (donation) = 800_000
-            SC.txDeposit t `shouldBe` Just 800_000
+          [(_, t)] -> SC.txDeposit t `shouldBe` Just 800_000
           _ -> panic "expected exactly one tx"
 
       it "Ingest leaves deposit NULL for the SQL backfill to fill in" $ do
         written <- runCoreWith emptyBlockLedgerData IngestChainHistory
-                     [] (blockWithTx validTx)
+                     [] (blockWithTx regTx)
         case twTxs written of
           [(_, tx)] -> SC.txDeposit tx `shouldBe` Nothing
           _ -> panic "expected exactly one tx"
+
+  describe "hasNoDepositActivity" $ do
+    it "True for an empty tx" $
+      hasNoDepositActivity validTx `shouldBe` True
+
+    it "False when the tx has a certificate" $
+      hasNoDepositActivity regTx `shouldBe` False
+
+    it "False when the tx has a withdrawal" $
+      hasNoDepositActivity (validTx { G.txWithdrawals = [oneWithdrawal] })
+        `shouldBe` False
+
+    it "False when the tx has a treasury donation" $
+      hasNoDepositActivity (validTx { G.txTreasuryDonation = 1 })
+        `shouldBe` False
+
+    it "False when all three are populated" $
+      hasNoDepositActivity (regTx
+        { G.txWithdrawals       = [oneWithdrawal]
+        , G.txTreasuryDonation  = 1
+        })
+        `shouldBe` False
 
 -- ---------------------------------------------------------------------------
 -- Test helpers
@@ -234,8 +295,9 @@ runCore block = do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
   addrBuf <- newAddressBufferRef
+  utxoCache <- newUtxoCache defaultCacheCapacity
   wrRef <- newIORef emptyTestWriterState
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoCache Nothing)
                               (mkTestWriter wrRef) [coreExtractor]
   runReaderT (processBlock block) env
   readIORef wrRef
@@ -246,7 +308,8 @@ runCoreTwoBlocks block1 block2 = do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
   addrBuf <- newAddressBufferRef
-  let resolver = mkIngestResolver stRef dedupMaps addrBuf
+  utxoCache <- newUtxoCache defaultCacheCapacity
+  let resolver = mkIngestResolver stRef dedupMaps addrBuf utxoCache Nothing
 
   wrRef1 <- newIORef emptyTestWriterState
   let env1 = mkTestPipelineEnv resolver (mkTestWriter wrRef1) [coreExtractor]
@@ -351,18 +414,41 @@ runCoreWith ledgerData phase inValues block = do
   stRef     <- newIORef freshExtractState
   dedupMaps <- newMaps
   addrBuf   <- newAddressBufferRef
+  utxoCache <- newUtxoCache defaultCacheCapacity
   wrRef     <- newIORef emptyTestWriterState
-  let baseResolver = mkIngestResolver stRef dedupMaps addrBuf
+  let baseResolver = mkIngestResolver stRef dedupMaps addrBuf utxoCache Nothing
       resolver = baseResolver { resolveInputValues = \_ -> pure inValues }
       env = mkTestPipelineEnvWith Mainnet resolver (mkTestWriter wrRef)
               [coreExtractor] (\_ -> pure ledgerData) phase
   runReaderT (processBlock block) env
   readIORef wrRef
 
--- | A valid (phase-2 success) tx with no inputs / outputs / withdrawals
--- by default. Field overrides supply the dispatch-relevant data.
+-- | A valid (phase-2 success) plain transfer — no certs,
+-- withdrawals or donations, so 'hasNoDepositActivity' is 'True'.
 validTx :: GenericTx
 validTx = mkTx 0 "validtx"
+
+-- | A valid (phase-2 success) activity-bearing tx — carries one
+-- stake-registration certificate, so 'hasNoDepositActivity' is
+-- 'False' and the deposit dispatch falls through to ledger lookup
+-- or identity formula.
+regTx :: GenericTx
+regTx = (mkTx 0 "regtx")
+  { G.txCertificates =
+      [ GenericTxCertificate
+          { txCertIndex  = 0
+          , txCertAction = CertStakeRegistration (BS.replicate 28 0xee) Nothing
+          }
+      ]
+  }
+
+-- | One zero-amount withdrawal — enough to make 'hasNoDepositActivity'
+-- return 'False'.
+oneWithdrawal :: GenericTxWithdrawal
+oneWithdrawal = GenericTxWithdrawal
+  { txwRewardAddress = BS.replicate 29 0xee
+  , txwAmount        = 0
+  }
 
 -- | A phase-2 failed tx with one collateral input and a 2_000_000
 -- collateral return.

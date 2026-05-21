@@ -65,8 +65,8 @@ commitEpoch newRow = do
 -- @writeSyncState@ encoder ignores those columns.
 --
 -- The address counter is passed in separately because it lives on the
--- 'DbSync.Address.Worker.AddressResolver' (the worker is the
--- sole allocator of @address.id@) rather than in 'IdCounters'.
+-- 'DbSync.Worker.TxOut.TxOutWorker' (the worker is the sole
+-- allocator of @address.id@) rather than in 'IdCounters'.
 mkBoundarySyncStateRow
   :: Word64        -- ^ Last committed slot (boundary block's slot)
   -> Word64        -- ^ Last committed block number

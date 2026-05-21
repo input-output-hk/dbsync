@@ -99,11 +99,12 @@ import DbSync.Ledger.Types
   )
 import DbSync.Node.ChainSyncMsg (ChainSyncMsg (..))
 import DbSync.Resolver (IdResolver (..))
-import DbSync.Address.Buffer (takeAndReset)
-import DbSync.Address.Worker
-  ( ResolveJob (..)
-  , awaitDrained
-  , enqueueResolveJob
+import DbSync.Worker.TxOut.AddressBuffer (emptyEpochAddressBuffer, takeAndReset)
+import qualified DbSync.Worker.TxOut.ConsumedByBuffer as ConsumedByBuffer
+import DbSync.Worker.TxOut
+  ( TxOutJob (..)
+  , awaitTxOutDrained
+  , enqueueTxOutJob
   , readAddressIdCounter
   )
 import DbSync.StateQuery
@@ -308,14 +309,29 @@ runConsumer = do
     -- ('pendingBoundaryRef' = 'Nothing').
     finalFlushSyncState :: IORef (Maybe PendingBoundary) -> IngestM ()
     finalFlushSyncState pendingBoundaryRef = do
-      addressResolver <- asks ieAddressResolver
+      txOutWorker     <- asks ieTxOutWorker
+      mConsumedByBuf  <- asks ieConsumedByBuffer
+      loaderStream    <- asks ieLoaderStream
       watchdog        <- asks ieWatchdog
       cfg             <- asks getConfig
       let ledgerEnabledCfg = lcEnabled (scLedger cfg)
           schemaVersion    = 1 :: Int
-      liftIO $ setConsumerNote watchdog "consumer: final awaitDrained"
-      liftIO $ awaitDrained addressResolver
-      addressIdCounter <- liftIO $ readAddressIdCounter addressResolver
+      -- Drain any residual mid-epoch consumed-by pairs by enqueueing
+      -- one last job with an empty address buffer; the worker pairs
+      -- them with the (empty) address work and applies the UPDATE
+      -- before exiting. When consumed-by is off this is unreachable.
+      mResidualCb <- liftIO $ case mConsumedByBuf of
+        Just ref -> Just <$> ConsumedByBuffer.takeAndReset ref
+        Nothing  -> pure Nothing
+      for_ mResidualCb $ \cb ->
+        liftIO $ enqueueTxOutJob txOutWorker $ TxOutJob
+          { tjEpoch      = EpochNo 0
+          , tjAddress    = emptyEpochAddressBuffer
+          , tjConsumedBy = Just cb
+          }
+      liftIO $ setConsumerNote watchdog "consumer: final awaitTxOutDrained"
+      liftIO $ awaitTxOutDrained txOutWorker
+      addressIdCounter <- liftIO $ readAddressIdCounter txOutWorker
       mPending <- liftIO $ readIORef pendingBoundaryRef
       for_ mPending $ \pb ->
         writeSyncState $
@@ -323,6 +339,10 @@ runConsumer = do
             (pbLastSlot pb) (pbLastBlockNo pb) (pbLastHash pb)
             (pbCounters pb) addressIdCounter
             schemaVersion ledgerEnabledCfg
+      -- Commit the in-progress epoch's loader-stream rows so Prep
+      -- and Follow don't have to replay them from the node.
+      liftIO $ setConsumerNote watchdog "consumer: final lsCommit"
+      liftIO $ lsCommit loaderStream
 
     processBatch
       :: IORef (Maybe EpochNo)
@@ -352,8 +372,9 @@ runConsumer = do
       extractStRef  <- asks ieExtractState
       dedupMaps     <- asks ieDedupMaps
       addressBuffer <- asks ieAddressBuffer
-      addressResolver <- asks ieAddressResolver
-      ctrlConn      <- asks ieControlConnection
+      txOutWorker    <- asks ieTxOutWorker
+      mConsumedByBuf <- asks ieConsumedByBuffer
+      ctrlConn       <- asks ieControlConnection
       bootSlot      <- asks ieLastCommittedSlotAtBoot
       replayStart   <- asks ieReplayStartSlot
       watchdog      <- asks ieWatchdog
@@ -464,7 +485,7 @@ runConsumer = do
             -- next one — see the @PendingBoundary@ Haddock for the
             -- crash-safety reasoning.
             commitStart <- liftIO getCurrentTime
-            buf <- liftIO $ do
+            (buf, mConsumedBuf) <- liftIO $ do
               -- 1. Flush loader streams — tx_outs durable, address_id = NULL.
               setConsumerNote watchdog "consumer: lsCommit (flushing loader stream)"
               lsCommit loaderStream
@@ -475,11 +496,16 @@ runConsumer = do
               setConsumerNote watchdog "consumer: takeAndReset addressBuffer"
               b <- takeAndReset addressBuffer
 
+              -- Snapshot the consumed-by buffer too when the feature is on.
+              cb <- case mConsumedByBuf of
+                Just ref -> Just <$> ConsumedByBuffer.takeAndReset ref
+                Nothing  -> pure Nothing
+
               -- 3. Wait for the worker to finish the job queued at the
               --    *previous* boundary (epoch N-1). On the first boundary
               --    the queue is empty and this returns immediately.
-              setConsumerNote watchdog "consumer: awaitDrained (epoch N-1)"
-              awaitDrained addressResolver
+              setConsumerNote watchdog "consumer: awaitTxOutDrained (epoch N-1)"
+              awaitTxOutDrained txOutWorker
 
               -- 4. Flush the ledger worker's per-epoch protocol-param
               --    deposit data for the just-finished epoch.
@@ -489,7 +515,7 @@ runConsumer = do
               --    to the previous epoch a step later.
               setConsumerNote watchdog "consumer: flushEpochParams"
               flushPendingDeposits hasLedger prev slot ctrlConn
-              pure b
+              pure (b, cb)
 
             -- 5. Advance @sync_state@ for the previously snapshotted
             --    epoch — its tx_out / collateral_tx_out FKs are now
@@ -498,7 +524,7 @@ runConsumer = do
             --    drain so it reflects exactly the rows it inserted
             --    for that epoch.
             liftIO $ setConsumerNote watchdog "consumer: writeSyncState (lagging)"
-            addressIdCounter <- liftIO $ readAddressIdCounter addressResolver
+            addressIdCounter <- liftIO $ readAddressIdCounter txOutWorker
             mPending <- liftIO $ readIORef pendingBoundaryRef
             for_ mPending $ \pb ->
               writeSyncState $
@@ -509,11 +535,12 @@ runConsumer = do
 
             -- 6. Queue the just-finished epoch's resolve job. The
             --    worker now runs in parallel with the consumer's
-            --    ingest of the next epoch. 'enqueueResolveJob'
-            --    blocks if the worker queue is at its bound,
-            --    back-pressuring the main pipeline.
-            liftIO $ setConsumerNote watchdog "consumer: enqueueResolveJob"
-            liftIO $ enqueueResolveJob addressResolver (ResolveJob prev buf)
+            --    ingest of the next epoch. 'enqueueTxOutJob' blocks
+            --    if the worker queue is at its bound, back-pressuring
+            --    the main pipeline.
+            liftIO $ setConsumerNote watchdog "consumer: enqueueTxOutJob"
+            liftIO $ enqueueTxOutJob txOutWorker
+              (TxOutJob prev buf mConsumedBuf)
 
             -- 7. Save the snapshot that the *next* boundary will use
             --    to advance @sync_state@ once this epoch's job is

@@ -95,8 +95,10 @@ import DbSync.AppM (runAppM)
 import DbSync.Env (TracerWithConn (..))
 import qualified DbSync.Phase.Preparing.PreResolveIndexes as PreResolveIndexes
 import qualified DbSync.Phase.Preparing.Resolve as Resolve
-import DbSync.Address.Buffer (newAddressBufferRef)
+import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
+import DbSync.Phase.Ingest.UtxoCache (defaultCacheCapacity, newUtxoCache)
+import DbSync.Test.AppHarness (defaultTestProfile)
 import DbSync.Test.Database
   ( execTestDb
   , queryTestDb
@@ -199,8 +201,9 @@ setUp = do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
   addrBuf <- newAddressBufferRef
+  utxoCache <- newUtxoCache defaultCacheCapacity
   bs <- mkLoaderStream testConnBs tables
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoCache Nothing)
                               (IngestWriter.mkWriter bs) extractors
   for_ [producerBlock, spendingBlock, byronBlock] $ \blk ->
     runReaderT (processBlock blk) env
@@ -208,10 +211,10 @@ setUp = do
   closeLoaderStream bs
 
   withTestConnection $ \conn -> do
-    let prepEnv = TracerWithConn mkNullTracer conn
+    let prepEnv = TracerWithConn mkNullTracer conn defaultTestProfile
     runAppM prepEnv PreResolveIndexes.createPreResolveIndexes
-    _ <- runAppM prepEnv Resolve.resolveForeignKeys
-    pure ()
+    runAppM prepEnv Resolve.resolveForeignKeys
+    runAppM prepEnv PreResolveIndexes.createPostResolveIndexes
 
   -- Run ANALYZE the same way 'Phase.Preparing.Run.run'
   -- does — needed for the planner to pick non-trivial plans even

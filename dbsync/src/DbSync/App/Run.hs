@@ -55,7 +55,7 @@ import DbSync.Checkpoint.SyncState
   , rebuildDedupMaps
   , seedSyncState
   )
-import DbSync.Env (CoreWithConn (..), TracerWithConn (..), TracerWithControl (..))
+import DbSync.Env (CoreWithConn (..), TracerWithControl (..))
 import DbSync.Config.Genesis
   ( GenesisConfig (..)
   , ShelleyConfig (..)
@@ -110,11 +110,18 @@ import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Phase.Current (setCurrentPhase)
 import qualified DbSync.Phase.Preparing.Run as Prep
 import DbSync.Phase.Preparing.Tuning (defaultPrepTuning)
-import DbSync.Address.Buffer (newAddressBufferRef)
-import DbSync.Address.Worker (awaitDrained, closeAddressResolver, mkAddressResolver)
+import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
+import DbSync.Worker.TxOut
+  ( awaitTxOutDrained
+  , closeTxOutWorker
+  , mkTxOutWorker
+  )
 import DbSync.Phase.Following.Resolver (mkFollowResolver)
 import DbSync.Phase.Following.Tuning (defaultFollowTuning, setFollowSessionGUCs)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
+import DbSync.Phase.Ingest.UtxoCache (defaultCacheCapacity, newUtxoCache)
+import DbSync.Worker.TxOut.ConsumedByBuffer (newConsumedByBufferRef)
+import DbSync.Config.Types (SyncOptions (..), UtxoOption (..))
 import DbSync.StateQuery (StateQueryVar, newStateQueryVar, seedInterpreterFromLedgerState)
 import DbSync.Trace.Timing (withHeartbeatIO)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
@@ -375,11 +382,15 @@ runApp tracer args = do
     receiverStats    <- newReceiverStats
     watchdog         <- newWatchdog (ceMinSeverity coreEnv)
     addrBuffer       <- newAddressBufferRef
-    addrResolver     <- mkAddressResolver tracer hasqlSettings initialAddressId
+    txOutWorker      <- mkTxOutWorker tracer hasqlSettings initialAddressId
+    utxoCache        <- newUtxoCache defaultCacheCapacity
+    let consumedByOn = uoConsumedByTxId (pcUtxo (scOptions validProfile))
+    mConsumedByBuf <-
+      if consumedByOn then Just <$> newConsumedByBufferRef else pure Nothing
     latestPointRef   <- newIORef Nothing
     rollbackBoundary <- newTVarIO Nothing
 
-    let resolver = mkIngestResolver stRef dedupMaps addrBuffer
+    let resolver = mkIngestResolver stRef dedupMaps addrBuffer utxoCache mConsumedByBuf
         writer   = IngestWriter.mkWriter loaderStream
 
     let ingestEnv = IngestEnv
@@ -388,7 +399,9 @@ runApp tracer args = do
           , ieLoaderStream              = loaderStream
           , ieDedupMaps               = dedupMaps
           , ieAddressBuffer           = addrBuffer
-          , ieAddressResolver         = addrResolver
+          , ieTxOutWorker             = txOutWorker
+          , ieUtxoCache               = utxoCache
+          , ieConsumedByBuffer        = mConsumedByBuf
           , ieHasLedgerEnv            = hasLedgerEnv
           , ieStateQueryVar           = stateQueryVar
           , ieSystemStart             = systemStart
@@ -414,13 +427,13 @@ runApp tracer args = do
           lsCommit loaderStream `catch` \(e :: SomeException) ->
             logError $ "Error during final commit: " <> show e
           closeLoaderStream loaderStream
-          logInfo "Draining address resolver..."
-          awaitDrained addrResolver `catch` \(e :: SomeException) ->
-            logError $ "Error draining address resolver: " <> show e
-          logInfo "Stopping address resolver..."
-          closeAddressResolver addrResolver
+          logInfo "Draining tx_out worker..."
+          awaitTxOutDrained txOutWorker `catch` \(e :: SomeException) ->
+            logError $ "Error draining tx_out worker: " <> show e
+          logInfo "Stopping tx_out worker..."
+          closeTxOutWorker txOutWorker
             `catch` \(e :: SomeException) ->
-              logError $ "Error closing address resolver: " <> show e
+              logError $ "Error closing tx_out worker: " <> show e
 
         ingestAction = runAppM ingestEnv runConsumer `finally` shutdownIngest
 
@@ -443,7 +456,7 @@ runApp tracer args = do
         runPrepAndMarkComplete =
           bracket (openControlConnection hasqlSettings) closeControlConnection $ \prepConn -> do
             runAppM coreEnv (setCurrentPhase (ceCurrentPhase coreEnv) PreparingForVolatileTail)
-            let prepEnv = TracerWithConn tracer (unControlConnection prepConn)
+            let prepEnv = CoreWithConn coreEnv (unControlConnection prepConn)
             runAppM prepEnv (Prep.run hasqlSettings defaultPrepTuning tableDefs)
             runAppM prepConn markSyncComplete
 

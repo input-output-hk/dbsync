@@ -34,6 +34,7 @@ import DbSync.Config.Types
   , SyncOption (..)
   , SyncOptions (..)
   , SyncConfig (..)
+  , UtxoOption (..)
   )
 import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Env (CoreEnv (..))
@@ -98,10 +99,10 @@ buildExtractors pc = do
   validateExtractorDeps raw
   topoSortExtractors raw
   where
-    mkProj :: (Text, SyncOption) -> Maybe ExtractorDef
-    mkProj (name, cfg)
-      | prEnabled cfg = Just $ resolveExtractor name
-      | otherwise     = Nothing
+    mkProj :: (Text, Bool) -> Maybe ExtractorDef
+    mkProj (name, enabled)
+      | enabled   = Just $ resolveExtractor name
+      | otherwise = Nothing
 
     -- | Resolve a named extractor to its real implementation (if available)
     -- or a stub (if not yet implemented).
@@ -116,19 +117,21 @@ buildExtractors pc = do
     resolveExtractor "epoch_boundary"   = epochBoundaryExtractor
     resolveExtractor name               = stubExtractor name
 
-    optionalExtractors :: [(Text, SyncOption)]
+    -- | (extractor name, enabled?). 'utxo' reads from the structured
+    -- 'UtxoOption'; the rest read the flat 'SyncOption' bool.
+    optionalExtractors :: [(Text, Bool)]
     optionalExtractors =
-      [ ("utxo",             pcUtxo pc)
-      , ("multi_asset",      pcMultiAsset pc)
-      , ("metadata",         pcMetadata pc)
-      , ("stake_delegation", pcStakeDelegation pc)
-      , ("pool",             pcPool pc)
-      , ("scripts_datums",   pcScriptsDatums pc)
-      , ("governance",       pcGovernance pc)
-      , ("cbor",             pcCbor pc)
-      , ("epoch_sync_stats", pcEpochSyncStats pc)
-      , ("epoch_boundary",   pcEpochBoundary pc)
-      , ("current_state",    pcCurrentState pc)
+      [ ("utxo",             uoEnabled (pcUtxo pc))
+      , ("multi_asset",      prEnabled (pcMultiAsset pc))
+      , ("metadata",         prEnabled (pcMetadata pc))
+      , ("stake_delegation", prEnabled (pcStakeDelegation pc))
+      , ("pool",             prEnabled (pcPool pc))
+      , ("scripts_datums",   prEnabled (pcScriptsDatums pc))
+      , ("governance",       prEnabled (pcGovernance pc))
+      , ("cbor",             prEnabled (pcCbor pc))
+      , ("epoch_sync_stats", prEnabled (pcEpochSyncStats pc))
+      , ("epoch_boundary",   prEnabled (pcEpochBoundary pc))
+      , ("current_state",    prEnabled (pcCurrentState pc))
       ]
 
 -- ---------------------------------------------------------------------------

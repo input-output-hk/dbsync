@@ -448,17 +448,34 @@ referenceTxInSpec = it "ReferenceTxIn" $ withTestConnection $ \conn -> do
 -- ---------------------------------------------------------------------------
 
 addressSpec :: Spec
-addressSpec = it "Address" $ withTestConnection $ \conn -> do
-  let aid = AddressId 1
-      sample = Address
-        { addressAddress        = "addr1q-bech32-text"
-        , addressRaw            = bs32 0xAD
-        , addressHasScript      = True
-        , addressPaymentCred    = Just (bs28 0xBE)
-        , addressStakeAddressId = Just (StakeAddressId 13)
-        }
-  runRoundTrip conn addressTableDef entityAddressDecoder
-    insertAddressRowStmt (aid, sample)
+addressSpec = do
+  it "Address" $ withTestConnection $ \conn -> do
+    let aid = AddressId 1
+        sample = Address
+          { addressAddress        = "addr1q-bech32-text"
+          , addressRaw            = bs32 0xAD
+          , addressHasScript      = True
+          , addressPaymentCred    = Just (bs28 0xBE)
+          , addressStakeAddressId = Just (StakeAddressId 13)
+          }
+    runRoundTrip conn addressTableDef entityAddressDecoder
+      insertAddressRowStmt (aid, sample)
+
+  -- A 12 KB raw is what crashed the old btree-on-raw index. The
+  -- raw_hash generated column (16-byte md5(raw)) lets the unique
+  -- index accept addresses of any size.
+  it "Address with a 12 KB raw (exercises the raw_hash index)" $
+    withTestConnection $ \conn -> do
+      let aid = AddressId 1
+          sample = Address
+            { addressAddress        = "addr1q-large-script-address"
+            , addressRaw            = BS.replicate 12000 0xAB
+            , addressHasScript      = True
+            , addressPaymentCred    = Nothing
+            , addressStakeAddressId = Nothing
+            }
+      runRoundTrip conn addressTableDef entityAddressDecoder
+        insertAddressRowStmt (aid, sample)
 
 -- ---------------------------------------------------------------------------
 -- Metadata

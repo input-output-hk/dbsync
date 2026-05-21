@@ -50,7 +50,6 @@ import DbSync.Db.Schema.Core (blockTableDef, txTableDef)
 import DbSync.Db.Schema.Init
   ( analyzeSql
   , perTableSchemaForFollowTipSql
-  , vacuumSql
   )
 import DbSync.Db.Schema.StakeDelegation (withdrawalTableDef)
 import DbSync.Db.Schema.Types (TableDef (..), TableMode (..))
@@ -61,6 +60,7 @@ import DbSync.Db.Schema.UTxO
   , txOutTableDef
   )
 import DbSync.Db.Transaction (HasHasqlConnection (..))
+import DbSync.Env (HasConfig)
 import qualified DbSync.Phase.Preparing.Backfill as Backfill
 import qualified DbSync.Phase.Preparing.Indexes as Indexes
 import qualified DbSync.Phase.Preparing.PreResolveIndexes as PreResolveIndexes
@@ -83,7 +83,7 @@ prepComponent = "PreparingForVolatileTail"
 --
 -- See the module Haddock for the step ordering and rationale.
 run
-  :: (LoggingM env m, HasHasqlConnection env)
+  :: (LoggingM env m, HasHasqlConnection env, HasConfig env)
   => ConnSettings.Settings
   -- ^ Settings for opening additional backends in the
   -- parallel-capable steps. Must connect to the same database as
@@ -102,19 +102,24 @@ run connSettings tuning tables = do
   timedTrace_ prepComponent "session GUCs" $
     setPrepSessionGUCs tuning
 
-  -- The four UPDATEs and two CTE backfills that follow all join
-  -- through tx.hash or tx_out (tx_id, index). Building those indexes
-  -- here, before any UPDATE runs, lets PG pick Nested Loop / Index
-  -- Scan plans instead of hash-joining the whole heaps.
+  -- Pre-resolve indexes used by the (small) residual resolve + the
+  -- backfill UPDATEs. The input-table indexes that supported the old
+  -- full-table UPDATE are not built here — the CTAS rebuilds skip
+  -- them entirely.
   timedTrace_ prepComponent "pre-resolve indexes"
     PreResolveIndexes.createPreResolveIndexes
 
-  _ <- Resolve.resolveForeignKeys
+  Resolve.resolveForeignKeys
+
+  -- Rebuild the perf indexes the CTAS DROP'd along with the input
+  -- tables. The backfill UPDATEs need them.
+  timedTrace_ prepComponent "post-resolve indexes"
+    PreResolveIndexes.createPostResolveIndexes
 
   -- Refresh planner statistics for every table the backfills read.
   -- Autovacuum runs on UNLOGGED tables but its last sample was
-  -- taken mid-ingest, before the resolve UPDATEs rewrote the row
-  -- shape. Without this pass the planner sees pre-resolve
+  -- taken mid-ingest, before the CTAS rebuilds replaced the input
+  -- tables. Without this pass the planner sees pre-resolve
   -- cardinalities for tx_out / tx_in / collateral_tx_in and picks
   -- Nested Loop plans whose outer-side estimate is off by orders
   -- of magnitude.
@@ -126,13 +131,6 @@ run connSettings tuning tables = do
   _ <- Backfill.applyDepositPending
   timedTrace_ prepComponent "truncate epoch_param_pending"
     Backfill.truncateDepositPending
-
-  -- Resolve UPDATEs leave tx_out and tx_in at roughly 50 % dead
-  -- tuples. Reclaiming them now keeps the step-9 heap rewrite from
-  -- carrying them across.
-  timedTrace_ prepComponent "VACUUM tx_out / tx_in" $
-    for_ preFlipVacuumTables $ \td ->
-      runDdl (vacuumSql (tdName td))
 
   withPrepPool connSettings tuning (ptPoolSize tuning) $
     Indexes.createIndexes tables
@@ -165,12 +163,6 @@ backfillAnalyzeTables =
   , collateralTxOutTableDef
   , withdrawalTableDef
   ]
-
--- | Tables the resolve UPDATEs leave heavily bloated. VACUUMed
--- between backfill and the LOGGED flip so the heap rewrite doesn't
--- copy dead tuples.
-preFlipVacuumTables :: [TableDef]
-preFlipVacuumTables = [txOutTableDef, txInTableDef]
 
 runDdl
   :: (HasHasqlConnection env, MonadReader env m, MonadIO m)

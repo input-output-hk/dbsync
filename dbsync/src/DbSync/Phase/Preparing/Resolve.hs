@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Run the post-load FK resolution UPDATEs against an open hasql
--- connection. SQL lives in 'DbSync.Db.Statement.Resolve'.
+-- | Run the post-load FK resolution against an open hasql connection.
+-- SQL lives in 'DbSync.Db.Statement.Resolve'.
 module DbSync.Phase.Preparing.Resolve
   ( resolveForeignKeys
   ) where
@@ -10,40 +10,48 @@ import Cardano.Prelude
 
 import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
-import qualified Hasql.Statement as Stmt
 
 import DbSync.AppM (LoggingM)
+import DbSync.Config.Types (SyncConfig (..), SyncOptions (..), UtxoOption (..))
 import DbSync.Db.Statement.Resolve
-  ( resolveCollateralTxInStmt
+  ( resolveCollateralTxInScript
   , resolveConsumedByTxIdStmt
-  , resolveReferenceTxInStmt
-  , resolveTxInStmt
+  , resolveReferenceTxInScript
+  , resolveTxInScript
   )
 import DbSync.Db.Transaction (HasHasqlConnection (..))
-import DbSync.Trace.Timing (timedTrace)
+import DbSync.Env (HasConfig (..))
+import DbSync.Trace.Timing (timedTrace_, timedTrace)
 
--- | Execute the four resolution UPDATEs in dependency order. Each is
--- timed and logged separately. Returns the total rows touched.
+-- | CTAS the three input tables, then fill the consumed-by
+-- residual when 'uoConsumedByTxId' is on (the per-epoch worker
+-- handles the bulk during Ingest; this catches cache-misses).
 resolveForeignKeys
-  :: (LoggingM env m, HasHasqlConnection env)
-  => m Int64
+  :: (LoggingM env m, HasHasqlConnection env, HasConfig env)
+  => m ()
 resolveForeignKeys = do
-  n1 <- timedTrace "PreparingForVolatileTail" "resolve tx_in.tx_out_id" $
-          runStmt resolveTxInStmt
-  n2 <- timedTrace "PreparingForVolatileTail" "resolve collateral_tx_in.tx_out_id" $
-          runStmt resolveCollateralTxInStmt
-  n3 <- timedTrace "PreparingForVolatileTail" "resolve reference_tx_in.tx_out_id" $
-          runStmt resolveReferenceTxInStmt
-  n4 <- timedTrace "PreparingForVolatileTail" "resolve tx_out.consumed_by_tx_id" $
-          runStmt resolveConsumedByTxIdStmt
-  pure (n1 + n2 + n3 + n4)
+  utxoOpts <- asks (pcUtxo . scOptions . getConfig)
+  timedTrace_ "PreparingForVolatileTail" "resolve tx_in.tx_out_id (CTAS)" $
+    runScript resolveTxInScript
+  timedTrace_ "PreparingForVolatileTail" "resolve collateral_tx_in.tx_out_id (CTAS)" $
+    runScript resolveCollateralTxInScript
+  timedTrace_ "PreparingForVolatileTail" "resolve reference_tx_in.tx_out_id (CTAS)" $
+    runScript resolveReferenceTxInScript
+  when (uoConsumedByTxId utxoOpts) $ do
+    _ <- timedTrace "PreparingForVolatileTail" "resolve tx_out.consumed_by_tx_id" $ do
+      conn <- asks getHasqlConnection
+      result <- liftIO $ Conn.use conn (Sess.statement () resolveConsumedByTxIdStmt)
+      case result of
+        Right n -> pure n
+        Left  e -> panic $ "Phase.Preparing.Resolve: " <> show e
+    pure ()
 
-runStmt
+runScript
   :: (HasHasqlConnection env, MonadReader env m, MonadIO m)
-  => Stmt.Statement () Int64 -> m Int64
-runStmt stmt = do
+  => Text -> m ()
+runScript sql = do
   conn <- asks getHasqlConnection
-  result <- liftIO $ Conn.use conn (Sess.statement () stmt)
+  result <- liftIO $ Conn.use conn (Sess.script sql)
   case result of
-    Right n -> pure n
-    Left  e -> panic $ "Phase.Preparing.Resolve: " <> show e
+    Right () -> pure ()
+    Left  e  -> panic $ "Phase.Preparing.Resolve: " <> show e

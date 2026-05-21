@@ -42,7 +42,7 @@ import DbSync.Db.Schema.Address
   )
 import DbSync.Db.Schema.Ids (AddressId (..), idDecoder, idEncoder)
 import DbSync.Db.Schema.Types (TableDef (..))
-import DbSync.Db.Statement.Common (LookupColumn (..), arrayParam, nextIdStmt, nullArrayParam, queryIdByColumnStmt)
+import DbSync.Db.Statement.Common (arrayParam, nextIdStmt, nullArrayParam)
 
 table :: Text
 table = tdName addressTableDef
@@ -63,8 +63,20 @@ nextAddressIdStmt :: Stmt.Statement () AddressId
 nextAddressIdStmt = nextIdStmt addressTableDef AddressId
 
 -- | Look up an existing 'AddressId' by raw address bytes.
+--
+-- Probes the @raw_hash@ unique index (fixed-width md5 of @raw@) and
+-- verifies the full @raw@ match to guard against the theoretical
+-- 128-bit collision.
 queryAddressIdStmt :: Stmt.Statement ByteString (Maybe AddressId)
-queryAddressIdStmt = queryIdByColumnStmt addressTableDef ByRaw AddressId
+queryAddressIdStmt =
+  Stmt.preparable sql encoder decoder
+  where
+    encoder = E.param (E.nonNullable E.bytea)
+    decoder = D.rowMaybe (idDecoder AddressId)
+    sql = T.concat
+      [ "SELECT id FROM ", table
+      , " WHERE raw_hash = decode(md5($1), 'hex') AND raw = $1"
+      ]
 
 -- ---------------------------------------------------------------------------
 -- * Bulk operations
@@ -86,7 +98,9 @@ data BulkAddressInsert = BulkAddressInsert
 -- input raw that already exists in the @address@ table; missing raws
 -- are simply absent from the result.
 --
--- One round-trip regardless of input size.
+-- The lookup probes the @raw_hash@ index (a btree on the fixed-width
+-- md5 of @raw@, computed server-side) and verifies the full @raw@
+-- match per row. One round-trip regardless of input size.
 bulkSelectAddressIdsStmt :: Stmt.Statement [ByteString] [(ByteString, AddressId)]
 bulkSelectAddressIdsStmt =
   Stmt.preparable sql (arrayParam E.bytea) decoder
@@ -94,7 +108,12 @@ bulkSelectAddressIdsStmt =
     decoder = D.rowList $ (,)
       <$> D.column (D.nonNullable D.bytea)
       <*> idDecoder AddressId
-    sql = "SELECT raw, id FROM " <> table <> " WHERE raw = ANY($1)"
+    sql = T.concat
+      [ "SELECT a.raw, a.id"
+      , " FROM unnest($1) AS i(raw_in)"
+      , " JOIN ", table, " a ON a.raw_hash = decode(md5(i.raw_in), 'hex')"
+      , " WHERE a.raw = i.raw_in"
+      ]
 
 -- | Bulk-insert addresses. Six parallel arrays, one per column.
 --

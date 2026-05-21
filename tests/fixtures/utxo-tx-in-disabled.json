@@ -1,0 +1,15 @@
+{
+  "database": {
+    "host": "localhost",
+    "port": 5432,
+    "name": "dbsync_test",
+    "user": "",
+    "password": ""
+  },
+  "db_options": {
+    "utxo": {
+      "enabled": true,
+      "tx_in": false
+    }
+  }
+}

@@ -17,6 +17,7 @@ module DbSync.Db.Statement.TxOut
 
     -- * Lookups
   , queryOutputValueStmt
+  , queryInputUtxoStmt
   ) where
 
 import Cardano.Prelude
@@ -27,7 +28,7 @@ import qualified Hasql.Decoders as D
 import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
-import DbSync.Db.Schema.Ids (AddressId (..), TxOutId (..), idEncoder)
+import DbSync.Db.Schema.Ids (AddressId (..), TxId (..), TxOutId (..), idEncoder)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Schema.UTxO (TxOut, txOutEncoder, txOutTableDef)
 import DbSync.Db.Statement.Common (arrayParam, nextIdStmt)
@@ -92,7 +93,27 @@ queryOutputValueStmt =
            <> (snd >$< E.param (E.nonNullable (fromIntegral >$< E.int8)))
     valueDecoder = D.column (D.nonNullable dbLovelaceValueDecoder)
     sql = T.concat
-      [ "SELECT tx_out.value FROM tx_out"
-      , " JOIN tx ON tx.id = tx_out.tx_id"
-      , " WHERE tx.hash = $1 AND tx_out.index = $2"
+      [ "SELECT ", table, ".value FROM ", table
+      , " JOIN tx ON tx.id = ", table, ".tx_id"
+      , " WHERE tx.hash = $1 AND ", table, ".index = $2"
+      ]
+
+-- | Look up @(tx.id, tx_out.id, tx_out.value)@ for a spent output
+-- identified by the producing tx's hash and the output index.
+-- 'Nothing' on miss. Used by the Follow resolver to satisfy
+-- 'resolveInputUtxo' in a single round-trip.
+queryInputUtxoStmt :: Stmt.Statement (ByteString, Word16) (Maybe (TxId, TxOutId, DbLovelace))
+queryInputUtxoStmt =
+  Stmt.preparable sql encoder (D.rowMaybe rowDecoder)
+  where
+    encoder = (fst >$< E.param (E.nonNullable E.bytea))
+           <> (snd >$< E.param (E.nonNullable (fromIntegral >$< E.int8)))
+    rowDecoder = (,,)
+      <$> D.column (D.nonNullable (TxId <$> D.int8))
+      <*> D.column (D.nonNullable (TxOutId <$> D.int8))
+      <*> D.column (D.nonNullable dbLovelaceValueDecoder)
+    sql = T.concat
+      [ "SELECT tx.id, ", table, ".id, ", table, ".value FROM ", table
+      , " JOIN tx ON tx.id = ", table, ".tx_id"
+      , " WHERE tx.hash = $1 AND ", table, ".index = $2"
       ]

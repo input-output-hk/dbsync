@@ -1,5 +1,5 @@
 -- | Per-epoch buffer of address-resolution work waiting for the
--- 'AddressResolver' worker.
+-- 'DbSync.Worker.TxOut.TxOutWorker'.
 --
 -- During @IngestChainHistory@ the UTxO extractor does not look up
 -- 'AddressId's synchronously. Instead it appends two facts to this
@@ -17,7 +17,7 @@
 -- The buffer is owned by the main extraction thread; no STM
 -- coordination is needed. The handoff to the worker is a TBQueue
 -- defined elsewhere; this module just produces the snapshot value.
-module DbSync.Address.Buffer
+module DbSync.Worker.TxOut.AddressBuffer
   ( -- * Types
     EpochAddressBuffer (..)
   , AddressBufferRef

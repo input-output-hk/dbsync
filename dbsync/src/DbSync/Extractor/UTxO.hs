@@ -85,11 +85,19 @@ processUTxO ctx = do
 
         forM_ (txInputs gtx) $ \gin -> do
           inId <- liftIO $ assignTxInId resolver
-          liftIO $ writeTxIn writer inId (mkTxIn txId gin)
+          mProducer <- liftIO $ resolveInputUtxo resolver
+            (txInHash gin) (txInIndex gin)
+          liftIO $ writeTxIn writer inId
+            (mkTxIn txId gin (producerTxIdFrom mProducer))
+          for_ mProducer $ \(_, producerOutId, _) ->
+            liftIO $ recordConsumed resolver producerOutId txId
 
         forM_ (txReferenceInputs gtx) $ \gin -> do
           inId <- liftIO $ assignReferenceTxInId resolver
-          liftIO $ writeReferenceTxIn writer inId (mkReferenceTxIn txId gin)
+          mProducer <- liftIO $ resolveInputUtxo resolver
+            (txInHash gin) (txInIndex gin)
+          liftIO $ writeReferenceTxIn writer inId
+            (mkReferenceTxIn txId gin (producerTxIdFrom mProducer))
       else
         -- Phase-2 failure: the chain only records the collateral
         -- inputs (consumed) and the optional collateral return.
@@ -110,7 +118,10 @@ processUTxO ctx = do
     -- inputs that were actually consumed.
     forM_ (txCollateralInputs gtx) $ \gin -> do
       inId <- liftIO $ assignCollateralTxInId resolver
-      liftIO $ writeCollateralTxIn writer inId (mkCollateralTxIn txId gin)
+      mProducer <- liftIO $ resolveInputUtxo resolver
+        (txInHash gin) (txInIndex gin)
+      liftIO $ writeCollateralTxIn writer inId
+        (mkCollateralTxIn txId gin (producerTxIdFrom mProducer))
   where
     -- Resolve the inline stake credential of a collateral-return
     -- output, if its address carries one. Reads resolver/writer/network
@@ -120,6 +131,10 @@ processUTxO ctx = do
         Nothing  -> pure Nothing
         Just cred ->
           Just <$> resolveAndWriteStakeAddress cred
+
+    -- Extract just the producer tx_id (for tx_in.tx_out_id) from the
+    -- cache lookup's full result.
+    producerTxIdFrom = fmap (\(producerTxId, _, _) -> producerTxId)
 
 -- | In Follow, resolve @address_id@ synchronously so the (collateral_)tx_out
 -- row carries the FK from the start. In Ingest, return 'Nothing' — the row
@@ -158,27 +173,30 @@ mkTxOut txId addrId mStakeId gout = TxOut
   , txOutConsumedByTxId    = Nothing  -- resolved post-load
   }
 
-mkTxIn :: TxId -> GenericTxIn -> TxIn
-mkTxIn txId gin = TxIn
+-- | Build a @tx_in@ row. The @tx_out_id@ argument is 'Just' when the
+-- cache resolved the producer and 'Nothing' otherwise — the post-load
+-- resolve fills the residual NULLs.
+mkTxIn :: TxId -> GenericTxIn -> Maybe TxId -> TxIn
+mkTxIn txId gin mTxOutId = TxIn
   { txInTxInId     = txId
-  , txInTxOutId    = Nothing  -- deferred: resolved post-load via SQL join
+  , txInTxOutId    = mTxOutId
   , txInTxOutIndex = fromIntegral (txInIndex gin)
   , txInTxOutHash  = txInHash gin
   , txInRedeemerId = Nothing  -- resolved by ScriptsDatums extractor
   }
 
-mkCollateralTxIn :: TxId -> GenericTxIn -> CollateralTxIn
-mkCollateralTxIn txId gin = CollateralTxIn
+mkCollateralTxIn :: TxId -> GenericTxIn -> Maybe TxId -> CollateralTxIn
+mkCollateralTxIn txId gin mTxOutId = CollateralTxIn
   { collateralTxInTxInId     = txId
-  , collateralTxInTxOutId    = Nothing
+  , collateralTxInTxOutId    = mTxOutId
   , collateralTxInTxOutIndex = fromIntegral (txInIndex gin)
   , collateralTxInTxOutHash  = txInHash gin
   }
 
-mkReferenceTxIn :: TxId -> GenericTxIn -> ReferenceTxIn
-mkReferenceTxIn txId gin = ReferenceTxIn
+mkReferenceTxIn :: TxId -> GenericTxIn -> Maybe TxId -> ReferenceTxIn
+mkReferenceTxIn txId gin mTxOutId = ReferenceTxIn
   { referenceTxInTxInId     = txId
-  , referenceTxInTxOutId    = Nothing
+  , referenceTxInTxOutId    = mTxOutId
   , referenceTxInTxOutIndex = fromIntegral (txInIndex gin)
   , referenceTxInTxOutHash  = txInHash gin
   }

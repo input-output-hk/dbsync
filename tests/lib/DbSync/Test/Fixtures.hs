@@ -43,8 +43,10 @@ import qualified Data.ByteString as BS
 
 import DbSync.Block.Types
   ( BlockEra (..)
+  , CertAction (..)
   , GenericBlock (..)
   , GenericTx (..)
+  , GenericTxCertificate (..)
   , GenericTxIn (..)
   , GenericTxOut (..)
   )
@@ -152,16 +154,25 @@ producerBlock = GenericBlock
 -- ---------------------------------------------------------------------------
 
 -- | Valid-contract consumer. Spends @(producerHash, 0)@ for a
--- 5_000_000 input; one output for 4_500_000; fee 200_000. The
--- ledger-disabled deposit fallback should compute @300_000@.
+-- 5_000_000 input; one output for 4_500_000; fee 200_000. Carries a
+-- stake-registration cert so the deposit identity-formula backfill
+-- targets the row (plain transfers ship with @0@ at parse time and
+-- bypass the SQL). The fallback computes
+-- @5_000_000 - 4_500_000 - 200_000 - 0 = 300_000@.
 consumerTx :: GenericTx
 consumerTx = (emptyTx (padHash32 "VALID"))
-  { txBlockIndex = 0
-  , txSize       = 200
-  , txFee        = 200000
-  , txOutSum     = 4500000
-  , txInputs     = [GenericTxIn producerHash 0]
-  , txOutputs    = [mkOut 0 4500000]
+  { txBlockIndex   = 0
+  , txSize         = 200
+  , txFee          = 200000
+  , txOutSum       = 4500000
+  , txInputs       = [GenericTxIn producerHash 0]
+  , txOutputs      = [mkOut 0 4500000]
+  , txCertificates =
+      [ GenericTxCertificate
+          { txCertIndex  = 0
+          , txCertAction = CertStakeRegistration (BS.replicate 28 0xee) Nothing
+          }
+      ]
   }
 
 -- | Phase-2 failure. Mirrors what the parser writes after the

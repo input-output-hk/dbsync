@@ -37,11 +37,12 @@ import DbSync.Extractor.UTxO
   )
 import DbSync.Phase.Ingest.DedupMap (newMaps)
 import DbSync.Block.Pipeline (processBlock)
-import DbSync.Address.Buffer
+import DbSync.Worker.TxOut.AddressBuffer
   ( EpochAddressBuffer (..)
   , newAddressBufferRef
   )
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
+import DbSync.Phase.Ingest.UtxoCache (defaultCacheCapacity, newUtxoCache)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import DbSync.Test.Writer (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 
@@ -231,6 +232,25 @@ spec = do
       -- Both outputs reference the same StakeAddressId.
       headDef (panic "no sa") saIds `shouldBe` headDef (panic "no sa") (drop 1 saIds)
 
+  describe "processUTxO: tx_in resolution via UtxoCache" $ do
+    it "writes tx_in.tx_out_id from the cache when the producer is in-block" $ do
+      written <- runFullPipeline twoTxsInputSpendsFirst
+      let inIds = mapMaybe (SU.txInTxOutId . snd) (twTxIns written)
+      length (twTxIns written) `shouldBe` 1
+      length inIds              `shouldBe` 1
+
+    it "leaves tx_in.tx_out_id NULL on a cache miss" $ do
+      written <- runFullPipeline (blockSpendingMissingTx (BS.replicate 32 0xee))
+      let inIds = mapMaybe (SU.txInTxOutId . snd) (twTxIns written)
+      length (twTxIns written) `shouldBe` 1
+      inIds                     `shouldBe` []
+
+    it "writes the same value for reference inputs that hit the cache" $ do
+      written <- runFullPipeline twoTxsReferenceSpendsFirst
+      let refIds = mapMaybe (SU.referenceTxInTxOutId . snd) (twReferenceTxIns written)
+      length (twReferenceTxIns written) `shouldBe` 1
+      length refIds                      `shouldBe` 1
+
   describe "processUTxO: phase-2 failure (txValidContract = False)" $ do
     it "writes no tx_out rows" $ do
       written <- runFullPipeline (blockWithFailedTx alonzoFailedTx)
@@ -277,8 +297,9 @@ runFullPipeline block = do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
   addrBuf <- newAddressBufferRef
+  utxoCache <- newUtxoCache defaultCacheCapacity
   wrRef <- newIORef emptyTestWriterState
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoCache Nothing)
                               (mkTestWriter wrRef)
                               [coreExtractor, stakeDelegationExtractor, utxoExtractor]
   runReaderT (processBlock block) env
@@ -443,3 +464,56 @@ babbageFailedTx :: GenericTx
 babbageFailedTx = alonzoFailedTx
   { txCollateralOutput = Just (mkOutput 1 (mkBaseAddr 0x00) 4_000_000)
   }
+
+-- ---------------------------------------------------------------------------
+-- UtxoCache fixtures
+-- ---------------------------------------------------------------------------
+
+-- | Block with two txs: the second tx spends an output produced by
+-- the first in the same block. 'Block.Pipeline' records the first
+-- tx's outputs in the cache before extractors run, so the UTxO
+-- extractor resolves the second tx's input as a cache hit.
+twoTxsInputSpendsFirst :: GenericBlock
+twoTxsInputSpendsFirst = shelleyEmptyBlock
+  { blkTxs = [producerTx, spenderTx]
+  }
+  where
+    producerHash = BS.replicate 32 0xa1
+    producerTx = (singleOutputTx (mkBaseAddr 0x00) 5_000_000)
+      { txHash = producerHash
+      }
+    spenderTx = (singleOutputTx (mkBaseAddr 0x00) 4_500_000)
+      { txHash       = BS.replicate 32 0xa2
+      , txBlockIndex = 1
+      , txInputs     = [GenericTxIn producerHash 0]
+      }
+
+-- | Same shape as 'twoTxsInputSpendsFirst' but the second tx
+-- references the first's output as a reference input (read-only).
+twoTxsReferenceSpendsFirst :: GenericBlock
+twoTxsReferenceSpendsFirst = shelleyEmptyBlock
+  { blkTxs = [producerTx, refTx]
+  }
+  where
+    producerHash = BS.replicate 32 0xb1
+    producerTx = (singleOutputTx (mkBaseAddr 0x00) 5_000_000)
+      { txHash = producerHash
+      }
+    refTx = (singleOutputTx (mkBaseAddr 0x00) 4_500_000)
+      { txHash            = BS.replicate 32 0xb2
+      , txBlockIndex      = 1
+      , txReferenceInputs = [GenericTxIn producerHash 0]
+      }
+
+-- | Block whose only tx spends an output by a hash that was never
+-- recorded in the cache. The extractor leaves @tx_in.tx_out_id@
+-- NULL for the post-load resolve to fill in.
+blockSpendingMissingTx :: ByteString -> GenericBlock
+blockSpendingMissingTx producerHash = shelleyEmptyBlock
+  { blkTxs = [spender]
+  }
+  where
+    spender = (singleOutputTx (mkBaseAddr 0x00) 4_500_000)
+      { txHash   = BS.replicate 32 0xc2
+      , txInputs = [GenericTxIn producerHash 0]
+      }

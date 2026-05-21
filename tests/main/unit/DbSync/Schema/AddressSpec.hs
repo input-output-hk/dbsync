@@ -33,10 +33,10 @@ import DbSync.Db.Schema.Types
 spec :: Spec
 spec = do
   describe "addressTableDef" $ do
-    it "is named address with 6 columns in golden order" $ do
+    it "is named address with 7 columns in golden order" $ do
       tdName addressTableDef `shouldBe` "address"
       map cdName (tdColumns addressTableDef) `shouldBe`
-        ["id", "address", "raw", "has_script", "payment_cred", "stake_address_id"]
+        ["id", "address", "raw", "has_script", "payment_cred", "stake_address_id", "raw_hash"]
 
     it "uses the right column types" $ do
       let cols = tdColumns addressTableDef
@@ -46,14 +46,19 @@ spec = do
       cdType (cols !! 3) `shouldBe` PgBoolean
       cdType (cols !! 4) `shouldBe` PgBytea
       cdType (cols !! 5) `shouldBe` PgBigInt
+      cdType (cols !! 6) `shouldBe` PgBytea
 
     it "marks payment_cred and stake_address_id as nullable" $ do
       let cols = tdColumns addressTableDef
       cdNullable (cols !! 4) `shouldBe` True
       cdNullable (cols !! 5) `shouldBe` True
 
-    it "declares a unique constraint on raw" $
-      tdUniqueConstraints addressTableDef `shouldBe` [pure "raw"]
+    it "declares a unique constraint on raw_hash (md5(raw)) to skirt btree's row-size limit" $
+      tdUniqueConstraints addressTableDef `shouldBe` [pure "raw_hash"]
+
+    it "declares raw_hash as a GENERATED column computing decode(md5(raw), 'hex')" $
+      tdGeneratedColumns addressTableDef
+        `shouldBe` [("raw_hash", "decode(md5(raw), 'hex')")]
 
   describe "encodeAddressCopy" $ do
     it "produces a 6-field tab-separated COPY row" $ do

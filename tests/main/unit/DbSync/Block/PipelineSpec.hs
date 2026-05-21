@@ -30,8 +30,9 @@ import DbSync.Extractor (ExtractorDef (..), freshExtractState)
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Phase.Ingest.DedupMap (newMaps)
 import DbSync.Block.Pipeline (processBlock)
-import DbSync.Address.Buffer (newAddressBufferRef)
+import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
+import DbSync.Phase.Ingest.UtxoCache (defaultCacheCapacity, newUtxoCache)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import DbSync.Test.Writer (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 
@@ -112,8 +113,9 @@ runPipeline extractors block = do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
   addrBuf <- newAddressBufferRef
+  utxoCache <- newUtxoCache defaultCacheCapacity
   wrRef <- newIORef emptyTestWriterState
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoCache Nothing)
                               (mkTestWriter wrRef) extractors
   runReaderT (processBlock block) env
   readIORef wrRef
@@ -123,7 +125,8 @@ runPipelineTwoBlocks extractors block1 block2 = do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
   addrBuf <- newAddressBufferRef
-  let resolver = mkIngestResolver stRef dedupMaps addrBuf
+  utxoCache <- newUtxoCache defaultCacheCapacity
+  let resolver = mkIngestResolver stRef dedupMaps addrBuf utxoCache Nothing
 
   wrRef1 <- newIORef emptyTestWriterState
   let env1 = mkTestPipelineEnv resolver (mkTestWriter wrRef1) extractors

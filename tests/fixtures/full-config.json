@@ -15,7 +15,9 @@
     "enabled": true
   },
   "db_options": {
-    "utxo": true,
+    "utxo": {
+      "enabled": true
+    },
     "multi_asset": true,
     "metadata": true,
     "stake_delegation": true,

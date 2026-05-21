@@ -69,12 +69,14 @@ import DbSync.Extractor
   )
 import DbSync.Phase.Ingest.DedupMap (DedupMaps)
 import DbSync.Phase.Ingest.ReceiverStats (ReceiverStats)
+import DbSync.Phase.Ingest.UtxoCache (UtxoCache)
 import DbSync.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..))
 import DbSync.Metrics (HasMetrics (..), Metrics)
 import DbSync.Phase.Current (HasCurrentPhase (..), CurrentPhase, readCurrentPhase)
 import DbSync.Resolver (HasResolver (..), IdResolver)
-import DbSync.Address.Buffer (AddressBufferRef)
-import DbSync.Address.Worker (AddressResolver)
+import DbSync.Worker.TxOut.AddressBuffer (AddressBufferRef)
+import DbSync.Worker.TxOut.ConsumedByBuffer (ConsumedByBufferRef)
+import DbSync.Worker.TxOut (TxOutWorker)
 import DbSync.StateQuery.Types
   ( HasStateQueryVar (..)
   , HasSystemStart (..)
@@ -183,13 +185,23 @@ data IngestEnv = IngestEnv
     -- ^ Mutable deduplication maps (internally mutable hash tables)
   , ieAddressBuffer :: !AddressBufferRef
     -- ^ Per-epoch buffer of address-resolution work for the
-    -- 'ieAddressResolver' worker. The consumer hands the contents
-    -- to the worker at each epoch boundary and resets the ref to
-    -- empty.
-  , ieAddressResolver :: !AddressResolver
-    -- ^ Background worker that drains 'ieAddressBuffer' and writes
-    -- @address@ rows / fills @tx_out.address_id@ FKs an epoch behind
-    -- the main pipeline.
+    -- 'ieTxOutWorker'. The consumer hands the contents to the worker
+    -- at each epoch boundary and resets the ref to empty.
+  , ieTxOutWorker :: !TxOutWorker
+    -- ^ Background worker that drains 'ieAddressBuffer' and
+    -- 'ieConsumedByBuffer' on a single PG connection. Writes
+    -- @address@ rows, @tx_out.address_id@, @collateral_tx_out.address_id@,
+    -- and (when the flag is on) @tx_out.consumed_by_tx_id@ for the
+    -- epoch one boundary behind the main pipeline.
+  , ieUtxoCache :: !UtxoCache
+    -- ^ Bounded FIFO map from tx hash to @(tx_id, [(tx_out_id, value)])@.
+    -- Consulted by the UTxO extractor to resolve inputs at COPY time;
+    -- misses fall through to the post-load resolve.
+  , ieConsumedByBuffer :: !(Maybe ConsumedByBufferRef)
+    -- ^ Per-epoch buffer of @(producer_tx_out_id, consumer_tx_id)@
+    -- pairs destined for @tx_out.consumed_by_tx_id@. 'Nothing' when
+    -- @utxo.consumed_by_tx_id@ is off; the 'ieTxOutWorker' then
+    -- skips that sub-task.
   , ieHasLedgerEnv  :: !HasLedgerEnv
     -- ^ Ledger subsystem — either enabled (carrying its own queues,
     -- 'LedgerDB', and snapshot machinery) or disabled (minimal).
@@ -556,16 +568,19 @@ instance HasTracer TracerWithControl where
 instance HasControlConnection TracerWithControl where
   getControlConnection (TracerWithControl _ c) = c
 
--- | Tracer + raw hasql connection. Drives the Prep phase helpers
--- and any other @(LoggingM env m, HasHasqlConnection env)@ action
--- run from boot or test code.
-data TracerWithConn = TracerWithConn !AppTracer !Conn.Connection
+-- | Tracer + raw hasql connection + 'SyncConfig'. Drives Prep
+-- helpers from test code (production boots them via 'CoreWithConn',
+-- which projects the same instances out of 'CoreEnv').
+data TracerWithConn = TracerWithConn !AppTracer !Conn.Connection !SyncConfig
 
 instance HasTracer TracerWithConn where
-  getTracer (TracerWithConn t _) = t
+  getTracer (TracerWithConn t _ _) = t
 
 instance HasHasqlConnection TracerWithConn where
-  getHasqlConnection (TracerWithConn _ c) = c
+  getHasqlConnection (TracerWithConn _ c _) = c
+
+instance HasConfig TracerWithConn where
+  getConfig (TracerWithConn _ _ cfg) = cfg
 
 -- | Loader stream + control connection. Drives 'commitEpoch' from
 -- any caller that has both handles but isn't running inside 'IngestEnv'.
@@ -593,3 +608,6 @@ instance HasSecurityParam CoreWithConn where
 
 instance HasNetwork CoreWithConn where
   getNetwork (CoreWithConn c _) = getNetwork c
+
+instance HasConfig CoreWithConn where
+  getConfig (CoreWithConn c _) = getConfig c

@@ -94,8 +94,11 @@ import DbSync.AppM (runAppM)
 import DbSync.Env (TracerWithConn (..))
 import qualified DbSync.Phase.Preparing.Run as Prep
 import DbSync.Phase.Preparing.Tuning (defaultPrepTuning)
-import DbSync.Address.Buffer (newAddressBufferRef)
+import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
+
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
+import DbSync.Phase.Ingest.UtxoCache (defaultCacheCapacity, newUtxoCache)
+import DbSync.Test.AppHarness (defaultTestProfile)
 import DbSync.Test.Database
   ( queryTestDb
   , testConnBs
@@ -178,14 +181,15 @@ runPipelineThenPrepare blocks = do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
   addrBuf <- newAddressBufferRef
+  utxoCache <- newUtxoCache defaultCacheCapacity
   bs <- mkLoaderStream testConnBs tables
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoCache Nothing)
                               (IngestWriter.mkWriter bs) extractors
   for_ blocks $ \blk -> runReaderT (processBlock blk) env
   lsCommit bs
   closeLoaderStream bs
   withTestConnection $ \conn ->
-    runAppM (TracerWithConn mkNullTracer conn)
+    runAppM (TracerWithConn mkNullTracer conn defaultTestProfile)
       (Prep.run testHasqlSettings defaultPrepTuning tables)
 
 -- ---------------------------------------------------------------------------
@@ -280,7 +284,7 @@ spec = describe "DbSync.Phase.Preparing.Run" $
         result `shouldBe` "10"
 
     describe "indexes" $ do
-      it "the address.raw unique index is created" $ do
+      it "the address.raw_hash unique index is created" $ do
         result <- T.strip <$> queryTestDb
           (indexExistsSql addressTableDef "address_unique_1_idx")
         result `shouldBe` "1"
@@ -298,11 +302,6 @@ spec = describe "DbSync.Phase.Preparing.Run" $
       it "tx_out (tx_id, index) is indexed for consumed-by + backfill JOINs" $ do
         result <- T.strip <$> queryTestDb
           (indexExistsSql txOutTableDef "tx_out_tx_id_index_idx")
-        result `shouldBe` "1"
-
-      it "tx_in (tx_out_id, tx_out_index) is indexed for the merge-join inner" $ do
-        result <- T.strip <$> queryTestDb
-          (indexExistsSql txInTableDef "tx_in_tx_out_idx")
         result `shouldBe` "1"
 
       -- The four perf indexes that support the rewritten backfill

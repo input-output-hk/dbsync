@@ -36,8 +36,9 @@ import DbSync.Extractor (freshExtractState)
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Phase.Ingest.DedupMap (newMaps)
 import DbSync.Block.Pipeline (processBlock)
-import DbSync.Address.Buffer (newAddressBufferRef)
+import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
+import DbSync.Phase.Ingest.UtxoCache (defaultCacheCapacity, newUtxoCache)
 import DbSync.Test.Database (queryTestDb, testConnBs, testConnStr, truncateAllTables)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import qualified DbSync.Phase.Ingest.Writer as IngestWriter
@@ -134,8 +135,9 @@ spec = describe "DbSync.Db.Loader (multi-threaded, full pipeline)" $
         stRef <- newIORef freshExtractState
         dedupMaps <- newMaps
         addrBuf <- newAddressBufferRef
+        utxoCache <- newUtxoCache defaultCacheCapacity
         bs <- mkLoaderStream testConnBs coreTables
-        let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf)
+        let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoCache Nothing)
                                     (IngestWriter.mkWriter bs) [coreExtractor]
 
         -- Epoch 1
@@ -183,8 +185,9 @@ runPipelineToDb blocks = do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
   addrBuf <- newAddressBufferRef
+  utxoCache <- newUtxoCache defaultCacheCapacity
   bs <- mkLoaderStream testConnBs coreTables
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoCache Nothing)
                               (IngestWriter.mkWriter bs) [coreExtractor]
   forM_ blocks $ \blk ->
     runReaderT (processBlock blk) env

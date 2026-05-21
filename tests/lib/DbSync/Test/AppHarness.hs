@@ -65,9 +65,11 @@ import DbSync.Config.Types
   , SyncOptions (..)
   , SyncMode (..)
   , SyncSettings (..)
+  , UtxoOption (..)
   , defaultLedgerBackend
   , defaultSnapshotNearTipEpoch
   , defaultSyncOptions
+  , defaultUtxoOption
   )
 import DbSync.Test.Database (queryTestDb, testDbName)
 import DbSync.Test.Helpers (waitFor)
@@ -115,7 +117,7 @@ ledgerEnabledTestProfile =
 -- @governance@, @current_state@ (stubs).
 allImplementedExtractors :: SyncOptions
 allImplementedExtractors = SyncOptions
-  { pcUtxo            = SyncOption True
+  { pcUtxo            = defaultUtxoOption { uoEnabled = True }
   , pcMultiAsset      = SyncOption True
   , pcMetadata        = SyncOption True
   , pcStakeDelegation = SyncOption True
@@ -212,19 +214,18 @@ tableIndexNames td =
         [1 ..]
         (tdUniqueConstraints td)
 
--- | Indexes the pre-resolve perf-index pass builds unconditionally.
--- Kept in sync by hand with
--- 'DbSync.Db.Statement.Indexes.preResolveIndexStatements'; if that
--- module grows a new entry, append the matching name here.
+-- | Indexes the pre- and post-resolve perf-index passes build
+-- unconditionally. Kept in sync by hand with
+-- 'DbSync.Db.Statement.Indexes.preResolveIndexStatements' and
+-- 'DbSync.Db.Statement.Indexes.postResolveIndexStatements'.
 preResolveIndexNames :: [Text]
 preResolveIndexNames =
   [ "tx_unique_1_idx"
   , "tx_out_tx_id_index_idx"
-  , "tx_in_tx_out_idx"
-  , "collateral_tx_in_tx_in_id_idx"
   , "collateral_tx_out_tx_id_idx"
-  , "tx_in_tx_in_id_idx"
   , "withdrawal_tx_id_idx"
+  , "tx_in_tx_in_id_idx"
+  , "collateral_tx_in_tx_in_id_idx"
   ]
 
 -- ---------------------------------------------------------------------------

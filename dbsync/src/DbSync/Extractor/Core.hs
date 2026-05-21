@@ -13,6 +13,9 @@ module DbSync.Extractor.Core
 
     -- * Slot-leader construction (used by 'DbSync.Block.Pipeline').
   , mkSlotLeader
+
+    -- * Deposit dispatch helper (exported for testing).
+  , hasNoDepositActivity
   ) where
 
 import Cardano.Prelude
@@ -130,11 +133,12 @@ computeTxFinancials resolver ctx gtx
           pure (DbLovelace (collInSum - collOutSum), Just 0)
       | otherwise = pure (parserFee, Just 0)
 
-    valid _ bld
+    valid p bld
+      -- Identity formula is 0 by conservation; skip ledger and resolver.
+      | hasNoDepositActivity gtx = pure (parserFee, Just 0)
       | bldLedgerEnabled bld =
           let mDep = lookupDepositsMap (G.txHash gtx) (bldDepositsMap bld)
            in pure (parserFee, fmap coinToInt64 mDep)
-    valid p _
       | isFollowPath p = do
           inValues <- resolveInputValues resolver
             [(G.txInHash i, G.txInIndex i) | i <- G.txInputs gtx]
@@ -148,6 +152,13 @@ computeTxFinancials resolver ctx gtx
                        - fromIntegral donation :: Int64
           pure (parserFee, Just dep)
       | otherwise = pure (parserFee, Nothing)
+
+-- | True for txs that cannot change ledger deposits.
+hasNoDepositActivity :: G.GenericTx -> Bool
+hasNoDepositActivity g =
+     null (G.txCertificates g)
+  && null (G.txWithdrawals g)
+  && G.txTreasuryDonation g == 0
 
 -- ---------------------------------------------------------------------------
 -- * Record builders (pure, shared across phases)

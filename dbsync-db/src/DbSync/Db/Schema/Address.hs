@@ -73,19 +73,24 @@ addressTableDef :: TableDef
 addressTableDef = TableDef
   { tdName    = "address"
   , tdColumns =
-      [ ColumnDef "id"               PgBigInt False
-      , ColumnDef "address"          PgText   False
-      , ColumnDef "raw"              PgBytea  False
+      [ ColumnDef "id"               PgBigInt  False
+      , ColumnDef "address"          PgText    False
+      , ColumnDef "raw"              PgBytea   False
       , ColumnDef "has_script"       PgBoolean False
-      , ColumnDef "payment_cred"     PgBytea  True
-      , ColumnDef "stake_address_id" PgBigInt True
+      , ColumnDef "payment_cred"     PgBytea   True
+      , ColumnDef "stake_address_id" PgBigInt  True
+      , ColumnDef "raw_hash"         PgBytea   False
       ]
   , tdMode    = TableUnlogged
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
-  , tdUniqueConstraints = [pure "raw"]
-  , tdGeneratedColumns = []
+    -- Plutus script addresses can exceed PG's btree row-size limit
+    -- (~8191 B), so the dedup index is on a fixed-size md5 of @raw@
+    -- rather than on @raw@ itself. Application-side dedup still keys
+    -- on @raw@; this constraint is the DB-level safety net.
+  , tdUniqueConstraints = [pure "raw_hash"]
+  , tdGeneratedColumns  = [("raw_hash", "decode(md5(raw), 'hex')")]
   , tdForeignKeys = []
   }
 

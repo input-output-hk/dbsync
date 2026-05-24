@@ -26,6 +26,8 @@ module DbSync.Worker.TxOut.ConsumedByBuffer
 import Cardano.Prelude
 
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
+import Data.Sequence ((|>))
+import qualified Data.Sequence as Seq
 
 import DbSync.Db.Schema.Ids (TxId, TxOutId)
 
@@ -35,11 +37,14 @@ import DbSync.Db.Schema.Ids (TxId, TxOutId)
 
 -- | One epoch's worth of @tx_out.consumed_by_tx_id@ writes.
 --
--- Stored as two parallel lists so the worker can pass them straight
--- to a Hasql @unnest($1, $2)@ bulk UPDATE without a re-shape pass.
+-- Two parallel 'Seq's: producer @tx_out.id@s and the consumer @tx@s
+-- that spent them, in lockstep. The worker walks both with
+-- 'Foldable.toList' and feeds them to a Hasql @unnest($1, $2)@ bulk
+-- UPDATE. 'Seq' gives O(1) snoc; the cardinality is one entry per
+-- cache-hit input, so Conway-era epochs reach ~100k entries here.
 data EpochConsumedByBuffer = EpochConsumedByBuffer
-  { ecbProducerTxOutIds :: ![TxOutId]
-  , ecbConsumerTxIds    :: ![TxId]
+  { ecbProducerTxOutIds :: !(Seq TxOutId)
+  , ecbConsumerTxIds    :: !(Seq TxId)
   }
   deriving stock (Eq, Show)
 
@@ -53,7 +58,7 @@ newConsumedByBufferRef :: IO ConsumedByBufferRef
 newConsumedByBufferRef = newIORef emptyEpochConsumedByBuffer
 
 emptyEpochConsumedByBuffer :: EpochConsumedByBuffer
-emptyEpochConsumedByBuffer = EpochConsumedByBuffer [] []
+emptyEpochConsumedByBuffer = EpochConsumedByBuffer Seq.empty Seq.empty
 
 -- ---------------------------------------------------------------------------
 -- * Mutation
@@ -68,8 +73,8 @@ recordConsumedBy
 recordConsumedBy ref producerOutId consumerTxId =
   atomicModifyIORef' ref $ \buf ->
     let !buf' = buf
-          { ecbProducerTxOutIds = producerOutId : ecbProducerTxOutIds buf
-          , ecbConsumerTxIds    = consumerTxId  : ecbConsumerTxIds buf
+          { ecbProducerTxOutIds = ecbProducerTxOutIds buf |> producerOutId
+          , ecbConsumerTxIds    = ecbConsumerTxIds buf    |> consumerTxId
           }
     in (buf', ())
 

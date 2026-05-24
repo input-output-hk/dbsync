@@ -89,7 +89,7 @@ data UtxoCache = UtxoCache
 -- | Default capacity for production runs. Sized for ~83% hit rate on
 -- mainnet at ~550MB RAM.
 defaultCacheCapacity :: Int
-defaultCacheCapacity = 5_000_000
+defaultCacheCapacity = 2_000_000
 
 -- | Allocate an empty cache with the supplied capacity.
 newUtxoCache :: Int -> IO UtxoCache

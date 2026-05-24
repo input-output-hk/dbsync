@@ -9,13 +9,18 @@
   "sync": {
     "mode": "auto",
     "checkpoint_dir": "/data/checkpoints",
-    "loader_connections": 12
+    "loader_connections": 4
   },
   "ledger": {
     "enabled": false
   },
   "db_options": {
-    "utxo": true,
+    "utxo": {
+      "enabled": true,
+      "consumed_by_tx_id": true,
+      "tx_in": true,
+      "strategy": "archive"
+    },
     "multi_asset": true,
     "metadata": true,
     "stake_delegation": true,
@@ -24,6 +29,7 @@
     "governance": true,
     "cbor": true,
     "epoch_sync_stats": true
+    
   },
   "metrics": {
     "prometheus_port": 8080

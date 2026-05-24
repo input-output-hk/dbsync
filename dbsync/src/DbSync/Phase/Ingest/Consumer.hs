@@ -581,8 +581,8 @@ runConsumer = do
               ( "Epoch " <> show (unEpochNo prev)
                 <> " | " <> fmtInt blockCount <> " blk in " <> fmtDuration elapsedSec
                 <> " (" <> show (round blocksPerSec :: Int) <> " blk/s)"
-                <> pctSeg
                 <> " | " <> status
+                <> pctSeg
               ) Nothing
 
             -- Dedup-map size + heap-usage trace: diagnostic only.
@@ -685,9 +685,7 @@ diagnose batchSz bps ps mBaseline
   | avg > highDrain
   , Just bl <- mBaseline
   , brBlocksPerSec bl > 0
-  , bps < brBlocksPerSec bl * 0.5 =
-      let ratio = brBlocksPerSec bl / max bps 1
-      in "SLOWING (" <> fmtF2 ratio <> "x slower vs e" <> show (brEpoch bl) <> ")"
+  , bps < brBlocksPerSec bl * 0.5 = "SLOWING"
 
   -- Queue partially full — balanced
   | avg >= 5 && avg <= highDrain = "BALANCED"
@@ -806,7 +804,7 @@ renderBoundaryPercent (Just (BlockNo boundary)) k (Just curBlock)
   | tip > 0 =
       let raw     = (fromIntegral curBlock / fromIntegral tip :: Double) * 100
           clamped = max 0 (min 100 raw)
-      in " | (~" <> fmtF2 clamped <> "%)"
+      in " | [" <> fmtF2 clamped <> "%]"
   where
     tip = boundary + k
 renderBoundaryPercent _ _ _ = ""

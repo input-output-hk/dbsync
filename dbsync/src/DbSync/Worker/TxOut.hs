@@ -55,6 +55,7 @@ import Control.Concurrent.STM (TBQueue, TVar, newTBQueueIO, readTBQueue, writeTB
 import Control.Tracer (traceWith)
 import Data.ByteString.Short (ShortByteString)
 import qualified Data.ByteString.Short as SBS
+import qualified Data.Foldable as Foldable
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import qualified Data.Map.Strict as Map
 import qualified Hasql.Connection as Conn
@@ -340,18 +341,20 @@ processTxOutJob hooks job = do
 
       txOutPairs =
         [ (txOutId, lookupOr "TxOutWorker: tx_out raw missing from buffer address map" key)
-        | (txOutId, key) <- eabTxOutAddresses addr
+        | (txOutId, key) <- Foldable.toList (eabTxOutAddresses addr)
         ]
       collPairs =
         [ (outId, lookupOr "TxOutWorker: collateral raw missing from buffer address map" key)
-        | (outId, key) <- eabCollateralTxOutAddresses addr
+        | (outId, key) <- Foldable.toList (eabCollateralTxOutAddresses addr)
         ]
 
   thBulkUpdateTxOut hooks txOutPairs
   thBulkUpdateCollateral hooks collPairs
 
   for_ (tjConsumedBy job) $ \cb -> do
-    let consumedPairs = zip (ecbProducerTxOutIds cb) (ecbConsumerTxIds cb)
+    let consumedPairs = zip
+          (Foldable.toList (ecbProducerTxOutIds cb))
+          (Foldable.toList (ecbConsumerTxIds cb))
     thBulkUpdateConsumedBy hooks consumedPairs
 
 -- ---------------------------------------------------------------------------

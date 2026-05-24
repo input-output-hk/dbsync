@@ -234,18 +234,30 @@ executable dbsync
   import:         warnings, defaults
   hs-source-dirs: app
   main-is:        Main.hs
-  -- RTS flags tuned for loader-stream encoding (many short-lived
-  -- ByteStrings that should die in the nursery).
-  --   -A64m  : 64 MB nursery (vs default 4 MB) — minor GC 16x less often
-  --   -N6    : 6 capabilities
-  --   -T     : enable GHC runtime statistics
+  -- Baked-in RTS defaults. Overridable at runtime because of -rtsopts:
+  --   dbsync ... +RTS -N4 -A16m -RTS
   --
-  -- We deliberately *omit* --disable-delayed-os-memory-return so that
-  -- pages freed by the GC are returned to the kernel between
-  -- collections. With the flag enabled, RSS pins at peak heap forever,
-  -- masking dedup-map growth as a 16+ GB RSS regression. See
-  -- PLANS/MEMORY_INVESTIGATION.md (Slice A).
-  ghc-options:    -threaded -rtsopts "-with-rtsopts=-A64m -N6 -T"
+  --   -A64m   per-capability nursery. Loader-stream encoders allocate
+  --           ~3 GB/s of short-lived ByteStrings; a large nursery
+  --           lets them die young instead of being promoted.
+  --   -N6     parallel capabilities. Operators on the 4-core target
+  --           override with +RTS -N4 -RTS at runtime.
+  --   -T      enable GHC.Stats so the prometheus endpoint can
+  --           publish GC numbers.
+  --   -I0     disable idle-time GC. Prevents the runtime triggering
+  --           a Gen-1 collection during chain-tip following whenever
+  --           the program goes briefly quiet between blocks; that
+  --           GC interrupts the otherwise-idle moment for no benefit
+  --           (the next block's allocations would trigger one anyway).
+  --   --disable-delayed-os-memory-return
+  --           run madvise() immediately after each major GC rather
+  --           than batching it. Without this the RTS holds onto
+  --           megablocks past the high-water mark of a transient
+  --           allocation peak, ratcheting RSS up to several times
+  --           the steady-state heap as the chain progresses.
+  ghc-options:
+    -threaded -rtsopts
+    "-with-rtsopts=-A64m -N6 -T -I0 --disable-delayed-os-memory-return"
   build-depends:
       dbsync
     , cardano-prelude

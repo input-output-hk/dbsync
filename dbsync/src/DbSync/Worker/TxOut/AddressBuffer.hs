@@ -38,6 +38,8 @@ import Data.ByteString.Short (ShortByteString)
 import qualified Data.ByteString.Short as SBS
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import qualified Data.Map.Strict as Map
+import Data.Sequence ((|>))
+import qualified Data.Sequence as Seq
 
 import DbSync.Db.Schema.Address (Address)
 import DbSync.Db.Schema.Ids (CollateralTxOutId, TxOutId)
@@ -47,6 +49,11 @@ import DbSync.Db.Schema.Ids (CollateralTxOutId, TxOutId)
 -- ---------------------------------------------------------------------------
 
 -- | Snapshot of one epoch's worth of address-resolution work.
+--
+-- The tx-out lists are 'Seq' because a Conway-era epoch accumulates
+-- 100k+ outputs and we want O(1) snoc with FIFO order preserved
+-- across the worker handoff. The internal finger-tree chunks of 16
+-- amortise the per-element overhead at this scale.
 data EpochAddressBuffer = EpochAddressBuffer
   { eabAddresses :: !(Map ShortByteString Address)
     -- ^ Unique addresses seen this epoch, keyed by raw bytes. The
@@ -55,11 +62,11 @@ data EpochAddressBuffer = EpochAddressBuffer
     -- @stake_address_id@ (from the existing 'dmsStakeAddress'
     -- dedup map). The worker takes this verbatim to build address
     -- rows.
-  , eabTxOutAddresses :: ![(TxOutId, ShortByteString)]
+  , eabTxOutAddresses :: !(Seq (TxOutId, ShortByteString))
     -- ^ @(tx_out.id, raw_address)@ pairs in extraction order. The
     -- worker resolves each raw to the final address_id and
     -- @UPDATE@s the row.
-  , eabCollateralTxOutAddresses :: ![(CollateralTxOutId, ShortByteString)]
+  , eabCollateralTxOutAddresses :: !(Seq (CollateralTxOutId, ShortByteString))
     -- ^ Same shape as 'eabTxOutAddresses' for @collateral_tx_out@.
   }
   deriving stock (Eq, Show)
@@ -86,8 +93,8 @@ newAddressBufferRef = newIORef emptyEpochAddressBuffer
 emptyEpochAddressBuffer :: EpochAddressBuffer
 emptyEpochAddressBuffer = EpochAddressBuffer
   { eabAddresses = Map.empty
-  , eabTxOutAddresses = []
-  , eabCollateralTxOutAddresses = []
+  , eabTxOutAddresses = Seq.empty
+  , eabCollateralTxOutAddresses = Seq.empty
   }
 
 -- ---------------------------------------------------------------------------
@@ -109,7 +116,7 @@ recordTxOut ref txOutId raw addr =
     let !key = SBS.toShort raw
         !buf' = buf
           { eabAddresses = Map.insertWith (\_ old -> old) key addr (eabAddresses buf)
-          , eabTxOutAddresses = (txOutId, key) : eabTxOutAddresses buf
+          , eabTxOutAddresses = eabTxOutAddresses buf |> (txOutId, key)
           }
     in (buf', ())
 
@@ -121,7 +128,7 @@ recordCollateralTxOut ref outId raw addr =
     let !key = SBS.toShort raw
         !buf' = buf
           { eabAddresses = Map.insertWith (\_ old -> old) key addr (eabAddresses buf)
-          , eabCollateralTxOutAddresses = (outId, key) : eabCollateralTxOutAddresses buf
+          , eabCollateralTxOutAddresses = eabCollateralTxOutAddresses buf |> (outId, key)
           }
     in (buf', ())
 

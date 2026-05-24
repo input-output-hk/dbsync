@@ -310,6 +310,19 @@ data FollowEnv = FollowEnv
     -- receiver. Unused by the Follow consumer (every block in
     -- Follow is volatile by definition); held only so the receiver
     -- has somewhere to publish it.
+  , feReplayBootSlot      :: !(Maybe SlotNo)
+    -- ^ Upper edge of the Follow replay window:
+    -- @dbsync_sync_state.last_committed_slot@ when a ledger-enabled
+    -- Follow restart finds the on-disk snapshot below it. Blocks
+    -- with @slot <= this value@ are already in PG; Follow\'s
+    -- consumer skips them so the receiver can fan them out to the
+    -- ledger worker, which advances the in-RAM ledger to match PG.
+    -- 'Nothing' on the in-process Ingest → Prep → Follow handoff and
+    -- on restarts where the snapshot is already aligned with PG.
+  , feReplayStartSlot     :: !(Maybe SlotNo)
+    -- ^ Lower edge of the Follow replay window — the chosen
+    -- snapshot\'s slot. Drives the percentage segment of the replay
+    -- progress log. 'Just' iff 'feReplayBootSlot' is.
   }
 
 -- ---------------------------------------------------------------------------
@@ -345,6 +358,8 @@ mkFollowEnvFromIngest ie conn resolver writer =
     , feWriter              = writer
     , feControlConnection   = ieControlConnection ie
     , feRollbackBoundary    = ieRollbackBoundary ie
+    , feReplayBootSlot      = Nothing
+    , feReplayStartSlot     = Nothing
     }
 
 -- ---------------------------------------------------------------------------

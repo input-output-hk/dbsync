@@ -97,7 +97,7 @@ defaultTestProfile = profileWithOptions allImplementedExtractors
 
 -- | Same as 'defaultTestProfile' but with the ledger feature on.
 -- Tests that exercise the LedgerWorker / snapshot writer / Follow
--- fast-path snapshot loading need ledger enabled.
+-- restart snapshot loading need ledger enabled.
 --
 -- The snapshot near-tip threshold is lowered to @2@ so snapshots
 -- fire on the short fixture chains; production default of @580@

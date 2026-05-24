@@ -61,8 +61,16 @@ import DbSync.Phase.Current
   , setCurrentPhase
   )
 import DbSync.StateQuery (getSlotDetails, observeBlockSTM)
-import DbSync.Trace.Timing (fmtDuration)
-import DbSync.Trace.Types (LogMsg (..), Severity (..))
+import DbSync.Trace (HasTracer (..))
+import DbSync.Trace.Replay
+  ( ReplayAdvance (..)
+  , ReplayLog (..)
+  , ReplayLogState (..)
+  , advanceReplay
+  , renderReplayPercent
+  )
+import DbSync.Trace.Timing (fmtCount, fmtDuration, fmtF2)
+import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 import DbSync.Trace.Watchdog (bumpConsumer, setConsumerNote)
 
 -- | Cadence for the periodic Follow-loop progress log while in
@@ -108,7 +116,7 @@ data FollowProgress = FollowProgress
 -- target slot.
 run :: FollowM ()
 run = do
-  FollowEnv{feCore, feBlockQueue} <- ask
+  FollowEnv{feCore, feBlockQueue, feReplayBootSlot} <- ask
   let tracer   = ceTracer    feCore
       phaseRef = ceCurrentPhase feCore
   liftIO $ do
@@ -123,11 +131,17 @@ run = do
     , fpLastBlockAt      = Nothing
     , fpLastSlot         = Nothing
     }
+  -- Seed the replay-progress state machine. Inert ('NoReplay')
+  -- when there's no replay window, primed ('ReplayPending') when
+  -- there is.
+  replayRef <- liftIO $ newIORef $ case feReplayBootSlot of
+    Just _  -> ReplayPending
+    Nothing -> NoReplay
   forever $ do
     mMsg <- liftIO $
       waitForMsgOrHeartbeat feBlockQueue phaseRef idleHeartbeatMicros
     case mMsg of
-      Just (MsgForward  blk)   -> processForward progressRef blk
+      Just (MsgForward  blk)   -> processForward progressRef replayRef blk
       Just (MsgRollback point) -> processRollback point
       Nothing                  -> emitIdleHeartbeat progressRef
 
@@ -160,58 +174,119 @@ waitForMsgOrHeartbeat q phaseRef micros = do
 readPhaseComponent :: CurrentPhase -> IO Text
 readPhaseComponent = fmap renderPhase . readCurrentPhase
 
--- | Apply one forward block inside one PG transaction.
+-- | Apply one forward block.
 --
---   1. Count the IDs the extractors will need ('countAssignableIds')
---      and allocate them in a single libpq pipeline
---      ('allocateAllIds').
---   2. Run extractors with a buffered resolver + writer. Dedup
---      resolves still hit PG synchronously (one SELECT plus a
---      possible @nextval@ on miss) but consult a per-block dedup
---      cache so siblings find each other. INSERTs land on a single
---      'WriteBuffer'.
---   3. BEGIN, pipeline-flush the writes plus the @last_committed_*@
---      UPDATE, COMMIT. The three Sessions are inlined here so the
---      'onException' rolls back cleanly without masking the original
---      exception.
-processForward :: IORef FollowProgress -> CardanoBlock StandardCrypto -> FollowM ()
-processForward progressRef cardanoBlock = do
+-- Two regimes:
+--
+--   * Replay window ('feReplayBootSlot' set, @slot <= bootSlot@) —
+--     the block is already in PG and the ledger worker is
+--     re-applying it via the receiver fan-out. The consumer just
+--     bumps the watchdog, advances the replay-progress state
+--     machine, and runs the phase-flip predicate.
+--
+--   * Normal — apply the block inside one PG transaction:
+--
+--       1. Count the IDs the extractors will need
+--          ('countAssignableIds') and allocate them in a single
+--          libpq pipeline ('allocateAllIds').
+--       2. Run extractors with a buffered resolver + writer. Dedup
+--          resolves still hit PG synchronously (one SELECT plus a
+--          possible @nextval@ on miss) but consult a per-block dedup
+--          cache so siblings find each other. INSERTs land on a
+--          single 'WriteBuffer'.
+--       3. BEGIN, pipeline-flush the writes plus the
+--          @last_committed_*@ UPDATE, COMMIT. The three Sessions are
+--          inlined here so the 'onException' rolls back cleanly
+--          without masking the original exception.
+processForward
+  :: IORef FollowProgress
+  -> IORef ReplayLogState
+  -> CardanoBlock StandardCrypto
+  -> FollowM ()
+processForward progressRef replayRef cardanoBlock = do
   env@FollowEnv
     { feWatchdog
     , feStateQueryVar
     , feHasqlConnection
+    , feReplayBootSlot
+    , feReplayStartSlot
     } <- ask
-  let slot = blockSlot cardanoBlock
-  liftIO $ setConsumerNote feWatchdog "follow: processForward"
-  liftIO $ bumpConsumer feWatchdog slot
-  liftIO $ void $ atomically $ observeBlockSTM feStateQueryVar cardanoBlock
-  sd <- getSlotDetails slot
-  let !genBlock = parseBlock sd cardanoBlock
-      !counts   = countAssignableIds genBlock
-      triple    = ( unSlotNo  (blkSlotNo  genBlock)
-                  , unBlockNo (blkBlockNo genBlock)
-                  , blkHash   genBlock
-                  )
+  let slot   = blockSlot cardanoBlock
+      tracer = getTracer env
   liftIO $ do
-    preAllocated <- allocateAllIds feHasqlConnection counts
-    buf          <- newWriteBuffer
-    resolver     <- mkBufferedFollowResolver feHasqlConnection preAllocated buf
-    let writer      = mkBufferedWriter buf
-        bufferedEnv = env { feResolver = resolver, feWriter = writer }
-    runAppM bufferedEnv (processBlock genBlock)
-    writes <- drain buf
-    let flushAndAdvance =
-          writes *> void (Pipeline.statement triple writeSyncStateSlotStmt)
-    setConsumerNote feWatchdog "follow: BEGIN"
-    runSession feHasqlConnection (Sess.script beginSql) "BEGIN"
-    setConsumerNote feWatchdog "follow: flush pipeline"
-    let runFlush = runSession feHasqlConnection
-          (Sess.pipeline flushAndAdvance) "flush"
-    runFlush `onException` rollbackQuiet feHasqlConnection
-    setConsumerNote feWatchdog "follow: COMMIT"
-    runSession feHasqlConnection (Sess.script commitSql) "COMMIT"
-  maybeFlipToTip (blkSlotNo genBlock)
-  maybeLogProgress progressRef genBlock
+    setConsumerNote feWatchdog "follow: processForward"
+    bumpConsumer feWatchdog slot
+    advanceAndLogReplay tracer replayRef feReplayStartSlot feReplayBootSlot slot
+  case feReplayBootSlot of
+    Just bootSlot | slot <= bootSlot -> do
+      -- Replay window: the row is already in PG and the ledger
+      -- worker is re-applying the block via 'leLedgerQueue'. Skip
+      -- the INSERT + sync_state advance; 'maybeFlipToTip' runs
+      -- unchanged (it gates on the queue + latest received point,
+      -- not on PG writes).
+      liftIO $ setConsumerNote feWatchdog "follow: replay-skip"
+      maybeFlipToTip slot
+    _ -> do
+      liftIO $ void $ atomically $ observeBlockSTM feStateQueryVar cardanoBlock
+      sd <- getSlotDetails slot
+      let !genBlock = parseBlock sd cardanoBlock
+          !counts   = countAssignableIds genBlock
+          triple    = ( unSlotNo  (blkSlotNo  genBlock)
+                      , unBlockNo (blkBlockNo genBlock)
+                      , blkHash   genBlock
+                      )
+      liftIO $ do
+        preAllocated <- allocateAllIds feHasqlConnection counts
+        buf          <- newWriteBuffer
+        resolver     <- mkBufferedFollowResolver feHasqlConnection preAllocated buf
+        let writer      = mkBufferedWriter buf
+            bufferedEnv = env { feResolver = resolver, feWriter = writer }
+        runAppM bufferedEnv (processBlock genBlock)
+        writes <- drain buf
+        let flushAndAdvance =
+              writes *> void (Pipeline.statement triple writeSyncStateSlotStmt)
+        setConsumerNote feWatchdog "follow: BEGIN"
+        runSession feHasqlConnection (Sess.script beginSql) "BEGIN"
+        setConsumerNote feWatchdog "follow: flush pipeline"
+        let runFlush = runSession feHasqlConnection
+              (Sess.pipeline flushAndAdvance) "flush"
+        runFlush `onException` rollbackQuiet feHasqlConnection
+        setConsumerNote feWatchdog "follow: COMMIT"
+        runSession feHasqlConnection (Sess.script commitSql) "COMMIT"
+      maybeFlipToTip (blkSlotNo genBlock)
+      maybeLogProgress progressRef genBlock
+
+-- | Step the replay-progress state machine for this block and emit
+-- any indicated trace. A no-op outside the replay window (the
+-- machine is 'NoReplay'); inside the window, fires periodic progress
+-- lines and one completion line on the first post-window block.
+advanceAndLogReplay
+  :: AppTracer
+  -> IORef ReplayLogState
+  -> Maybe SlotNo          -- ^ lower edge of the window (snapshot slot)
+  -> Maybe SlotNo          -- ^ upper edge of the window (last_committed_slot)
+  -> SlotNo                -- ^ current block's slot
+  -> IO ()
+advanceAndLogReplay tracer replayRef mReplayStart mReplayBoot slot = do
+  now <- getCurrentTime
+  logEvent <- atomicModifyIORef' replayRef $ \prev ->
+    let adv = advanceReplay slot mReplayBoot now prev
+    in (raNewState adv, raLog adv)
+  let traceReplay msg =
+        traceWith tracer $ LogMsg Info "LedgerReplay" msg Nothing
+  case logEvent of
+    ReplayLogNothing -> pure ()
+    ReplayLogProgress n ->
+      traceReplay $
+        "applied " <> fmtCount n <> " blocks; current slot "
+          <> show (unSlotNo slot)
+          <> renderReplayPercent mReplayStart mReplayBoot slot
+    ReplayLogComplete n elapsed ->
+      traceReplay $
+        "replay complete; applied " <> fmtCount n
+          <> " blocks in " <> fmtF2 (realToFrac elapsed :: Double)
+          <> "s, resuming Follow PG writes at slot "
+          <> show (unSlotNo slot)
 
 -- | Run a hasql 'Session' against the supplied connection, panicking
 -- with a labelled message on failure. Used by 'processForward' to

@@ -15,7 +15,7 @@ import DbSync.Db.Schema.SyncState (SyncStateRow (..))
 import DbSync.App.Boot
   ( BootDecision (..)
   , BootError (..)
-  , FastPathContext (..)
+  , FollowRestartContext (..)
   , ResumeContext (..)
   , ResumeIntersection (..)
   , decideBoot
@@ -133,12 +133,12 @@ spec = describe "DbSync.App.Boot.decideBoot" $ do
         `shouldBe` Right BootFresh
 
   describe "sync_complete = True (ledger disabled)" $ do
-    it "is BootFollowingFastPath with empty candidate list" $ do
+    it "is BootFollowRestart with empty candidate list" $ do
       let row = (committedRow False) { ssrSyncComplete = True }
       case decideBoot (Just row) [] False of
-        Right (BootFollowingFastPath fpc) -> do
-          fpcSyncState          fpc `shouldBe` row
-          fpcCandidateSnapshots fpc `shouldBe` []
+        Right (BootFollowRestart frc) -> do
+          frcSyncState          frc `shouldBe` row
+          frcCandidateSnapshots frc `shouldBe` []
         other -> expectationFailure $ "unexpected: " <> show other
 
   describe "sync_complete = True (ledger enabled)" $ do
@@ -152,9 +152,9 @@ spec = describe "DbSync.App.Boot.decideBoot" $ do
             , snapshotAt 11_000_000   -- in-range
             ]
       case decideBoot (Just completedRow) snaps True of
-        Right (BootFollowingFastPath fpc) -> do
-          fpcSyncState fpc `shouldBe` completedRow
-          fpcCandidateSnapshots fpc
+        Right (BootFollowRestart frc) -> do
+          frcSyncState frc `shouldBe` completedRow
+          frcCandidateSnapshots frc
             `shouldBe` [ snapshotAt 11_900_000
                        , snapshotAt 11_500_000
                        , snapshotAt 11_000_000

@@ -24,7 +24,8 @@ module DbSync.Trace.Timing
 
     -- * Formatting helpers
   , fmtDuration
-  , fmtRows
+  , fmtCount
+  , fmtF2
   ) where
 
 import Cardano.Prelude
@@ -69,7 +70,7 @@ timedTrace component label action = do
   rows  <- action
   end   <- liftIO getCurrentTime
   liftIO $ emitTrace tracer component $
-    label <> ": " <> fmtRows rows <> " rows in "
+    label <> ": " <> fmtCount rows <> " rows in "
       <> fmtDuration (realToFrac (diffUTCTime end start))
   pure rows
 
@@ -112,7 +113,7 @@ timedTraceIO tracer component label action = do
   rows  <- action
   end   <- getCurrentTime
   emitTrace tracer component $
-    label <> ": " <> fmtRows rows <> " rows in "
+    label <> ": " <> fmtCount rows <> " rows in "
       <> fmtDuration (realToFrac (diffUTCTime end start))
   pure rows
 
@@ -146,14 +147,16 @@ fmtDuration secs
       let t = round secs :: Int
       in show (t `div` 3600) <> "h " <> show ((t `mod` 3600) `div` 60) <> "m"
 
--- | Comma-separate large row counts so they read at a glance.
-fmtRows :: Int64 -> Text
-fmtRows n
-  | n < 0     = "-" <> fmtRows (abs n)
-  | n < 1000  = show n
+-- | Comma-separate a count so it reads at a glance. Polymorphic
+-- over any 'Integral' so callers needn't convert between 'Int64' /
+-- 'Word64' / etc.
+fmtCount :: (Integral n, Show n) => n -> Text
+fmtCount n
+  | n < 0     = "-" <> fmtCount (abs n)
+  | n < 1000  = Text.pack (show n)
   | otherwise =
       let s :: [Char]
-          s = show (n :: Int64)
+          s = show n
           len = length s
           (prefix, rest) = splitAt (len `mod` 3) s
           chunks = chunksOf3 rest
@@ -163,3 +166,9 @@ fmtRows n
     chunksOf3 :: [a] -> [[a]]
     chunksOf3 [] = []
     chunksOf3 xs = let (h, t) = splitAt 3 xs in h : chunksOf3 t
+
+-- | Render a 'Double' with two decimal places, no scientific
+-- notation. Used by percentage / rate displays in epoch summaries
+-- and the replay-progress logger.
+fmtF2 :: Double -> Text
+fmtF2 d = Text.pack (printf "%.2f" d)

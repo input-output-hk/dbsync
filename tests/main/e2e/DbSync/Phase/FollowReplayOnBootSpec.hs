@@ -1,21 +1,29 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
--- | Boot the Follow fast-path against a database that has committed
--- past the latest on-disk ledger snapshot.
+-- | Boot the Follow restart path against a database that has
+-- committed past the latest on-disk ledger snapshot.
 --
 -- The snapshot writer is asynchronous; on any shutdown the on-disk
--- snapshot can lag the consumer's last PG commit. On the next boot
--- the Fast-Path detects the gap, picks the newest snapshot whose
--- slot has a matching @block.hash@ in PG, and rolls PG back to that
--- point via 'Phase.Following.Rollback.rollbackToPoint'. Once aligned,
--- chainsync re-streams the rolled-back range and Follow re-inserts
--- the rows.
+-- snapshot can lag the consumer\'s last PG commit. On the next boot
+-- the Follow restart path:
+--
+--   * Picks the newest snapshot whose slot has a matching
+--     @block.hash@ in PG.
+--   * Loads it into the in-memory @LedgerDB@.
+--   * Configures a replay window with @last_committed_slot@ as the
+--     upper edge — the ledger worker re-applies the gap from the
+--     receiver\'s fan-out while Follow\'s consumer skips its
+--     PG-write path (the rows are already in PG from the previous
+--     run).
+--   * Intersects chainsync at the snapshot\'s point; the protocol
+--     streams each block from @snap_slot + 1@ forward.
 --
 -- The deterministic gap is engineered by deleting the newest
--- snapshot's header + LSM directory between the two sessions; the
--- next-newest survivor becomes the chosen restart point.
-module DbSync.Phase.FollowRollbackOnBootSpec (spec) where
+-- snapshot\'s header + LSM directory between the two sessions; the
+-- next-newest survivor becomes the chosen restart point and is
+-- strictly below @last_committed_slot@.
+module DbSync.Phase.FollowReplayOnBootSpec (spec) where
 
 import Cardano.Prelude
 
@@ -54,10 +62,10 @@ import DbSync.Test.MockNode (forgeAndPushBlocks, withMockNode)
 import DbSync.Test.PgAssertions (countRows, tableColumn)
 
 spec :: Spec
-spec = describe "FollowingChainTip fast-path rollback on boot" $
-  it "rolls PG back to the chosen snapshot when the snapshot lags last_committed_slot" $
+spec = describe "FollowingChainTip restart replay on boot" $
+  it "replays the snapshot-to-PG gap through the ledger worker without rolling PG back" $
     withMockNode conwayConfigDir $ \mn ->
-      withTempDir "dbsync-test-rollback-on-boot" $ \ledgerDir -> do
+      withTempDir "dbsync-test-replay-on-boot" $ \ledgerDir -> do
         firstLogs <- newIORef []
         let firstTracer = mkTestTracer firstLogs
 
@@ -76,8 +84,8 @@ spec = describe "FollowingChainTip fast-path rollback on boot" $
             waitForSyncComplete 90
             -- 250 Follow blocks ≈ 1300 slots, enough to cross two
             -- epoch boundaries (~slot 2500, ~slot 3000) and so write
-            -- two snapshots we can choose between in the rollback
-            -- step below.
+            -- two snapshots; the gap-engineering step below removes
+            -- the newer one to drive 'S < L'.
             forgeAndWaitForBlocks mn 250 650 90
             blockCount       <- countRows (tdName blockTableDef)
             dedupCounts      <- traverse countRows dedupTables
@@ -100,57 +108,51 @@ spec = describe "FollowingChainTip fast-path rollback on boot" $
         deletedSlot `shouldSatisfy` (> chosenSlot)
         chosenSlot  `shouldSatisfy` (< lastCommitted)
 
-        -- Capture the second-session logs so we can confirm the
-        -- rollback path actually fired. The previous code panicked
-        -- here with "snapshot at slot S is behind last_committed_slot
-        -- L"; the new path emits a rollback-from-L-to-S line and
-        -- proceeds.
         secondLogs <- newIORef []
         let secondTracer = mkTestTracer secondLogs
 
         withAppSessionResume secondTracer ledgerEnabledTestProfile mn ledgerDir $ \_ -> do
           waitFor "sync_complete remains true on restart" syncCompleteTrue 60
 
-          -- ChainSync re-delivers the rolled-back range and Follow
-          -- re-inserts every block. Wait for the block table to
-          -- return to its pre-restart size — the simplest evidence
-          -- that the rollback was followed by a successful re-sync.
-          waitFor
-            (tdName blockTableDef <> " count returns to " <> show preBlocks)
-            (do n <- countRows (tdName blockTableDef); pure (n >= preBlocks))
-            60
+          -- Block count is unchanged across the restart: Follow's
+          -- consumer skips its PG-write path for blocks inside the
+          -- replay window, so committed rows stay put.
+          afterRestartBlocks <- countRows (tdName blockTableDef)
+          afterRestartBlocks `shouldBe` preBlocks
 
           afterReSyncSlot <- readLastCommittedSlot
           afterReSyncSlot `shouldBe` lastCommitted
 
-          -- Dedup rows survived the cascade; the re-insert path
-          -- found them via SELECT-then-nextval rather than allocating
-          -- new ids.
           postDedupCounts <- traverse countRows dedupTables
           postDedupCounts `shouldBe` preDedupCounts
 
-          -- Forge new blocks past the original tip; Follow advances.
+          -- Forging past the original tip continues to advance PG.
           let target = preBlocks + 20
           forgeAndWaitForBlocks mn 20 target 90
 
           finalBlocks <- countRows (tdName blockTableDef)
           finalBlocks `shouldSatisfy` (>= target)
 
-        -- Log-message assertion: the rollback path emitted both the
-        -- "snapshot at slot S" load line and the rollback line.
-        -- Without these two markers the test could pass even if the
-        -- gap-handling branch never ran.
         secondMessages <- collectMessages secondLogs
+
+        -- Pin the chosen snapshot and the snapshot-lag log line so
+        -- the test fails if the gap-handling branch isn't actually
+        -- exercised.
         secondMessages `shouldSatisfy`
           any (T.isInfixOf ("Loading ledger snapshot at slot " <> show chosenSlot))
         secondMessages `shouldSatisfy`
-          any (\m -> "Rolling back PG from slot" `T.isInfixOf` m
-                  && ("to snapshot slot " <> show chosenSlot) `T.isInfixOf` m)
+          any (T.isInfixOf ("Snapshot lags PG by "
+                              <> show (lastCommitted - chosenSlot)
+                              <> " slots"))
 
--- | Tables whose row counts must survive the rollback cascade.
--- These are dedup tables: content-keyed, not slot-keyed, so the
--- cascade leaves them alone. The re-insert path finds the rows via
--- SELECT-then-nextval instead of allocating new ids.
+        -- And confirm no PG rollback is performed: a "Rolling back
+        -- PG from slot" line would mean we'd deleted committed rows.
+        secondMessages `shouldSatisfy`
+          not . any (T.isInfixOf "Rolling back PG from slot")
+
+-- | Tables whose row counts must survive the restart. Dedup tables
+-- (content-keyed) and the slot-keyed @block@ table; none of them
+-- ever loses a row under the replay path.
 dedupTables :: [Text]
 dedupTables = map tdName
   [ addressTableDef

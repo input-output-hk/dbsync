@@ -47,8 +47,8 @@ spec = describe "IngestChainHistory restart" $
         -- Conway test config: 500-slot epochs, ~5 slots/block, k=10.
         -- Enough chain that the consumer can't reach @tip − k@
         -- before we cancel: if Prep runs, sync_complete flips true
-        -- and the resume boot takes the fast path that skips the
-        -- cleanup we're exercising.
+        -- and the resume boot takes the Follow-restart path that
+        -- skips the cleanup we're exercising.
         _ <- forgeAndPushBlocks mn 5000
 
         midRows <- runMidIngestSession tracer mn ledgerDir
@@ -95,8 +95,9 @@ runMidIngestSession tracer mn ledgerDir = do
       ((&&) <$> twoEpochSyncStatsRows <*> lastCommittedSlotSet)
       60
 
-    -- If Prep already ran the resume boot would take the fast path
-    -- and the bug never surfaces. Fail loud rather than silent.
+    -- If Prep already ran the resume boot would take the
+    -- Follow-restart path and the bug never surfaces. Fail loud
+    -- rather than silent.
     complete <- syncCompleteTrue
     complete `shouldBe` False
 

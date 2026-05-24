@@ -9,9 +9,9 @@
 --
 --   * 'BootFresh' — start from genesis. Reached on a fresh DB or
 --     when a row exists but no epoch has been committed yet.
---   * 'BootResume' — resume past a previous run.
---   * 'BootFollowingFastPath' — historic sync already finished;
---     skip directly to the steady-state Follow phase.
+--   * 'BootResume' — resume an interrupted Ingest.
+--   * 'BootFollowRestart' — a prior run completed sync; resume
+--     directly in the Follow phase.
 --
 -- Mismatch cases (config flipped, missing snapshot, etc.) are
 -- returned as 'BootError'. Callers render these via
@@ -21,7 +21,7 @@ module DbSync.App.Boot
     BootDecision (..)
   , ResumeContext (..)
   , ResumeIntersection (..)
-  , FastPathContext (..)
+  , FollowRestartContext (..)
   , BootError (..)
 
     -- * Decision
@@ -61,8 +61,8 @@ data BootDecision
     -- ^ Start from genesis (fresh DB or a seeded-but-uncommitted row).
   | BootResume !ResumeContext
     -- ^ Resume past a previous run.
-  | BootFollowingFastPath !FastPathContext
-    -- ^ Historic sync is complete; proceed straight to Follow.
+  | BootFollowRestart !FollowRestartContext
+    -- ^ A prior run completed sync; resume directly in Follow.
   deriving stock (Eq, Show)
 
 -- | Information needed to resume from a 'SyncStateRow'.
@@ -91,11 +91,11 @@ data ResumeContext = ResumeContext
 -- The orchestrator walks the candidates newest-first, picking the
 -- first one whose slot has a matching @block.hash@ in PG. That
 -- chosen snapshot becomes the restart point: the ledger is loaded
--- from it, PG is rolled back to it (when the snapshot lags PG), and
--- chainsync intersects at it.
-data FastPathContext = FastPathContext
-  { fpcSyncState           :: !SyncStateRow
-  , fpcCandidateSnapshots  :: ![DiskSnapshot]
+-- from it, the gap to @last_committed_slot@ becomes the replay
+-- window, and chainsync intersects at the snapshot\'s point.
+data FollowRestartContext = FollowRestartContext
+  { frcSyncState           :: !SyncStateRow
+  , frcCandidateSnapshots  :: ![DiskSnapshot]
     -- ^ Snapshots at or before @last_committed_slot@, newest-first.
     -- Empty when ledger is disabled.
   }
@@ -160,7 +160,7 @@ decideBoot mRow snapshots ledgerEnabledCfg = case mRow of
         Left $ BootLedgerEnabledMismatch (ssrLedgerEnabled row) ledgerEnabledCfg
 
     | ssrSyncComplete row ->
-        decideFastPath row snapshots ledgerEnabledCfg
+        decideFollowRestart row snapshots ledgerEnabledCfg
 
     | rowHasNoCommittedProgress row ->
         Right BootFresh
@@ -193,7 +193,7 @@ decideBoot mRow snapshots ledgerEnabledCfg = case mRow of
                         }
           _ -> Left BootSyncStateMissing
 
--- | Build the 'BootFollowingFastPath' decision for @sync_complete =
+-- | Build the 'BootFollowRestart' decision for @sync_complete =
 -- true@.
 --
 -- Ledger disabled: PG is the single source of truth, candidate list
@@ -205,17 +205,17 @@ decideBoot mRow snapshots ledgerEnabledCfg = case mRow of
 -- conditions as 'BootResume' — empty snapshot directory is
 -- 'BootResumeStateMissing', candidates all beyond the committed
 -- slot is 'BootNoUsableSnapshot'.
-decideFastPath
+decideFollowRestart
   :: SyncStateRow
   -> [DiskSnapshot]
   -> Bool
   -> Either BootError BootDecision
-decideFastPath row snapshots ledgerEnabledCfg
+decideFollowRestart row snapshots ledgerEnabledCfg
   | not ledgerEnabledCfg =
-      Right $ BootFollowingFastPath
-        FastPathContext
-          { fpcSyncState           = row
-          , fpcCandidateSnapshots  = []
+      Right $ BootFollowRestart
+        FollowRestartContext
+          { frcSyncState           = row
+          , frcCandidateSnapshots  = []
           }
   | otherwise =
       case ssrLastCommittedSlot row of
@@ -231,10 +231,10 @@ decideFastPath row snapshots ledgerEnabledCfg
               case candidateSnapshotSlots snapshots slotNo of
                 []         -> Left (BootNoUsableSnapshot slotNo)
                 candidates ->
-                  Right $ BootFollowingFastPath
-                    FastPathContext
-                      { fpcSyncState           = row
-                      , fpcCandidateSnapshots  = candidates
+                  Right $ BootFollowRestart
+                    FollowRestartContext
+                      { frcSyncState           = row
+                      , frcCandidateSnapshots  = candidates
                       }
 
 -- | True when the row has no committed chain position.

@@ -18,7 +18,7 @@
 -- At each epoch boundary the consumer emits one summary line:
 --
 -- @
--- Epoch 265 | 21,427 blk in 41s (526 blk/s) | (~63.21%) | HEALTHY
+-- Epoch 265 | 21,427 blk in 41s (526 blk/s) | HEALTHY | [63.21%]
 -- @
 --
 -- The bracketed percentage is the current block's position relative
@@ -39,14 +39,6 @@ module DbSync.Phase.Ingest.Consumer
 
     -- * Queue utilities
   , drainTBQueue
-
-    -- * Replay-progress logging (exported for tests)
-  , ReplayLogState (..)
-  , ReplayProgress (..)
-  , ReplayAdvance (..)
-  , ReplayLog (..)
-  , advanceReplay
-  , progressLogInterval
 
     -- * Rollback-boundary predicate (exported for tests)
   , rollbackBoundaryReached
@@ -69,7 +61,7 @@ import Control.Tracer (traceWith)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import qualified Data.Strict.Maybe as SMaybe
 import qualified Data.Text as Text
-import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime, NominalDiffTime)
+import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import GHC.Stats (RTSStats (..), GCDetails (..), getRTSStats, getRTSStatsEnabled)
 import System.Mem (performMajorGC)
 import Text.Printf (printf)
@@ -89,6 +81,13 @@ import DbSync.Extractor (ExtractState (..))
 import DbSync.Extractor.EpochBoundary (runEpochBoundary)
 import DbSync.Phase.Ingest.DedupMap (dedupMapSizes)
 import DbSync.Phase.Ingest.PipelineStats (PipelineStats (..), emptyPipelineStats)
+import DbSync.Trace.Replay
+  ( ReplayAdvance (..)
+  , ReplayLog (..)
+  , ReplayLogState (..)
+  , advanceReplay
+  , renderReplayPercent
+  )
 import DbSync.Block.Pipeline (processBlock)
 import DbSync.Phase.Type (SyncPhase (..), renderPhase)
 import DbSync.Ledger.DepositAccumulator (drainCompletedEpochs, flushEpochParams)
@@ -116,6 +115,7 @@ import DbSync.StateQuery
   , observeBlockSTM
   )
 import DbSync.Trace (HasTracer (..))
+import DbSync.Trace.Timing (fmtCount, fmtF2)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 import DbSync.Trace.Watchdog (bumpConsumer, setConsumerNote)
 import DbSync.Writer (Writer (..))
@@ -130,9 +130,8 @@ import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()  -- 'LedgerSupport
 
 -- | Baseline blocks/sec captured from the first fast epoch.
 -- Used to detect slowdowns via the "Nx vs baseline" indicator.
-data BaselineRef = BaselineRef
-  { brBlocksPerSec :: !Double  -- ^ Baseline throughput
-  , brEpoch        :: !Word64  -- ^ Which epoch the baseline was captured from
+newtype BaselineRef = BaselineRef
+  { brBlocksPerSec :: Double  -- ^ Baseline throughput
   }
 
 -- | Snapshot of the data a @sync_state@ row will eventually carry
@@ -150,49 +149,6 @@ data PendingBoundary = PendingBoundary
   , pbLastHash    :: !ByteString
   , pbCounters    :: !IdCounters
   }
-
--- ---------------------------------------------------------------------------
--- * Replay-progress logging
--- ---------------------------------------------------------------------------
-
--- | State machine driving the @LedgerReplay@ log channel during a
--- ledger-enabled resume\'s replay window. Without it the consumer
--- emits no progress for the duration of the window (it skips
--- 'processBlock' for replayed slots) and the operator can\'t tell
--- a slow replay from a hang.
-data ReplayLogState
-  = NoReplay
-    -- ^ No replay configured, or the window has been exited.
-  | ReplayPending
-    -- ^ Replay configured; no block observed yet.
-  | InReplay !ReplayProgress
-    -- ^ Inside the replay window; counters drive log cadence.
-  deriving stock (Eq, Show)
-
--- | Block counter and log-cadence timestamps carried inside 'InReplay'.
-data ReplayProgress = ReplayProgress
-  { rpStartTime     :: !UTCTime
-  , rpBlocksApplied :: !Word64
-  , rpLastLogTime   :: !UTCTime
-  }
-  deriving stock (Eq, Show)
-
--- | Result of advancing 'ReplayLogState' for one received block.
-data ReplayAdvance = ReplayAdvance
-  { raNewState :: !ReplayLogState
-  , raLog      :: !ReplayLog
-  }
-  deriving stock (Eq, Show)
-
--- | Log directive produced by 'advanceReplay'. The caller emits the
--- trace; keeping the decision pure makes it trivial to unit-test.
-data ReplayLog
-  = ReplayLogNothing
-  | ReplayLogProgress !Word64
-    -- ^ Emit a progress line — \"applied @N@ blocks so far\".
-  | ReplayLogComplete !Word64 !NominalDiffTime
-    -- ^ Emit a completion line — \"@N@ blocks replayed in @T@s\".
-  deriving stock (Eq, Show)
 
 -- ---------------------------------------------------------------------------
 -- * Running
@@ -388,12 +344,12 @@ runConsumer = do
         ReplayLogNothing -> pure ()
         ReplayLogProgress n ->
           traceReplay $
-            "applied " <> fmtInt n <> " blocks; current slot "
+            "applied " <> fmtCount n <> " blocks; current slot "
               <> show (unSlotNo slot)
               <> renderReplayPercent replayStart bootSlot slot
         ReplayLogComplete n elapsed ->
           traceReplay $
-            "replay complete; applied " <> fmtInt n
+            "replay complete; applied " <> fmtCount n
               <> " blocks in " <> fmtF2 (realToFrac elapsed :: Double)
               <> "s, resuming loader stream at slot " <> show (unSlotNo slot)
 
@@ -575,11 +531,11 @@ runConsumer = do
                 status = diagnose batchSize blocksPerSec ps baseline
 
             when (isNothing baseline && blocksPerSec > 500) $
-              liftIO $ writeIORef baselineRef (Just (BaselineRef blocksPerSec (unEpochNo prev)))
+              liftIO $ writeIORef baselineRef (Just (BaselineRef blocksPerSec))
 
             liftIO $ traceWith tracer $ LogMsg Info "Ingest"
               ( "Epoch " <> show (unEpochNo prev)
-                <> " | " <> fmtInt blockCount <> " blk in " <> fmtDuration elapsedSec
+                <> " | " <> fmtCount blockCount <> " blk in " <> fmtDuration elapsedSec
                 <> " (" <> show (round blocksPerSec :: Int) <> " blk/s)"
                 <> " | " <> status
                 <> pctSeg
@@ -788,11 +744,6 @@ ingestRollbackPanicMessage point =
     <> "; this should be impossible (k-safety violation)."
 
 
--- | Wall-clock cadence between progress lines. Five seconds keeps
--- short replays silent while still flagging liveness on long ones.
-progressLogInterval :: NominalDiffTime
-progressLogInterval = 5
-
 -- | Render the Ingest progress segment of the form @\" | (~87.32%)\"@.
 -- The percentage is the current block's position relative to the
 -- current node tip (derived from the published rollback boundary
@@ -809,101 +760,11 @@ renderBoundaryPercent (Just (BlockNo boundary)) k (Just curBlock)
     tip = boundary + k
 renderBoundaryPercent _ _ _ = ""
 
--- | Render a slot-progress percentage of the form @\" (~37%)\"@.
--- Empty string when bounds are missing or the window has zero
--- width. Uses /slot/ progress, not /block/ progress, since Cardano
--- slots can be empty so the total block count is unknown up front.
-renderReplayPercent :: Maybe SlotNo -> Maybe SlotNo -> SlotNo -> Text
-renderReplayPercent (Just (SlotNo start)) (Just (SlotNo endBound)) (SlotNo cur)
-  | endBound > start =
-      let span'   = endBound - start
-          done
-            | cur > endBound = span'
-            | cur > start = cur - start
-            | otherwise = 0
-          pct     = (done * 100) `div` span'
-      in " (~" <> show pct <> "%)"
-renderReplayPercent _ _ _ = ""
-
--- | Advance the replay-log state machine given the just-arrived
--- block\'s slot, the resume boundary (@'Nothing'@ = no replay) and
--- the current wall-clock time. Pure; the caller mutates the IORef
--- and emits any indicated trace.
-advanceReplay
-  :: SlotNo
-  -> Maybe SlotNo
-  -> UTCTime
-  -> ReplayLogState
-  -> ReplayAdvance
-advanceReplay _    Nothing  _   s =
-  ReplayAdvance s ReplayLogNothing
-advanceReplay slot (Just bs) now s =
-  let inReplay = slot <= bs
-  in case s of
-       NoReplay ->
-         ReplayAdvance NoReplay ReplayLogNothing
-       ReplayPending
-         | inReplay  ->
-             let p = ReplayProgress
-                       { rpStartTime     = now
-                       , rpBlocksApplied = 1
-                       , rpLastLogTime   = now
-                       }
-             in ReplayAdvance (InReplay p) ReplayLogNothing
-         | otherwise ->
-             -- First block already past the boundary — degenerate
-             -- replay window of zero blocks. Skip straight to
-             -- 'NoReplay' without firing any log.
-             ReplayAdvance NoReplay ReplayLogNothing
-       InReplay p
-         | inReplay ->
-             let p' = p { rpBlocksApplied = rpBlocksApplied p + 1 }
-                 elapsedSinceLog = diffUTCTime now (rpLastLogTime p)
-             in if elapsedSinceLog >= progressLogInterval
-                  then ReplayAdvance
-                         (InReplay p' { rpLastLogTime = now })
-                         (ReplayLogProgress (rpBlocksApplied p'))
-                  else ReplayAdvance (InReplay p') ReplayLogNothing
-         | otherwise ->
-             let totalElapsed = diffUTCTime now (rpStartTime p)
-             in ReplayAdvance NoReplay
-                  (ReplayLogComplete (rpBlocksApplied p) totalElapsed)
-
--- ---------------------------------------------------------------------------
--- * Number formatting
--- ---------------------------------------------------------------------------
-
--- | Format a Double with 2 decimal places, no scientific notation.
-fmtF2 :: Double -> Text
-fmtF2 d = toS (printf "%.2f" d :: [Char])
-
--- | Format a large integer with comma separators.
-fmtInt :: Word64 -> Text
-fmtInt n
-  | n < 1000  = show n
-  | otherwise =
-      let s :: [Char]
-          s = toS (show n :: Text)
-          len = length s
-          (prefix, rest) = splitAt (len `mod` 3) s
-          groups = chunksOf3 rest
-          allGroups = if null prefix then groups else prefix : groups
-      in toS (commaJoin allGroups)
-  where
-    chunksOf3 :: [a] -> [[a]]
-    chunksOf3 [] = []
-    chunksOf3 xs = let (h, tl) = splitAt 3 xs in h : chunksOf3 tl
-
-    commaJoin :: [[Char]] -> [Char]
-    commaJoin [] = []
-    commaJoin [x] = x
-    commaJoin (x:xs) = x ++ "," ++ commaJoin xs
-
 -- | Format a @(name, count)@ list as @"name=N1,234 …"@ for log lines.
 renderDedupCounts :: [(Text, Int)] -> Text
 renderDedupCounts = Text.intercalate " " . map one
   where
-    one (n, c) = n <> "=" <> fmtInt (fromIntegral c)
+    one (n, c) = n <> "=" <> fmtCount c
 
 -- | Live data after the most recent GC. Sampled at epoch boundaries
 -- so the value reflects the heap working set at the end of that

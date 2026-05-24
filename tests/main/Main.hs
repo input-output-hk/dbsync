@@ -56,6 +56,7 @@ import qualified DbSync.Schema.ScriptsDatumsSpec as SchemaScriptsDatumsSpec
 import qualified DbSync.Schema.SyncStateSpec as SchemaSyncStateSpec
 import qualified DbSync.StateQuery.ObservedSummarySpec as ObservedSummarySpec
 import qualified DbSync.StateQuery.SlotDetailsSpec as SlotDetailsSpec
+import qualified DbSync.Trace.ReplaySpec as TraceReplaySpec
 import qualified DbSync.Block.MetadataSpec as BlockMetadataSpec
 import qualified DbSync.Util.Bech32Spec as UtilBech32Spec
 import qualified DbSync.Util.DedupHashSpec as UtilDedupHashSpec
@@ -84,8 +85,8 @@ import qualified DbSync.Schema.InitSpec as SchemaInitSpec
 import qualified DbSync.Phase.FollowAtTipSpec as PhaseFollowAtTipSpec
 import qualified DbSync.Phase.FollowPerfRealisticSpec as PhaseFollowPerfRealisticSpec
 import qualified DbSync.Phase.FollowPerfSpec as PhaseFollowPerfSpec
+import qualified DbSync.Phase.FollowReplayOnBootSpec as PhaseFollowReplayOnBootSpec
 import qualified DbSync.Phase.FollowRestartSpec as PhaseFollowRestartSpec
-import qualified DbSync.Phase.FollowRollbackOnBootSpec as PhaseFollowRollbackOnBootSpec
 import qualified DbSync.Phase.IngestPrepFollowSpec as PhaseIngestPrepFollowSpec
 import qualified DbSync.Phase.IngestRestartSpec as PhaseIngestRestartSpec
 import qualified DbSync.Phase.MockChainSpec as PhaseMockChainSpec
@@ -145,6 +146,7 @@ main = hspec $ do
     SchemaSyncStateSpec.spec
     ObservedSummarySpec.spec
     SlotDetailsSpec.spec
+    TraceReplaySpec.spec
     UtilBech32Spec.spec
     UtilDedupHashSpec.spec
     BlockMetadataSpec.spec
@@ -176,7 +178,7 @@ main = hspec $ do
     PhaseIngestPrepFollowSpec.spec
     PhaseIngestRestartSpec.spec
     PhaseFollowRestartSpec.spec
-    PhaseFollowRollbackOnBootSpec.spec
+    PhaseFollowReplayOnBootSpec.spec
     PhaseFollowAtTipSpec.spec
     PhaseFollowPerfSpec.spec
     PhaseFollowPerfRealisticSpec.spec

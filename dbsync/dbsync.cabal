@@ -58,6 +58,7 @@ library
     DbSync.Trace
     DbSync.Trace.Types
     DbSync.Trace.Backend
+    DbSync.Trace.Replay
     DbSync.Trace.Timing
     DbSync.Trace.Watchdog
     DbSync.Phase.Current

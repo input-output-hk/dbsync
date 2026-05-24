@@ -99,7 +99,7 @@ import qualified DbSync.Phase.Following.Rollback as Rollback
 import DbSync.Db.Schema.Types (TableDef)
 import DbSync.App.Boot
   ( BootDecision (..)
-  , FastPathContext (..)
+  , FollowRestartContext (..)
   , ResumeContext (..)
   , ResumeIntersection (..)
   , decideBoot
@@ -295,7 +295,7 @@ runApp tracer args = do
 
   -- 8. Resolve the boot decision.
   --
-  -- 'BootFollowingFastPath' does its entire run inline and returns
+  -- 'BootFollowRestart' does its entire run inline and returns
   -- 'Nothing'; the rest of runApp (which is the Ingest pipeline) then
   -- short-circuits. The other two branches return 'Just' with the
   -- initial state the Ingest setup needs.
@@ -368,15 +368,17 @@ runApp tracer args = do
           , ssrAddressIdCounter row
           )
 
-      BootFollowingFastPath fpc -> do
+      BootFollowRestart frc -> do
         runAppM coreEnv (setCurrentPhase (ceCurrentPhase coreEnv) FollowingVolatileTail)
         watchdog <- newWatchdog (ceMinSeverity coreEnv)
+        -- 'runFollowRestart' owns the 'withLedgerThreads' bracket so
+        -- it can pass the computed replay boundary to the ledger
+        -- worker (see the 'FollowRestartStart' record).
         withIOManager $ \iomgr ->
-          withLedgerThreads hasLedgerEnv Nothing stateQueryVar watchdog $
-            runFollowFastPath
-              tracer logInfo logError hasqlSettings coreEnv topLevelCfg networkMagic
-              socketPath systemStart stateQueryVar hasLedgerEnv
-              consumerCtrlConn fpc mShutdown iomgr watchdog
+          runFollowRestart
+            tracer logInfo logError hasqlSettings coreEnv topLevelCfg networkMagic
+            socketPath systemStart stateQueryVar hasLedgerEnv
+            consumerCtrlConn frc mShutdown iomgr watchdog
         pure Nothing
 
   for_ mIngestState $ \(initialExtractState, dedupMaps, intersectReq, replayBoundary, replayStart, initialAddressId) -> do
@@ -711,11 +713,32 @@ handoffToFollow
       link nodeThread
       racedFollow
 
+-- | Resolved boot state handed from 'prepareFollowRestart' to the
+-- Follow setup. Carries the chainsync intersection point and,
+-- when the on-disk snapshot lags PG, the (lower, upper) edges of
+-- the replay window the ledger worker walks while Follow\'s
+-- consumer skips its PG-write path.
+--
+-- Both replay edges are 'Just' together or 'Nothing' together;
+-- 'Nothing' when ledger is off or the snapshot is aligned with PG.
+data FollowRestartStart = FollowRestartStart
+  { frsIntersectPoint  :: !CardanoPoint
+    -- ^ Chainsync intersection point. The snapshot\'s point when
+    -- ledger is on; the last-committed point when ledger is off.
+  , frsReplayBootSlot  :: !(Maybe SlotNo)
+    -- ^ Upper edge of the replay window: PG\'s
+    -- @last_committed_slot@. 'Just' iff the snapshot lags PG.
+  , frsReplayStartSlot :: !(Maybe SlotNo)
+    -- ^ Lower edge of the replay window: the chosen snapshot\'s
+    -- slot. 'Just' iff 'frsReplayBootSlot' is.
+  }
+
 -- | Boot directly into 'FollowingChainTip' on a restart after Prep
 -- has already marked sync complete. Builds the Follow state from
 -- scratch (no 'IngestEnv' is in scope) and runs the receiver +
--- Follow loop. The caller is responsible for opening the
--- 'IOManager' and any ledger threads ('withLedgerThreads').
+-- Follow loop. Owns the ledger-thread bracket so it can pass the
+-- computed replay boundary (when the snapshot lags PG) to the
+-- ledger worker before the worker starts draining the queue.
 --
 -- When ledger is enabled, the on-disk snapshot is the authoritative
 -- restart point. The flow:
@@ -723,20 +746,23 @@ handoffToFollow
 --   1. Walk the candidate snapshots newest-first; pick the first
 --      whose slot has a matching @block.hash@ in PG.
 --   2. Load that snapshot into the in-memory 'LedgerDB'.
---   3. If the snapshot's slot is below @last_committed_slot@, the
---      asynchronous snapshot writer fell behind the consumer's
---      commits before shutdown. Roll PG back to the snapshot's
---      point using the same cascade chain reorgs use; this brings
---      PG and ledger into alignment.
---   4. Intersect chainsync at the (now-aligned) restart point.
+--   3. If the snapshot\'s slot is below @last_committed_slot@ —
+--      the async snapshot writer was behind the consumer at
+--      shutdown — configure a replay window. The ledger worker
+--      re-applies the gap from the receiver fan-out; Follow\'s
+--      consumer skips its PG-write path for blocks in the window
+--      (the rows are already in PG).
+--   4. Start the ledger worker + snapshot writer (parametrised by
+--      the replay window so snapshot writes are suppressed inside
+--      it) and intersect chainsync at the snapshot\'s point.
 --
 -- When ledger is disabled there is no snapshot to load; chainsync
--- intersects directly at the row's @last_committed_*@.
+-- intersects directly at the row\'s @last_committed_*@.
 --
 -- When the optional shutdown signal fires, the Follow loop is
 -- cancelled and this returns normally; otherwise it blocks forever
 -- (production behaviour).
-runFollowFastPath
+runFollowRestart
   :: AppTracer
   -> (Text -> IO ())
   -> (Text -> IO ())
@@ -749,19 +775,19 @@ runFollowFastPath
   -> StateQueryVar
   -> HasLedgerEnv
   -> ControlConnection
-  -> FastPathContext
+  -> FollowRestartContext
   -> Maybe (IO ())
   -> IOManager
   -> Watchdog
   -> IO ()
-runFollowFastPath
+runFollowRestart
   tracer logInfo logError hasqlSettings coreEnv topLevelCfg networkMagic
-  socketPath systemStart stateQueryVar hasLedgerEnv consumerCtrlConn fpc
+  socketPath systemStart stateQueryVar hasLedgerEnv consumerCtrlConn frc
   mShutdown iomgr watchdog = do
 
     logInfo "Boot: sync_complete=true; entering FollowingVolatileTail"
 
-    let row = fpcSyncState fpc
+    let row = frcSyncState frc
         tableDefs = concatMap pdTables (ceExtractors coreEnv)
     -- 'FollowRestart' mode skips the dedup-counter DELETE. The counter
     -- columns on 'SyncStateRow' are frozen at Ingest's last
@@ -774,69 +800,81 @@ runFollowFastPath
         "Cleaned up " <> show deleted
           <> " rows past last_committed_slot from a prior Follow crash"
 
-    -- Pick the chainsync restart point. When ledger is enabled, this
-    -- also loads the chosen snapshot and rolls PG back to it if it
-    -- lags @last_committed_slot@.
-    intersectPoint <- prepareFastPathStart
-      coreEnv logInfo consumerCtrlConn tableDefs
-      hasLedgerEnv stateQueryVar topLevelCfg fpc
+    -- Pick the chainsync restart point. When ledger is enabled and
+    -- the chosen snapshot lags PG, this also computes the replay
+    -- window so the ledger worker (started below) and Follow's
+    -- consumer can coordinate the catch-up without touching PG.
+    restartStart <- prepareFollowRestart
+      coreEnv logInfo consumerCtrlConn
+      hasLedgerEnv stateQueryVar topLevelCfg frc
+    let intersectPoint  = frsIntersectPoint  restartStart
+        mReplayBoot     = frsReplayBootSlot  restartStart
+        mReplayStart    = frsReplayStartSlot restartStart
 
-    followCtrl <- openControlConnection hasqlSettings
-    let followConn = unControlConnection followCtrl
-    -- @synchronous_commit = off@: per-block COMMITs no longer wait
-    -- on WAL fsync. Crash recovery is covered by chainsync replay
-    -- from @last_committed_slot@.
-    runAppM followConn (setFollowSessionGUCs defaultFollowTuning)
+    -- Now that the snapshot is loaded and the replay window is
+    -- computed, start the ledger worker + snapshot writer with the
+    -- replay boundary baked in. Inside the window the worker
+    -- suppresses snapshot writes and 'accumulateEpochParams' because
+    -- those epochs are already represented in PG / on disk.
+    withLedgerThreads hasLedgerEnv mReplayBoot stateQueryVar watchdog $ do
+      followCtrl <- openControlConnection hasqlSettings
+      let followConn = unControlConnection followCtrl
+      -- @synchronous_commit = off@: per-block COMMITs no longer wait
+      -- on WAL fsync. Crash recovery is covered by chainsync replay
+      -- from @last_committed_slot@.
+      runAppM followConn (setFollowSessionGUCs defaultFollowTuning)
 
-    blockQueue       <- newTBQueueIO 500
-    receiverStats    <- newReceiverStats
-    latestPointRef   <- newIORef Nothing
-    rollbackBoundary <- newTVarIO Nothing
+      blockQueue       <- newTBQueueIO 500
+      receiverStats    <- newReceiverStats
+      latestPointRef   <- newIORef Nothing
+      rollbackBoundary <- newTVarIO Nothing
 
-    resolver <- mkFollowResolver followConn
-    let writer    = FollowingWriter.mkWriter followConn
-        followEnv =
-          FollowEnv
-            { feCore                = coreEnv
-            , feBlockQueue          = blockQueue
-            , feHasLedgerEnv        = hasLedgerEnv
-            , feStateQueryVar       = stateQueryVar
-            , feSystemStart         = systemStart
-            , feReceiverStats       = receiverStats
-            , feWatchdog            = watchdog
-            , feLatestReceivedPoint = latestPointRef
-            , feHasqlConnection     = followConn
-            , feResolver            = resolver
-            , feWriter              = writer
-            , feControlConnection   = consumerCtrlConn
-            , feRollbackBoundary    = rollbackBoundary
-            }
+      resolver <- mkFollowResolver followConn
+      let writer    = FollowingWriter.mkWriter followConn
+          followEnv =
+            FollowEnv
+              { feCore                = coreEnv
+              , feBlockQueue          = blockQueue
+              , feHasLedgerEnv        = hasLedgerEnv
+              , feStateQueryVar       = stateQueryVar
+              , feSystemStart         = systemStart
+              , feReceiverStats       = receiverStats
+              , feWatchdog            = watchdog
+              , feLatestReceivedPoint = latestPointRef
+              , feHasqlConnection     = followConn
+              , feResolver            = resolver
+              , feWriter              = writer
+              , feControlConnection   = consumerCtrlConn
+              , feRollbackBoundary    = rollbackBoundary
+              , feReplayBootSlot      = mReplayBoot
+              , feReplayStartSlot     = mReplayStart
+              }
 
-    let intersectReq = IntersectAt [intersectPoint]
+      let intersectReq = IntersectAt [intersectPoint]
 
-        mLedgerQueue = case hasLedgerEnv of
-          LedgerEnabled lenv -> Just (leLedgerQueue lenv)
-          LedgerDisabled _   -> Nothing
+          mLedgerQueue = case hasLedgerEnv of
+            LedgerEnabled lenv -> Just (leLedgerQueue lenv)
+            LedgerDisabled _   -> Nothing
 
-        followAction =
-          runAppM followEnv Follow.run
-            `finally` do
-              logInfo "Closing Follow hasql connection..."
-              closeControlConnection followCtrl
-                `catch` \(e :: SomeException) ->
-                  logError $ "Error closing Follow connection: " <> show e
+          followAction =
+            runAppM followEnv Follow.run
+              `finally` do
+                logInfo "Closing Follow hasql connection..."
+                closeControlConnection followCtrl
+                  `catch` \(e :: SomeException) ->
+                    logError $ "Error closing Follow connection: " <> show e
 
-        -- When 'mShutdown' is provided, race it against the Follow
-        -- loop so a test can stop the app cleanly.
-        racedFollow = case mShutdown of
-          Nothing      -> followAction
-          Just waitSig -> void (race waitSig followAction)
+          -- When 'mShutdown' is provided, race it against the Follow
+          -- loop so a test can stop the app cleanly.
+          racedFollow = case mShutdown of
+            Nothing      -> followAction
+            Just waitSig -> void (race waitSig followAction)
 
-    withAsync (runWatchdogIO tracer watchdog blockQueue mLedgerQueue Nothing) $ \watchdogThread -> do
-      link watchdogThread
-      withAsync (runAppM followEnv $ connectToNode iomgr topLevelCfg networkMagic socketPath intersectReq) $ \nodeThread -> do
-        link nodeThread
-        racedFollow
+      withAsync (runWatchdogIO tracer watchdog blockQueue mLedgerQueue Nothing) $ \watchdogThread -> do
+        link watchdogThread
+        withAsync (runAppM followEnv $ connectToNode iomgr topLevelCfg networkMagic socketPath intersectReq) $ \nodeThread -> do
+          link nodeThread
+          racedFollow
 
 -- | Cadence between snapshot-load heartbeat lines. Tuned so a fast
 -- load doesn't emit any heartbeats while a slow one still gives the
@@ -844,59 +882,69 @@ runFollowFastPath
 snapshotHeartbeatSeconds :: Int
 snapshotHeartbeatSeconds = 15
 
--- | Resolve the chainsync intersection point for the fast-path
--- restart, loading the ledger snapshot and rolling PG back to it
--- when needed.
+-- | Resolve the chainsync intersection point for a Follow restart,
+-- loading the ledger snapshot and computing the replay window when
+-- the snapshot lags PG.
 --
--- Ledger disabled: returns the row's last-committed point.
+-- Ledger disabled: returns the row\'s last-committed point with no
+-- replay window.
 --
 -- Ledger enabled:
 --
---   * Walks 'fpcCandidateSnapshots' newest-first, picking the first
+--   * Walks 'frcCandidateSnapshots' newest-first, picking the first
 --     whose slot has a matching @block.hash@ in PG. Orphaned
 --     candidates (snapshot exists but PG has no block at that slot)
 --     are skipped with a log line.
 --   * Loads the chosen snapshot into the in-memory 'LedgerDB' and
 --     seeds the HFC interpreter from the resulting ledger state.
---   * If the snapshot's slot is below @last_committed_slot@, runs
---     'Rollback.rollbackToPoint' on the snapshot's point. The
---     cascade DELETEs every row past the point and advances
---     @dbsync_sync_state.last_committed_*@ in one PG transaction,
---     leaving the database aligned with the ledger.
+--   * If the snapshot\'s slot is below @last_committed_slot@,
+--     emits a log line and returns 'frsReplayBootSlot' / Start so
+--     the caller can:
+--       * Start the ledger worker with the boot slot as its replay
+--         boundary (suppressing snapshot writes inside the window).
+--       * Configure Follow\'s consumer to skip PG writes for blocks
+--         whose slot is at or below the boot slot.
+--     The chainsync receiver intersects at the snapshot\'s point
+--     and fans every replayed block to /both/ the consumer (which
+--     no-ops on it) and the ledger worker (which applies it).
+--     Committed PG rows are left untouched.
 --
 -- Panics when every candidate is orphaned in PG — the
 -- state-directory and PG database have drifted apart and the
 -- operator's recovery is @--resync-from-genesis@.
-prepareFastPathStart
+prepareFollowRestart
   :: CoreEnv
   -> (Text -> IO ())
   -> ControlConnection
-  -> [TableDef]
   -> HasLedgerEnv
   -> StateQueryVar
   -> TopLevelConfig (CardanoBlock StandardCrypto)
-  -> FastPathContext
-  -> IO CardanoPoint
-prepareFastPathStart coreEnv logInfo ctrl tableDefs hasLE sqv topLevelCfg fpc =
+  -> FollowRestartContext
+  -> IO FollowRestartStart
+prepareFollowRestart coreEnv logInfo ctrl hasLE sqv topLevelCfg frc =
   case hasLE of
     LedgerDisabled _ -> ledgerDisabledStart
     LedgerEnabled lenv -> ledgerEnabledStart lenv
   where
-    row    = fpcSyncState fpc
+    row    = frcSyncState frc
     tracer = ceTracer coreEnv
 
     ledgerDisabledStart =
       case (ssrLastCommittedSlot row, ssrLastCommittedBlockHash row) of
         (Just s, Just h) ->
-          pure (mkCardanoPoint s h)
+          pure FollowRestartStart
+            { frsIntersectPoint  = mkCardanoPoint s h
+            , frsReplayBootSlot  = Nothing
+            , frsReplayStartSlot = Nothing
+            }
         _ ->
           panic
-            "Follow fast-path: ledger disabled but dbsync_sync_state has\
+            "Follow restart: ledger disabled but dbsync_sync_state has\
             \ no (slot, hash). The boot decision should have rejected\
             \ this earlier; this is an internal invariant violation."
 
     ledgerEnabledStart lenv = do
-      (snap, snapHash) <- pickValidatedSnapshot logInfo ctrl (fpcCandidateSnapshots fpc)
+      (snap, snapHash) <- pickValidatedSnapshot logInfo ctrl (frcCandidateSnapshots frc)
       let snapSlot  = dsNumber snap
           snapPoint = mkCardanoPoint snapSlot snapHash
       logInfo $ "Loading ledger snapshot at slot " <> show snapSlot
@@ -910,21 +958,31 @@ prepareFastPathStart coreEnv logInfo ctrl tableDefs hasLE sqv topLevelCfg fpc =
         Right () -> do
           loadedExt <- runAppM lenv readCurrentStateUnsafe
           seedInterpreterFromLedgerState topLevelCfg loadedExt sqv
-      -- Rollback PG to the snapshot's point when the snapshot lags
-      -- the last-committed slot. The snapshot writer is asynchronous
-      -- and can fall behind the consumer at shutdown; we re-align by
-      -- deleting the committed rows the ledger doesn't know about.
-      case ssrLastCommittedSlot row of
-        Just lastSlot | lastSlot > snapSlot -> do
+      -- When the snapshot lags PG\'s last-committed slot, configure
+      -- a replay window. Follow\'s consumer skips its PG-write path
+      -- for blocks in the window (the rows are already in PG from
+      -- the previous run) while the ledger worker applies them via
+      -- the receiver fan-out to advance the in-RAM ledger.
+      let mReplayBoot = case ssrLastCommittedSlot row of
+            Just lastSlot | lastSlot > snapSlot -> Just (SlotNo lastSlot)
+            _                                   -> Nothing
+          mReplayStart = case mReplayBoot of
+            Just _  -> Just (SlotNo snapSlot)
+            Nothing -> Nothing
+      case mReplayBoot of
+        Just (SlotNo lastSlot) ->
           logInfo $
-            "Rolling back PG from slot " <> show lastSlot
-              <> " to snapshot slot " <> show snapSlot
-              <> " (" <> show (lastSlot - snapSlot)
-              <> " slots) to align with ledger state"
-          let rollbackEnv = CoreWithConn coreEnv (unControlConnection ctrl)
-          runAppM rollbackEnv (Rollback.rollbackToPoint tableDefs snapPoint)
-        _ -> pure ()
-      pure snapPoint
+            "Snapshot lags PG by " <> show (lastSlot - snapSlot)
+              <> " slots (snapshot=" <> show snapSlot
+              <> ", last_committed_slot=" <> show lastSlot
+              <> "); ledger will catch up via chainsync replay before"
+              <> " Follow resumes PG writes."
+        Nothing -> pure ()
+      pure FollowRestartStart
+        { frsIntersectPoint  = snapPoint
+        , frsReplayBootSlot  = mReplayBoot
+        , frsReplayStartSlot = mReplayStart
+        }
 
 -- | Walk the candidate snapshots newest-first. Return the first one
 -- whose slot has a matching @block.hash@ in PG, paired with that
@@ -938,7 +996,7 @@ pickValidatedSnapshot logInfo ctrl = go
   where
     go [] =
       panic
-        "Follow fast-path: every candidate snapshot is orphaned in PG\
+        "Follow restart: every candidate snapshot is orphaned in PG\
         \ (no matching row in the block table). The state directory\
         \ and PG database have drifted apart. Restart with\
         \ --resync-from-genesis."

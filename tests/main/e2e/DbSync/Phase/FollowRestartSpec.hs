@@ -2,28 +2,38 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- | Restart a sync that's already in 'FollowingChainTip' and verify
--- the second run picks up cleanly.
+-- the second run picks up cleanly across three configurations:
 --
--- Targets two regressions:
---
---   * The dedup-counter cleanup must not wipe legitimately-committed
---     rows on a Follow restart ('CleanupMode.FollowRestart').
---   * The ledger fast-path must restore the in-memory 'LedgerDB' from
---     the latest on-disk snapshot at or before
---     @last_committed_slot@ ('loadLedgerSnapshotForFollow').
+--   * Ledger off — the dedup-counter cleanup must not wipe
+--     legitimately-committed rows on a Follow restart
+--     ('CleanupMode.FollowRestart').
+--   * Ledger on, snapshot aligned with PG — the restart path
+--     restores the in-memory 'LedgerDB' from the on-disk snapshot.
+--   * Ledger on, snapshot lags @last_committed_slot@ (the natural
+--     state on any non-boundary stop) — the restart path replays
+--     the gap through the ledger worker via the receiver fan-out;
+--     Follow\'s consumer skips its PG-write path for the replayed
+--     range so committed rows are preserved.
 module DbSync.Phase.FollowRestartSpec (spec) where
 
 import Cardano.Prelude
 
-import Test.Hspec (Spec, describe, it, shouldSatisfy)
+import qualified Data.List as List
+import qualified Data.Text as T
+import Data.IORef (IORef, newIORef, readIORef)
+
+import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 import DbSync.Config.Types (SyncConfig)
 import DbSync.Db.Schema.Address (addressTableDef)
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
 import DbSync.Db.Schema.Pool (poolHashTableDef)
 import DbSync.Db.Schema.StakeDelegation (stakeAddressTableDef)
+import DbSync.Db.Schema.SyncState (syncStateTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Schema.UTxO (txOutTableDef)
+import DbSync.Trace.Backend (mkTestTracer)
+import DbSync.Trace.Types (LogMsg (..))
 import DbSync.Test.AppHarness
   ( defaultTestProfile
   , ledgerEnabledTestProfile
@@ -31,6 +41,7 @@ import DbSync.Test.AppHarness
   , waitForSyncComplete
   , withTempDir
   )
+import DbSync.Test.Database (queryTestDb)
 import DbSync.Test.E2E
   ( conwayConfigDir
   , forgeAndWaitForBlocks
@@ -41,7 +52,7 @@ import DbSync.Test.E2E
   )
 import DbSync.Test.Helpers (waitFor)
 import DbSync.Test.MockNode (MockNode, forgeAndPushBlocks, withMockNode)
-import DbSync.Test.PgAssertions (countRows)
+import DbSync.Test.PgAssertions (countRows, tableColumn)
 
 spec :: Spec
 spec = describe "FollowingChainTip restart" $ do
@@ -55,6 +66,9 @@ spec = describe "FollowingChainTip restart" $ do
     -- chains; production default of @580@ would mean no snapshot
     -- ever lands during a typical test run.
     runRestartScenario ledgerEnabledTestProfile RequireSnapshot
+
+  it "replays the natural mid-epoch gap without rolling PG back (ledger on)" $
+    runMidEpochReplayScenario
 
 -- | Tables whose row counts must survive the restart. They get IDs
 -- from PG sequences during Follow and live with the "stale counter"
@@ -120,3 +134,111 @@ verifyResume mn preCounts blocksBefore = do
   -- INSERT path stalling for another reason.
   let target = blocksBefore + 20
   forgeAndWaitForBlocks mn 20 target 60
+
+-- ---------------------------------------------------------------------------
+-- * Mid-epoch natural-gap scenario
+-- ---------------------------------------------------------------------------
+
+-- | Restart inside the natural \"snapshot lags PG\" window — the
+-- usual state at any non-boundary stop with ledger enabled. The
+-- snapshot writer fires once per Follow-cadence epoch boundary;
+-- between boundaries the consumer keeps advancing
+-- @dbsync_sync_state.last_committed_slot@ on each block while the
+-- snapshot stays put at the last boundary. The restart path
+-- detects the gap, replays it through the ledger worker via the
+-- receiver fan-out, and lets the Follow consumer no-op on each
+-- replayed block.
+runMidEpochReplayScenario :: IO ()
+runMidEpochReplayScenario =
+  withMockNode conwayConfigDir $ \mn ->
+    withTempDir "dbsync-test-restart-mid-epoch" $ \ledgerDir -> do
+      firstLogs <- newIORef []
+      let firstTracer = mkTestTracer firstLogs
+
+      -- 200 Ingest blocks (≈1000 slots, two epoch boundaries)
+      -- + 130 Follow blocks (≈650 slots, crosses at least one
+      -- Follow-cadence epoch). Guarantees the Follow snapshot
+      -- writer has fired at least once, and the final block sits
+      -- strictly mid-epoch so 'last_committed_slot' is ahead of the
+      -- newest snapshot.
+      _ <- forgeAndPushBlocks mn 200
+
+      (preBlocks, preCounts, lastCommitted, newestSnapshotSlot) <-
+        withAppSession firstTracer ledgerEnabledTestProfile mn ledgerDir $ \_ -> do
+          waitForSyncComplete 60
+          forgeAndWaitForBlocks mn 130 330 90
+          blockCount    <- countRows (tdName blockTableDef)
+          counts        <- traverse countRows preservedTables
+          committedSlot <- readLastCommittedSlot
+          snapshotSlot  <- newestSnapshotSlotOrFail ledgerDir
+          pure (blockCount, counts, committedSlot, snapshotSlot)
+
+      -- Precondition: 'last_committed_slot' strictly ahead of the
+      -- newest snapshot. If this ever stops holding (e.g. snapshot
+      -- cadence changes), the test is no longer exercising the
+      -- target path.
+      lastCommitted `shouldSatisfy` (> newestSnapshotSlot)
+
+      secondLogs <- newIORef []
+      let secondTracer = mkTestTracer secondLogs
+
+      withAppSessionResume secondTracer ledgerEnabledTestProfile mn ledgerDir $ \_ -> do
+        waitFor "sync_complete remains true on restart" syncCompleteTrue 60
+
+        -- Block count is unchanged across the restart: Follow's
+        -- consumer skips its PG-write path inside the replay
+        -- window, so committed rows stay put.
+        afterRestartBlocks <- countRows (tdName blockTableDef)
+        afterRestartBlocks `shouldBe` preBlocks
+
+        afterReSyncSlot <- readLastCommittedSlot
+        afterReSyncSlot `shouldBe` lastCommitted
+
+        postCounts <- traverse countRows preservedTables
+        postCounts `shouldBe` preCounts
+
+        -- The chain advances normally past the original tip.
+        let target = preBlocks + 20
+        forgeAndWaitForBlocks mn 20 target 60
+
+      secondMessages <- collectMessages secondLogs
+
+      -- Pin the snapshot-lag log so the test fails if the
+      -- gap-handling branch is silently bypassed.
+      secondMessages `shouldSatisfy`
+        any (T.isInfixOf ("Snapshot lags PG by "
+                            <> show (lastCommitted - newestSnapshotSlot)
+                            <> " slots"))
+
+      -- No PG rollback line: confirms we don't delete committed rows.
+      secondMessages `shouldSatisfy`
+        not . any (T.isInfixOf "Rolling back PG from slot")
+
+-- | Read @dbsync_sync_state.last_committed_slot@ as a 'Word64'.
+readLastCommittedSlot :: IO Word64
+readLastCommittedSlot = do
+  raw <- T.strip <$> queryTestDb
+    ( "SELECT COALESCE(" <> tableColumn syncStateTableDef "last_committed_slot"
+        <> "::text, '') FROM " <> tdName syncStateTableDef <> " LIMIT 1"
+    )
+  case readMaybe (T.unpack raw) of
+    Just n  -> pure n
+    Nothing -> panic $ "last_committed_slot was empty / unparseable: " <> raw
+
+-- | Highest snapshot slot under @ledgerDir@. Panics when the
+-- directory is empty — the caller relies on at least one Follow
+-- snapshot having landed by the time it's invoked.
+newestSnapshotSlotOrFail :: FilePath -> IO Word64
+newestSnapshotSlotOrFail ledgerDir = do
+  entries <- listLedgerSnapshots ledgerDir
+  case List.sortBy (flip compare) (mapMaybe readMaybe entries) of
+    (s : _) -> pure s
+    []      -> panic
+      "newestSnapshotSlotOrFail: no Follow snapshot landed during the\
+      \ first session; the mid-epoch replay scenario can't be set up.\
+      \ The Follow run may need a longer chain to cross a snapshot\
+      \ cadence boundary."
+
+-- | Pull the captured log messages out of the test tracer's IORef.
+collectMessages :: IORef [LogMsg] -> IO [Text]
+collectMessages ref = reverse . map lmMessage <$> readIORef ref

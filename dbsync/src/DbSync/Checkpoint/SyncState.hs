@@ -56,7 +56,7 @@ import DbSync.Db.Statement.Resume
   , selectMultiAssetDedupStmt
   )
 import DbSync.Trace (HasTracer (..))
-import DbSync.Trace.Timing (fmtDuration, fmtRows)
+import DbSync.Trace.Timing (fmtCount, fmtDuration)
 import DbSync.Trace.Types (LogMsg (..), Severity (..))
 import DbSync.Db.Statement.SyncState
   ( clearPendingRollbackSlotStmt
@@ -155,7 +155,7 @@ markSnapshotComplete slotNo = do
   expectOneRowAffected "markSnapshotComplete" n
 
 -- | Flip @sync_complete@ to true at the Ingest → Follow boundary.
--- Subsequent boots take the fast path.
+-- Subsequent boots take the Follow-restart path.
 markSyncComplete
   :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
   => m ()
@@ -281,7 +281,7 @@ timedRebuild tableName action = do
   rows  <- action
   end   <- liftIO getCurrentTime
   liftIO $ traceWith tracer $ LogMsg Info "DedupRebuild" (
-      tableName <> ": " <> fmtRows rows <> " rows in "
+      tableName <> ": " <> fmtCount rows <> " rows in "
         <> fmtDuration (realToFrac (diffUTCTime end start))
     ) Nothing
 

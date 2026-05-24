@@ -143,7 +143,7 @@ markSnapshotCompleteStmt =
 
 -- | Flip @sync_complete@ to true. Called once at the
 -- 'IngestChainHistory' → 'FollowingChainTip' transition; subsequent
--- boots take the fast path.
+-- boots take the Follow-restart path.
 markSyncCompleteStmt :: Stmt.Statement () Int64
 markSyncCompleteStmt =
   Stmt.preparable sql E.noParams D.rowsAffected

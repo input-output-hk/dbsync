@@ -9,7 +9,7 @@
 -- by @tx_out.id@ (PK lookup, no index on @(tx_id, index)@ needed
 -- during Ingest).
 --
--- A miss in the 'UtxoCache' does not enqueue a pair here — those
+-- A miss in the 'UtxoStore' does not enqueue a pair here — those
 -- inputs fall through to the post-load resolve, which writes the
 -- same column from the now-populated @tx_in.tx_out_id@.
 module DbSync.Worker.TxOut.ConsumedByBuffer

@@ -53,6 +53,8 @@ import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
 import DbSync.Phase.Ingest.PipelineStats (PipelineStats (..))
 import qualified DbSync.Phase.Ingest.ReceiverStats as Recv
 import DbSync.Phase.Ingest.ReceiverStats (ReceiverStats)
+import DbSync.Phase.Ingest.UtxoStore (UtxoStore)
+import qualified DbSync.Phase.Ingest.UtxoStore as UtxoStore
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 
@@ -89,6 +91,7 @@ data WatchdogState = WatchdogState
 data WatchdogIngestSamples = WatchdogIngestSamples
   { wisPipelineStats :: !(IORef PipelineStats)
   , wisReceiverStats :: !ReceiverStats
+  , wisUtxoStore     :: !UtxoStore
   }
 
 -- | Enabled if the configured minimum severity admits 'Debug'.
@@ -197,20 +200,23 @@ advanceThread ts curBlocks =
     !delta   = monotonicDelta (tsPrevBlocks ts) curBlocks
     !streak' = if delta == 0 then tsStreak ts + 1 else 0
 
--- | Previously-seen pipeline / receiver counters carried between
--- sampler iterations so the next iteration can compute interval
--- deltas. Mirrors 'PipelineStats' + the receiver writes-blocked
--- counter.
+-- | Previously-seen pipeline / receiver / UtxoStore counters carried
+-- between sampler iterations so the next iteration can compute
+-- interval deltas. Mirrors 'PipelineStats' + the receiver
+-- writes-blocked counter + 'UtxoStore.StoreStats'.
 data PipelineSample = PipelineSample
-  { psPrevDrainTotal   :: !Word64
-  , psPrevDrainCount   :: !Word64
-  , psPrevSingleDrains :: !Word64
-  , psPrevFullDrains   :: !Word64
+  { psPrevDrainTotal    :: !Word64
+  , psPrevDrainCount    :: !Word64
+  , psPrevSingleDrains  :: !Word64
+  , psPrevFullDrains    :: !Word64
   , psPrevWritesBlocked :: !Word64
+  , psPrevUtxoHits      :: !Word64
+  , psPrevUtxoMisses    :: !Word64
+  , psPrevUtxoInserts   :: !Word64
   }
 
 emptyPipelineSample :: PipelineSample
-emptyPipelineSample = PipelineSample 0 0 0 0 0
+emptyPipelineSample = PipelineSample 0 0 0 0 0 0 0 0
 
 -- | Subtract @prev@ from @cur@, treating @cur < prev@ as a fresh
 -- counter (return @cur@). Handles the consumer's per-epoch reset of
@@ -299,10 +305,11 @@ runWatchdogIO tracer (WatchdogEnabled s) blockQ mLedgerQ mSamples = do
               let dBlocked = monotonicDelta (psPrevWritesBlocked pipelinePrev)
                                             (psPrevWritesBlocked now)
                   drainSeg = renderDrain pipelinePrev now
+                  utxoSeg  = renderUtxoStore pipelinePrev now
                   blockedSeg
                     | dBlocked == 0 = ""
                     | otherwise = " blocked=+" <> show dBlocked
-              in ( blockedSeg <> drainSeg, now )
+              in ( blockedSeg <> drainSeg <> utxoSeg, now )
 
           -- One tip-slot reference rather than three identical
           -- 'slot:S' fields. The receiver's slot is the leading edge
@@ -359,19 +366,57 @@ runWatchdogIO tracer (WatchdogEnabled s) blockQ mLedgerQ mSamples = do
         dSingle = monotonicDelta (psPrevSingleDrains prev) (psPrevSingleDrains now)
         dFull   = monotonicDelta (psPrevFullDrains prev)   (psPrevFullDrains now)
 
+    -- Render the UtxoStore segment as
+    -- @ utxo +Hh/+Mm/+Ii HR=X.YY%@ where the deltas are this
+    -- interval's activity and HR is the lifetime hit rate. Returns
+    -- @""@ when no lookup or insert happened this interval.
+    renderUtxoStore :: PipelineSample -> PipelineSample -> Text
+    renderUtxoStore prev now
+      | dHits == 0 && dMisses == 0 && dInserts == 0 = ""
+      | otherwise =
+          " utxo +" <> show dHits
+            <> "h/+" <> show dMisses
+            <> "m/+" <> show dInserts <> "i"
+            <> hitRateSeg
+      where
+        dHits    = monotonicDelta (psPrevUtxoHits prev)    (psPrevUtxoHits now)
+        dMisses  = monotonicDelta (psPrevUtxoMisses prev)  (psPrevUtxoMisses now)
+        dInserts = monotonicDelta (psPrevUtxoInserts prev) (psPrevUtxoInserts now)
+        looked   = psPrevUtxoHits now + psPrevUtxoMisses now
+        hitRateSeg
+          | looked == 0 = ""
+          | otherwise =
+              let pct = fromIntegral (psPrevUtxoHits now) * (100 :: Double)
+                      / fromIntegral looked
+              in " HR=" <> fmtPct pct
+
+    -- Two-decimal-place percentage formatter without pulling in
+    -- 'Text.Printf' just for one call site.
+    fmtPct :: Double -> Text
+    fmtPct x =
+      let rounded = round (x * 100) :: Int
+          whole   = rounded `div` 100
+          frac    = abs (rounded `mod` 100)
+          fracTxt = if frac < 10 then "0" <> show frac else show frac
+      in show whole <> "." <> fracTxt <> "%"
+
     -- Read the current absolute counter values from PipelineStats +
-    -- ReceiverStats and stash them in a 'PipelineSample' so the next
-    -- iteration can compute a delta.
+    -- ReceiverStats + UtxoStore and stash them in a 'PipelineSample'
+    -- so the next iteration can compute a delta.
     readPipeline :: WatchdogIngestSamples -> IO PipelineSample
-    readPipeline (WatchdogIngestSamples psRef rs) = do
+    readPipeline (WatchdogIngestSamples psRef rs uxs) = do
       ps   <- readIORef psRef
       rsSn <- Recv.readSnapshot rs
+      uxSn <- UtxoStore.readStoreStats uxs
       pure PipelineSample
         { psPrevDrainTotal    = psDrainTotal ps
         , psPrevDrainCount    = psDrainCount ps
         , psPrevSingleDrains  = psSingleDrains ps
         , psPrevFullDrains    = psFullDrains ps
         , psPrevWritesBlocked = Recv.snWritesBlocked rsSn
+        , psPrevUtxoHits      = UtxoStore.ssHits uxSn
+        , psPrevUtxoMisses    = UtxoStore.ssMisses uxSn
+        , psPrevUtxoInserts   = UtxoStore.ssInserts uxSn
         }
 
     -- Suppress the notes line when no thread has ever written a real

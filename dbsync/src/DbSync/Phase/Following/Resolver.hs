@@ -195,6 +195,8 @@ resolver conn lastBlock = IdResolver
   , recordTxOutputs = \_ _ -> pure ()
 
   , recordConsumed = \_ _ -> pure ()
+
+  , deleteCachedUtxo = \_ _ -> pure ()
   }
 
 run :: Conn.Connection -> a -> Stmt.Statement a b -> IO b
@@ -399,6 +401,8 @@ bufferedResolver conn preAlloc buf lastBlock cache = IdResolver
   , recordTxOutputs = \_ _ -> pure ()
 
   , recordConsumed = \_ _ -> pure ()
+
+  , deleteCachedUtxo = \_ _ -> pure ()
   }
 
 -- | SELECT-on-key, allocate-on-miss with per-block cache shadowing.

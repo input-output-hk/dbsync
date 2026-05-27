@@ -81,6 +81,7 @@ import DbSync.Extractor (ExtractState (..))
 import DbSync.Extractor.EpochBoundary (runEpochBoundary)
 import DbSync.Phase.Ingest.DedupMap (dedupMapSizes)
 import DbSync.Phase.Ingest.PipelineStats (PipelineStats (..), emptyPipelineStats)
+import qualified DbSync.Phase.Ingest.UtxoStore as UtxoStore
 import DbSync.Trace.Replay
   ( ReplayAdvance (..)
   , ReplayLog (..)
@@ -485,6 +486,22 @@ runConsumer = do
               lsReopen loaderStream
               setConsumerNote watchdog "consumer: post-commit"
 
+            -- 9. Compact the UtxoStore: snapshot the current state
+            --    then reopen the active table from it. Caps the
+            --    active LSM run count (and hence open file
+            --    descriptors) to whatever the snapshot persists; the
+            --    snapshot also doubles as the warm-up state for a
+            --    resumed boot. Runs after @lsReopen@ so the
+            --    snapshot reflects state PG has durabilised through
+            --    epoch @prev@; a resumed boot re-processes from
+            --    @sync_state@ and re-records are idempotent on the
+            --    same key.
+            lsm   <- asks ieLsmSession
+            store <- asks ieUtxoStore
+            liftIO $ do
+              setConsumerNote watchdog "consumer: utxoStore compact"
+              UtxoStore.compactUtxoStore store lsm
+
             -- End-to-end timing: spans the previous boundary's
             -- post-commit reset through this boundary's post-commit
             -- reset, so the @blk/s@ rate reflects what the operator
@@ -533,10 +550,14 @@ runConsumer = do
             when (isNothing baseline && blocksPerSec > 500) $
               liftIO $ writeIORef baselineRef (Just (BaselineRef blocksPerSec))
 
+            storeStats <- liftIO $ UtxoStore.readStoreStats store
+            let hitRateSeg = renderUtxoHitRate storeStats
+
             liftIO $ traceWith tracer $ LogMsg Info "Ingest"
               ( "Epoch " <> show (unEpochNo prev)
                 <> " | " <> fmtCount blockCount <> " blk in " <> fmtDuration elapsedSec
                 <> " (" <> show (round blocksPerSec :: Int) <> " blk/s)"
+                <> hitRateSeg
                 <> " | " <> status
                 <> pctSeg
               ) Nothing
@@ -765,6 +786,19 @@ renderDedupCounts :: [(Text, Int)] -> Text
 renderDedupCounts = Text.intercalate " " . map one
   where
     one (n, c) = n <> "=" <> fmtCount c
+
+-- | Render the UtxoStore lifetime hit rate as @" | utxo HR=X.YY%"@.
+-- Returns @""@ until the first lookup has happened so the boot
+-- epoch's log line doesn't carry a meaningless @0.00%@.
+renderUtxoHitRate :: UtxoStore.StoreStats -> Text
+renderUtxoHitRate s
+  | looked == 0 = ""
+  | otherwise   =
+      let pct = fromIntegral (UtxoStore.ssHits s) * 100
+              / fromIntegral looked :: Double
+      in " | utxo HR=" <> fmtF2 pct <> "%"
+  where
+    looked = UtxoStore.ssHits s + UtxoStore.ssMisses s
 
 -- | Live data after the most recent GC. Sampled at epoch boundaries
 -- so the value reflects the heap working set at the end of that

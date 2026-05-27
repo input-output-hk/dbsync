@@ -70,7 +70,8 @@ import DbSync.Extractor
 import DbSync.Phase.Ingest.DedupMap (DedupMaps)
 import DbSync.Phase.Ingest.PipelineStats (PipelineStats)
 import DbSync.Phase.Ingest.ReceiverStats (ReceiverStats)
-import DbSync.Phase.Ingest.UtxoCache (UtxoCache)
+import DbSync.Phase.Ingest.LsmSession (LsmSession)
+import DbSync.Phase.Ingest.UtxoStore (UtxoStore)
 import DbSync.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..))
 import DbSync.Metrics (HasMetrics (..), Metrics)
 import DbSync.Phase.Current (HasCurrentPhase (..), CurrentPhase, readCurrentPhase)
@@ -194,10 +195,16 @@ data IngestEnv = IngestEnv
     -- @address@ rows, @tx_out.address_id@, @collateral_tx_out.address_id@,
     -- and (when the flag is on) @tx_out.consumed_by_tx_id@ for the
     -- epoch one boundary behind the main pipeline.
-  , ieUtxoCache :: !UtxoCache
-    -- ^ Bounded FIFO map from tx hash to @(tx_id, [(tx_out_id, value)])@.
-    -- Consulted by the UTxO extractor to resolve inputs at COPY time;
-    -- misses fall through to the post-load resolve.
+  , ieLsmSession :: !LsmSession
+    -- ^ Shared LSM session backing the ingest-phase scratch
+    -- tables. Owned by 'IngestEnv'; the App-level shutdown calls
+    -- 'DbSync.Phase.Ingest.LsmSession.closeLsmSession' (mid-flight
+    -- crash) or 'closeAndDeleteLsmSession' (after Prep completes).
+  , ieUtxoStore :: !UtxoStore
+    -- ^ Tx-hash → @(tx_id, [(tx_out_id, value)])@ store backed by
+    -- 'ieLsmSession'. Consulted by the UTxO extractor to resolve
+    -- inputs at COPY time; misses fall through to the post-load
+    -- resolve.
   , ieConsumedByBuffer :: !(Maybe ConsumedByBufferRef)
     -- ^ Per-epoch buffer of @(producer_tx_out_id, consumer_tx_id)@
     -- pairs destined for @tx_out.consumed_by_tx_id@. 'Nothing' when

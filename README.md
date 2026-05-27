@@ -1,6 +1,6 @@
 # DbSync
 
-A Haskell ground-up reimplementation of `cardano-db-sync` targeting a ~4× faster
+A Haskell ground-up reimplementation of `cardano-db-sync` targeting a faster
 genesis-to-tip sync via decoupled COPY-based parallel extraction.
 
 

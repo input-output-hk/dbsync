@@ -97,7 +97,7 @@ import qualified DbSync.Phase.Preparing.PreResolveIndexes as PreResolveIndexes
 import qualified DbSync.Phase.Preparing.Resolve as Resolve
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
-import DbSync.Phase.Ingest.UtxoCache (defaultCacheCapacity, newUtxoCache)
+import DbSync.Test.Lsm (withTestUtxoStore)
 import DbSync.Test.AppHarness (defaultTestProfile)
 import DbSync.Test.Database
   ( execTestDb
@@ -198,17 +198,17 @@ setUp = do
   dropSchema tables versions testConnStr
   initSchema tables versions testConnStr
 
-  stRef <- newIORef freshExtractState
-  dedupMaps <- newMaps
-  addrBuf <- newAddressBufferRef
-  utxoCache <- newUtxoCache defaultCacheCapacity
-  bs <- mkLoaderStream testConnBs tables
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoCache Nothing)
-                              (IngestWriter.mkWriter bs) extractors
-  for_ [producerBlock, spendingBlock, byronBlock] $ \blk ->
-    runReaderT (processBlock blk) env
-  lsCommit bs
-  closeLoaderStream bs
+  withTestUtxoStore $ \utxoStore -> do
+    stRef <- newIORef freshExtractState
+    dedupMaps <- newMaps
+    addrBuf <- newAddressBufferRef
+    bs <- mkLoaderStream testConnBs tables
+    let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoStore Nothing)
+                                (IngestWriter.mkWriter bs) extractors
+    for_ [producerBlock, spendingBlock, byronBlock] $ \blk ->
+      runReaderT (processBlock blk) env
+    lsCommit bs
+    closeLoaderStream bs
 
   withTestConnection $ \conn -> do
     let prepEnv = TracerWithConn mkNullTracer conn defaultTestProfile

@@ -66,10 +66,12 @@ library
     DbSync.Phase.Ingest.Consumer
     DbSync.Phase.Ingest.Counter
     DbSync.Phase.Ingest.DedupMap
+    DbSync.Phase.Ingest.FdLimit
+    DbSync.Phase.Ingest.LsmSession
     DbSync.Phase.Ingest.PipelineStats
     DbSync.Phase.Ingest.ReceiverStats
     DbSync.Phase.Ingest.Resolver
-    DbSync.Phase.Ingest.UtxoCache
+    DbSync.Phase.Ingest.UtxoStore
     DbSync.Phase.Ingest.Writer
     DbSync.Phase.Preparing.Backfill
     DbSync.Phase.Preparing.Indexes
@@ -173,6 +175,7 @@ library
     , cardano-protocol-tpraos
     , cardano-slotting
     , cardano-strict-containers
+    , blockio
     , fs-api
     , io-classes:strict-stm
     , lsm-tree
@@ -227,6 +230,7 @@ library
     , time
     , transformers-except
     , filepath
+    , unix
 
 -- ---------------------------------------------------------------------------
 -- Executable

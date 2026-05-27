@@ -97,7 +97,7 @@ import DbSync.Phase.Preparing.Tuning (defaultPrepTuning)
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
-import DbSync.Phase.Ingest.UtxoCache (defaultCacheCapacity, newUtxoCache)
+import DbSync.Test.Lsm (withTestUtxoStore)
 import DbSync.Test.AppHarness (defaultTestProfile)
 import DbSync.Test.Database
   ( queryTestDb
@@ -177,13 +177,12 @@ extractors =
 -- | Drive the supplied blocks through extractor → resolver → COPY
 -- writer → PostgreSQL, then run the post-load pass on the same DB.
 runPipelineThenPrepare :: [GenericBlock] -> IO ()
-runPipelineThenPrepare blocks = do
+runPipelineThenPrepare blocks = withTestUtxoStore $ \utxoStore -> do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
   addrBuf <- newAddressBufferRef
-  utxoCache <- newUtxoCache defaultCacheCapacity
   bs <- mkLoaderStream testConnBs tables
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoCache Nothing)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoStore Nothing)
                               (IngestWriter.mkWriter bs) extractors
   for_ blocks $ \blk -> runReaderT (processBlock blk) env
   lsCommit bs

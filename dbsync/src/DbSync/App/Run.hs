@@ -119,8 +119,15 @@ import DbSync.Worker.TxOut
   )
 import DbSync.Phase.Following.Resolver (mkFollowResolver)
 import DbSync.Phase.Following.Tuning (defaultFollowTuning, setFollowSessionGUCs)
+import DbSync.Phase.Ingest.FdLimit (raiseFdLimit)
+import DbSync.Phase.Ingest.LsmSession
+  ( closeAndDeleteLsmSession
+  , closeLsmSession
+  , lsmSessionTracerFromApp
+  , openLsmSession
+  )
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
-import DbSync.Phase.Ingest.UtxoCache (defaultCacheCapacity, newUtxoCache)
+import DbSync.Phase.Ingest.UtxoStore (closeUtxoStore, openUtxoStore)
 import DbSync.Worker.TxOut.ConsumedByBuffer (newConsumedByBufferRef)
 import DbSync.Config.Types (SyncOptions (..), UtxoOption (..))
 import DbSync.StateQuery (StateQueryVar, newStateQueryVar, seedInterpreterFromLedgerState)
@@ -161,7 +168,10 @@ runApp tracer args = do
       networkMagic = getNetworkMagic genesisCfg
       network      = sgNetworkId (scConfig (gcShelley genesisCfg))
 
-  -- 1. Shared core environment + startup logging
+  -- 1. Raise the open-file soft limit before any LSM session opens.
+  raiseFdLimit tracer
+
+  -- 2. Shared core environment + startup logging
   coreEnv <- buildCoreEnv tracer validProfile nodeCfg network
   runAppM coreEnv runStartup
 
@@ -169,13 +179,13 @@ runApp tracer args = do
   logInfo $ "Ledger state dir: " <> toS ledgerStateDir
   logInfo $ "Socket: " <> toS socketPath
 
-  -- 2. State-query interpreter handle for SlotDetails computation.
+  -- 3. State-query interpreter handle for SlotDetails computation.
   --    Tests against the mock node pre-seed this; production starts
   --    with an empty one and the receiver fills it from the live
   --    node's LocalStateQuery.
   stateQueryVar <- maybe (newStateQueryVar topLevelCfg) pure (aaStateQueryVar args)
 
-  -- 3. Database connection settings from profile.
+  -- 4. Database connection settings from profile.
   let dbCfg   = scDatabase validProfile
       connStr = TE.encodeUtf8 $ "dbname=" <> dcName dbCfg
       hasqlSettings =
@@ -186,7 +196,7 @@ runApp tracer args = do
           , HasqlSettings.dbname (dcName dbCfg)
           ]
 
-  -- 4. Schema check + (re)init.
+  -- 5. Schema check + (re)init.
   let extractors       = ceExtractors coreEnv
       tableDefs        = concatMap pdTables extractors
       versions         = map (\e -> (pdName e, pdVersion e)) extractors
@@ -217,7 +227,7 @@ runApp tracer args = do
       for_ errs $ \err -> logError $ "  - " <> renderSchemaMismatch err
       exitFailure
 
-  -- 5. Open the consumer's control connection.
+  -- 6. Open the consumer's control connection.
   consumerCtrlConn <- openControlConnection hasqlSettings
   when needsSeed $ do
     runAppM consumerCtrlConn (seedSyncState schemaVersion ledgerEnabledCfg)
@@ -240,7 +250,7 @@ runApp tracer args = do
         , "wal_level = replica. Acceptable on a one-time fresh sync."
         ]
 
-  -- 6. SystemStart and ledger plumbing.
+  -- 7. SystemStart and ledger plumbing.
   let systemStart = SystemStart (sgSystemStart $ scConfig $ gcShelley genesisCfg)
       pinfo       = mkProtocolInfoCardano nodeCfg genesisCfg
       ledgerCfg   = scLedger validProfile
@@ -267,7 +277,7 @@ runApp tracer args = do
         logInfo "Ledger feature disabled (set ledger.enabled = true in profile to opt in); skipping LSM session"
         LedgerDisabled <$> mkNoLedgerEnv tracer pinfo systemStart network
 
-  -- 7. Pre-boot rollback. Either the operator passed --rollback-to-slot
+  -- 8. Pre-boot rollback. Either the operator passed --rollback-to-slot
   -- or a previous deep chainsync rollback left a marker that the ledger
   -- worker couldn't satisfy from its in-RAM buffer. The CLI request
   -- wins when both are present; the marker is cleared either way once
@@ -277,7 +287,7 @@ runApp tracer args = do
       logInfo coreEnv consumerCtrlConn tableDefs hasLedgerEnv
       (aaRollbackToSlot args)
 
-  -- 8. Boot decision.
+  -- 9. Boot decision.
   bootDecision <-
     if needsSeed
       then pure BootFresh
@@ -293,7 +303,7 @@ runApp tracer args = do
             exitFailure
           Right d -> pure d
 
-  -- 8. Resolve the boot decision.
+  -- 10. Resolve the boot decision.
   --
   -- 'BootFollowRestart' does its entire run inline and returns
   -- 'Nothing'; the rest of runApp (which is the Ingest pipeline) then
@@ -392,14 +402,18 @@ runApp tracer args = do
     watchdog         <- newWatchdog (ceMinSeverity coreEnv)
     addrBuffer       <- newAddressBufferRef
     txOutWorker      <- mkTxOutWorker tracer hasqlSettings initialAddressId
-    utxoCache        <- newUtxoCache defaultCacheCapacity
+    -- Open the shared LSM session before any table on top of it.
+    -- The directory may already exist with snapshots from a prior
+    -- run — 'openLsmSession' restores in that case.
+    lsmSession       <- openLsmSession (lsmSessionTracerFromApp tracer) ledgerStateDir
+    utxoStore        <- openUtxoStore lsmSession
     let consumedByOn = uoConsumedByTxId (pcUtxo (scOptions validProfile))
     mConsumedByBuf <-
       if consumedByOn then Just <$> newConsumedByBufferRef else pure Nothing
     latestPointRef   <- newIORef Nothing
     rollbackBoundary <- newTVarIO Nothing
 
-    let resolver = mkIngestResolver stRef dedupMaps addrBuffer utxoCache mConsumedByBuf
+    let resolver = mkIngestResolver stRef dedupMaps addrBuffer utxoStore mConsumedByBuf
         writer   = IngestWriter.mkWriter loaderStream
 
     let ingestEnv = IngestEnv
@@ -409,7 +423,8 @@ runApp tracer args = do
           , ieDedupMaps               = dedupMaps
           , ieAddressBuffer           = addrBuffer
           , ieTxOutWorker             = txOutWorker
-          , ieUtxoCache               = utxoCache
+          , ieLsmSession              = lsmSession
+          , ieUtxoStore               = utxoStore
           , ieConsumedByBuffer        = mConsumedByBuf
           , ieHasLedgerEnv            = hasLedgerEnv
           , ieStateQueryVar           = stateQueryVar
@@ -444,6 +459,10 @@ runApp tracer args = do
           closeTxOutWorker txOutWorker
             `catch` \(e :: SomeException) ->
               logError $ "Error closing tx_out worker: " <> show e
+          logInfo "Closing UTxO store table..."
+          closeUtxoStore utxoStore
+            `catch` \(e :: SomeException) ->
+              logError $ "Error closing UTxO store: " <> show e
 
         ingestAction = runAppM ingestEnv runConsumer `finally` shutdownIngest
 
@@ -452,23 +471,36 @@ runApp tracer args = do
           closeControlConnection consumerCtrlConn
             `catch` \(e :: SomeException) ->
               logError $ "Error closing consumer control connection: " <> show e
+          -- Idempotent. If 'runPrepAndMarkComplete' completed it has
+          -- already called 'closeAndDeleteLsmSession'; otherwise we
+          -- close the session here so the directory survives for
+          -- the next boot to resume from.
+          logInfo "Closing ingest LSM session..."
+          closeLsmSession lsmSession
+            `catch` \(e :: SomeException) ->
+              logError $ "Error closing ingest LSM session: " <> show e
           case hasLedgerEnv of
             LedgerEnabled lenv -> do
-              logInfo "Closing LSM session..."
+              logInfo "Closing ledger LSM session..."
               leClose lenv `catch` \(e :: SomeException) ->
-                logError $ "Error closing LSM session: " <> show e
+                logError $ "Error closing ledger LSM session: " <> show e
               logInfo "Closing snapshot-writer control connection..."
               closeControlConnection (leControlConnection lenv)
                 `catch` \(e :: SomeException) ->
                   logError $ "Error closing snapshot control connection: " <> show e
             LedgerDisabled _ -> pure ()
 
-        runPrepAndMarkComplete =
+        runPrepAndMarkComplete = do
           bracket (openControlConnection hasqlSettings) closeControlConnection $ \prepConn -> do
             runAppM coreEnv (setCurrentPhase (ceCurrentPhase coreEnv) PreparingForVolatileTail)
             let prepEnv = CoreWithConn coreEnv (unControlConnection prepConn)
             runAppM prepEnv (Prep.run hasqlSettings defaultPrepTuning tableDefs)
             runAppM prepConn markSyncComplete
+          -- Prep finished cleanly and 'sync_state' records it.
+          -- Follow does not consult the ingest LSM, so wipe the
+          -- whole 'ingest-lsm/' directory.
+          logInfo "Removing ingest LSM scratch directory..."
+          closeAndDeleteLsmSession lsmSession
 
     let mLedgerQueue = case hasLedgerEnv of
           LedgerEnabled lenv -> Just (leLedgerQueue lenv)
@@ -477,6 +509,7 @@ runApp tracer args = do
     let watchdogSamples = WatchdogIngestSamples
           { wisPipelineStats = pipelineStats
           , wisReceiverStats = receiverStats
+          , wisUtxoStore     = utxoStore
           }
     withIOManager (\iomgr ->
       withLedgerThreads hasLedgerEnv replayBoundary stateQueryVar watchdog $

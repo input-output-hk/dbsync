@@ -52,7 +52,7 @@ import DbSync.Phase.Ingest.DedupMap (DedupMaps, newMaps)
 import DbSync.Block.Pipeline (processBlock)
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
-import DbSync.Phase.Ingest.UtxoCache (defaultCacheCapacity, newUtxoCache)
+import DbSync.Test.Lsm (withTestUtxoStore)
 import DbSync.StateQuery.Types (SlotDetails (..))
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import DbSync.Test.Writer (TestWriterState, emptyTestWriterState, mkTestWriter)
@@ -77,13 +77,12 @@ runPureExtractMany
   :: [ExtractorDef]
   -> [CardanoBlock StandardCrypto]
   -> IO TestWriterState
-runPureExtractMany extractors blocks = do
+runPureExtractMany extractors blocks = withTestUtxoStore $ \utxoStore -> do
   stRef     <- newIORef freshExtractState
   dedupMaps <- newMaps :: IO DedupMaps
   addrBuf   <- newAddressBufferRef
-  utxoCache <- newUtxoCache defaultCacheCapacity
   ref       <- newIORef emptyTestWriterState
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoCache Nothing)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoStore Nothing)
                               (mkTestWriter ref) extractors
   for_ blocks $ \block -> do
     let sd        = syntheticSlotDetails (blockSlot block)

@@ -32,7 +32,7 @@ import DbSync.Phase.Ingest.DedupMap (newMaps)
 import DbSync.Block.Pipeline (processBlock)
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
-import DbSync.Phase.Ingest.UtxoCache (defaultCacheCapacity, newUtxoCache)
+import DbSync.Test.Lsm (withTestUtxoStore)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import DbSync.Test.Writer (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 
@@ -109,24 +109,22 @@ mkMockExtractor countRef = ExtractorDef
 -- ---------------------------------------------------------------------------
 
 runPipeline :: [ExtractorDef] -> GenericBlock -> IO TestWriterState
-runPipeline extractors block = do
+runPipeline extractors block = withTestUtxoStore $ \utxoStore -> do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
   addrBuf <- newAddressBufferRef
-  utxoCache <- newUtxoCache defaultCacheCapacity
   wrRef <- newIORef emptyTestWriterState
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoCache Nothing)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoStore Nothing)
                               (mkTestWriter wrRef) extractors
   runReaderT (processBlock block) env
   readIORef wrRef
 
 runPipelineTwoBlocks :: [ExtractorDef] -> GenericBlock -> GenericBlock -> IO (TestWriterState, TestWriterState)
-runPipelineTwoBlocks extractors block1 block2 = do
+runPipelineTwoBlocks extractors block1 block2 = withTestUtxoStore $ \utxoStore -> do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
   addrBuf <- newAddressBufferRef
-  utxoCache <- newUtxoCache defaultCacheCapacity
-  let resolver = mkIngestResolver stRef dedupMaps addrBuf utxoCache Nothing
+  let resolver = mkIngestResolver stRef dedupMaps addrBuf utxoStore Nothing
 
   wrRef1 <- newIORef emptyTestWriterState
   let env1 = mkTestPipelineEnv resolver (mkTestWriter wrRef1) extractors

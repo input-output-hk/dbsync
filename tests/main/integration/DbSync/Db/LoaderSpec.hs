@@ -38,7 +38,7 @@ import DbSync.Phase.Ingest.DedupMap (newMaps)
 import DbSync.Block.Pipeline (processBlock)
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
-import DbSync.Phase.Ingest.UtxoCache (defaultCacheCapacity, newUtxoCache)
+import DbSync.Test.Lsm (withTestUtxoStore)
 import DbSync.Test.Database (queryTestDb, testConnBs, testConnStr, truncateAllTables)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import qualified DbSync.Phase.Ingest.Writer as IngestWriter
@@ -129,15 +129,14 @@ spec = describe "DbSync.Db.Loader (multi-threaded, full pipeline)" $
         slCount `shouldBe` "2"
 
     describe "epoch boundary (commit + reopen)" $ do
-      it "data survives commit + reopen cycle" $ do
+      it "data survives commit + reopen cycle" $ withTestUtxoStore $ \utxoStore -> do
         truncateAllTables coreTableNames
         -- Simulate 2 epochs: write block, commit, reopen, write another block, commit
         stRef <- newIORef freshExtractState
         dedupMaps <- newMaps
         addrBuf <- newAddressBufferRef
-        utxoCache <- newUtxoCache defaultCacheCapacity
         bs <- mkLoaderStream testConnBs coreTables
-        let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoCache Nothing)
+        let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoStore Nothing)
                                     (IngestWriter.mkWriter bs) [coreExtractor]
 
         -- Epoch 1
@@ -181,13 +180,12 @@ queryCount td = T.strip <$>
 
 -- | Run the full pipeline: extractor → resolver → Ingest writer → PostgreSQL.
 runPipelineToDb :: [GenericBlock] -> IO ()
-runPipelineToDb blocks = do
+runPipelineToDb blocks = withTestUtxoStore $ \utxoStore -> do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
   addrBuf <- newAddressBufferRef
-  utxoCache <- newUtxoCache defaultCacheCapacity
   bs <- mkLoaderStream testConnBs coreTables
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoCache Nothing)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoStore Nothing)
                               (IngestWriter.mkWriter bs) [coreExtractor]
   forM_ blocks $ \blk ->
     runReaderT (processBlock blk) env

@@ -52,7 +52,7 @@ import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Resolver (IdResolver (..))
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
-import DbSync.Phase.Ingest.UtxoCache (defaultCacheCapacity, newUtxoCache)
+import DbSync.Test.Lsm (withTestUtxoStore)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv, mkTestPipelineEnvWith)
 import DbSync.Test.Writer (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 import Test.Hspec (shouldSatisfy)
@@ -291,25 +291,23 @@ spec = do
 
 -- | Run the core extractor on a single block, return written records.
 runCore :: GenericBlock -> IO TestWriterState
-runCore block = do
+runCore block = withTestUtxoStore $ \utxoStore -> do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
   addrBuf <- newAddressBufferRef
-  utxoCache <- newUtxoCache defaultCacheCapacity
   wrRef <- newIORef emptyTestWriterState
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoCache Nothing)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoStore Nothing)
                               (mkTestWriter wrRef) [coreExtractor]
   runReaderT (processBlock block) env
   readIORef wrRef
 
 -- | Run the core extractor on two blocks sequentially, return separate results.
 runCoreTwoBlocks :: GenericBlock -> GenericBlock -> IO (TestWriterState, TestWriterState)
-runCoreTwoBlocks block1 block2 = do
+runCoreTwoBlocks block1 block2 = withTestUtxoStore $ \utxoStore -> do
   stRef <- newIORef freshExtractState
   dedupMaps <- newMaps
   addrBuf <- newAddressBufferRef
-  utxoCache <- newUtxoCache defaultCacheCapacity
-  let resolver = mkIngestResolver stRef dedupMaps addrBuf utxoCache Nothing
+  let resolver = mkIngestResolver stRef dedupMaps addrBuf utxoStore Nothing
 
   wrRef1 <- newIORef emptyTestWriterState
   let env1 = mkTestPipelineEnv resolver (mkTestWriter wrRef1) [coreExtractor]
@@ -410,13 +408,12 @@ runCoreWith
   -> [Maybe DbLovelace]   -- ^ what 'resolveInputValues' should return
   -> GenericBlock
   -> IO TestWriterState
-runCoreWith ledgerData phase inValues block = do
+runCoreWith ledgerData phase inValues block = withTestUtxoStore $ \utxoStore -> do
   stRef     <- newIORef freshExtractState
   dedupMaps <- newMaps
   addrBuf   <- newAddressBufferRef
-  utxoCache <- newUtxoCache defaultCacheCapacity
   wrRef     <- newIORef emptyTestWriterState
-  let baseResolver = mkIngestResolver stRef dedupMaps addrBuf utxoCache Nothing
+  let baseResolver = mkIngestResolver stRef dedupMaps addrBuf utxoStore Nothing
       resolver = baseResolver { resolveInputValues = \_ -> pure inValues }
       env = mkTestPipelineEnvWith Mainnet resolver (mkTestWriter wrRef)
               [coreExtractor] (\_ -> pure ledgerData) phase

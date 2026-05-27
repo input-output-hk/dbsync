@@ -41,7 +41,7 @@ import DbSync.Block.Pipeline (processBlock)
 import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
-import DbSync.Phase.Ingest.UtxoCache (defaultCacheCapacity, newUtxoCache)
+import DbSync.Test.Lsm (withTestUtxoStore)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv, mkTestPipelineEnvWith)
 import DbSync.Test.Writer (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 
@@ -120,13 +120,12 @@ runPoolTwoBlocks :: GenericBlock -> GenericBlock -> IO TestWriterState
 runPoolTwoBlocks b1 b2 = runPoolBlocks [b1, b2]
 
 runPoolBlocks :: [GenericBlock] -> IO TestWriterState
-runPoolBlocks blocks = do
+runPoolBlocks blocks = withTestUtxoStore $ \utxoStore -> do
   stRef <- newIORef freshExtractState
   dedup <- newMaps
   addrBuf <- newAddressBufferRef
-  utxoCache <- newUtxoCache defaultCacheCapacity
   wrRef <- newIORef emptyTestWriterState
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedup addrBuf utxoCache Nothing)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedup addrBuf utxoStore Nothing)
                               (mkTestWriter wrRef)
                               [coreExtractor, stakeDelegationExtractor, poolExtractor]
   for_ blocks $ \b -> runReaderT (processBlock b) env
@@ -138,14 +137,13 @@ runPoolWith bld block = runPoolWithBlocks bld [block]
 
 -- | Run several blocks sharing one 'BlockLedgerData' value.
 runPoolWithBlocks :: BlockLedgerData -> [GenericBlock] -> IO TestWriterState
-runPoolWithBlocks bld blocks = do
+runPoolWithBlocks bld blocks = withTestUtxoStore $ \utxoStore -> do
   stRef <- newIORef freshExtractState
   dedup <- newMaps
   addrBuf <- newAddressBufferRef
-  utxoCache <- newUtxoCache defaultCacheCapacity
   wrRef <- newIORef emptyTestWriterState
   let env = mkTestPipelineEnvWith Mainnet
-              (mkIngestResolver stRef dedup addrBuf utxoCache Nothing) (mkTestWriter wrRef)
+              (mkIngestResolver stRef dedup addrBuf utxoStore Nothing) (mkTestWriter wrRef)
               [coreExtractor, stakeDelegationExtractor, poolExtractor]
               (\_ -> pure bld) IngestChainHistory
   for_ blocks $ \b -> runReaderT (processBlock b) env

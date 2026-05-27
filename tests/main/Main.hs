@@ -38,7 +38,7 @@ import qualified DbSync.Extractor.PoolSpec as ExtractorPoolSpec
 import qualified DbSync.Extractor.StakeDelegationSpec as ExtractorStakeDelegationSpec
 import qualified DbSync.Extractor.UTxOSpec as ExtractorUTxOSpec
 import qualified DbSync.Phase.Ingest.ConsumerSpec as IngestConsumerSpec
-import qualified DbSync.Phase.Ingest.UtxoCacheSpec as IngestUtxoCacheSpec
+import qualified DbSync.Phase.Ingest.UtxoStoreSpec as IngestUtxoStoreSpec
 import qualified DbSync.Block.PipelineSpec as BlockPipelineSpec
 import qualified DbSync.Ledger.DepositAccumulatorSpec as LedgerDepositAccumulatorSpec
 import qualified DbSync.Ledger.StateSpec as LedgerStateSpec
@@ -89,6 +89,7 @@ import qualified DbSync.Phase.FollowReplayOnBootSpec as PhaseFollowReplayOnBootS
 import qualified DbSync.Phase.FollowRestartSpec as PhaseFollowRestartSpec
 import qualified DbSync.Phase.IngestPrepFollowSpec as PhaseIngestPrepFollowSpec
 import qualified DbSync.Phase.IngestRestartSpec as PhaseIngestRestartSpec
+import qualified DbSync.Phase.LsmLifecycleSpec as PhaseLsmLifecycleSpec
 import qualified DbSync.Phase.MockChainSpec as PhaseMockChainSpec
 import qualified DbSync.Phase.MockNodeSpec as PhaseMockNodeSpec
 
@@ -128,7 +129,7 @@ main = hspec $ do
     ExtractorStakeDelegationSpec.spec
     ExtractorUTxOSpec.spec
     IngestConsumerSpec.spec
-    IngestUtxoCacheSpec.spec
+    IngestUtxoStoreSpec.spec
     BlockPipelineSpec.spec
     LedgerDepositAccumulatorSpec.spec
     LedgerStateSpec.spec
@@ -177,6 +178,7 @@ main = hspec $ do
   describe "End-to-end" $ withTimeoutSeconds e2eTimeoutSeconds $ do
     PhaseIngestPrepFollowSpec.spec
     PhaseIngestRestartSpec.spec
+    PhaseLsmLifecycleSpec.spec
     PhaseFollowRestartSpec.spec
     PhaseFollowReplayOnBootSpec.spec
     PhaseFollowAtTipSpec.spec

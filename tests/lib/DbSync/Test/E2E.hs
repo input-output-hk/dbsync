@@ -25,11 +25,16 @@ module DbSync.Test.E2E
 
     -- * Filesystem probes
   , listLedgerSnapshots
+  , ingestLsmDir
+  , ingestLsmExists
+  , listIngestLsmSnapshots
+  , countIngestLsmActiveRuns
   ) where
 
 import Cardano.Prelude
 
 import Data.IORef (IORef, readIORef)
+import qualified Data.List as List
 import qualified Data.Text as T
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath ((</>))
@@ -208,3 +213,46 @@ listLedgerSnapshots ledgerDir = do
   let snapDir = ledgerDir </> "dbsync-ledger" </> "snapshot-headers"
   exists <- doesDirectoryExist snapDir
   if exists then listDirectory snapDir else pure []
+
+-- | The ingest-phase LSM session root, derived from the test's
+-- @ledgerDir@. Matches 'DbSync.Phase.Ingest.LsmSession.ingestLsmRootDir'
+-- but reconstructs the path so the test doesn't depend on internal
+-- helpers.
+ingestLsmDir :: FilePath -> FilePath
+ingestLsmDir ledgerDir = ledgerDir </> "dbsync-ledger" </> "ingest-lsm"
+
+-- | 'True' when the ingest-phase LSM directory is present on disk.
+ingestLsmExists :: FilePath -> IO Bool
+ingestLsmExists = doesDirectoryExist . ingestLsmDir
+
+-- | Entries in the ingest-phase LSM snapshot directory. Empty list
+-- when either the LSM root or its @snapshots/@ subdir is absent
+-- (e.g. after the post-Prep delete).
+listIngestLsmSnapshots :: FilePath -> IO [FilePath]
+listIngestLsmSnapshots ledgerDir = do
+  let snapDir = ingestLsmDir ledgerDir </> "snapshots"
+  exists <- doesDirectoryExist snapDir
+  if exists then listDirectory snapDir else pure []
+
+-- | Count the number of distinct run IDs currently live in the
+-- @active/@ subdir. Each surviving LSM run shows up as several
+-- files sharing the same @<N>@ prefix
+-- (@<N>.keyops@, @<N>.blobs@, …), so the run count is the
+-- count of distinct numeric prefixes. Returns @0@ when the LSM
+-- directory hasn't been created yet.
+countIngestLsmActiveRuns :: FilePath -> IO Int
+countIngestLsmActiveRuns ledgerDir = do
+  let activeDir = ingestLsmDir ledgerDir </> "active"
+  exists <- doesDirectoryExist activeDir
+  if exists
+    then do
+      entries <- listDirectory activeDir
+      pure $ length $ List.nub $ mapMaybe extractRunPrefix entries
+    else pure 0
+  where
+    -- Run files are named @"<N>.<suffix>"@ where @<N>@ is the
+    -- decimal run number. Drop anything that doesn't parse.
+    extractRunPrefix :: FilePath -> Maybe Int
+    extractRunPrefix name =
+      let (prefix, _suffix) = break (== '.') name
+      in readMaybe prefix

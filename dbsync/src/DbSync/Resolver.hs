@@ -28,7 +28,7 @@ import DbSync.Db.Schema.MultiAsset (MultiAsset)
 import DbSync.Db.Schema.Pool (PoolHash)
 import DbSync.Db.Schema.StakeDelegation (StakeAddress)
 import DbSync.Db.Types (DbLovelace)
-import DbSync.Phase.Ingest.UtxoCache (UtxoTxEntry)
+import DbSync.Phase.Ingest.UtxoStore (UtxoTxEntry)
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -181,7 +181,7 @@ data IdResolver m = IdResolver
 
     -- | Look up output values by (producing tx hash, output index).
     -- 'Nothing' for any pair the resolver cannot fulfil. During Ingest,
-    -- the value comes from the 'UtxoCache' (cache hit) or 'Nothing' (cache
+    -- the value comes from the 'UtxoStore' (hit) or 'Nothing' (
     -- miss, deferred to the post-load resolve).
   , resolveInputValues :: !([(ByteString, Word16)] -> m [Maybe DbLovelace])
 
@@ -191,10 +191,10 @@ data IdResolver m = IdResolver
     -- time, to enqueue the consumed-by triple keyed by the output's
     -- 'TxOutId', and to accumulate input values for the deposit
     -- calculation. Follow resolves via SQL; Ingest reads from the
-    -- in-process 'UtxoCache'.
+    -- in-process 'UtxoStore'.
   , resolveInputUtxo :: !(ByteString -> Word16 -> m (Maybe (TxId, TxOutId, DbLovelace)))
 
-    -- | Record a tx's outputs in the Ingest 'UtxoCache' so later
+    -- | Record a tx's outputs in the Ingest 'UtxoStore' so later
     -- inputs spending them resolve at COPY time. No-op in Follow.
   , recordTxOutputs :: !(ByteString -> UtxoTxEntry -> m ())
 
@@ -204,6 +204,12 @@ data IdResolver m = IdResolver
     -- @tx_out.consumed_by_tx_id@ at the next epoch boundary. No-op
     -- when @utxo.consumed_by_tx_id@ is off and in Follow.
   , recordConsumed :: !(TxOutId -> TxId -> m ())
+
+    -- | Remove a consumed output from the Ingest 'UtxoStore' so the
+    -- table tracks the live UTxO set rather than chain history.
+    -- Called for regular inputs and for phase-2 failed collateral.
+    -- No-op in Follow.
+  , deleteCachedUtxo :: !(ByteString -> Word16 -> m ())
   }
 
 -- ---------------------------------------------------------------------------

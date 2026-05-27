@@ -89,8 +89,9 @@ processUTxO ctx = do
             (txInHash gin) (txInIndex gin)
           liftIO $ writeTxIn writer inId
             (mkTxIn txId gin (producerTxIdFrom mProducer))
-          for_ mProducer $ \(_, producerOutId, _) ->
+          for_ mProducer $ \(_, producerOutId, _) -> do
             liftIO $ recordConsumed resolver producerOutId txId
+            liftIO $ deleteCachedUtxo resolver (txInHash gin) (txInIndex gin)
 
         forM_ (txReferenceInputs gtx) $ \gin -> do
           inId <- liftIO $ assignReferenceTxInId resolver
@@ -122,6 +123,10 @@ processUTxO ctx = do
         (txInHash gin) (txInIndex gin)
       liftIO $ writeCollateralTxIn writer inId
         (mkCollateralTxIn txId gin (producerTxIdFrom mProducer))
+      -- Phase-2 failure consumes the collateral on chain.
+      unless (G.txValidContract gtx) $
+        for_ mProducer $ \_ ->
+          liftIO $ deleteCachedUtxo resolver (txInHash gin) (txInIndex gin)
   where
     -- Resolve the inline stake credential of a collateral-return
     -- output, if its address carries one. Reads resolver/writer/network

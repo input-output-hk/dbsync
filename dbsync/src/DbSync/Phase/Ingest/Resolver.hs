@@ -25,8 +25,8 @@ import DbSync.Db.Schema.Ids
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Phase.Ingest.Counter (IdCounters (..), nextId)
 import DbSync.Phase.Ingest.DedupMap (DedupMaps (..), lookupOrInsert)
-import DbSync.Phase.Ingest.UtxoCache (UtxoCache)
-import qualified DbSync.Phase.Ingest.UtxoCache as UtxoCache
+import DbSync.Phase.Ingest.UtxoStore (UtxoStore)
+import qualified DbSync.Phase.Ingest.UtxoStore as UtxoStore
 import DbSync.Resolver (IdResolver (..))
 import DbSync.Worker.TxOut.AddressBuffer
   ( AddressBufferRef
@@ -58,12 +58,12 @@ mkIngestResolver
   :: IORef ExtractState
   -> DedupMaps
   -> AddressBufferRef
-  -> UtxoCache
+  -> UtxoStore
   -> Maybe ConsumedByBufferRef
   -- ^ 'Just' enables 'recordConsumed' to enqueue triples; 'Nothing'
   -- (feature off) drops them silently.
   -> IdResolver IO
-mkIngestResolver stRef dedupMaps addrBufRef utxoCache mConsumedByBuf = IdResolver
+mkIngestResolver stRef dedupMaps addrBufRef utxoStore mConsumedByBuf = IdResolver
   { -- Core shared IDs
     assignBlockId = atomicModifyIORef' stRef $ \st ->
       let (bid, ctr') = nextId (icBlockId $ esIdCounters st)
@@ -225,14 +225,16 @@ mkIngestResolver stRef dedupMaps addrBufRef utxoCache mConsumedByBuf = IdResolve
     -- post-load resolve handles the residual on cache-miss inputs.
   , resolveInputValues = \pairs ->
       forM pairs $ \(hash, idx) -> do
-        m <- UtxoCache.lookupInput utxoCache hash idx
+        m <- UtxoStore.lookupInput utxoStore hash idx
         pure (fmap (\(_, _, v) -> v) m)
 
-  , resolveInputUtxo = UtxoCache.lookupInput utxoCache
+  , resolveInputUtxo = UtxoStore.lookupInput utxoStore
 
-  , recordTxOutputs = UtxoCache.recordTx utxoCache
+  , recordTxOutputs = UtxoStore.recordTx utxoStore
 
   , recordConsumed = case mConsumedByBuf of
       Just ref -> recordConsumedBy ref
       Nothing  -> \_ _ -> pure ()
+
+  , deleteCachedUtxo = UtxoStore.deleteConsumed utxoStore
   }

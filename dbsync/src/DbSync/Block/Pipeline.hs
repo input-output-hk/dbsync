@@ -34,7 +34,7 @@ import DbSync.Extractor.SharedDedup
 import DbSync.Extractor.UTxO (extractStakeCred)
 import DbSync.Db.Schema.Ids (PoolHashId, StakeAddressId)
 import DbSync.Phase.Current (HasCurrentPhase (..))
-import DbSync.Phase.Ingest.UtxoCache (UtxoTxEntry (..))
+import DbSync.Phase.Ingest.UtxoStore (UtxoTxEntry (..))
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
 import DbSync.Writer (HasWriter (..))
 

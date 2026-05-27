@@ -2,7 +2,7 @@
 
 -- | Post-load FK resolution for the three input tables.
 --
--- During Ingest, the 'UtxoCache' resolves the bulk of inputs at COPY
+-- During Ingest, the 'UtxoStore' resolves the bulk of inputs at COPY
 -- time and the rows go in with @tx_out_id@ already populated. Inputs
 -- that missed the cache land with @tx_out_id = NULL@; this module
 -- rebuilds the input tables via @CREATE … LIKE@ + @INSERT … SELECT

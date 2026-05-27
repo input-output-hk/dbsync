@@ -2,14 +2,14 @@
 
 -- | Ingest-phase ID resolver.
 --
--- Uses mutable 'DedupMaps' and 'IdCounters' to assign IDs in-memory
--- during 'IngestChainHistory'. No database queries -- all state is
--- either in mutable hash tables (dedup maps) or an 'IORef' (counters).
+-- Uses 'DedupStores' (LSM-backed) and 'IdCounters' ('IORef'-backed)
+-- to assign IDs during 'IngestChainHistory'. No live database
+-- queries on the hot path; dedup state lives in the shared
+-- 'LsmSession' and counter state in an 'IORef' on 'ExtractState'.
 --
 -- Dedup operations ('resolveSlotLeader', 'resolveMultiAsset', etc.)
--- are direct IO mutations on the hash tables -- no CAS loop, no
--- path-copying. Non-dedup counter operations use 'atomicModifyIORef''
--- on 'ExtractState'.
+-- are direct IO operations on the LSM tables. Non-dedup counter
+-- operations use 'atomicModifyIORef'' on 'ExtractState'.
 module DbSync.Phase.Ingest.Resolver
   ( -- * Construction
     mkIngestResolver
@@ -24,7 +24,7 @@ import qualified Data.ByteString.Short as SBS
 import DbSync.Db.Schema.Ids
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Phase.Ingest.Counter (IdCounters (..), nextId)
-import DbSync.Phase.Ingest.DedupMap (DedupMaps (..), lookupOrInsert)
+import DbSync.Phase.Ingest.DedupStore (DedupStores (..), lookupOrInsert)
 import DbSync.Phase.Ingest.UtxoStore (UtxoStore)
 import qualified DbSync.Phase.Ingest.UtxoStore as UtxoStore
 import DbSync.Resolver (IdResolver (..))
@@ -41,14 +41,15 @@ import DbSync.Worker.TxOut.ConsumedByBuffer (ConsumedByBufferRef, recordConsumed
 
 -- | Build an 'IdResolver' for 'IngestChainHistory'.
 --
--- Dedup operations mutate the mutable hash tables in 'DedupMaps'
--- directly. Non-dedup counter operations use 'atomicModifyIORef''
--- on 'ExtractState'.
+-- Dedup operations look keys up in the LSM-backed 'DedupStores'
+-- and allocate the next id from the in-process counter on miss.
+-- Non-dedup counter operations use 'atomicModifyIORef'' on
+-- 'ExtractState'.
 --
 -- 'ByteString' keys from the blockchain are converted to
--- 'ShortByteString' at this boundary so the dedup-map storage
--- stays unpinned. Extractors and the 'IdResolver' interface
--- remain 'ByteString'-based.
+-- 'ShortByteString' at this boundary so the dedup-store keys stay
+-- unpinned. Extractors and the 'IdResolver' interface remain
+-- 'ByteString'-based.
 --
 -- @recordTxOutAddress@\/@recordCollateralTxOutAddress@ append to
 -- the per-epoch 'AddressBufferRef'; the background 'AddressResolver'
@@ -56,14 +57,14 @@ import DbSync.Worker.TxOut.ConsumedByBuffer (ConsumedByBufferRef, recordConsumed
 -- and fills in @tx_out.address_id@\/@collateral_tx_out.address_id@.
 mkIngestResolver
   :: IORef ExtractState
-  -> DedupMaps
+  -> DedupStores
   -> AddressBufferRef
   -> UtxoStore
   -> Maybe ConsumedByBufferRef
   -- ^ 'Just' enables 'recordConsumed' to enqueue triples; 'Nothing'
   -- (feature off) drops them silently.
   -> IdResolver IO
-mkIngestResolver stRef dedupMaps addrBufRef utxoStore mConsumedByBuf = IdResolver
+mkIngestResolver stRef dedupStores addrBufRef utxoStore mConsumedByBuf = IdResolver
   { -- Core shared IDs
     assignBlockId = atomicModifyIORef' stRef $ \st ->
       let (bid, ctr') = nextId (icBlockId $ esIdCounters st)
@@ -82,10 +83,10 @@ mkIngestResolver stRef dedupMaps addrBufRef utxoStore mConsumedByBuf = IdResolve
           st' = st { esIdCounters = (esIdCounters st) { icTxOutId = ctr' } }
       in (st', TxOutId oid)
 
-    -- Dedup: SlotLeader -- direct IO mutation, no atomicModifyIORef'
+    -- Dedup: SlotLeader
   , resolveSlotLeader = \hash _leader -> do
       let !key = SBS.toShort hash
-      (slId, isNew) <- lookupOrInsert key (dmsSlotLeader dedupMaps)
+      (slId, isNew) <- lookupOrInsert key (dstSlotLeader dedupStores)
       pure (SlotLeaderId slId, isNew)
 
   , resolvePrevBlock = \_ -> do
@@ -129,10 +130,10 @@ mkIngestResolver stRef dedupMaps addrBufRef utxoStore mConsumedByBuf = IdResolve
           st' = st { esIdCounters = (esIdCounters st) { icTxMetadataId = ctr' } }
       in (st', TxMetadataId mid)
 
-    -- Dedup: MultiAsset -- direct IO mutation
+    -- Dedup: MultiAsset
     -- Key arrives as ShortByteString (already unpinned) from the extractor.
   , resolveMultiAsset = \skey _ma -> do
-      (maId, isNew) <- lookupOrInsert skey (dmsMultiAsset dedupMaps)
+      (maId, isNew) <- lookupOrInsert skey (dstMultiAsset dedupStores)
       pure (MultiAssetId maId, isNew)
 
   , assignMaTxMintId = atomicModifyIORef' stRef $ \st ->
@@ -145,10 +146,10 @@ mkIngestResolver stRef dedupMaps addrBufRef utxoStore mConsumedByBuf = IdResolve
           st' = st { esIdCounters = (esIdCounters st) { icMaTxOutId = ctr' } }
       in (st', MaTxOutId mid)
 
-    -- Dedup: StakeAddress -- direct IO mutation
+    -- Dedup: StakeAddress
   , resolveStakeAddress = \hash _sa -> do
       let !key = SBS.toShort hash
-      (saId, isNew) <- lookupOrInsert key (dmsStakeAddress dedupMaps)
+      (saId, isNew) <- lookupOrInsert key (dstStakeAddress dedupStores)
       pure (StakeAddressId saId, isNew)
 
   , assignStakeRegistrationId = atomicModifyIORef' stRef $ \st ->
@@ -171,10 +172,10 @@ mkIngestResolver stRef dedupMaps addrBufRef utxoStore mConsumedByBuf = IdResolve
           st' = st { esIdCounters = (esIdCounters st) { icWithdrawalId = ctr' } }
       in (st', WithdrawalId i)
 
-    -- Dedup: PoolHash -- direct IO mutation
+    -- Dedup: PoolHash
   , resolvePoolHash = \hash _ph -> do
       let !key = SBS.toShort hash
-      (phId, isNew) <- lookupOrInsert key (dmsPoolHash dedupMaps)
+      (phId, isNew) <- lookupOrInsert key (dstPoolHash dedupStores)
       pure (PoolHashId phId, isNew)
 
   , assignPoolUpdateId = atomicModifyIORef' stRef $ \st ->

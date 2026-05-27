@@ -136,6 +136,7 @@ test-suite dbsync-test
     DbSync.Extractor.UTxOSpec
     DbSync.Block.PipelineSpec
     DbSync.Phase.Ingest.ConsumerSpec
+    DbSync.Phase.Ingest.DedupStoreSpec
     DbSync.Phase.Ingest.UtxoStoreSpec
     DbSync.Schema.InitSpec
     DbSync.Db.LoaderSpec
@@ -189,6 +190,7 @@ test-suite dbsync-test
     , directory
     , filepath
     , io-classes:strict-stm
+    , lsm-tree
     , optparse-applicative
     , ouroboros-consensus
     , ouroboros-consensus:cardano

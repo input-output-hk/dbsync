@@ -5,7 +5,7 @@
 --   * 'DbSync.Checkpoint.Resume.deleteRowsPastSlot' — past-resume
 --     row cleanup.
 --   * 'DbSync.Checkpoint.SyncState.rebuildDedupMaps' — repopulating
---     the in-memory dedup maps from PG.
+--     the LSM-backed dedup stores from PG.
 --   * 'DbSync.Checkpoint.SyncState.fetchBlockHashAtSlot' — looking
 --     up the canonical block hash for a snapshot's slot.
 module DbSync.Checkpoint.ResumeSpec (spec) where
@@ -49,7 +49,8 @@ import DbSync.Db.Schema.Ids (EpochSyncStatsId (..))
 import DbSync.Db.Schema.Init (dropSchema, initSchema)
 import DbSync.Db.Schema.SyncState (syncStateTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
-import DbSync.Phase.Ingest.DedupMap (DedupMaps (..), lookupOrInsert, size)
+import DbSync.Phase.Ingest.DedupStore (DedupStores (..), lookupOrInsert, sizeApprox)
+import DbSync.Test.Lsm (withTestLsmSession)
 import DbSync.Db.Loader.Encoder
   ( buildCopyRow
   , bBool
@@ -250,7 +251,7 @@ ingestResumeSpec = describe "IngestResume" $ do
         closeLoaderStream bs
 
         let row = (rowAtBoundary 100 1) { ssrLastCommittedSlot = Nothing }
-        deleted <- runAppM ctrl (deleteRowsPastSlot IngestResume coreTables row)
+        deleted <- runAppM (TracerWithControl mkNullTracer ctrl) (deleteRowsPastSlot IngestResume coreTables row)
         deleted `shouldBe` 0
 
         countRows blockTableDef      >>= (`shouldBe` 3)
@@ -269,7 +270,7 @@ ingestResumeSpec = describe "IngestResume" $ do
         -- on the slot-based fact-table cleanup.
         let row = rowAtBoundary 300 6
         runAppM ctrl (writeSyncState row)
-        deleted <- runAppM ctrl (deleteRowsPastSlot IngestResume coreTables row)
+        deleted <- runAppM (TracerWithControl mkNullTracer ctrl) (deleteRowsPastSlot IngestResume coreTables row)
 
         deleted `shouldBe` 4
         countRows blockTableDef      >>= (`shouldBe` 3)
@@ -286,7 +287,7 @@ ingestResumeSpec = describe "IngestResume" $ do
 
         let row = rowAtBoundary 250 6
         runAppM ctrl (writeSyncState row)
-        _ <- runAppM ctrl (deleteRowsPastSlot IngestResume coreTables row)
+        _ <- runAppM (TracerWithControl mkNullTracer ctrl) (deleteRowsPastSlot IngestResume coreTables row)
 
         remainingTx <- T.strip <$> queryTestDb
           ("SELECT id FROM " <> tdName txTableDef <> " ORDER BY id;")
@@ -304,7 +305,7 @@ ingestResumeSpec = describe "IngestResume" $ do
         -- the committed point.
         let row = rowAtBoundary 1000 4
         runAppM ctrl (writeSyncState row)
-        _ <- runAppM ctrl (deleteRowsPastSlot IngestResume coreTables row)
+        _ <- runAppM (TracerWithControl mkNullTracer ctrl) (deleteRowsPastSlot IngestResume coreTables row)
 
         countRows slotLeaderTableDef >>= (`shouldBe` 3)
         remaining <- T.strip <$> queryTestDb
@@ -330,7 +331,7 @@ ingestResumeSpec = describe "IngestResume" $ do
         let row = (rowAtBoundary 1000 6)
                     { ssrEpochSyncStatsIdCounter = 3 }
         runAppM ctrl (writeSyncState row)
-        _ <- runAppM ctrl (deleteRowsPastSlot IngestResume coreTables row)
+        _ <- runAppM (TracerWithControl mkNullTracer ctrl) (deleteRowsPastSlot IngestResume coreTables row)
 
         countRows epochSyncStatsTableDef >>= (`shouldBe` 2)
         remaining <- T.strip <$> queryTestDb
@@ -357,7 +358,7 @@ ingestResumeSpec = describe "IngestResume" $ do
         let row = (rowAtBoundary 300 2)
                     { ssrEpochSyncStatsIdCounter = 4 }
         runAppM ctrl (writeSyncState row)
-        _ <- runAppM ctrl (deleteRowsPastSlot IngestResume coreTables row)
+        _ <- runAppM (TracerWithControl mkNullTracer ctrl) (deleteRowsPastSlot IngestResume coreTables row)
 
         countRows blockTableDef          >>= (`shouldBe` 3)
         countRows txTableDef             >>= (`shouldBe` 3)
@@ -374,7 +375,7 @@ ingestResumeSpec = describe "IngestResume" $ do
 
         let row = rowAtBoundary 9_999 4
         runAppM ctrl (writeSyncState row)
-        deleted <- runAppM ctrl (deleteRowsPastSlot IngestResume coreTables row)
+        deleted <- runAppM (TracerWithControl mkNullTracer ctrl) (deleteRowsPastSlot IngestResume coreTables row)
         deleted `shouldBe` 0
 
         countRows blockTableDef      >>= (`shouldBe` 3)
@@ -403,7 +404,7 @@ followRestartSpec = describe "FollowRestart" $ do
                     , ssrEpochSyncStatsIdCounter = 1
                     }
         runAppM ctrl (writeSyncState row)
-        deleted <- runAppM ctrl (deleteRowsPastSlot FollowRestart coreTables row)
+        deleted <- runAppM (TracerWithControl mkNullTracer ctrl) (deleteRowsPastSlot FollowRestart coreTables row)
         deleted `shouldBe` 0
 
         countRows slotLeaderTableDef     >>= (`shouldBe` 5)
@@ -424,7 +425,7 @@ followRestartSpec = describe "FollowRestart" $ do
         -- catches them. Counter at 1 must not affect the count.
         let row = rowAtBoundary 300 1
         runAppM ctrl (writeSyncState row)
-        deleted <- runAppM ctrl (deleteRowsPastSlot FollowRestart coreTables row)
+        deleted <- runAppM (TracerWithControl mkNullTracer ctrl) (deleteRowsPastSlot FollowRestart coreTables row)
 
         deleted `shouldBe` 4
         countRows blockTableDef      >>= (`shouldBe` 3)
@@ -440,7 +441,7 @@ followRestartSpec = describe "FollowRestart" $ do
         closeLoaderStream bs
 
         let row = (rowAtBoundary 100 1) { ssrLastCommittedSlot = Nothing }
-        deleted <- runAppM ctrl (deleteRowsPastSlot FollowRestart coreTables row)
+        deleted <- runAppM (TracerWithControl mkNullTracer ctrl) (deleteRowsPastSlot FollowRestart coreTables row)
         deleted `shouldBe` 0
 
         countRows slotLeaderTableDef >>= (`shouldBe` 3)
@@ -452,60 +453,68 @@ followRestartSpec = describe "FollowRestart" $ do
 rebuildDedupMapsSpec :: Spec
 rebuildDedupMapsSpec = describe "DbSync.Checkpoint.SyncState.rebuildDedupMaps" $ do
 
-    it "returns empty maps when no rows exist" $
-      withControlConnection $ \ctrl -> do
+    it "returns empty stores when no rows exist" $
+      withControlConnection $ \ctrl ->
+      withTestLsmSession $ \lsm -> do
         runAppM ctrl (seedSyncState 1 False)
-        maps <- runAppM (TracerWithControl mkNullTracer ctrl) (rebuildDedupMaps coreTables)
-        size (dmsSlotLeader maps)   >>= (`shouldBe` 0)
-        size (dmsStakeAddress maps) >>= (`shouldBe` 0)
-        size (dmsPoolHash maps)     >>= (`shouldBe` 0)
-        size (dmsMultiAsset maps)   >>= (`shouldBe` 0)
+        stores <- runAppM (TracerWithControl mkNullTracer ctrl)
+                    (rebuildDedupMaps coreTables lsm)
+        sizeApprox (dstSlotLeader stores)   >>= (`shouldBe` 0)
+        sizeApprox (dstStakeAddress stores) >>= (`shouldBe` 0)
+        sizeApprox (dstPoolHash stores)     >>= (`shouldBe` 0)
+        sizeApprox (dstMultiAsset stores)   >>= (`shouldBe` 0)
 
-    it "loads slot_leader rows back into the dedup map" $
-      withControlConnection $ \ctrl -> do
+    it "loads slot_leader rows back into the dedup store" $
+      withControlConnection $ \ctrl ->
+      withTestLsmSession $ \lsm -> do
         runAppM ctrl (seedSyncState 1 False)
         bs <- mkLoaderStream testConnBs coreTables
         populateChain bs 3
         lsCommit bs
         closeLoaderStream bs
 
-        maps <- runAppM (TracerWithControl mkNullTracer ctrl) (rebuildDedupMaps coreTables)
-        size (dmsSlotLeader maps) >>= (`shouldBe` 3)
+        stores <- runAppM (TracerWithControl mkNullTracer ctrl)
+                    (rebuildDedupMaps coreTables lsm)
+        sizeApprox (dstSlotLeader stores) >>= (`shouldBe` 3)
 
         -- Looking up a known key returns the existing id, doesn't
         -- allocate a new one. (id 1 = first leader's hash, replicated
         -- 0xa1 across 28 bytes — see populateChain.)
         let key1 = SBS.toShort (BS.replicate 28 0xa1)
-        (rowId, isNew) <- lookupOrInsert key1 (dmsSlotLeader maps)
+        (rowId, isNew) <- lookupOrInsert key1 (dstSlotLeader stores)
         rowId `shouldBe` 1
         isNew `shouldBe` False
 
     it "advances the counter past existing ids so new keys avoid collisions" $
-      withControlConnection $ \ctrl -> do
+      withControlConnection $ \ctrl ->
+      withTestLsmSession $ \lsm -> do
         runAppM ctrl (seedSyncState 1 False)
         bs <- mkLoaderStream testConnBs coreTables
         populateChain bs 3
         lsCommit bs
         closeLoaderStream bs
 
-        maps <- runAppM (TracerWithControl mkNullTracer ctrl) (rebuildDedupMaps coreTables)
+        stores <- runAppM (TracerWithControl mkNullTracer ctrl)
+                    (rebuildDedupMaps coreTables lsm)
         let unseenKey = SBS.toShort (BS.replicate 28 0xff)
-        (rowId, isNew) <- lookupOrInsert unseenKey (dmsSlotLeader maps)
+        (rowId, isNew) <- lookupOrInsert unseenKey (dstSlotLeader stores)
         isNew `shouldBe` True
         rowId `shouldBe` 4    -- next id past the 3 rebuilt entries
 
     it "skips dedup tables not present in the schema list" $
-      withControlConnection $ \ctrl -> do
+      withControlConnection $ \ctrl ->
+      withTestLsmSession $ \lsm -> do
         runAppM ctrl (seedSyncState 1 False)
         -- Only block + tx in the schema list — slot_leader is absent,
-        -- so its map is left empty even if rows exist server-side.
+        -- so its store is left empty even if rows exist server-side.
         bs <- mkLoaderStream testConnBs coreTables
         populateChain bs 3
         lsCommit bs
         closeLoaderStream bs
 
-        maps <- runAppM (TracerWithControl mkNullTracer ctrl) (rebuildDedupMaps [blockTableDef, txTableDef])
-        size (dmsSlotLeader maps) >>= (`shouldBe` 0)
+        stores <- runAppM (TracerWithControl mkNullTracer ctrl)
+                    (rebuildDedupMaps [blockTableDef, txTableDef] lsm)
+        sizeApprox (dstSlotLeader stores) >>= (`shouldBe` 0)
 
 -- ---------------------------------------------------------------------------
 -- fetchBlockHashAtSlot

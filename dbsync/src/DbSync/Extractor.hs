@@ -7,7 +7,7 @@ Description : Extractor definition types for modular data extraction.
 An extractor is a self-contained unit of extraction logic that reads
 'GenericBlock' values, resolves foreign key IDs via an 'IdResolver',
 and writes rows via a 'Writer'. The same extraction code works in
-both 'IngestChainHistory' (COPY + DedupMaps) and 'FollowingChainTip'
+both 'IngestChainHistory' (COPY + DedupStores) and 'FollowingChainTip'
 (INSERT + DB queries).
 -}
 module DbSync.Extractor
@@ -187,10 +187,9 @@ class HasLedgerData env where
 -- Contains the monotonic ID counters and tracking state that ensure
 -- stable, deterministic ID assignment.
 --
--- Deduplication maps ('DedupMaps') live separately as mutable hash
--- tables — they are passed directly to the resolver, not through
--- this 'IORef'-wrapped record. This avoids CAS-loop overhead for
--- dedup operations and eliminates path-copying GC pressure.
+-- Deduplication state ('DedupStores') lives separately on top of
+-- the shared 'LsmSession' and is passed directly to the resolver,
+-- not through this 'IORef'-wrapped record.
 --
 -- NOT used during 'FollowingChainTip' — the 'IdResolver' handles
 -- ID assignment via PostgreSQL directly.

@@ -59,9 +59,8 @@ data EpochAddressBuffer = EpochAddressBuffer
     -- ^ Unique addresses seen this epoch, keyed by raw bytes. The
     -- 'Address' value carries the precomputed Bech32 text, the
     -- has-script flag, the payment credential, and the resolved
-    -- @stake_address_id@ (from the existing 'dmsStakeAddress'
-    -- dedup map). The worker takes this verbatim to build address
-    -- rows.
+    -- @stake_address_id@ (from the 'dstStakeAddress' dedup store).
+    -- The worker takes this verbatim to build address rows.
   , eabTxOutAddresses :: !(Seq (TxOutId, ShortByteString))
     -- ^ @(tx_out.id, raw_address)@ pairs in extraction order. The
     -- worker resolves each raw to the final address_id and

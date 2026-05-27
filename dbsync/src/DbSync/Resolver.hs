@@ -5,7 +5,7 @@
 -- An 'IdResolver' provides the mechanism for obtaining database IDs
 -- during block processing. Two implementations exist:
 --
--- * 'DbSync.Phase.Ingest.Resolver' — DedupMap\/Counter-based for 'IngestChainHistory'
+-- * 'DbSync.Phase.Ingest.Resolver' — DedupStore\/Counter-based for 'IngestChainHistory'
 -- * 'DbSync.Phase.Following.Resolver' — SELECT->INSERT for 'FollowingChainTip'
 --
 -- Extractors are parameterised by 'IdResolver' so the same extraction

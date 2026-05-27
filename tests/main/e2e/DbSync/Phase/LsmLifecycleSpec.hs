@@ -9,10 +9,12 @@
 --
 --   * The directory is created when @IngestChainHistory@ opens the
 --     session and receives one compaction per epoch boundary.
---   * 'DbSync.Phase.Ingest.UtxoStore.compactUtxoStore' is
+--   * 'DbSync.Phase.Ingest.UtxoStore.compactUtxoStore' and
+--     'DbSync.Phase.Ingest.DedupStore.compactDedupStore' are
 --     delete-then-save-then-reopen, so @snapshots/@ holds exactly
---     one entry once any compaction has run, and the @active/@
---     run count is bounded across many boundaries.
+--     one entry per table (UtxoStore + five DedupStores = six)
+--     once any compaction has run, and the @active/@ run count
+--     stays bounded across many boundaries.
 --   * 'DbSync.Phase.Ingest.LsmSession.closeAndDeleteLsmSession'
 --     removes the whole directory at the end of
 --     @PreparingForVolatileTail@.
@@ -62,12 +64,13 @@ import DbSync.Test.PgAssertions (countRows, tableColumn, waitForTableQueryable)
 import DbSync.Trace.Types (AppTracer)
 
 -- | Upper bound on @active/@ run count after at least one
--- 'compactUtxoStore'. The compaction collapses to the snapshot's
--- run shape (a handful of runs for the toy Conway test workload);
--- this leaves headroom for in-flight merges started in the
--- subsequent epoch.
+-- compaction across the six ingest tables (UtxoStore + five
+-- DedupStores). Each compaction collapses its table to the
+-- snapshot's run shape (a handful of runs for the toy Conway test
+-- workload); the headroom covers in-flight merges started in the
+-- subsequent epoch on top of all six.
 maxActiveRunsAfterCompact :: Int
-maxActiveRunsAfterCompact = 64
+maxActiveRunsAfterCompact = 128
 
 spec :: Spec
 spec = describe "Ingest LSM session lifecycle" $ do
@@ -93,13 +96,16 @@ spec = describe "Ingest LSM session lifecycle" $ do
           present <- ingestLsmExists ledgerDir
           present `shouldBe` False
 
-  -- Covers invariant 3: 'compactUtxoStore' is delete-then-save, so
-  -- the @snapshots/@ subdirectory holds exactly one entry once at
-  -- least one compaction has run. The same compaction also reopens
-  -- the active table from the snapshot, so the @active/@ run count
-  -- stays small even across many boundaries — pinned here at a
-  -- generous ceiling to give the merge schedule headroom.
-  it "keeps one snapshot and bounded active run count across boundaries" $
+  -- Covers invariant 3: every per-table compaction is
+  -- delete-then-save, so the @snapshots/@ subdirectory holds exactly
+  -- one entry per LSM table once at least one compaction has run.
+  -- Six tables live on the ingest session — 'UtxoStore' plus the
+  -- five 'DedupStores' — so the assertion is six. The same
+  -- compaction also reopens each active table from its snapshot, so
+  -- the @active/@ run count stays small even across many boundaries
+  -- — pinned here at a generous ceiling to give the merge schedule
+  -- headroom.
+  it "keeps one snapshot per table and bounded active run count across boundaries" $
     withMockNode conwayConfigDir $ \mn ->
       withTempDir "dbsync-test-lsm-keep-one" $ \ledgerDir -> do
         _ <- forgeAndPushBlocks mn 5000
@@ -107,7 +113,7 @@ spec = describe "Ingest LSM session lifecycle" $ do
         tracer <- quietTracer
         runUntilTwoBoundariesThenCancel tracer mn ledgerDir
         snaps <- listIngestLsmSnapshots ledgerDir
-        length snaps `shouldBe` 1
+        length snaps `shouldBe` 6
         activeRuns <- countIngestLsmActiveRuns ledgerDir
         activeRuns `shouldSatisfy` (<= maxActiveRunsAfterCompact)
 

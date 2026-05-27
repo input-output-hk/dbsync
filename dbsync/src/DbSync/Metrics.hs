@@ -37,7 +37,7 @@ data Metrics = Metrics
   , mBlocksPerSec    :: !Double
   , mCopyRowsWritten :: !Int64
   , mPhase           :: !Int64   -- ^ 0=Ingest, 1=Preparing, 2=Following
-  , mDedupMapSize    :: !Int64
+  , mDedupStoreSize  :: !Int64
   , mQueueDepth      :: !Int64
   }
   deriving stock (Show)

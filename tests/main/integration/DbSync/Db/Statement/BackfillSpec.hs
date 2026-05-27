@@ -89,7 +89,7 @@ import DbSync.Extractor.MultiAsset (multiAssetExtractor)
 import DbSync.Extractor.Pool (poolExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Extractor.UTxO (utxoExtractor)
-import DbSync.Phase.Ingest.DedupMap (newMaps)
+
 import DbSync.Block.Pipeline (processBlock)
 import DbSync.AppM (runAppM)
 import DbSync.Env (TracerWithConn (..))
@@ -97,7 +97,7 @@ import qualified DbSync.Phase.Preparing.PreResolveIndexes as PreResolveIndexes
 import qualified DbSync.Phase.Preparing.Resolve as Resolve
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
-import DbSync.Test.Lsm (withTestUtxoStore)
+import DbSync.Test.Lsm (withTestIngestStores)
 import DbSync.Test.AppHarness (defaultTestProfile)
 import DbSync.Test.Database
   ( execTestDb
@@ -198,12 +198,11 @@ setUp = do
   dropSchema tables versions testConnStr
   initSchema tables versions testConnStr
 
-  withTestUtxoStore $ \utxoStore -> do
+  withTestIngestStores $ \utxoStore dedupStores -> do
     stRef <- newIORef freshExtractState
-    dedupMaps <- newMaps
     addrBuf <- newAddressBufferRef
     bs <- mkLoaderStream testConnBs tables
-    let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoStore Nothing)
+    let env = mkTestPipelineEnv (mkIngestResolver stRef dedupStores addrBuf utxoStore Nothing)
                                 (IngestWriter.mkWriter bs) extractors
     for_ [producerBlock, spendingBlock, byronBlock] $ \blk ->
       runReaderT (processBlock blk) env

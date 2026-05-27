@@ -5,12 +5,19 @@
 --
 -- The helpers run each action against a fresh session under
 -- @\<system tmp\>/dbsync-test-lsm-\<unique\>/@ and remove the
--- directory afterwards. Tests that need a real 'UtxoStore' use
--- 'withTestUtxoStore'; tests that need the bare session for their
--- own tables use 'withTestLsmSession'.
+-- directory afterwards. Use:
+--
+--   * 'withTestIngestStores' when a test needs both 'UtxoStore' and
+--     'DedupStores' on the same session (the production layout).
+--   * 'withTestUtxoStore' \/ 'withTestDedupStores' for tests that
+--     only need one of the two.
+--   * 'withTestLsmSession' for tests that drive the bare session
+--     manually.
 module DbSync.Test.Lsm
   ( withTestLsmSession
   , withTestUtxoStore
+  , withTestDedupStores
+  , withTestIngestStores
   ) where
 
 import Cardano.Prelude
@@ -21,6 +28,11 @@ import System.FilePath ((</>))
 import System.IO.Error (isDoesNotExistError)
 import System.IO.Unsafe (unsafePerformIO)
 
+import DbSync.Phase.Ingest.DedupStore
+  ( DedupStores
+  , closeStores
+  , newStores
+  )
 import DbSync.Phase.Ingest.LsmSession
   ( LsmSession
   , closeLsmSession
@@ -47,6 +59,25 @@ withTestUtxoStore :: (UtxoStore -> IO a) -> IO a
 withTestUtxoStore action =
   withTestLsmSession $ \lsm ->
     bracket (openUtxoStore lsm) closeUtxoStore action
+
+-- | Bracket an action with a fresh 'DedupStores' (all five stores)
+-- on top of a temp-dir LSM session. Every store is closed on exit
+-- along with the session.
+withTestDedupStores :: (DedupStores -> IO a) -> IO a
+withTestDedupStores action =
+  withTestLsmSession $ \lsm ->
+    bracket (newStores lsm) closeStores action
+
+-- | Bracket an action with a fresh 'UtxoStore' /and/ 'DedupStores'
+-- sharing one temp-dir LSM session — the same layout the production
+-- consumer runs against. Every table is closed on exit along with
+-- the session.
+withTestIngestStores :: (UtxoStore -> DedupStores -> IO a) -> IO a
+withTestIngestStores action =
+  withTestLsmSession $ \lsm ->
+    bracket (openUtxoStore lsm) closeUtxoStore $ \utxoStore ->
+      bracket (newStores lsm) closeStores $ \dedupStores ->
+        action utxoStore dedupStores
 
 -- ---------------------------------------------------------------------------
 -- Internal

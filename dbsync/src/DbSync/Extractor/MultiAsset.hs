@@ -5,7 +5,7 @@
 -- Extracts multi-asset data into @multi_asset@, @ma_tx_mint@, and
 -- @ma_tx_out@ tables.
 --
--- The @multi_asset@ table uses a DedupMap: each unique (policy, name)
+-- The @multi_asset@ table uses a DedupStore: each unique (policy, name)
 -- pair gets a single row and a stable 'MultiAssetId'. Subsequent
 -- references (in mint or output events) reuse the same ID.
 module DbSync.Extractor.MultiAsset

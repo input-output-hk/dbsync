@@ -35,14 +35,14 @@ import DbSync.Extractor.UTxO
   , rawHasScript
   , utxoExtractor
   )
-import DbSync.Phase.Ingest.DedupMap (newMaps)
+
 import DbSync.Block.Pipeline (processBlock)
 import DbSync.Worker.TxOut.AddressBuffer
   ( EpochAddressBuffer (..)
   , newAddressBufferRef
   )
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
-import DbSync.Test.Lsm (withTestUtxoStore)
+import DbSync.Test.Lsm (withTestIngestStores)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import DbSync.Test.Writer (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 
@@ -293,12 +293,11 @@ spec = do
 -- tests, we materialise the buffer's address map into the returned
 -- 'TestWriterState' with synthetic ids in insertion order.
 runFullPipeline :: GenericBlock -> IO TestWriterState
-runFullPipeline block = withTestUtxoStore $ \utxoStore -> do
+runFullPipeline block = withTestIngestStores $ \utxoStore dedupStores -> do
   stRef <- newIORef freshExtractState
-  dedupMaps <- newMaps
   addrBuf <- newAddressBufferRef
   wrRef <- newIORef emptyTestWriterState
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoStore Nothing)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupStores addrBuf utxoStore Nothing)
                               (mkTestWriter wrRef)
                               [coreExtractor, stakeDelegationExtractor, utxoExtractor]
   runReaderT (processBlock block) env

@@ -79,7 +79,8 @@ import DbSync.Db.Schema.Ids (BlockId (..))
 import DbSync.Env (CoreEnv (..), HasConfig (..), IngestEnv (..))
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Extractor.EpochBoundary (runEpochBoundary)
-import DbSync.Phase.Ingest.DedupMap (dedupMapSizes)
+import DbSync.Phase.Ingest.DedupStore (dedupStoreSizes)
+import qualified DbSync.Phase.Ingest.DedupStore as DedupStore
 import DbSync.Phase.Ingest.PipelineStats (PipelineStats (..), emptyPipelineStats)
 import qualified DbSync.Phase.Ingest.UtxoStore as UtxoStore
 import DbSync.Trace.Replay
@@ -314,7 +315,7 @@ runConsumer = do
       loaderStream  <- asks ieLoaderStream
       hasLedger     <- asks ieHasLedgerEnv
       extractStRef  <- asks ieExtractState
-      dedupMaps     <- asks ieDedupMaps
+      dedupStores   <- asks ieDedupStores
       addressBuffer <- asks ieAddressBuffer
       txOutWorker    <- asks ieTxOutWorker
       mConsumedByBuf <- asks ieConsumedByBuffer
@@ -486,21 +487,26 @@ runConsumer = do
               lsReopen loaderStream
               setConsumerNote watchdog "consumer: post-commit"
 
-            -- 9. Compact the UtxoStore: snapshot the current state
-            --    then reopen the active table from it. Caps the
-            --    active LSM run count (and hence open file
-            --    descriptors) to whatever the snapshot persists; the
-            --    snapshot also doubles as the warm-up state for a
-            --    resumed boot. Runs after @lsReopen@ so the
-            --    snapshot reflects state PG has durabilised through
-            --    epoch @prev@; a resumed boot re-processes from
-            --    @sync_state@ and re-records are idempotent on the
-            --    same key.
+            -- 9. Compact the LSM-backed Ingest tables: snapshot then
+            --    reopen each from the snapshot. Caps the active LSM
+            --    run count (and hence open file descriptors) to
+            --    whatever the snapshot persists; the snapshot also
+            --    doubles as the warm-up state for a resumed boot.
+            --    Runs after @lsReopen@ so the snapshots reflect
+            --    state PG has durabilised through epoch @prev@; a
+            --    resumed boot re-processes from @sync_state@ and
+            --    re-records are idempotent on the same key.
             lsm   <- asks ieLsmSession
             store <- asks ieUtxoStore
             liftIO $ do
               setConsumerNote watchdog "consumer: utxoStore compact"
               UtxoStore.compactUtxoStore store lsm
+              setConsumerNote watchdog "consumer: dedupStore compact"
+              DedupStore.compactDedupStore (DedupStore.dstPoolHash     dedupStores) lsm
+              DedupStore.compactDedupStore (DedupStore.dstStakeAddress dedupStores) lsm
+              DedupStore.compactDedupStore (DedupStore.dstSlotLeader   dedupStores) lsm
+              DedupStore.compactDedupStore (DedupStore.dstMultiAsset   dedupStores) lsm
+              DedupStore.compactDedupStore (DedupStore.dstScriptHash   dedupStores) lsm
 
             -- End-to-end timing: spans the previous boundary's
             -- post-commit reset through this boundary's post-commit
@@ -562,14 +568,14 @@ runConsumer = do
                 <> pctSeg
               ) Nothing
 
-            -- Dedup-map size + heap-usage trace: diagnostic only.
-            -- 'dedupMapSizes' iterates every hash table and
+            -- Dedup-store size + heap-usage trace: diagnostic only.
+            -- 'dedupStoreSizes' samples each store's counter and
             -- 'sampleHeapBytes' calls 'getRTSStats', so the whole
             -- block is gated on 'Debug' to keep production runs free
             -- of the overhead.
             minSev <- asks (ceMinSeverity . ieCore)
             when (minSev <= Debug) $ do
-              dedupCounts <- liftIO $ dedupMapSizes dedupMaps
+              dedupCounts <- liftIO $ dedupStoreSizes dedupStores
               heapInfo    <- liftIO sampleHeapBytes
               let heapText = case heapInfo of
                     Just live -> " | heap=" <> fmtBytes live

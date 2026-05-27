@@ -1,7 +1,8 @@
 -- | Checkpoint serialisation.
 --
--- Binary serialisation and deserialisation of 'DedupMaps' for checkpoint
--- persistence. Uses a compact binary format for fast save/restore.
+-- Binary serialisation and deserialisation of 'DedupStores' for
+-- checkpoint persistence. Uses a compact binary format for fast
+-- save/restore.
 module DbSync.Checkpoint.Serialise
   ( serialiseDedupMaps
   , deserialiseDedupMaps
@@ -9,12 +10,12 @@ module DbSync.Checkpoint.Serialise
 
 import Cardano.Prelude
 
-import DbSync.Phase.Ingest.DedupMap (DedupMaps)
+import DbSync.Phase.Ingest.DedupStore (DedupStores)
 
--- | Serialise dedup maps to a compact binary format.
-serialiseDedupMaps :: DedupMaps -> ByteString
+-- | Serialise dedup stores to a compact binary format.
+serialiseDedupMaps :: DedupStores -> ByteString
 serialiseDedupMaps = panic "TODO: not implemented"
 
--- | Deserialise dedup maps from a checkpoint file.
-deserialiseDedupMaps :: ByteString -> Either Text DedupMaps
+-- | Deserialise dedup stores from a checkpoint file.
+deserialiseDedupMaps :: ByteString -> Either Text DedupStores
 deserialiseDedupMaps = panic "TODO: not implemented"

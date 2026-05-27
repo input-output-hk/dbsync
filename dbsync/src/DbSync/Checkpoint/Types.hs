@@ -37,8 +37,8 @@ data Checkpoint = Checkpoint
       -- ^ Slot of the last processed block
   , cpIdCounters     :: !IdCounters
       -- ^ Monotonic ID counter state at checkpoint time
-  , cpDedupMapsPath  :: !FilePath
-      -- ^ Path to the serialised dedup maps on disk
+  , cpDedupStoresPath :: !FilePath
+      -- ^ Path to the serialised dedup stores on disk
   , cpLedgerPath     :: !FilePath
       -- ^ Path to the serialised ledger state snapshot
   , cpExtractors    :: ![Text]

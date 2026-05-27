@@ -65,7 +65,7 @@ library
     DbSync.Phase.Type
     DbSync.Phase.Ingest.Consumer
     DbSync.Phase.Ingest.Counter
-    DbSync.Phase.Ingest.DedupMap
+    DbSync.Phase.Ingest.DedupStore
     DbSync.Phase.Ingest.FdLimit
     DbSync.Phase.Ingest.LsmSession
     DbSync.Phase.Ingest.PipelineStats
@@ -204,7 +204,6 @@ library
     -- Data / serialisation
     , aeson
     , yaml
-    , hashtables
     , bytestring
     , text
     , vector

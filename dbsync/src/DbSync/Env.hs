@@ -67,7 +67,7 @@ import DbSync.Extractor
   , HasNetwork (..)
   , emptyBlockLedgerData
   )
-import DbSync.Phase.Ingest.DedupMap (DedupMaps)
+import DbSync.Phase.Ingest.DedupStore (DedupStores)
 import DbSync.Phase.Ingest.PipelineStats (PipelineStats)
 import DbSync.Phase.Ingest.ReceiverStats (ReceiverStats)
 import DbSync.Phase.Ingest.LsmSession (LsmSession)
@@ -88,9 +88,6 @@ import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer, Severity)
 import DbSync.Trace.Watchdog (HasWatchdog (..), Watchdog)
 import DbSync.Writer (HasWriter (..), Writer)
-
--- NOTE: DedupMaps is internally mutable (BasicHashTable + IORef counters).
--- No IORef wrapper needed — the hash tables are mutated in-place.
 
 -- ---------------------------------------------------------------------------
 -- * Accessor classes
@@ -183,8 +180,11 @@ data IngestEnv = IngestEnv
     -- the consumer panics if one slips through.
   , ieLoaderStream    :: !LoaderStream
     -- ^ Multi-threaded loader-stream writer (per-table TBQueues + worker threads)
-  , ieDedupMaps     :: !DedupMaps
-    -- ^ Mutable deduplication maps (internally mutable hash tables)
+  , ieDedupStores   :: !DedupStores
+    -- ^ LSM-backed deduplication stores. Five tables on the shared
+    -- 'ieLsmSession'; each maps a natural key to its assigned
+    -- database id. Compacted alongside 'ieUtxoStore' at each epoch
+    -- boundary.
   , ieAddressBuffer :: !AddressBufferRef
     -- ^ Per-epoch buffer of address-resolution work for the
     -- 'ieTxOutWorker'. The consumer hands the contents to the worker
@@ -221,8 +221,8 @@ data IngestEnv = IngestEnv
     -- ^ Network system-start time, sourced from the Shelley genesis.
     -- Required by the state-query interpreter to compute slot times.
   , ieResolver      :: !(IdResolver IO)
-    -- ^ Ingest-phase ID resolver (DedupMaps + IdCounters under the hood).
-    -- Built once from 'ieDedupMaps' and 'ieExtractState' at startup.
+    -- ^ Ingest-phase ID resolver ('DedupStores' + 'IdCounters' under the hood).
+    -- Built once from 'ieDedupStores' and 'ieExtractState' at startup.
   , ieWriter        :: !(Writer IO)
     -- ^ Ingest-phase writer (the loader-stream adapter). Built once
     -- from 'ieLoaderStream' at startup.
@@ -279,7 +279,7 @@ data IngestEnv = IngestEnv
 -- | Environment for the Follow loop ('FollowingVolatileTail' and
 -- 'FollowingChainTip').
 --
--- Lighter than 'IngestEnv' — no COPY connections, no dedup maps, no
+-- Lighter than 'IngestEnv' — no COPY connections, no dedup stores, no
 -- background address resolver. Reads from the same chainsync message
 -- queue as the Ingest consumer did and runs per-block INSERTs with
 -- rollback support against a single hasql connection.

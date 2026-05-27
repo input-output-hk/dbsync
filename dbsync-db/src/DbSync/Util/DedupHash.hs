@@ -1,11 +1,11 @@
--- | Fixed-size key derivation for in-memory dedup maps.
+-- | Fixed-size key derivation for dedup stores.
 --
--- A dedup map ('DbSync.Phase.Ingest.DedupMap.DedupMap') stores one entry per
--- unique entity ever seen, and never evicts. For maps whose natural
--- key is already a 28-byte cryptographic hash (pool key, stake
--- credential, script hash) the raw key is fine. For maps whose
--- natural key is wider or variable-length, we hash it down to a
--- uniform 28-byte digest via 'hashDedupKey'.
+-- A dedup store ('DbSync.Phase.Ingest.DedupStore.DedupStore') stores
+-- one entry per unique entity ever seen, and never evicts. For
+-- stores whose natural key is already a 28-byte cryptographic hash
+-- (pool key, stake credential, script hash) the raw key is fine.
+-- For stores whose natural key is wider or variable-length, we hash
+-- it down to a uniform 28-byte digest via 'hashDedupKey'.
 --
 -- Any callsite that derives a key MUST go through this module so the
 -- ingest path and the boot-time rebuild path produce byte-identical

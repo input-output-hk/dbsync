@@ -200,8 +200,8 @@ obtaining row IDs:
 - **`IngestChainHistory`** writes through 12 parallel `COPY` streams (one libpq
   connection per table) into UNLOGGED tables with epoch-aligned commits.
   Because `COPY` has no return channel for generated IDs, monotonic IDs are
-  pre-assigned in memory by `Phase/Ingest/DedupMap` + `Phase/Ingest/Counter`
-  *before* the row is written.
+  pre-assigned by `Phase/Ingest/DedupStore` (LSM-backed dedup tables) +
+  `Phase/Ingest/Counter` *before* the row is written.
 - **`PreparingForChainTip` and `FollowingChainTip`** share a single `hasql`
   writer doing `INSERT … RETURNING` for new rows and `SELECT` for existing
   parent IDs — IDs come back as part of the query/insert response itself, not
@@ -236,7 +236,7 @@ optional **Ledger Worker** (kept off the critical path during Ingest) and the
         ├── App.hs / AppM.hs / Cli.hs / Env.hs / Error.hs / Util.hs   # Top-level wiring & CLI
         ├── App/                          # Orchestrator: boot decision, run loop, AppArgs
         ├── Phase/                        # Phase state machine — SyncPhase type, live Current carrier,
-        │                                 #   Ingest/ (incl. Counter, DedupMap) / Preparing / Following
+        │                                 #   Ingest/ (incl. Counter, DedupStore) / Preparing / Following
         ├── Block/                        # ChainSync receiver + HFC-era-dispatching block/tx parser
         ├── Extractor.hs + Extractor/     # Pure GenericBlock → [Row] projections (Core, UTxO, Pool, …)
         ├── Db/                           # Loader-stream COPY writer + hasql pool + transaction bracket

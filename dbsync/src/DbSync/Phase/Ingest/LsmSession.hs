@@ -3,9 +3,9 @@
 
 -- | LSM session that backs Ingest-phase working state.
 --
--- Currently used by 'DbSync.Phase.Ingest.UtxoStore'; more tables
--- (the existing 'DbSync.Phase.Ingest.DedupMap' maps and the address
--- resolver) move to it in follow-up phases.
+-- Hosts every LSM table used during 'IngestChainHistory':
+-- 'DbSync.Phase.Ingest.UtxoStore' and the five
+-- 'DbSync.Phase.Ingest.DedupStore' tables.
 --
 -- == Lifecycle
 --
@@ -27,9 +27,8 @@
 --
 -- @lsm-tree@ sessions are safe for concurrent reads but races on
 -- write + anything else. Every ingest-phase table on top of this
--- session is written by a single thread (the consumer thread for
--- 'UtxoStore'; the extractor pipeline thread for the future dedup
--- tables) — match that or add explicit serialisation.
+-- session is written by the single consumer thread; match that or
+-- add explicit serialisation.
 --
 -- == On disk
 --

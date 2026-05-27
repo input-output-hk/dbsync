@@ -38,6 +38,7 @@ import qualified DbSync.Extractor.PoolSpec as ExtractorPoolSpec
 import qualified DbSync.Extractor.StakeDelegationSpec as ExtractorStakeDelegationSpec
 import qualified DbSync.Extractor.UTxOSpec as ExtractorUTxOSpec
 import qualified DbSync.Phase.Ingest.ConsumerSpec as IngestConsumerSpec
+import qualified DbSync.Phase.Ingest.DedupStoreSpec as IngestDedupStoreSpec
 import qualified DbSync.Phase.Ingest.UtxoStoreSpec as IngestUtxoStoreSpec
 import qualified DbSync.Block.PipelineSpec as BlockPipelineSpec
 import qualified DbSync.Ledger.DepositAccumulatorSpec as LedgerDepositAccumulatorSpec
@@ -129,6 +130,7 @@ main = hspec $ do
     ExtractorStakeDelegationSpec.spec
     ExtractorUTxOSpec.spec
     IngestConsumerSpec.spec
+    IngestDedupStoreSpec.spec
     IngestUtxoStoreSpec.spec
     BlockPipelineSpec.spec
     LedgerDepositAccumulatorSpec.spec

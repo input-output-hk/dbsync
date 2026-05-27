@@ -41,12 +41,12 @@ import DbSync.Extractor
   )
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
-import DbSync.Phase.Ingest.DedupMap (newMaps)
+
 import DbSync.Block.Pipeline (processBlock)
 import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
-import DbSync.Test.Lsm (withTestUtxoStore)
+import DbSync.Test.Lsm (withTestIngestStores)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnvWith)
 import DbSync.Test.Writer (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 
@@ -90,13 +90,12 @@ spec = describe "stake_registration.deposit" $ do
 -- ---------------------------------------------------------------------------
 
 runWith :: BlockLedgerData -> GenericBlock -> IO TestWriterState
-runWith bld block = withTestUtxoStore $ \utxoStore -> do
+runWith bld block = withTestIngestStores $ \utxoStore dedupStores -> do
   stRef <- newIORef freshExtractState
-  dedup <- newMaps
   addrBuf <- newAddressBufferRef
   wrRef <- newIORef emptyTestWriterState
   let env = mkTestPipelineEnvWith Mainnet
-              (mkIngestResolver stRef dedup addrBuf utxoStore Nothing) (mkTestWriter wrRef)
+              (mkIngestResolver stRef dedupStores addrBuf utxoStore Nothing) (mkTestWriter wrRef)
               [coreExtractor, stakeDelegationExtractor]
               (\_ -> pure bld) IngestChainHistory
   runReaderT (processBlock block) env

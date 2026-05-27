@@ -48,11 +48,11 @@ import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()  -- LedgerSupports
 
 import DbSync.Block.Parser (parseBlock)
 import DbSync.Extractor (ExtractorDef, freshExtractState)
-import DbSync.Phase.Ingest.DedupMap (DedupMaps, newMaps)
+
 import DbSync.Block.Pipeline (processBlock)
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
-import DbSync.Test.Lsm (withTestUtxoStore)
+import DbSync.Test.Lsm (withTestIngestStores)
 import DbSync.StateQuery.Types (SlotDetails (..))
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import DbSync.Test.Writer (TestWriterState, emptyTestWriterState, mkTestWriter)
@@ -77,12 +77,11 @@ runPureExtractMany
   :: [ExtractorDef]
   -> [CardanoBlock StandardCrypto]
   -> IO TestWriterState
-runPureExtractMany extractors blocks = withTestUtxoStore $ \utxoStore -> do
-  stRef     <- newIORef freshExtractState
-  dedupMaps <- newMaps :: IO DedupMaps
-  addrBuf   <- newAddressBufferRef
-  ref       <- newIORef emptyTestWriterState
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoStore Nothing)
+runPureExtractMany extractors blocks = withTestIngestStores $ \utxoStore dedupStores -> do
+  stRef   <- newIORef freshExtractState
+  addrBuf <- newAddressBufferRef
+  ref     <- newIORef emptyTestWriterState
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupStores addrBuf utxoStore Nothing)
                               (mkTestWriter ref) extractors
   for_ blocks $ \block -> do
     let sd        = syntheticSlotDetails (blockSlot block)

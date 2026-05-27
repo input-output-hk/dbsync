@@ -34,11 +34,11 @@ import DbSync.Db.Schema.Pool (poolHashTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Extractor (freshExtractState)
 import DbSync.Extractor.Core (coreExtractor)
-import DbSync.Phase.Ingest.DedupMap (newMaps)
+
 import DbSync.Block.Pipeline (processBlock)
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
-import DbSync.Test.Lsm (withTestUtxoStore)
+import DbSync.Test.Lsm (withTestIngestStores)
 import DbSync.Test.Database (queryTestDb, testConnBs, testConnStr, truncateAllTables)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import qualified DbSync.Phase.Ingest.Writer as IngestWriter
@@ -129,27 +129,27 @@ spec = describe "DbSync.Db.Loader (multi-threaded, full pipeline)" $
         slCount `shouldBe` "2"
 
     describe "epoch boundary (commit + reopen)" $ do
-      it "data survives commit + reopen cycle" $ withTestUtxoStore $ \utxoStore -> do
-        truncateAllTables coreTableNames
-        -- Simulate 2 epochs: write block, commit, reopen, write another block, commit
-        stRef <- newIORef freshExtractState
-        dedupMaps <- newMaps
-        addrBuf <- newAddressBufferRef
-        bs <- mkLoaderStream testConnBs coreTables
-        let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoStore Nothing)
-                                    (IngestWriter.mkWriter bs) [coreExtractor]
+      it "data survives commit + reopen cycle" $
+        withTestIngestStores $ \utxoStore dedupStores -> do
+          truncateAllTables coreTableNames
+          -- Simulate 2 epochs: write block, commit, reopen, write another block, commit
+          stRef <- newIORef freshExtractState
+          addrBuf <- newAddressBufferRef
+          bs <- mkLoaderStream testConnBs coreTables
+          let env = mkTestPipelineEnv (mkIngestResolver stRef dedupStores addrBuf utxoStore Nothing)
+                                      (IngestWriter.mkWriter bs) [coreExtractor]
 
-        -- Epoch 1
-        runReaderT (processBlock emptyBlock) env
-        lsCommit bs
-        -- Epoch 2
-        lsReopen bs
-        runReaderT (processBlock emptyBlock2) env
-        lsCommit bs
-        closeLoaderStream bs
+          -- Epoch 1
+          runReaderT (processBlock emptyBlock) env
+          lsCommit bs
+          -- Epoch 2
+          lsReopen bs
+          runReaderT (processBlock emptyBlock2) env
+          lsCommit bs
+          closeLoaderStream bs
 
-        blockCount <- queryCount blockTableDef
-        blockCount `shouldBe` "2"
+          blockCount <- queryCount blockTableDef
+          blockCount `shouldBe` "2"
 
     describe "data integrity" $ do
       it "NULL values round-trip correctly" $ do
@@ -180,12 +180,11 @@ queryCount td = T.strip <$>
 
 -- | Run the full pipeline: extractor → resolver → Ingest writer → PostgreSQL.
 runPipelineToDb :: [GenericBlock] -> IO ()
-runPipelineToDb blocks = withTestUtxoStore $ \utxoStore -> do
+runPipelineToDb blocks = withTestIngestStores $ \utxoStore dedupStores -> do
   stRef <- newIORef freshExtractState
-  dedupMaps <- newMaps
   addrBuf <- newAddressBufferRef
   bs <- mkLoaderStream testConnBs coreTables
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoStore Nothing)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupStores addrBuf utxoStore Nothing)
                               (IngestWriter.mkWriter bs) [coreExtractor]
   forM_ blocks $ \blk ->
     runReaderT (processBlock blk) env

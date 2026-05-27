@@ -79,7 +79,7 @@ import DbSync.Db.Schema.Init
   )
 import DbSync.Env (CoreEnv (..), FollowEnv (..), IngestEnv (..), mkFollowEnvFromIngest)
 import DbSync.Extractor (ExtractState, ExtractorDef (..), freshExtractState)
-import DbSync.Phase.Ingest.DedupMap (newMaps)
+import DbSync.Phase.Ingest.DedupStore (closeStores, newStores)
 import DbSync.Phase.Ingest.Consumer (runConsumer)
 import DbSync.Phase.Ingest.PipelineStats (emptyPipelineStats)
 import DbSync.Phase.Ingest.ReceiverStats (newReceiverStats)
@@ -303,7 +303,15 @@ runApp tracer args = do
             exitFailure
           Right d -> pure d
 
-  -- 10. Resolve the boot decision.
+  -- 10. Open the shared LSM session before resolving the boot
+  -- decision. Both 'BootFresh' (via 'newStores') and 'BootResume'
+  -- (via 'rebuildDedupMaps') need it to materialise the dedup
+  -- stores; the 'BootFollowRestart' branch releases it
+  -- immediately because the follow loop doesn't touch ingest LSM
+  -- tables.
+  lsmSession <- openLsmSession (lsmSessionTracerFromApp tracer) ledgerStateDir
+
+  -- 11. Resolve the boot decision.
   --
   -- 'BootFollowRestart' does its entire run inline and returns
   -- 'Nothing'; the rest of runApp (which is the Ingest pipeline) then
@@ -317,8 +325,8 @@ runApp tracer args = do
             logInfo "Seeding ledger DB from genesis"
             runAppM lenv initLedgerDbFromGenesis
           LedgerDisabled _ -> pure ()
-        maps <- newMaps
-        pure $ Just (mkInitState, maps, IntersectGenesis, Nothing, Nothing, 1)
+        stores <- newStores lsmSession
+        pure $ Just (mkInitState, stores, IntersectGenesis, Nothing, Nothing, 1)
 
       BootResume rc -> do
         let row = rcSyncState rc
@@ -327,14 +335,16 @@ runApp tracer args = do
             <> show (ssrLastCommittedSlot row)
             <> ", block "
             <> show (ssrLastCommittedBlockNo row)
-        deleted <- runAppM consumerCtrlConn (deleteRowsPastSlot IngestResume tableDefs row)
+        logInfo "Cleaning rows past last_committed_slot…"
+        deleted <- runAppM (TracerWithControl tracer consumerCtrlConn)
+                     (deleteRowsPastSlot IngestResume tableDefs row)
         when (deleted > 0) $
           logInfo $
             "Cleaned up " <> show deleted
               <> " rows past last_committed_slot from a prior crash"
-        logInfo "Rebuilding dedup maps from PG..."
-        maps <- runAppM (TracerWithControl tracer consumerCtrlConn)
-                  (rebuildDedupMaps tableDefs)
+        logInfo "Rebuilding dedup stores from PG…"
+        stores <- runAppM (TracerWithControl tracer consumerCtrlConn)
+                    (rebuildDedupMaps tableDefs lsmSession)
 
         (replayBs, replaySt) <- case (hasLedgerEnv, rcChosenSnapshot rc) of
           (LedgerDisabled _, _) -> pure (Nothing, Nothing)
@@ -371,7 +381,7 @@ runApp tracer args = do
         ireq <- resolveIntersection logInfo logError consumerCtrlConn rc
         pure $ Just
           ( mkResumeExtractState row
-          , maps
+          , stores
           , ireq
           , replayBs
           , replaySt
@@ -379,6 +389,10 @@ runApp tracer args = do
           )
 
       BootFollowRestart frc -> do
+        -- 'runFollowRestart' does not touch the ingest LSM tables.
+        -- Release the session opened above so the directory lock is
+        -- dropped before entering the long-running follow loop.
+        closeLsmSession lsmSession
         runAppM coreEnv (setCurrentPhase (ceCurrentPhase coreEnv) FollowingVolatileTail)
         watchdog <- newWatchdog (ceMinSeverity coreEnv)
         -- 'runFollowRestart' owns the 'withLedgerThreads' bracket so
@@ -391,9 +405,12 @@ runApp tracer args = do
             consumerCtrlConn frc mShutdown iomgr watchdog
         pure Nothing
 
-  for_ mIngestState $ \(initialExtractState, dedupMaps, intersectReq, replayBoundary, replayStart, initialAddressId) -> do
+  for_ mIngestState $ \(initialExtractState, dedupStores, intersectReq, replayBoundary, replayStart, initialAddressId) -> do
 
-    -- 9. Build the ingest pipeline state.
+    -- 12. Build the ingest pipeline state. The shared LSM session
+    -- ('lsmSession') was opened above in step 10; the dedup
+    -- stores ('dedupStores') were opened on top of it inside the
+    -- boot-decision branch.
     stRef            <- newIORef initialExtractState
     loaderStream     <- mkLoaderStream connStr tableDefs
     blockQueue       <- newTBQueueIO 500
@@ -402,10 +419,6 @@ runApp tracer args = do
     watchdog         <- newWatchdog (ceMinSeverity coreEnv)
     addrBuffer       <- newAddressBufferRef
     txOutWorker      <- mkTxOutWorker tracer hasqlSettings initialAddressId
-    -- Open the shared LSM session before any table on top of it.
-    -- The directory may already exist with snapshots from a prior
-    -- run — 'openLsmSession' restores in that case.
-    lsmSession       <- openLsmSession (lsmSessionTracerFromApp tracer) ledgerStateDir
     utxoStore        <- openUtxoStore lsmSession
     let consumedByOn = uoConsumedByTxId (pcUtxo (scOptions validProfile))
     mConsumedByBuf <-
@@ -413,14 +426,14 @@ runApp tracer args = do
     latestPointRef   <- newIORef Nothing
     rollbackBoundary <- newTVarIO Nothing
 
-    let resolver = mkIngestResolver stRef dedupMaps addrBuffer utxoStore mConsumedByBuf
+    let resolver = mkIngestResolver stRef dedupStores addrBuffer utxoStore mConsumedByBuf
         writer   = IngestWriter.mkWriter loaderStream
 
     let ingestEnv = IngestEnv
           { ieCore                    = coreEnv
           , ieBlockQueue              = blockQueue
           , ieLoaderStream              = loaderStream
-          , ieDedupMaps               = dedupMaps
+          , ieDedupStores             = dedupStores
           , ieAddressBuffer           = addrBuffer
           , ieTxOutWorker             = txOutWorker
           , ieLsmSession              = lsmSession
@@ -463,6 +476,10 @@ runApp tracer args = do
           closeUtxoStore utxoStore
             `catch` \(e :: SomeException) ->
               logError $ "Error closing UTxO store: " <> show e
+          logInfo "Closing dedup store tables..."
+          closeStores dedupStores
+            `catch` \(e :: SomeException) ->
+              logError $ "Error closing dedup stores: " <> show e
 
         ingestAction = runAppM ingestEnv runConsumer `finally` shutdownIngest
 
@@ -827,7 +844,9 @@ runFollowRestart
     -- pending-boundary snapshot; running them here would wipe every
     -- dedup row Ingest's last two epochs and Follow wrote, silently
     -- orphaning the fact-table FKs that reference them.
-    deleted <- runAppM consumerCtrlConn (deleteRowsPastSlot FollowRestart tableDefs row)
+    logInfo "Cleaning rows past last_committed_slot…"
+    deleted <- runAppM (TracerWithControl tracer consumerCtrlConn)
+                 (deleteRowsPastSlot FollowRestart tableDefs row)
     when (deleted > 0) $
       logInfo $
         "Cleaned up " <> show deleted

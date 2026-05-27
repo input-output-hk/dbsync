@@ -28,11 +28,11 @@ import DbSync.Db.Schema.Core (Block (..))
 import DbSync.Db.Schema.Ids (BlockId (..), TxId (..))
 import DbSync.Extractor (ExtractorDef (..), freshExtractState)
 import DbSync.Extractor.Core (coreExtractor)
-import DbSync.Phase.Ingest.DedupMap (newMaps)
+
 import DbSync.Block.Pipeline (processBlock)
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
-import DbSync.Test.Lsm (withTestUtxoStore)
+import DbSync.Test.Lsm (withTestIngestStores)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import DbSync.Test.Writer (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 
@@ -109,22 +109,20 @@ mkMockExtractor countRef = ExtractorDef
 -- ---------------------------------------------------------------------------
 
 runPipeline :: [ExtractorDef] -> GenericBlock -> IO TestWriterState
-runPipeline extractors block = withTestUtxoStore $ \utxoStore -> do
+runPipeline extractors block = withTestIngestStores $ \utxoStore dedupStores -> do
   stRef <- newIORef freshExtractState
-  dedupMaps <- newMaps
   addrBuf <- newAddressBufferRef
   wrRef <- newIORef emptyTestWriterState
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupMaps addrBuf utxoStore Nothing)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupStores addrBuf utxoStore Nothing)
                               (mkTestWriter wrRef) extractors
   runReaderT (processBlock block) env
   readIORef wrRef
 
 runPipelineTwoBlocks :: [ExtractorDef] -> GenericBlock -> GenericBlock -> IO (TestWriterState, TestWriterState)
-runPipelineTwoBlocks extractors block1 block2 = withTestUtxoStore $ \utxoStore -> do
+runPipelineTwoBlocks extractors block1 block2 = withTestIngestStores $ \utxoStore dedupStores -> do
   stRef <- newIORef freshExtractState
-  dedupMaps <- newMaps
   addrBuf <- newAddressBufferRef
-  let resolver = mkIngestResolver stRef dedupMaps addrBuf utxoStore Nothing
+  let resolver = mkIngestResolver stRef dedupStores addrBuf utxoStore Nothing
 
   wrRef1 <- newIORef emptyTestWriterState
   let env1 = mkTestPipelineEnv resolver (mkTestWriter wrRef1) extractors

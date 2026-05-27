@@ -33,7 +33,7 @@ module DbSync.Checkpoint.SyncState
     -- * Boot-time canonicalisation
   , fetchBlockHashAtSlot
 
-    -- * Dedup map rebuild
+    -- * Dedup store rebuild
   , rebuildDedupMaps
   ) where
 
@@ -69,12 +69,13 @@ import DbSync.Db.Statement.SyncState
   , writeSyncStateStmt
   )
 import DbSync.Error (throwDb)
-import DbSync.Phase.Ingest.DedupMap
-  ( DedupMap
-  , DedupMaps (..)
+import DbSync.Phase.Ingest.DedupStore
+  ( DedupStore
+  , DedupStores (..)
   , insertExisting
-  , newMaps
+  , newStores
   )
+import DbSync.Phase.Ingest.LsmSession (LsmSession)
 import DbSync.Util.DedupHash (hashDedupKey)
 
 -- ---------------------------------------------------------------------------
@@ -200,17 +201,23 @@ fetchBlockHashAtSlot slot =
   runCtrlStmt "fetchBlockHashAtSlot" slot selectBlockHashAtSlotStmt
 
 -- ---------------------------------------------------------------------------
--- * Dedup-map rebuild
+-- * Dedup-store rebuild
 -- ---------------------------------------------------------------------------
 
--- | Rebuild the in-memory dedup maps from the rows already
--- committed to PostgreSQL. Each map's counter is left pointing at
+-- | Rebuild the dedup stores from the rows already committed to
+-- PostgreSQL. Each store's counter is left pointing at
 -- @max(existingId) + 1@ so subsequent 'lookupOrInsert' allocations
 -- don't collide.
 --
 -- The supplied 'TableDef' list determines which tables are queried —
 -- a dedup table absent from the active schema (e.g. @script@) is
--- silently skipped, leaving its map empty.
+-- silently skipped, leaving its store empty.
+--
+-- The 'LsmSession' is needed by 'newStores' to materialise the
+-- five LSM tables. Restart-resume callers should pass the same
+-- session that the consumer will use; the saved snapshots (if any)
+-- carry the table contents from a prior run, and the PG repopulate
+-- pass below only bumps the counters.
 rebuildDedupMaps
   :: ( HasCallStack
      , HasTracer env
@@ -219,21 +226,22 @@ rebuildDedupMaps
      , MonadIO m
      )
   => [TableDef]
-  -> m DedupMaps
-rebuildDedupMaps tableDefs = do
-  maps <- liftIO newMaps
+  -> LsmSession
+  -> m DedupStores
+rebuildDedupMaps tableDefs lsmSession = do
+  stores <- liftIO (newStores lsmSession)
   let tableNames = map tdName tableDefs
       whenPresent name action =
         when (name `elem` tableNames) action
   whenPresent "slot_leader" $
-    populateSingle "slot_leader" "hash" (dmsSlotLeader maps)
+    populateSingle "slot_leader" "hash" (dstSlotLeader stores)
   whenPresent "stake_address" $
-    populateSingle "stake_address" "hash_raw" (dmsStakeAddress maps)
+    populateSingle "stake_address" "hash_raw" (dstStakeAddress stores)
   whenPresent "pool_hash" $
-    populateSingle "pool_hash" "hash_raw" (dmsPoolHash maps)
+    populateSingle "pool_hash" "hash_raw" (dstPoolHash stores)
   whenPresent "multi_asset" $
-    populateMultiAsset (dmsMultiAsset maps)
-  pure maps
+    populateMultiAsset (dstMultiAsset stores)
+  pure stores
 
 populateSingle
   :: ( HasCallStack
@@ -242,13 +250,13 @@ populateSingle
      , MonadReader env m
      , MonadIO m
      )
-  => Text -> Text -> DedupMap -> m ()
-populateSingle tableName keyCol dm =
+  => Text -> Text -> DedupStore -> m ()
+populateSingle tableName keyCol store =
   timedRebuild tableName $ do
     rows <- runCtrlStmt ("rebuildDedupMaps[" <> tableName <> "]") ()
               (selectDedupSingleStmt tableName keyCol)
     liftIO $ forM_ rows $ \(rowId, key) ->
-      insertExisting (SBS.toShort key) rowId dm
+      insertExisting (SBS.toShort key) rowId store
     pure (fromIntegral (length rows))
 
 populateMultiAsset
@@ -258,13 +266,13 @@ populateMultiAsset
      , MonadReader env m
      , MonadIO m
      )
-  => DedupMap -> m ()
-populateMultiAsset dm =
+  => DedupStore -> m ()
+populateMultiAsset store =
   timedRebuild "multi_asset" $ do
     rows <- runCtrlStmt "rebuildDedupMaps[multi_asset]" ()
               selectMultiAssetDedupStmt
     liftIO $ forM_ rows $ \(rowId, policy, name) ->
-      insertExisting (hashDedupKey (policy <> name)) rowId dm
+      insertExisting (hashDedupKey (policy <> name)) rowId store
     pure (fromIntegral (length rows))
 
 -- | Wrap one table's repopulation in start/end trace lines and time

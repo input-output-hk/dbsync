@@ -36,12 +36,12 @@ import DbSync.Extractor
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Extractor.Pool (poolExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
-import DbSync.Phase.Ingest.DedupMap (newMaps)
+
 import DbSync.Block.Pipeline (processBlock)
 import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
-import DbSync.Test.Lsm (withTestUtxoStore)
+import DbSync.Test.Lsm (withTestIngestStores)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv, mkTestPipelineEnvWith)
 import DbSync.Test.Writer (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 
@@ -120,12 +120,11 @@ runPoolTwoBlocks :: GenericBlock -> GenericBlock -> IO TestWriterState
 runPoolTwoBlocks b1 b2 = runPoolBlocks [b1, b2]
 
 runPoolBlocks :: [GenericBlock] -> IO TestWriterState
-runPoolBlocks blocks = withTestUtxoStore $ \utxoStore -> do
+runPoolBlocks blocks = withTestIngestStores $ \utxoStore dedupStores -> do
   stRef <- newIORef freshExtractState
-  dedup <- newMaps
   addrBuf <- newAddressBufferRef
   wrRef <- newIORef emptyTestWriterState
-  let env = mkTestPipelineEnv (mkIngestResolver stRef dedup addrBuf utxoStore Nothing)
+  let env = mkTestPipelineEnv (mkIngestResolver stRef dedupStores addrBuf utxoStore Nothing)
                               (mkTestWriter wrRef)
                               [coreExtractor, stakeDelegationExtractor, poolExtractor]
   for_ blocks $ \b -> runReaderT (processBlock b) env
@@ -137,13 +136,12 @@ runPoolWith bld block = runPoolWithBlocks bld [block]
 
 -- | Run several blocks sharing one 'BlockLedgerData' value.
 runPoolWithBlocks :: BlockLedgerData -> [GenericBlock] -> IO TestWriterState
-runPoolWithBlocks bld blocks = withTestUtxoStore $ \utxoStore -> do
+runPoolWithBlocks bld blocks = withTestIngestStores $ \utxoStore dedupStores -> do
   stRef <- newIORef freshExtractState
-  dedup <- newMaps
   addrBuf <- newAddressBufferRef
   wrRef <- newIORef emptyTestWriterState
   let env = mkTestPipelineEnvWith Mainnet
-              (mkIngestResolver stRef dedup addrBuf utxoStore Nothing) (mkTestWriter wrRef)
+              (mkIngestResolver stRef dedupStores addrBuf utxoStore Nothing) (mkTestWriter wrRef)
               [coreExtractor, stakeDelegationExtractor, poolExtractor]
               (\_ -> pure bld) IngestChainHistory
   for_ blocks $ \b -> runReaderT (processBlock b) env

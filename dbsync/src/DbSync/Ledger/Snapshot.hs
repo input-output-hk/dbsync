@@ -44,7 +44,6 @@ module DbSync.Ledger.Snapshot
 
     -- * Writing
   , saveCurrentLedgerState
-  , saveCleanupState
 
     -- * Async writer thread
   , runLedgerStateWriteThread
@@ -56,6 +55,9 @@ module DbSync.Ledger.Snapshot
     -- * Deletion
   , safeDeleteSnapshot
   , deleteNewerSnapshots
+
+    -- * Retention
+  , snapshotRetention
   ) where
 
 import Cardano.Prelude hiding (atomically)
@@ -77,6 +79,8 @@ import qualified Ouroboros.Consensus.Ledger.Abstract as Consensus
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots
   ( DiskSnapshot (..)
   , SnapshotManager (..)
+  , SnapshotPolicy (..)
+  , trimSnapshots
   )
 
 import Ouroboros.Network.Block (pattern BlockPoint, pattern GenesisPoint, pointSlot)
@@ -166,27 +170,15 @@ getSlotNoSnapshot = \case
 -- persist to disk. Atomically flips @srCanClose@ to 'False' so the
 -- LedgerDB pruner can't close the handle out from under the writer
 -- — see invariant I3.
+--
+-- Retention is handled by the writer thread after each successful
+-- write — see 'snapshotWriteLoop' and 'snapshotRetention'.
 saveCurrentLedgerState :: DbSyncStateRef -> LedgerM ()
 saveCurrentLedgerState sref = do
   env <- ask
   liftIO $ atomically $ do
     writeTVar (srCanClose sref) False
     writeTBQueue (leSnapshotQueue env) sref
-
--- | Enqueue a snapshot write and trim older snapshots according to
--- the retention policy. Trimming is currently a no-op stub —
--- consensus's 'trimSnapshots' needs a 'SnapshotPolicy', which lives
--- on the boot-flow-supplied snapshot manager rather than 'LedgerEnv',
--- and the wiring will land alongside the boot flow that constructs
--- both together.
-saveCleanupState :: DbSyncStateRef -> LedgerM ()
-saveCleanupState sref = do
-  saveCurrentLedgerState sref
-  -- TODO: invoke 'trimSnapshots (leSnapshotManager env) policy' once
-  -- 'SnapshotPolicy' is plumbed through to 'LedgerEnv'. Until then
-  -- the snapshot manager retains every snapshot it writes; operators
-  -- can manually clean up by deleting old slot directories.
-  pure ()
 
 -- ---------------------------------------------------------------------------
 -- * Async writer thread
@@ -258,6 +250,7 @@ snapshotWriteLoop = do
               "Snapshot at slot " <> show (dsNumber ds)
                 <> " written but markSnapshotComplete failed: "
                 <> Text.pack (Exception.displayException ex)
+        trimRetention env
       Right Nothing ->
         logMsg env Info "takeSnapshot returned Nothing — backend declined to write"
       Left ex ->
@@ -269,6 +262,31 @@ snapshotWriteLoop = do
     logMsg :: LedgerEnv -> Severity -> Text -> LedgerM ()
     logMsg env sev msg =
       liftIO $ traceWith (leTracer env) (LogMsg sev "LedgerSnapshot" msg Nothing)
+
+    trimRetention :: LedgerEnv -> LedgerM ()
+    trimRetention env = do
+      result <- liftIO $
+        Exception.try @Exception.SomeException $
+          trimSnapshots (leSnapshotManager env) retentionPolicy
+      case result of
+        Right deleted
+          | not (null deleted) ->
+              logMsg env Info $
+                "Trimmed " <> show (length deleted)
+                  <> " snapshot(s) (retention=" <> show snapshotRetention <> ")"
+          | otherwise -> pure ()
+        Left ex ->
+          logMsg env Warning $
+            "Snapshot retention trim failed: "
+              <> Text.pack (Exception.displayException ex)
+
+    -- 'trimSnapshots' ignores 'onDiskShouldTakeSnapshot'; only the
+    -- count is consulted.
+    retentionPolicy :: SnapshotPolicy
+    retentionPolicy = SnapshotPolicy
+      { onDiskNumSnapshots       = snapshotRetention
+      , onDiskShouldTakeSnapshot = \_ _ -> False
+      }
 
 -- ---------------------------------------------------------------------------
 -- * Loading
@@ -330,7 +348,7 @@ safeDeleteSnapshot ds = do
 
 -- | Delete every disk snapshot strictly newer than the given slot.
 -- Used by the rollback path and by the boot-flow resume-constraint
--- check (I2) in the ledger-state plan §7 Path B.
+-- check.
 --
 -- Walks the snapshot list and applies 'safeDeleteSnapshot' to each
 -- candidate, so a single failed delete doesn't abort the rest.
@@ -339,3 +357,13 @@ deleteNewerSnapshots (SlotNo s) = do
   snaps <- listDiskSnapshots
   let newer = filter (\ds -> dsNumber ds > s) snaps
   forM_ newer safeDeleteSnapshot
+
+-- ---------------------------------------------------------------------------
+-- * Retention
+-- ---------------------------------------------------------------------------
+
+-- | How many on-disk snapshots to keep after each successful write:
+-- the chosen resume anchor, one fallback if it fails to load, and one
+-- buffer.
+snapshotRetention :: Word
+snapshotRetention = 3

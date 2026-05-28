@@ -393,6 +393,12 @@ runConsumer = do
 
         -- Epoch boundary check
         prevEpoch <- liftIO $ readIORef prevEpochRef
+        -- On the first block we actually process (fresh boot or
+        -- post-replay resume), restart the epoch timer so socket
+        -- waits and replay-window time do not bleed into the first
+        -- epoch's elapsed-seconds stat.
+        when (isNothing prevEpoch) $
+          liftIO $ getCurrentTime >>= writeIORef epochStartRef
         case prevEpoch of
           Just prev | prev /= blockEpoch -> do
             epochStart <- liftIO $ readIORef epochStartRef

@@ -257,7 +257,10 @@ dedupStoreSizes ds = do
 -- caps the active LSM run count (and hence open file descriptors)
 -- and durabilises a restart-resume anchor.
 compactDedupStore :: DedupStore -> LsmSession -> IO ()
-compactDedupStore store lsm = do
+compactDedupStore store lsm = mask_ $ do
+  -- delete-then-save would lose this table's snapshot if interrupted
+  -- between the two calls; mask covers the whole cycle so cancel
+  -- either lands before any work or after a fresh snapshot exists.
   let session = lsmHandle lsm
       name    = dstSnapshotName store
       label   = dstLabel        store
@@ -265,13 +268,8 @@ compactDedupStore store lsm = do
   hasSnap  <- LSMTree.doesSnapshotExist session name
   when hasSnap $ LSMTree.deleteSnapshot session name
   LSMTree.saveSnapshot name label oldTable
-  -- Open the new table and publish it before closing the old one,
-  -- so an async exception between open and swap can't strand the
-  -- new handle. The old table's runs survive in the snapshot dir
-  -- as hardlinks once 'closeTable' unlinks the active-dir entries.
-  mask_ $ do
-    newTable <- LSMTree.openTableFromSnapshot session name label
-    writeIORef (dstTable store) newTable
+  newTable <- LSMTree.openTableFromSnapshot session name label
+  writeIORef (dstTable store) newTable
   LSMTree.closeTable oldTable
 
 -- ---------------------------------------------------------------------------

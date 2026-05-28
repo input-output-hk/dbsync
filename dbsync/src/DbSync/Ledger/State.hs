@@ -317,12 +317,14 @@ mkHasLedgerEnv
     snapshotQueue   <- newTBQueueIO snapshotQueueBound
 
     -- One snapshot, two directories — both halves required, neither a duplicate:
-    --   <dir>/snapshot-headers/<slot>/  small (KB–MB): ExtLedgerState
-    --     (era, governance, stake dist, params, tip) + utxoSize + checksum.
+    --   <dir>/snapshot-headers/<slot>/  ExtLedgerState minus UTxO (tens to
+    --     hundreds of MB on Conway mainnet/testnet) + utxoSize + checksum.
     --     The entry door on resume; without it we'd replay from genesis.
-    --   <dir>/lsm/snapshots/<slot>/     bulk (multi-GB): UTxO tables only.
-    -- Can't merge: 'LSM.saveSnapshot' rejects pre-existing dirs and the
-    -- matching load path is upstream's V2 LSM 'implTakeSnapshot'.
+    --   <dir>/lsm/snapshots/<slot>/     UTxO tables (multi-GB).
+    -- Retention is bounded by 'snapshotRetention' (currently 3).
+    -- 'LSM.saveSnapshot' rejects pre-existing dirs and the load path
+    -- is upstream's V2 LSM 'implTakeSnapshot', so the two halves can't
+    -- be merged.
     let snapshotsDir = dir </> "snapshot-headers"
     createDirectoryIfMissing True snapshotsDir
 
@@ -648,7 +650,7 @@ applyBlockAndSnapshot blk slotDetails consistent mReplayBoundary = do
     if not inReplayWindow
        && shouldSnapshotAtEpoch appResult consistent nearTip (leSnapshotNearTipEpoch env)
       then do
-        DbSync.Ledger.Snapshot.saveCleanupState oldRef
+        DbSync.Ledger.Snapshot.saveCurrentLedgerState oldRef
         pure True
       else pure False
   liftIO $ forM_ pruned $ \sr -> do

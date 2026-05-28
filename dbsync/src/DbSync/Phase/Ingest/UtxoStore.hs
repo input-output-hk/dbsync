@@ -224,20 +224,18 @@ deleteConsumed cache hash idx = do
 -- Called by 'DbSync.Phase.Ingest.Consumer' after each per-epoch
 -- @lsCommit@. Synchronous on the consumer thread.
 compactUtxoStore :: UtxoStore -> LsmSession -> IO ()
-compactUtxoStore store lsm = do
+compactUtxoStore store lsm = mask_ $ do
+  -- delete-then-save would lose this table's snapshot if interrupted
+  -- between the two calls; mask covers the whole cycle so cancel
+  -- either lands before any work or after a fresh snapshot exists.
   let session = lsmHandle lsm
   oldTable <- readIORef (usTable store)
   hasSnap <- LSMTree.doesSnapshotExist session currentSnapshotName
   when hasSnap $ LSMTree.deleteSnapshot session currentSnapshotName
   LSMTree.saveSnapshot currentSnapshotName ingestSnapshotLabel oldTable
-  -- Open the new table and publish it before closing the old one,
-  -- so an async exception between open and swap can't strand the
-  -- new handle. The old table's runs survive in the snapshot dir
-  -- as hardlinks once 'closeTable' unlinks the active-dir entries.
-  mask_ $ do
-    newTable <-
-      LSMTree.openTableFromSnapshot session currentSnapshotName ingestSnapshotLabel
-    writeIORef (usTable store) newTable
+  newTable <-
+    LSMTree.openTableFromSnapshot session currentSnapshotName ingestSnapshotLabel
+  writeIORef (usTable store) newTable
   LSMTree.closeTable oldTable
 
 -- ---------------------------------------------------------------------------

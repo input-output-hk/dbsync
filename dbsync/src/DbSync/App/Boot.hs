@@ -50,6 +50,7 @@ import Cardano.Slotting.Slot (SlotNo (..))
 
 import DbSync.Block.Types (CardanoPoint)
 import DbSync.Db.Schema.SyncState (SyncStateRow (..))
+import DbSync.Ledger.Fingerprint (LedgerStateFingerprint, renderFingerprint)
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -136,6 +137,14 @@ data BootError
   | BootNoUsableSnapshot !Word64
     -- ^ Ledger enabled, the row has @last_committed_slot@, but no
     -- on-disk snapshot exists at or before that slot.
+  | BootLedgerStateFingerprintMismatch !LedgerStateFingerprint !LedgerStateFingerprint
+    -- ^ The fingerprint file in the ledger state directory describes
+    -- a different chain than the current config. Fields:
+    -- @(onDisk, expected)@.
+  | BootLedgerStateFingerprintMissing !FilePath
+    -- ^ The ledger state directory contains data but no readable
+    -- fingerprint file. Carries the directory path for the operator
+    -- message.
   deriving stock (Eq, Show)
 
 -- ---------------------------------------------------------------------------
@@ -163,7 +172,11 @@ decideBoot mRow snapshots ledgerEnabledCfg = case mRow of
         decideFollowRestart row snapshots ledgerEnabledCfg
 
     | rowHasNoCommittedProgress row ->
-        Right BootFresh
+        -- Snapshots without committed PG progress would diverge
+        -- silently from genesis-seeded ledger state.
+        if ledgerEnabledCfg && not (null snapshots)
+          then Left BootSnapshotsWithoutPgState
+          else Right BootFresh
 
     | not ledgerEnabledCfg ->
         case (ssrLastCommittedSlot row, ssrLastCommittedBlockHash row) of
@@ -347,6 +360,33 @@ renderBootError = \case
       , ""
       , "Recovery: restart with --resync-from-genesis to wipe both the database"
       , "and the ledger state directory and re-sync from genesis."
+      ]
+
+  BootLedgerStateFingerprintMismatch onDisk expected ->
+    T.unlines
+      [ "Cannot resume: the ledger state directory was created for a different chain."
+      , ""
+      , "  On disk  : " <> renderFingerprint onDisk
+      , "  This run : " <> renderFingerprint expected
+      , ""
+      , "Resuming would corrupt the database. Recovery options:"
+      , "  - Point --ledger-state-dir at the directory used for this network, or"
+      , "  - Restart with --resync-from-genesis to wipe and re-sync from genesis."
+      ]
+
+  BootLedgerStateFingerprintMissing dir ->
+    T.unlines
+      [ "Cannot resume: the ledger state directory contains data but no"
+      , "fingerprint file. Path:"
+      , ""
+      , "  " <> T.pack dir
+      , ""
+      , "This means the directory was populated by a build that predates the"
+      , "fingerprint check, or the file was deleted. Refusing to proceed because"
+      , "we cannot verify the directory belongs to this chain."
+      , ""
+      , "Recovery: restart with --resync-from-genesis to wipe and re-sync from"
+      , "genesis."
       ]
 
 tshow :: Show a => a -> Text

@@ -132,6 +132,14 @@ spec = describe "DbSync.App.Boot.decideBoot" $ do
       decideBoot (Just (seededRow True)) [] True
         `shouldBe` Right BootFresh
 
+    it "is BootSnapshotsWithoutPgState (ledger enabled, stale snapshots present)" $
+      decideBoot (Just (seededRow True)) [snapshotAt 11_500_000] True
+        `shouldBe` Left BootSnapshotsWithoutPgState
+
+    it "is BootFresh (ledger disabled, ignores any stray on-disk snapshots)" $
+      decideBoot (Just (seededRow False)) [snapshotAt 11_500_000] False
+        `shouldBe` Right BootFresh
+
   describe "sync_complete = True (ledger disabled)" $ do
     it "is BootFollowRestart with empty candidate list" $ do
       let row = (committedRow False) { ssrSyncComplete = True }

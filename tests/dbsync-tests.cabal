@@ -141,6 +141,7 @@ test-suite dbsync-test
     DbSync.Schema.InitSpec
     DbSync.Db.LoaderSpec
     DbSync.Ledger.DepositAccumulatorSpec
+    DbSync.Ledger.FingerprintSpec
     DbSync.Ledger.StateSpec
     DbSync.Ledger.TypesSpec
     DbSync.Ledger.WorkerSpec

@@ -42,6 +42,7 @@ import qualified DbSync.Phase.Ingest.DedupStoreSpec as IngestDedupStoreSpec
 import qualified DbSync.Phase.Ingest.UtxoStoreSpec as IngestUtxoStoreSpec
 import qualified DbSync.Block.PipelineSpec as BlockPipelineSpec
 import qualified DbSync.Ledger.DepositAccumulatorSpec as LedgerDepositAccumulatorSpec
+import qualified DbSync.Ledger.FingerprintSpec as LedgerFingerprintSpec
 import qualified DbSync.Ledger.StateSpec as LedgerStateSpec
 import qualified DbSync.Ledger.TypesSpec as LedgerTypesSpec
 import qualified DbSync.Ledger.WorkerSpec as LedgerWorkerSpec
@@ -134,6 +135,7 @@ main = hspec $ do
     IngestUtxoStoreSpec.spec
     BlockPipelineSpec.spec
     LedgerDepositAccumulatorSpec.spec
+    LedgerFingerprintSpec.spec
     LedgerStateSpec.spec
     LedgerTypesSpec.spec
     LedgerWorkerSpec.spec

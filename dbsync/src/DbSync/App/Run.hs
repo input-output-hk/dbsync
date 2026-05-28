@@ -83,6 +83,12 @@ import DbSync.Phase.Ingest.DedupStore (closeStores, newStores)
 import DbSync.Phase.Ingest.Consumer (runConsumer)
 import DbSync.Phase.Ingest.PipelineStats (emptyPipelineStats)
 import DbSync.Phase.Ingest.ReceiverStats (newReceiverStats)
+import DbSync.Ledger.Fingerprint
+  ( FingerprintCheck (..)
+  , checkFingerprint
+  , computeFingerprint
+  , writeFingerprint
+  )
 import DbSync.Ledger.Snapshot (deleteNewerSnapshots, runLedgerStateWriteThread)
 import DbSync.Ledger.State
   ( dropLedgerStateDir
@@ -99,6 +105,7 @@ import qualified DbSync.Phase.Following.Rollback as Rollback
 import DbSync.Db.Schema.Types (TableDef)
 import DbSync.App.Boot
   ( BootDecision (..)
+  , BootError (..)
   , FollowRestartContext (..)
   , ResumeContext (..)
   , ResumeIntersection (..)
@@ -256,6 +263,22 @@ runApp tracer args = do
   let systemStart = SystemStart (sgSystemStart $ scConfig $ gcShelley genesisCfg)
       pinfo       = mkProtocolInfoCardano nodeCfg genesisCfg
       ledgerCfg   = scLedger validProfile
+      expectedFp  = computeFingerprint genesisCfg
+
+  -- Validate chain-identity fingerprint before opening the LSM
+  -- session. A 'FingerprintFresh' result triggers a write below.
+  fpCheck <-
+    if lcEnabled ledgerCfg
+      then checkFingerprint ledgerStateDir expectedFp
+      else pure FingerprintMatch
+  case fpCheck of
+    FingerprintMatch -> pure ()
+    FingerprintFresh -> pure ()
+    FingerprintMismatch onDisk expected ->
+      abortBoot logError (BootLedgerStateFingerprintMismatch onDisk expected)
+    FingerprintMissing dir ->
+      abortBoot logError (BootLedgerStateFingerprintMissing dir)
+
   hasLedgerEnv <-
     if lcEnabled ledgerCfg
       then do
@@ -279,6 +302,10 @@ runApp tracer args = do
         logInfo "Ledger feature disabled (set ledger.enabled = true in profile to opt in); skipping LSM session"
         LedgerDisabled <$> mkNoLedgerEnv tracer pinfo systemStart network
 
+  -- Stamp the directory now that ledger init has succeeded.
+  when (lcEnabled ledgerCfg && fpCheck == FingerprintFresh) $
+    writeFingerprint ledgerStateDir expectedFp
+
   -- 8. Pre-boot rollback. Either the operator passed --rollback-to-slot
   -- or a previous deep chainsync rollback left a marker that the ledger
   -- worker couldn't satisfy from its in-RAM buffer. The CLI request
@@ -289,21 +316,17 @@ runApp tracer args = do
       logInfo coreEnv consumerCtrlConn tableDefs hasLedgerEnv
       (aaRollbackToSlot args)
 
-  -- 9. Boot decision.
-  bootDecision <-
-    if needsSeed
-      then pure BootFresh
-      else do
-        mRow <- runAppM consumerCtrlConn readSyncState
-        snapshots <- case hasLedgerEnv of
-          LedgerEnabled lenv -> listSnapshots (leSnapshotManager lenv)
-          LedgerDisabled _   -> pure []
-        case decideBoot mRow snapshots ledgerEnabledCfg of
-          Left bootErr -> do
-            for_ (T.lines (renderBootError bootErr)) $ \line ->
-              logError line
-            exitFailure
-          Right d -> pure d
+  -- 9. Boot decision. 'decideBoot' runs even after a fresh seed so
+  -- a stale 'dbsync-ledger/' against an empty PG surfaces as
+  -- 'BootSnapshotsWithoutPgState'.
+  bootDecision <- do
+    mRow <- runAppM consumerCtrlConn readSyncState
+    snapshots <- case hasLedgerEnv of
+      LedgerEnabled lenv -> listSnapshots (leSnapshotManager lenv)
+      LedgerDisabled _   -> pure []
+    case decideBoot mRow snapshots ledgerEnabledCfg of
+      Left bootErr -> abortBoot logError bootErr
+      Right d      -> pure d
 
   -- 10. Open the shared LSM session before resolving the boot
   -- decision. Both 'BootFresh' (via 'newStores') and 'BootResume'
@@ -568,6 +591,12 @@ runApp tracer args = do
 -- ---------------------------------------------------------------------------
 -- * Helpers
 -- ---------------------------------------------------------------------------
+
+-- | Render a 'BootError' and exit. Never returns.
+abortBoot :: (Text -> IO ()) -> BootError -> IO a
+abortBoot logError err = do
+  for_ (T.lines (renderBootError err)) logError
+  exitFailure
 
 -- | Apply a rollback request that arrived before normal boot.
 --

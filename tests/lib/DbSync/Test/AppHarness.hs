@@ -194,7 +194,7 @@ profileExpectedIndexes :: SyncConfig -> [Text]
 profileExpectedIndexes cfg = case buildExtractors (scOptions cfg) of
   Left _err  -> []
   Right exts ->
-    List.nub (schemaIndexes <> preResolveIndexNames)
+    List.nub (schemaIndexes <> ingestResolveIndexNames <> preResolveIndexNames)
     where
       schemaIndexes = concatMap tableIndexNames (concatMap pdTables exts)
 
@@ -226,6 +226,21 @@ preResolveIndexNames =
   , "withdrawal_tx_id_idx"
   , "tx_in_tx_in_id_idx"
   , "collateral_tx_in_tx_in_id_idx"
+  ]
+
+-- | Indexes 'DbSync.Phase.Ingest.IngestIndexes.createIngestResolveIndexes'
+-- builds at the start of @IngestChainHistory@ on the still-UNLOGGED
+-- tables. Kept in sync by hand with
+-- 'DbSync.Db.Statement.Indexes.ingestResolveIndexStatements'.
+--
+-- They survive into the post-Prep schema (the schema-driven Prep
+-- pass emits the same names with @IF NOT EXISTS@), so they are
+-- listed in 'profileExpectedIndexes' alongside the pre-resolve set.
+ingestResolveIndexNames :: [Text]
+ingestResolveIndexNames =
+  [ "tx_out_pkey_idx"
+  , "collateral_tx_out_pkey_idx"
+  , "address_unique_1_idx"
   ]
 
 -- ---------------------------------------------------------------------------

@@ -33,7 +33,7 @@ module DbSync.Db.Loader
 
 import Cardano.Prelude
 
-import Control.Concurrent.STM (TBQueue, newTBQueueIO, readTBQueue, writeTBQueue)
+import Control.Concurrent.STM (TBQueue, lengthTBQueue, newTBQueueIO, readTBQueue, writeTBQueue)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 
 import qualified Data.Map.Strict as Map
@@ -61,14 +61,19 @@ import DbSync.Error (throwInternal)
 -- thread dispatches encoded rows via 'lsWriteRow'. Commits are
 -- coordinated via the sentinel\/barrier pattern in 'lsCommit'.
 data LoaderStream = LoaderStream
-  { lsWriteRow :: !(Text -> ByteString -> IO ())
+  { lsWriteRow     :: !(Text -> ByteString -> IO ())
       -- ^ Dispatch an encoded row to the named table's queue
-  , lsCommit   :: !(IO ())
+  , lsCommit       :: !(IO ())
       -- ^ Epoch boundary: drain all queues, end streams, COMMIT
-  , lsReopen   :: !(IO ())
+  , lsReopen       :: !(IO ())
       -- ^ Reopen streams for the next epoch (BEGIN + new loader stream)
-  , lsClose    :: !(IO ())
+  , lsClose        :: !(IO ())
       -- ^ Close all connections and stop writer threads
+  , lsQueueDepths  :: !(IO [(Text, Natural, Natural)])
+      -- ^ Snapshot of every per-table queue depth as
+      -- @(tableName, currentDepth, capacity)@. Used by diagnostic
+      -- subsystems (the consumer pulse) to surface downstream
+      -- backpressure.
   }
 
 -- | Access the multi-threaded loader-stream writer from env. Implemented
@@ -106,9 +111,13 @@ mkLoaderStream connStr tableDefs = do
     worker <- async $ streamWorkerLoop bc queue ready
     link worker  -- propagate worker exceptions to parent
     workerRef <- newIORef worker
-    pure (tdName td, LoaderChannel bc queue workerRef ready)
+    pure (tdName td, queueBound, LoaderChannel bc queue workerRef ready)
 
-  let channelMap = Map.fromList channels
+  let channelMap = Map.fromList [ (n, ch) | (n, _, ch) <- channels ]
+      -- Capacities never change after construction; capture them in a
+      -- plain list so 'lsQueueDepths' doesn't have to call back into
+      -- 'tableQueueBound'.
+      capacities = [ (n, cap) | (n, cap, _) <- channels ]
 
   pure LoaderStream
     { lsWriteRow = \tableName rowBytes ->
@@ -157,6 +166,13 @@ mkLoaderStream connStr tableDefs = do
         forM_ channelMap $ \ch -> do
           readIORef (chWorker ch) >>= cancel
           closeLoaderConnection (chConnection ch)
+
+    , lsQueueDepths =
+        for capacities $ \(name, cap) -> do
+          cur <- case Map.lookup name channelMap of
+            Just ch -> atomically (lengthTBQueue (chQueue ch))
+            Nothing -> pure 0
+          pure (name, cur, cap)
     }
 
 -- | Close the 'LoaderStream', cancelling all threads and releasing connections.

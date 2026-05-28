@@ -58,6 +58,7 @@ library
     DbSync.Trace
     DbSync.Trace.Types
     DbSync.Trace.Backend
+    DbSync.Trace.Pulse
     DbSync.Trace.Replay
     DbSync.Trace.Timing
     DbSync.Trace.Watchdog
@@ -67,6 +68,7 @@ library
     DbSync.Phase.Ingest.Counter
     DbSync.Phase.Ingest.DedupStore
     DbSync.Phase.Ingest.FdLimit
+    DbSync.Phase.Ingest.IngestIndexes
     DbSync.Phase.Ingest.LsmSession
     DbSync.Phase.Ingest.PipelineStats
     DbSync.Phase.Ingest.ReceiverStats

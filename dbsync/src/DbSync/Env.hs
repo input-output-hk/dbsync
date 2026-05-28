@@ -85,6 +85,7 @@ import DbSync.StateQuery.Types
   , StateQueryVar
   )
 import DbSync.Trace (HasTracer (..))
+import DbSync.Trace.Pulse (HasPulse (..), Pulse)
 import DbSync.Trace.Types (AppTracer, Severity)
 import DbSync.Trace.Watchdog (HasWatchdog (..), Watchdog)
 import DbSync.Writer (HasWriter (..), Writer)
@@ -254,6 +255,13 @@ data IngestEnv = IngestEnv
     -- ledger worker bumps via the same handle, passed explicitly
     -- to 'DbSync.Ledger.Worker.runLedgerWorker' because the worker
     -- runs under 'LedgerEnv' (no 'IngestEnv' in scope).
+  , iePulse                   :: !Pulse
+    -- ^ In-epoch pulse counter. Bumped once per processed block;
+    -- a background sampler reads it every 'pulseInterval' seconds
+    -- and emits a Debug-level liveness line covering rate +
+    -- receiver/loader queue depths + current consumer note. Same
+    -- disabled/enabled gating as the watchdog: at 'Info' or above
+    -- both the bumps and the sampler are no-ops.
   , ieLatestReceivedPoint     :: !(IORef (Maybe CardanoPoint))
     -- ^ The latest chain point the receiver has accepted (forward
     -- or rollback). Read on every (re)connection so the chainsync
@@ -555,6 +563,13 @@ instance HasWatchdog IngestEnv where
 
 instance HasWatchdog FollowEnv where
   getWatchdog = feWatchdog
+
+-- ---------------------------------------------------------------------------
+-- * HasPulse instances
+-- ---------------------------------------------------------------------------
+
+instance HasPulse IngestEnv where
+  getPulse = iePulse
 
 -- ---------------------------------------------------------------------------
 -- * HasStateQueryVar / HasSystemStart instances

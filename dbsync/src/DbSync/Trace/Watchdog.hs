@@ -35,6 +35,9 @@ module DbSync.Trace.Watchdog
   , setWorkerNote
   , setReceiverNote
 
+    -- * Note readers
+  , readConsumerNote
+
     -- * Sampler
   , runWatchdog
   , runWatchdogIO
@@ -153,6 +156,17 @@ setWorkerNote (WatchdogEnabled s) note = writeIORef (wsWorkerNote s) note
 setReceiverNote :: Watchdog -> Text -> IO ()
 setReceiverNote WatchdogDisabled    _    = pure ()
 setReceiverNote (WatchdogEnabled s) note = writeIORef (wsReceiverNote s) note
+
+-- ---------------------------------------------------------------------------
+-- * Note readers
+-- ---------------------------------------------------------------------------
+
+-- | Read the consumer's current annotation. Returns a sentinel
+-- @"(watchdog-off)"@ when the subsystem is disabled, so callers
+-- never see a panic on a missing IORef.
+readConsumerNote :: Watchdog -> IO Text
+readConsumerNote WatchdogDisabled    = pure "(watchdog-off)"
+readConsumerNote (WatchdogEnabled s) = readIORef (wsConsumerNote s)
 
 -- ---------------------------------------------------------------------------
 -- * Sampler

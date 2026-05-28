@@ -120,6 +120,7 @@ import DbSync.Worker.TxOut
 import DbSync.Phase.Following.Resolver (mkFollowResolver)
 import DbSync.Phase.Following.Tuning (defaultFollowTuning, setFollowSessionGUCs)
 import DbSync.Phase.Ingest.FdLimit (raiseFdLimit)
+import DbSync.Phase.Ingest.IngestIndexes (createIngestResolveIndexes)
 import DbSync.Phase.Ingest.LsmSession
   ( closeAndDeleteLsmSession
   , closeLsmSession
@@ -133,6 +134,7 @@ import DbSync.Config.Types (SyncOptions (..), UtxoOption (..))
 import DbSync.StateQuery (StateQueryVar, newStateQueryVar, seedInterpreterFromLedgerState)
 import DbSync.Trace.Timing (withHeartbeatIO)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
+import DbSync.Trace.Pulse (newPulse, runPulseIO)
 import DbSync.Trace.Watchdog
   ( Watchdog
   , WatchdogIngestSamples (..)
@@ -407,7 +409,20 @@ runApp tracer args = do
 
   for_ mIngestState $ \(initialExtractState, dedupStores, intersectReq, replayBoundary, replayStart, initialAddressId) -> do
 
-    -- 12. Build the ingest pipeline state. The shared LSM session
+    -- 12. Build the per-epoch resolver's working indexes on the
+    -- still-UNLOGGED Ingest tables. Without these, the bulk
+    -- @UPDATE tx_out@ / @UPDATE collateral_tx_out@ and
+    -- @SELECT address@ in 'DbSync.Worker.TxOut' hash-join the full
+    -- heap once per epoch; cost grows linearly with chain history
+    -- and produces the long @awaitTxOutDrained (epoch N-1)@ stalls
+    -- seen at epoch boundaries late in IngestChainHistory.
+    --
+    -- Idempotent (CREATE INDEX IF NOT EXISTS) so a resumed boot is
+    -- a fast no-op; gated by 'for_ mIngestState' so BootFollowRestart
+    -- (which doesn't touch the resolver) doesn't run it at all.
+    createIngestResolveIndexes tracer (unControlConnection consumerCtrlConn)
+
+    -- 13. Build the ingest pipeline state. The shared LSM session
     -- ('lsmSession') was opened above in step 10; the dedup
     -- stores ('dedupStores') were opened on top of it inside the
     -- boot-decision branch.
@@ -417,6 +432,7 @@ runApp tracer args = do
     receiverStats    <- newReceiverStats
     pipelineStats    <- newIORef emptyPipelineStats
     watchdog         <- newWatchdog (ceMinSeverity coreEnv)
+    pulse            <- newPulse (ceMinSeverity coreEnv)
     addrBuffer       <- newAddressBufferRef
     txOutWorker      <- mkTxOutWorker tracer hasqlSettings initialAddressId
     utxoStore        <- openUtxoStore lsmSession
@@ -451,6 +467,7 @@ runApp tracer args = do
           , ieLastCommittedSlotAtBoot = replayBoundary
           , ieReplayStartSlot         = replayStart
           , ieWatchdog                = watchdog
+          , iePulse                   = pulse
           , ieLatestReceivedPoint     = latestPointRef
           , ieRollbackBoundary        = rollbackBoundary
           }
@@ -530,10 +547,11 @@ runApp tracer args = do
           }
     withIOManager (\iomgr ->
       withLedgerThreads hasLedgerEnv replayBoundary stateQueryVar watchdog $
-        withAsync
-          (runWatchdogIO tracer watchdog blockQueue mLedgerQueue (Just watchdogSamples))
-          $ \watchdogThread -> do
-          link watchdogThread
+        withAsyncs
+          [ runWatchdogIO tracer watchdog blockQueue mLedgerQueue (Just watchdogSamples)
+          , runPulseIO tracer pulse watchdog blockQueue 500 loaderStream
+          ]
+          $ do
           withAsync (runAppM ingestEnv $ connectToNode iomgr topLevelCfg networkMagic socketPath intersectReq) $ \nodeThread -> do
             link nodeThread
             ingestAction
@@ -643,6 +661,23 @@ resolveSlot logInfo ctrl slot = do
 -- | Initial extraction state for IngestChainHistory.
 mkInitState :: ExtractState
 mkInitState = freshExtractState
+
+-- | Run a list of background 'IO' actions concurrently with the
+-- inner @body@. Each background action is spawned via 'withAsync'
+-- and 'link'ed to the calling thread, so an exception in any of
+-- them propagates immediately. When @body@ exits — whether cleanly
+-- or via an exception — every background async is cancelled by the
+-- enclosing 'withAsync's' bracket.
+--
+-- All background actions share the same lifetime (that of @body@).
+-- Use nested 'withAsync' calls directly when threads need to die
+-- at different points.
+withAsyncs :: [IO ()] -> IO a -> IO a
+withAsyncs []       body = body
+withAsyncs (a : as) body =
+  withAsync a $ \th -> do
+    link th
+    withAsyncs as body
 
 -- | Run the ledger worker + snapshot-writer asyncs for the duration
 -- of the inner action. No-op when the ledger feature is disabled.

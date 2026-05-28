@@ -119,6 +119,7 @@ import DbSync.StateQuery
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Timing (fmtCount, fmtF2)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
+import DbSync.Trace.Pulse (bumpPulse)
 import DbSync.Trace.Watchdog (bumpConsumer, setConsumerNote)
 import DbSync.Writer (Writer (..))
 
@@ -323,6 +324,7 @@ runConsumer = do
       bootSlot      <- asks ieLastCommittedSlotAtBoot
       replayStart   <- asks ieReplayStartSlot
       watchdog      <- asks ieWatchdog
+      pulse         <- asks iePulse
       boundaryVar   <- asks ieRollbackBoundary
       securityParam <- asks (ceSecurityParam . ieCore)
       cfg           <- asks getConfig
@@ -360,6 +362,7 @@ runConsumer = do
         -- Update the observed summary before 'getSlotDetails' so
         -- any era-boundary transition is in scope when the slot
         -- details are computed.
+        liftIO $ setConsumerNote watchdog "consumer: observeBlock"
         obsResult <- liftIO $ atomically $ observeBlockSTM sqv cardanoBlock
         case obsResult of
           NewTransition t ->
@@ -382,7 +385,9 @@ runConsumer = do
                 ) Nothing
           Unchanged -> pure ()
 
+        liftIO $ setConsumerNote watchdog "consumer: getSlotDetails"
         sd <- getSlotDetails slot
+        liftIO $ setConsumerNote watchdog "consumer: parseBlock"
         let !genBlock = parseBlock sd cardanoBlock
             !blockEpoch = sdEpochNo sd
 
@@ -624,10 +629,12 @@ runConsumer = do
           , blkHash genBlock
           )
 
-      -- Watchdog bump: per iteration, replay or not, so the
+      -- Watchdog + pulse bump: per iteration, replay or not, so the
       -- watchdog still sees forward progress during the replay
-      -- window (where 'processBlock' is skipped).
+      -- window (where 'processBlock' is skipped). 'bumpPulse' is a
+      -- no-op when the configured minimum severity is above 'Debug'.
       liftIO $ bumpConsumer watchdog slot
+      liftIO $ bumpPulse pulse
 
       -- Recurse, whether the block was processed or skipped.
       processBatch prevEpochRef blockCountRef epochStartRef statsRef baselineRef lastBlockRef pendingBoundaryRef replayRef rest

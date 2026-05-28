@@ -32,6 +32,7 @@
 -- index metadata. The pre-resolve set hand-rolls them in the meantime.
 module DbSync.Db.Statement.Indexes
   ( tableIndexStatements
+  , ingestResolveIndexStatements
   , preResolveIndexStatements
   , postResolveIndexStatements
   , uniqueConstraintIndexName
@@ -44,6 +45,7 @@ import Cardano.Prelude
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Text as T
 
+import DbSync.Db.Schema.Address (addressTableDef)
 import DbSync.Db.Schema.Core (txTableDef)
 import DbSync.Db.Schema.StakeDelegation (withdrawalTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
@@ -88,6 +90,49 @@ tableIndexStatements conc td =
 uniqueConstraintIndexName :: TableDef -> Int -> Text
 uniqueConstraintIndexName td n =
   tdName td <> "_unique_" <> show n <> "_idx"
+
+-- | Indexes the @IngestChainHistory@ per-epoch address-resolver
+-- worker ('DbSync.Worker.TxOut') needs to avoid hash-joining the
+-- unindexed @tx_out@ / @address@ / @collateral_tx_out@ heaps once
+-- per epoch.
+--
+-- Built once at the start of @IngestChainHistory@ (see
+-- 'DbSync.Phase.Ingest.IngestIndexes.createIngestResolveIndexes') on
+-- still-UNLOGGED tables, so the build skips WAL writes. Index names
+-- match what 'tableIndexStatements' would emit later, so the
+-- schema-driven Prep pass dedupes them via @IF NOT EXISTS@.
+--
+-- Without these, every per-epoch resolve scans the full @tx_out@
+-- heap; cost grows linearly with chain history and is the visible
+-- cause of the long @awaitTxOutDrained (epoch N-1)@ stalls an
+-- operator sees at epoch boundaries late in @IngestChainHistory@.
+ingestResolveIndexStatements :: [Text]
+ingestResolveIndexStatements =
+  [ -- 'bulkUpdateTxOutAddressIdsStmt' and 'bulkUpdateConsumedByTxIdStmt'
+    -- both match by 'tx_out.id' (PK). 'tx_out.id' is assigned
+    -- monotonically by the worker counter so the btree insert during
+    -- COPY is at the right edge: cheap.
+    renderIndex NonConcurrent Unique
+      (tdName txOutTableDef <> "_pkey_idx")
+      (tdName txOutTableDef)
+      [columnRef txOutTableDef "id"]
+    -- 'bulkUpdateCollateralTxOutAddressIdsStmt' matches by
+    -- 'collateral_tx_out.id'. Same shape as @tx_out@; the table is
+    -- much smaller but the per-epoch UPDATE still hash-joins without
+    -- the index.
+  , renderIndex NonConcurrent Unique
+      (tdName collateralTxOutTableDef <> "_pkey_idx")
+      (tdName collateralTxOutTableDef)
+      [columnRef collateralTxOutTableDef "id"]
+    -- 'bulkSelectAddressIdsStmt' joins on 'address.raw_hash'. The
+    -- column is @GENERATED ALWAYS AS (md5(raw))@; indexing it
+    -- @UNIQUE@ matches the Prep-pass shape and gives the worker an
+    -- index nested-loop instead of a full @address@ heap scan.
+  , renderIndex NonConcurrent Unique
+      (uniqueConstraintIndexName addressTableDef 1)
+      (tdName addressTableDef)
+      [columnRef addressTableDef "raw_hash"]
+  ]
 
 -- | Indexes built before the CTAS resolve runs.
 --

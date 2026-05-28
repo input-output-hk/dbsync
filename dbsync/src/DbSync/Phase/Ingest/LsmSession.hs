@@ -66,7 +66,7 @@ module DbSync.Phase.Ingest.LsmSession
 
 import Cardano.Prelude
 
-import Control.Tracer (Tracer, contramap, nullTracer)
+import Control.Tracer (Tracer (..), nullTracer, traceWith)
 import Data.IORef (atomicModifyIORef', newIORef)
 import qualified Database.LSMTree as LSMTree
 import qualified System.Directory as Dir
@@ -86,7 +86,8 @@ import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 -- | Tracer @lsm-tree@ writes its internal events to. The session
 -- can be wired to 'nullLsmSessionTracer' (suppress everything) or
 -- to 'lsmSessionTracerFromApp' (forward each event as a Debug
--- 'LogMsg').
+-- 'LogMsg', dropping the high-frequency per-operation table events
+-- — see 'lsmSessionTracerFromApp').
 type LsmSessionTracer = Tracer IO LSMTree.LSMTreeTrace
 
 -- | Handle owned by 'DbSync.Env.IngestEnv'. Carries every resource
@@ -180,10 +181,33 @@ nullLsmSessionTracer = nullTracer
 
 -- | Forward each @lsm-tree@ event into the application tracer as a
 -- Debug-level 'LogMsg' under the @"LsmIngest"@ component.
+--
+-- High-frequency per-operation table events ('LSMTree.TraceLookups',
+-- 'LSMTree.TraceRangeLookup', 'LSMTree.TraceUpdates',
+-- 'LSMTree.TraceUpdated') are dropped: during ingest they fire
+-- hundreds of times per second and drown out the
+-- 'DbSync.Trace.Pulse' line that actually localises CPU-idle
+-- stretches inside an epoch. Session lifecycle, table lifecycle,
+-- snapshot ops, union ops and cursor ops are all preserved.
 lsmSessionTracerFromApp :: AppTracer -> LsmSessionTracer
-lsmSessionTracerFromApp = contramap toLogMsg
-  where
-    toLogMsg e = LogMsg Debug "LsmIngest" (show e) Nothing
+lsmSessionTracerFromApp inner = Tracer $ \e ->
+  unless (isHotPathLsmTrace e) $
+    traceWith inner (LogMsg Debug "LsmIngest" (show e) Nothing)
+
+-- | True for 'LSMTree.LSMTreeTrace' events that fire on every
+-- batched table operation. These flood the log during ingest
+-- (hundreds per second) and add no diagnostic value beyond what the
+-- 'DbSync.Trace.Pulse' line already reports. The silenced set is
+-- intentionally explicit so adding or removing an event is a
+-- one-line change.
+isHotPathLsmTrace :: LSMTree.LSMTreeTrace -> Bool
+isHotPathLsmTrace (LSMTree.TraceTable _ tt) = case tt of
+  LSMTree.TraceLookups{}     -> True
+  LSMTree.TraceRangeLookup{} -> True
+  LSMTree.TraceUpdates{}     -> True
+  LSMTree.TraceUpdated{}     -> True
+  _                          -> False
+isHotPathLsmTrace _ = False
 
 -- ---------------------------------------------------------------------------
 -- Shared table configuration

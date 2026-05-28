@@ -10,6 +10,7 @@ import qualified Data.List.NonEmpty as NE
 
 import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldThrow)
 
+import DbSync.Db.Schema.Address (addressTableDef)
 import DbSync.Db.Schema.Core (txTableDef)
 import DbSync.Db.Schema.Types
   ( ColumnDef (..)
@@ -20,6 +21,7 @@ import DbSync.Db.Schema.Types
 import DbSync.Db.Statement.Indexes
   ( Concurrency (..)
   , columnRef
+  , ingestResolveIndexStatements
   , postResolveIndexStatements
   , preResolveIndexStatements
   , tableIndexStatements
@@ -149,6 +151,25 @@ spec = describe "DbSync.Db.Statement.Indexes" $ do
       -- from the eval is enough to confirm the guard fires.
       evaluate (columnRef pkAndUniques "not_a_column" :: Text)
         `shouldThrow` anyException
+
+  describe "ingestResolveIndexStatements" $ do
+    it "indexes the columns the per-epoch resolver matches on" $
+      ingestResolveIndexStatements `shouldBe`
+        [ "CREATE UNIQUE INDEX IF NOT EXISTS \"tx_out_pkey_idx\""
+            <> " ON \"tx_out\" (\"id\")"
+        , "CREATE UNIQUE INDEX IF NOT EXISTS \"collateral_tx_out_pkey_idx\""
+            <> " ON \"collateral_tx_out\" (\"id\")"
+        , "CREATE UNIQUE INDEX IF NOT EXISTS \"address_unique_1_idx\""
+            <> " ON \"address\" (\"raw_hash\")"
+        ]
+
+    it "names the address-raw-hash index to match the later concurrent rebuild" $
+      -- Both this pass and the schema-driven Prep pass route through
+      -- 'uniqueConstraintIndexName addressTableDef 1', so a matching
+      -- name here is what makes the later 'tableIndexStatements' build
+      -- a no-op via @IF NOT EXISTS@.
+      uniqueConstraintIndexName addressTableDef 1
+        `shouldBe` "address_unique_1_idx"
 
   describe "preResolveIndexStatements" $ do
     it "covers tx.hash plus the lookups the CTAS join and backfills need" $

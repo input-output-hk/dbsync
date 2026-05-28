@@ -44,7 +44,7 @@ import DbSync.Extractor
   , emptyBlockLedgerData
   , freshExtractState
   )
-import DbSync.Extractor.Core (coreExtractor, hasNoDepositActivity)
+import DbSync.Extractor.Core (affectsDeposit, coreExtractor, hasNoDepositActivity)
 import DbSync.Block.Pipeline (processBlock)
 
 import DbSync.Ledger.Types (DepositsMap (..))
@@ -267,23 +267,71 @@ spec = do
     it "True for an empty tx" $
       hasNoDepositActivity validTx `shouldBe` True
 
-    it "False when the tx has a certificate" $
+    it "True for a withdrawal-only tx" $
+      hasNoDepositActivity (validTx { G.txWithdrawals = [oneWithdrawal] })
+        `shouldBe` True
+
+    it "True for a treasury-donation-only tx" $
+      hasNoDepositActivity (validTx { G.txTreasuryDonation = 1 })
+        `shouldBe` True
+
+    it "True for a delegation-only tx" $
+      hasNoDepositActivity (validTx { G.txCertificates = [certFor delegationAction] })
+        `shouldBe` True
+
+    it "True for a Conway vote-delegation-only tx" $
+      hasNoDepositActivity (validTx { G.txCertificates = [certFor conwayDelegVoteAction] })
+        `shouldBe` True
+
+    it "True for a DRep-update-only tx" $
+      hasNoDepositActivity (validTx { G.txCertificates = [certFor drepUpdateAction] })
+        `shouldBe` True
+
+    it "True for a committee-auth-only tx" $
+      hasNoDepositActivity (validTx { G.txCertificates = [certFor committeeAuthAction] })
+        `shouldBe` True
+
+    it "True when only non-affecting activity is present together" $
+      hasNoDepositActivity (validTx
+        { G.txCertificates    = [certFor delegationAction]
+        , G.txWithdrawals     = [oneWithdrawal]
+        , G.txTreasuryDonation = 1
+        })
+        `shouldBe` True
+
+    it "False for a stake-registration cert" $
       hasNoDepositActivity regTx `shouldBe` False
 
-    it "False when the tx has a withdrawal" $
-      hasNoDepositActivity (validTx { G.txWithdrawals = [oneWithdrawal] })
+    it "False for a stake-registration cert mixed with a withdrawal" $
+      hasNoDepositActivity (regTx { G.txWithdrawals = [oneWithdrawal] })
         `shouldBe` False
 
-    it "False when the tx has a treasury donation" $
-      hasNoDepositActivity (validTx { G.txTreasuryDonation = 1 })
+    it "False for a pool-retirement cert" $
+      hasNoDepositActivity (validTx { G.txCertificates = [certFor poolRetireAction] })
         `shouldBe` False
 
-    it "False when all three are populated" $
-      hasNoDepositActivity (regTx
-        { G.txWithdrawals       = [oneWithdrawal]
-        , G.txTreasuryDonation  = 1
-        })
+    it "False for a DRep-registration cert" $
+      hasNoDepositActivity (validTx { G.txCertificates = [certFor drepRegAction] })
         `shouldBe` False
+
+  describe "affectsDeposit" $ do
+    it "True for CertStakeRegistration"    $ affectsDeposit (CertStakeRegistration "" Nothing)         `shouldBe` True
+    it "True for CertStakeDeregistration"  $ affectsDeposit (CertStakeDeregistration "")               `shouldBe` True
+    it "True for CertPoolRegistration"     $ affectsDeposit poolRegAction                              `shouldBe` True
+    it "True for CertPoolRetirement"       $ affectsDeposit poolRetireAction                           `shouldBe` True
+    it "True for CertConwayRegDeleg"       $ affectsDeposit (CertConwayRegDeleg "" "" Nothing)         `shouldBe` True
+    it "True for CertDRepRegistration"     $ affectsDeposit drepRegAction                              `shouldBe` True
+    it "True for CertDRepDeregistration"   $ affectsDeposit (CertDRepDeregistration "" 0)              `shouldBe` True
+    it "True for CertOther (defensive)"    $ affectsDeposit (CertOther "")                             `shouldBe` True
+
+    it "False for CertDelegation"          $ affectsDeposit delegationAction                           `shouldBe` False
+    it "False for CertConwayDelegVote"     $ affectsDeposit conwayDelegVoteAction                      `shouldBe` False
+    it "False for CertConwayDelegStakeVote" $ affectsDeposit (CertConwayDelegStakeVote "" "" G.DRepAlwaysAbstain) `shouldBe` False
+    it "False for CertDRepUpdate"          $ affectsDeposit drepUpdateAction                           `shouldBe` False
+    it "False for CertCommitteeAuth"       $ affectsDeposit committeeAuthAction                        `shouldBe` False
+    it "False for CertCommitteeResign"     $ affectsDeposit (CertCommitteeResign "" Nothing)           `shouldBe` False
+    it "False for CertMIR"                 $ affectsDeposit (CertMIR "")                               `shouldBe` False
+    it "False for CertGenesisDelegation"   $ affectsDeposit (CertGenesisDelegation "")                 `shouldBe` False
 
 -- ---------------------------------------------------------------------------
 -- Test helpers
@@ -423,25 +471,52 @@ validTx :: GenericTx
 validTx = mkTx 0 "validtx"
 
 -- | A valid (phase-2 success) activity-bearing tx — carries one
--- stake-registration certificate, so 'hasNoDepositActivity' is
--- 'False' and the deposit dispatch falls through to ledger lookup
--- or identity formula.
+-- stake-registration certificate (deposit-affecting).
 regTx :: GenericTx
 regTx = (mkTx 0 "regtx")
-  { G.txCertificates =
-      [ GenericTxCertificate
-          { txCertIndex  = 0
-          , txCertAction = CertStakeRegistration (BS.replicate 28 0xee) Nothing
-          }
-      ]
+  { G.txCertificates = [certFor (CertStakeRegistration (BS.replicate 28 0xee) Nothing)]
   }
 
--- | One zero-amount withdrawal — enough to make 'hasNoDepositActivity'
--- return 'False'.
+-- | One zero-amount withdrawal.
 oneWithdrawal :: GenericTxWithdrawal
 oneWithdrawal = GenericTxWithdrawal
   { txwRewardAddress = BS.replicate 29 0xee
   , txwAmount        = 0
+  }
+
+-- | Wrap a 'CertAction' in a 'GenericTxCertificate' at index 0.
+certFor :: CertAction -> GenericTxCertificate
+certFor act = GenericTxCertificate { txCertIndex = 0, txCertAction = act }
+
+delegationAction :: CertAction
+delegationAction = CertDelegation (BS.replicate 28 0xee) (BS.replicate 28 0xff)
+
+conwayDelegVoteAction :: CertAction
+conwayDelegVoteAction = CertConwayDelegVote (BS.replicate 28 0xee) G.DRepAlwaysAbstain
+
+drepRegAction :: CertAction
+drepRegAction = CertDRepRegistration (BS.replicate 28 0xee) 500_000_000 Nothing
+
+drepUpdateAction :: CertAction
+drepUpdateAction = CertDRepUpdate (BS.replicate 28 0xee) Nothing
+
+committeeAuthAction :: CertAction
+committeeAuthAction = CertCommitteeAuth (BS.replicate 28 0xaa) (BS.replicate 28 0xbb)
+
+poolRetireAction :: CertAction
+poolRetireAction = CertPoolRetirement (BS.replicate 28 0xee) 100
+
+poolRegAction :: CertAction
+poolRegAction = CertPoolRegistration G.PoolRegistrationData
+  { G.prdPoolHash    = BS.replicate 28 0xee
+  , G.prdVrfKeyHash  = BS.replicate 32 0xff
+  , G.prdPledge      = 0
+  , G.prdCost        = 0
+  , G.prdMargin      = 0
+  , G.prdRewardAddr  = BS.replicate 29 0
+  , G.prdOwners      = []
+  , G.prdRelays      = []
+  , G.prdMetadata    = Nothing
   }
 
 -- | A phase-2 failed tx with one collateral input and a 2_000_000

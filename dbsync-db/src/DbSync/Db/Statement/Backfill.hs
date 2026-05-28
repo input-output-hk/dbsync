@@ -140,45 +140,31 @@ backfillPhaseTwoDepositSql = T.unwords
 
 -- | Compute @deposit = inputs + withdrawals - outputs - fee -
 -- treasury_donation@ for valid-contract activity txs whose
--- @deposit@ is still NULL after the extractor pass.
---
--- Plain transfers ship with @0@ from
--- 'Extractor.Core.computeTxFinancials' (the identity formula is
--- 0 by conservation when a tx has no certs, withdrawals or
--- treasury donation) so they bypass this UPDATE entirely.
---
--- Requires 'resolveTxInStmt' to have populated @tx_in.tx_out_id@.
--- 'Phase.Preparing.Run.run' ANALYZEs between resolve and backfill
--- so the planner has fresh stats for the @tx_in@ / @tx_out@ join.
+-- @deposit@ is still NULL after the extractor pass. Requires
+-- 'resolveTxInStmt' to have populated @tx_in.tx_out_id@.
 backfillValidContractDepositStmt :: Stmt.Statement () Int64
 backfillValidContractDepositStmt =
   Stmt.preparable backfillValidContractDepositSql E.noParams D.rowsAffected
 
 -- | SQL string behind 'backfillValidContractDepositStmt'.
 --
--- @affected_txs@ unions the tx ids of every activity-bearing tx
--- (stake reg/dereg, pool reg/retire, withdrawal, treasury
--- donation); @targets@ narrows that to the valid-contract,
--- NULL-deposit subset. Extend the @affected_txs@ UNION when
--- adding new activity tables.
+-- @affected_txs@ sources tx ids from every table whose presence on a
+-- tx implies a deposit-affecting certificate. Extend this UNION
+-- when a new such table lands (e.g. @drep_registration@,
+-- @committee_registration@, @committee_de_registration@).
 backfillValidContractDepositSql :: Text
 backfillValidContractDepositSql = T.unwords
   [ "WITH affected_txs AS ("
   , "  SELECT", col stakeRegistrationTableDef "tx_id"
   , "  FROM",   table stakeRegistrationTableDef
-  , "  UNION SELECT", col stakeDeregistrationTableDef "tx_id"
+  , "  UNION ALL SELECT", col stakeDeregistrationTableDef "tx_id"
   , "  FROM",   table stakeDeregistrationTableDef
-  , "  UNION SELECT", col poolUpdateTableDef "registered_tx_id"
+  , "  UNION ALL SELECT", col poolUpdateTableDef "registered_tx_id"
   , "  FROM",   table poolUpdateTableDef
-  , "  UNION SELECT", col poolRetireTableDef "announced_tx_id"
+  , "  UNION ALL SELECT", col poolRetireTableDef "announced_tx_id"
   , "  FROM",   table poolRetireTableDef
-  , "  UNION SELECT", col withdrawalTableDef "tx_id"
-  , "  FROM",   table withdrawalTableDef
-  , "  UNION SELECT", col txTableDef "id"
-  , "  FROM",   table txTableDef
-  , "  WHERE",  col txTableDef "treasury_donation", "> 0"
   , "), targets AS ("
-  , "  SELECT a.tx_id"
+  , "  SELECT DISTINCT a.tx_id"
   , "  FROM affected_txs a"
   , "  JOIN", table txTableDef, "ON tx.", col txTableDef "id", "= a.tx_id"
   , "  WHERE tx.", col txTableDef "valid_contract", "= TRUE"

@@ -22,6 +22,7 @@ module DbSync.Test.E2E
   , syncCompleteTrue
   , forgeAndWaitForBlocks
   , waitForLogMatch
+  , waitForLsmLockReleased
 
     -- * Filesystem probes
   , listLedgerSnapshots
@@ -36,8 +37,10 @@ import Cardano.Prelude
 import Data.IORef (IORef, readIORef)
 import qualified Data.List as List
 import qualified Data.Text as T
-import System.Directory (doesDirectoryExist, listDirectory)
+import GHC.IO.Handle.Lock (LockMode (..), hTryLock, hUnlock)
+import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath ((</>))
+import System.IO (hClose)
 import System.Timeout (timeout)
 
 import DbSync.App.Args (AppArgs)
@@ -233,6 +236,28 @@ listIngestLsmSnapshots ledgerDir = do
   let snapDir = ingestLsmDir ledgerDir </> "snapshots"
   exists <- doesDirectoryExist snapDir
   if exists then listDirectory snapDir else pure []
+
+-- | Block until @ingest-lsm/lock@ can be acquired exclusively, or
+-- @timeoutSecs@ elapses.
+waitForLsmLockReleased :: FilePath -> Int -> IO ()
+waitForLsmLockReleased ledgerDir =
+  waitFor "ingest-lsm/lock to be released" probe
+  where
+    lockPath = ingestLsmDir ledgerDir </> "lock"
+    probe = do
+      present <- doesFileExist lockPath
+      if not present
+        then pure True
+        else try @SomeException tryAcquire >>= \case
+          Right ok -> pure ok
+          Left _   -> pure False
+    tryAcquire = bracket
+      (openFile lockPath WriteMode)
+      hClose
+      (\h -> do
+         acquired <- hTryLock h ExclusiveLock
+         when acquired (hUnlock h)
+         pure acquired)
 
 -- | Count the number of distinct run IDs currently live in the
 -- @active/@ subdir. Each surviving LSM run shows up as several

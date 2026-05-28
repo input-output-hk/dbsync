@@ -46,6 +46,7 @@ import DbSync.Test.E2E
   , countIngestLsmActiveRuns
   , ingestLsmExists
   , listIngestLsmSnapshots
+  , waitForLsmLockReleased
   , withAppSession
   , withAppSessionResume
   )
@@ -158,6 +159,11 @@ spec = describe "Ingest LSM session lifecycle" $ do
         afterCancel <- ingestLsmExists ledgerDir
         afterCancel `shouldBe` True
 
+        -- @cancel@ returns when the app async exits, but the file
+        -- lock released by 'LSMTree.closeSession' settles on disk a
+        -- moment later; probe before opening a fresh session.
+        waitForLsmLockReleased ledgerDir 10
+
         withAppSessionResume tracer defaultTestProfile mn ledgerDir $ \_ ->
           waitForSyncComplete 120
 
@@ -184,11 +190,8 @@ runUntilLsmDirExistsThenCancel tracer mn ledgerDir = do
     cancel app
 
 -- | Start a sync, wait until @sync_state@ records two completed
--- epoch boundaries, then cancel.
---
--- The async is intentionally not 'link'ed so the 'AsyncCancelled'
--- raised by 'cancel' stays inside the app instead of re-throwing
--- into the test thread.
+-- epoch boundaries and all six per-table snapshots are on disk,
+-- then cancel.
 runUntilTwoBoundariesThenCancel :: AppTracer -> MockNode -> FilePath -> IO ()
 runUntilTwoBoundariesThenCancel tracer mn ledgerDir = do
   clearSyncCompleteFlag
@@ -199,6 +202,9 @@ runUntilTwoBoundariesThenCancel tracer mn ledgerDir = do
       ((&&) <$> twoEpochSyncStatsRows <*> lastCommittedSlotSet)
       60
     waitForTableQueryable (tdName epochSyncStatsTableDef) 30
+    waitFor "six per-table LSM snapshots"
+      ((>= 6) . length <$> listIngestLsmSnapshots ledgerDir)
+      30
     cancel app
 
 -- ---------------------------------------------------------------------------

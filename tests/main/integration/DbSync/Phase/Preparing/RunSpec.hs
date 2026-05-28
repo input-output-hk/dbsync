@@ -105,7 +105,7 @@ import DbSync.Test.Database
   , testConnStr
   , testHasqlSettings
   )
-import DbSync.Test.Fixtures (byronBlock, producerBlock, spendingBlock)
+import DbSync.Test.Fixtures (byronBlock, producerBlock, spendingBlock, withdrawalBlock)
 import DbSync.Test.Hasql (withTestConnection)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import DbSync.Trace.Backend (mkNullTracer)
@@ -198,7 +198,7 @@ setUp :: IO ()
 setUp = do
   dropSchema tables versions testConnStr
   initSchema tables versions testConnStr
-  runPipelineThenPrepare [producerBlock, spendingBlock, byronBlock]
+  runPipelineThenPrepare [producerBlock, spendingBlock, byronBlock, withdrawalBlock]
 
 tearDown :: IO ()
 tearDown = dropSchema tables [] testConnStr
@@ -231,8 +231,10 @@ spec = describe "DbSync.Phase.Preparing.Run" $
           [ "1|2"  -- producer.0: spent by the Shelley consumer (tx 2)
           , "2|"   -- producer.1: only collateral consumed it; not tracked
           , "3|4"  -- producer.2: spent by the Byron tx (tx 4)
-          , "4|"   -- consumer's own output: never spent
-          , "5|"   -- byron tx's own output: never spent
+          , "4|5"  -- producer.3: spent by the withdrawal-only tx (tx 5)
+          , "5|"   -- consumer's own output: never spent
+          , "6|"   -- byron tx's own output: never spent
+          , "7|"   -- withdrawal tx's own output: never spent
           ]
 
     describe "tx column backfill" $ do
@@ -268,6 +270,30 @@ spec = describe "DbSync.Phase.Preparing.Run" $
         result <- T.strip <$> queryTestDb
           ("SELECT fee FROM " <> tdName txTableDef <> " WHERE block_id = 3")
         result `shouldBe` "500000"
+
+      it "withdrawal-only tx.deposit is 0 (extractor short-circuit)" $ do
+        -- The withdrawal-only tx carries no deposit-affecting cert,
+        -- so 'hasNoDepositActivity' returns 'True' and the extractor
+        -- writes @tx.deposit = 0@ at parse time. The backfill never
+        -- visits the row because @WHERE deposit IS NULL@ excludes it.
+        result <- T.strip <$> queryTestDb
+          ("SELECT deposit FROM " <> tdName txTableDef <> " WHERE block_id = 4")
+        result `shouldBe` "0"
+
+      it "withdrawal-only tx is absent from the deposit-backfill source tables" $ do
+        -- The new affected_txs UNION drives off stake_registration,
+        -- stake_deregistration, pool_update, pool_retire only.
+        -- A withdrawal-only tx writes a row in 'withdrawal' but not
+        -- in any of those, so it isn't a backfill target.
+        result <- T.strip <$> queryTestDb
+          (T.unwords
+            [ "SELECT count(*) FROM"
+            , tdName withdrawalTableDef
+            , "WHERE tx_id = (SELECT id FROM"
+            , tdName txTableDef
+            , "WHERE block_id = 4)"
+            ])
+        result `shouldBe` "1"
 
     describe "schema-mode flip" $
       it "every extractor table is now LOGGED" $ do
@@ -327,21 +353,24 @@ spec = describe "DbSync.Phase.Preparing.Run" $
 
     describe "sequence reset" $ do
       it "tx_id_seq's next value is MAX(id) + 1" $ do
-        -- Four txs landed: producer, valid-contract spender, phase-2
-        -- failure, Byron spender. MAX(id) = 4, next allocation = 5.
+        -- Five txs landed: producer, valid-contract spender, phase-2
+        -- failure, Byron spender, withdrawal-only. MAX(id) = 5,
+        -- next allocation = 6.
         result <- T.strip <$> queryTestDb (nextvalSql txTableDef)
-        result `shouldBe` "5"
-
-      it "tx_out_id_seq's next value is MAX(id) + 1" $ do
-        -- Producer wrote three outputs; consumer wrote one; Byron
-        -- wrote one; phase-2 wrote none. MAX(id) = 5, next = 6.
-        result <- T.strip <$> queryTestDb (nextvalSql txOutTableDef)
         result `shouldBe` "6"
 
+      it "tx_out_id_seq's next value is MAX(id) + 1" $ do
+        -- Producer wrote four outputs; consumer wrote one; Byron
+        -- wrote one; withdrawal-only wrote one; phase-2 wrote none.
+        -- MAX(id) = 7, next = 8.
+        result <- T.strip <$> queryTestDb (nextvalSql txOutTableDef)
+        result `shouldBe` "8"
+
       it "tx_in_id_seq's next value is MAX(id) + 1" $ do
-        -- Two tx_in rows: consumer's spend + Byron's spend.
+        -- Three tx_in rows: consumer's spend, Byron's spend,
+        -- withdrawal-only's spend.
         result <- T.strip <$> queryTestDb (nextvalSql txInTableDef)
-        result `shouldBe` "3"
+        result `shouldBe` "4"
 
       it "an empty table's sequence still starts at 1" $ do
         -- No reference_tx_in rows were produced; setval(seq, 0+1, false)

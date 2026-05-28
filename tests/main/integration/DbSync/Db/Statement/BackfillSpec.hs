@@ -317,9 +317,20 @@ spec = describe "DbSync.Db.Statement.Backfill" $
         plan `shouldSatisfy` \p ->
           "HashAggregate" `T.isInfixOf` p
             || "GroupAggregate" `T.isInfixOf` p
+
         -- And it must not have the bad shape — a SubPlan probing
         -- the same tables per outer row.
         plan `shouldNotMention` "SubPlan"
+
+      it "sources affected_txs from the deposit-affecting tables" $ do
+        -- 'affected_txs' must scan exactly the four tables whose
+        -- presence on a tx implies a deposit-affecting cert.
+        -- Extend this list when a new such table lands.
+        plan <- explainOf backfillValidContractDepositSql
+        plan `shouldMention` tdName stakeRegistrationTableDef
+        plan `shouldMention` tdName stakeDeregistrationTableDef
+        plan `shouldMention` tdName poolUpdateTableDef
+        plan `shouldMention` tdName poolRetireTableDef
 
     describe "backfillPhaseTwoDepositStmt plan" $
       it "is a flat UPDATE on tx (no joins, no subqueries)" $ do

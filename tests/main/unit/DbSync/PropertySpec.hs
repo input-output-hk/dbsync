@@ -125,11 +125,9 @@ prop_blockIdsMonotonic blocks = ioProperty $ do
     unBlockId :: BlockId -> Int64
     unBlockId (BlockId n) = n
 
--- | Every valid-contract tx with no certs, withdrawals or treasury
--- donation receives @txDeposit = Just 0@ from the Ingest pipeline
--- — the conservation short-circuit in
--- 'Extractor.Core.computeTxFinancials' fires before any deposit
--- lookup, so the post-load backfill never sees these rows.
+-- | Every valid-contract tx that 'hasNoDepositActivity' classifies
+-- as conservation-zero receives @txDeposit = Just 0@ from the Ingest
+-- pipeline, so the post-load backfill never sees these rows.
 prop_plainTransfersGetZeroDeposit
   :: CardanoBlock StandardCrypto -> Property
 prop_plainTransfersGetZeroDeposit block = ioProperty $ do

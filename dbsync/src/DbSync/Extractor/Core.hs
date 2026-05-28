@@ -14,8 +14,9 @@ module DbSync.Extractor.Core
     -- * Slot-leader construction (used by 'DbSync.Block.Pipeline').
   , mkSlotLeader
 
-    -- * Deposit dispatch helper (exported for testing).
+    -- * Deposit dispatch helpers (exported for testing).
   , hasNoDepositActivity
+  , affectsDeposit
   ) where
 
 import Cardano.Prelude
@@ -153,12 +154,34 @@ computeTxFinancials resolver ctx gtx
           pure (parserFee, Just dep)
       | otherwise = pure (parserFee, Nothing)
 
--- | True for txs that cannot change ledger deposits.
+-- | True for txs whose @tx.deposit@ is @0@ by conservation:
+-- @deposit = inputs + withdrawals - outputs - fee - treasury_donation@
+-- is zero for any tx that carries no deposit-affecting certificate.
 hasNoDepositActivity :: G.GenericTx -> Bool
 hasNoDepositActivity g =
-     null (G.txCertificates g)
-  && null (G.txWithdrawals g)
-  && G.txTreasuryDonation g == 0
+  not (any (affectsDeposit . G.txCertAction) (G.txCertificates g))
+
+-- | Whether a single certificate kind locks or refunds ada in the
+-- deposit pot. 'G.CertOther' is treated as affecting defensively —
+-- it carries raw CBOR of an undecoded variant.
+affectsDeposit :: G.CertAction -> Bool
+affectsDeposit = \case
+  G.CertStakeRegistration{}    -> True
+  G.CertStakeDeregistration{}  -> True
+  G.CertPoolRegistration{}     -> True
+  G.CertPoolRetirement{}       -> True
+  G.CertConwayRegDeleg{}       -> True
+  G.CertDRepRegistration{}     -> True
+  G.CertDRepDeregistration{}   -> True
+  G.CertOther{}                -> True
+  G.CertDelegation{}           -> False
+  G.CertConwayDelegVote{}      -> False
+  G.CertConwayDelegStakeVote{} -> False
+  G.CertDRepUpdate{}           -> False
+  G.CertCommitteeAuth{}        -> False
+  G.CertCommitteeResign{}      -> False
+  G.CertMIR{}                  -> False
+  G.CertGenesisDelegation{}    -> False
 
 -- ---------------------------------------------------------------------------
 -- * Record builders (pure, shared across phases)

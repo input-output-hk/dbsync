@@ -18,6 +18,11 @@
 --     one tx that spends @producer.2@. Drives the Byron fee
 --     backfill, which is gated on the block's @proto_major < 2@
 --     filter.
+--   * @withdrawalBlock@ — a Shelley block carrying a single
+--     withdrawal-only tx that spends @producer.3@. Exercises the
+--     conservation short-circuit: the extractor writes
+--     @tx.deposit = 0@ at parse time so the backfill never sees the
+--     row.
 --
 -- Using these rather than 'DbSync.Test.MockChain' is a deliberate
 -- choice: the chaingen interpreter is Conway-only and can't easily
@@ -29,6 +34,7 @@ module DbSync.Test.Fixtures
   ( producerBlock
   , spendingBlock
   , byronBlock
+  , withdrawalBlock
   , producerHash
   ) where
 
@@ -49,6 +55,7 @@ import DbSync.Block.Types
   , GenericTxCertificate (..)
   , GenericTxIn (..)
   , GenericTxOut (..)
+  , GenericTxWithdrawal (..)
   )
 
 -- ---------------------------------------------------------------------------
@@ -123,8 +130,13 @@ producerTx = (emptyTx producerHash)
   { txBlockIndex = 0
   , txSize       = 100
   , txFee        = 170000
-  , txOutSum     = 12000000
-  , txOutputs    = [mkOut 0 5000000, mkOut 1 5000000, mkOut 2 2000000]
+  , txOutSum     = 12100000
+  , txOutputs    =
+      [ mkOut 0 5000000
+      , mkOut 1 5000000
+      , mkOut 2 2000000
+      , mkOut 3  100000
+      ]
   }
 
 -- | Shelley block carrying just the producer.
@@ -233,4 +245,40 @@ byronBlock = producerBlock
   , blkOpCert        = Nothing
   , blkOpCertCounter = Nothing
   , blkTxs           = [byronTx]
+  }
+
+-- ---------------------------------------------------------------------------
+-- * Withdrawal-only block (conservation short-circuit)
+-- ---------------------------------------------------------------------------
+
+-- | Withdrawal-only tx. Spends @(producerHash, 3)@ for a 100_000
+-- input; one output for 50_000; fee 50_000; one zero-amount
+-- withdrawal. Carries no certificates, so 'hasNoDepositActivity'
+-- returns 'True' and the extractor writes @tx.deposit = 0@ at parse
+-- time.
+withdrawalTx :: GenericTx
+withdrawalTx = (emptyTx (padHash32 "WD"))
+  { txBlockIndex  = 0
+  , txSize        = 200
+  , txFee         = 50000
+  , txOutSum      = 50000
+  , txInputs      = [GenericTxIn producerHash 3]
+  , txOutputs     = [mkOut 0 50000]
+  , txWithdrawals =
+      [ GenericTxWithdrawal
+          { txwRewardAddress = BS.replicate 29 0xdd
+          , txwAmount        = 0
+          }
+      ]
+  }
+
+-- | Shelley block carrying the withdrawal-only tx.
+withdrawalBlock :: GenericBlock
+withdrawalBlock = producerBlock
+  { blkHash         = padHash32 "BLK4"
+  , blkPreviousHash = blkHash byronBlock
+  , blkSlotNo       = SlotNo 300
+  , blkBlockNo      = BlockNo 4
+  , blkEpochSlotNo  = 300
+  , blkTxs          = [withdrawalTx]
   }

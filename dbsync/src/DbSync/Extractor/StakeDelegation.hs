@@ -23,13 +23,25 @@ import DbSync.Block.Types
   , GenericTxCertificate (..)
   , GenericTxWithdrawal (..)
   , CertAction (..)
+  , MirAction (..)
+  , MirPot (..)
   )
+import DbSync.Db.Schema.EpochBoundary
+  ( PotTransfer (..)
+  , Reserve (..)
+  , Treasury (..)
+  , potTransferTableDef
+  , reserveTableDef
+  , treasuryTableDef
+  )
+import DbSync.Db.Schema.Ids (TxId)
 import DbSync.Db.Schema.StakeDelegation
-import DbSync.Db.Types (DbLovelace (..))
+import DbSync.Db.Types (DbLovelace (..), toDbInt65)
 import DbSync.Extractor
   ( BlockContext (..)
   , BlockLedgerData (..)
   , ExtractorDef (..)
+  , HasNetwork (..)
   , ProcessBlockFn
   , TxContext (..)
   )
@@ -52,6 +64,9 @@ stakeDelegationExtractor = ExtractorDef
                      , stakeDeregistrationTableDef
                      , delegationTableDef
                      , withdrawalTableDef
+                     , potTransferTableDef
+                     , reserveTableDef
+                     , treasuryTableDef
                      ]
   , pdProcess      = processStakeDelegation
   }
@@ -165,6 +180,10 @@ processStakeDelegation ctx = do
                 }
           liftIO $ writeDelegation writer dId d
 
+        -- Move-Instantaneous-Reward cert (Shelley-Babbage only).
+        CertMir pot action ->
+          processMirCert txId certIdx pot action
+
         -- All other cert types: handled by Pool or Governance extractors
         _ -> pure ()
 
@@ -186,4 +205,85 @@ processStakeDelegation ctx = do
     stakeDeposit :: Maybe Word64 -> Maybe DbLovelace
     stakeDeposit (Just d) = Just (DbLovelace d)
     stakeDeposit Nothing  = coinToDbLovelace <$> bldStakeKeyDeposit (bcLedgerData ctx)
+
+-- ---------------------------------------------------------------------------
+-- * MIR cert handling
+-- ---------------------------------------------------------------------------
+
+-- | Write the rows produced by one MIR certificate.
+--
+-- 'MirToStakeAddresses' writes one @reserve@ or @treasury@ row per
+-- recipient, depending on the named pot. 'MirPotToPot' writes a
+-- single @pot_transfer@ row carrying signed treasury/reserves
+-- deltas: a positive amount with @MirReserves@ credits the
+-- treasury and debits the reserves.
+processMirCert
+  :: ( HasResolver env
+     , HasWriter env
+     , HasNetwork env
+     , MonadReader env m
+     , MonadIO m
+     )
+  => TxId -> Word16 -> MirPot -> MirAction -> m ()
+processMirCert txId certIdx pot = \case
+  MirToStakeAddresses recipients ->
+    forM_ recipients (writeMirRecipient txId certIdx pot)
+  MirPotToPot xfer ->
+    writePotTransferRow txId certIdx pot xfer
+
+writeMirRecipient
+  :: ( HasResolver env
+     , HasWriter env
+     , HasNetwork env
+     , MonadReader env m
+     , MonadIO m
+     )
+  => TxId -> Word16 -> MirPot -> (ByteString, Integer) -> m ()
+writeMirRecipient txId certIdx pot (credHash, dcoin) = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
+  saId     <- resolveAndWriteStakeAddress credHash
+  let amount = toDbInt65 (fromInteger dcoin)
+  case pot of
+    MirReserves -> do
+      rid <- liftIO (assignReserveId resolver)
+      liftIO $ writeReserve writer rid Reserve
+        { reserveAddrId    = saId
+        , reserveCertIndex = certIdx
+        , reserveAmount    = amount
+        , reserveTxId      = txId
+        }
+    MirTreasury -> do
+      tid <- liftIO (assignTreasuryId resolver)
+      liftIO $ writeTreasury writer tid Treasury
+        { treasuryAddrId    = saId
+        , treasuryCertIndex = certIdx
+        , treasuryAmount    = amount
+        , treasuryTxId      = txId
+        }
+
+-- | A pot-to-pot transfer with positive amount on the named pot
+-- credits the /other/ pot. Treasury and reserves deltas are
+-- mirror-image signed values.
+writePotTransferRow
+  :: ( HasResolver env
+     , HasWriter env
+     , MonadReader env m
+     , MonadIO m
+     )
+  => TxId -> Word16 -> MirPot -> Integer -> m ()
+writePotTransferRow txId certIdx pot xfer = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
+  ptid <- liftIO (assignPotTransferId resolver)
+  let signed = fromInteger xfer :: Int64
+      (toTreasury, toReserves) = case pot of
+        MirReserves -> (signed, negate signed)
+        MirTreasury -> (negate signed, signed)
+  liftIO $ writePotTransfer writer ptid PotTransfer
+    { potTransferTxId      = txId
+    , potTransferCertIndex = certIdx
+    , potTransferTreasury  = toDbInt65 toTreasury
+    , potTransferReserves  = toDbInt65 toReserves
+    }
 

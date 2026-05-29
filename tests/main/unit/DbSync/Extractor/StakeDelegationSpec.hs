@@ -1,15 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Tests for the stake-delegation extractor's @stake_registration.deposit@
--- dispatch.
+-- | Tests for the stake-delegation extractor.
 --
--- Three-way precedence:
---
---   * Conway+ certs that carry an inline deposit win regardless of
---     ledger state.
---   * Shelley-Babbage certs (no inline deposit) take the worker's
---     'bldStakeKeyDeposit' protocol-param value when ledger is on.
---   * Ledger-off runs leave the column NULL — matches original behaviour.
+-- Covers @stake_registration.deposit@ dispatch (three-way precedence
+-- between inline Conway+ deposits, ledger protocol-param values, and
+-- ledger-off) and the MIR cert handling that writes
+-- @reserve@ / @treasury@ / @pot_transfer@ rows.
 module DbSync.Extractor.StakeDelegationSpec (spec) where
 
 import Cardano.Prelude
@@ -31,8 +27,11 @@ import DbSync.Block.Types
   , GenericBlock (..)
   , GenericTx (..)
   , GenericTxCertificate (..)
+  , MirAction (..)
+  , MirPot (..)
   )
-import DbSync.Db.Types (DbLovelace (..))
+import qualified DbSync.Db.Schema.EpochBoundary as SEB
+import DbSync.Db.Types (DbLovelace (..), fromDbInt65)
 import qualified DbSync.Db.Schema.StakeDelegation as SSD
 import DbSync.Extractor
   ( BlockLedgerData (..)
@@ -54,36 +53,88 @@ import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 
 spec :: Spec
-spec = describe "stake_registration.deposit" $ do
+spec = do
+  describe "stake_registration.deposit" $ do
 
-  it "Conway+ inline deposit wins over the worker value" $ do
-    -- Cert carries 1_500_000; worker says 2_000_000. Inline wins.
-    let bld = (emptyBlockLedgerData :: BlockLedgerData)
-          { bldLedgerEnabled    = True
-          , bldStakeKeyDeposit  = Just (Coin 2_000_000)
-          }
-    written <- runWith bld (blockWithStakeReg (Just 1_500_000))
-    case twStakeRegistrations written of
-      [(_, sr)] ->
-        SSD.stakeRegistrationDeposit sr `shouldBe` Just (DbLovelace 1_500_000)
-      _ -> panic "expected exactly one stake_registration"
+    it "Conway+ inline deposit wins over the worker value" $ do
+      -- Cert carries 1_500_000; worker says 2_000_000. Inline wins.
+      let bld = (emptyBlockLedgerData :: BlockLedgerData)
+            { bldLedgerEnabled    = True
+            , bldStakeKeyDeposit  = Just (Coin 2_000_000)
+            }
+      written <- runWith bld (blockWithStakeReg (Just 1_500_000))
+      case twStakeRegistrations written of
+        [(_, sr)] ->
+          SSD.stakeRegistrationDeposit sr `shouldBe` Just (DbLovelace 1_500_000)
+        _ -> panic "expected exactly one stake_registration"
 
-  it "Shelley-Babbage cert (no inline deposit) takes the worker value" $ do
-    let bld = (emptyBlockLedgerData :: BlockLedgerData)
-          { bldLedgerEnabled    = True
-          , bldStakeKeyDeposit  = Just (Coin 2_000_000)
-          }
-    written <- runWith bld (blockWithStakeReg Nothing)
-    case twStakeRegistrations written of
-      [(_, sr)] ->
-        SSD.stakeRegistrationDeposit sr `shouldBe` Just (DbLovelace 2_000_000)
-      _ -> panic "expected exactly one stake_registration"
+    it "Shelley-Babbage cert (no inline deposit) takes the worker value" $ do
+      let bld = (emptyBlockLedgerData :: BlockLedgerData)
+            { bldLedgerEnabled    = True
+            , bldStakeKeyDeposit  = Just (Coin 2_000_000)
+            }
+      written <- runWith bld (blockWithStakeReg Nothing)
+      case twStakeRegistrations written of
+        [(_, sr)] ->
+          SSD.stakeRegistrationDeposit sr `shouldBe` Just (DbLovelace 2_000_000)
+        _ -> panic "expected exactly one stake_registration"
 
-  it "leaves the column NULL when ledger is OFF and cert has no inline" $ do
-    written <- runWith emptyBlockLedgerData (blockWithStakeReg Nothing)
-    case twStakeRegistrations written of
-      [(_, sr)] -> SSD.stakeRegistrationDeposit sr `shouldBe` Nothing
-      _ -> panic "expected exactly one stake_registration"
+    it "leaves the column NULL when ledger is OFF and cert has no inline" $ do
+      written <- runWith emptyBlockLedgerData (blockWithStakeReg Nothing)
+      case twStakeRegistrations written of
+        [(_, sr)] -> SSD.stakeRegistrationDeposit sr `shouldBe` Nothing
+        _ -> panic "expected exactly one stake_registration"
+
+  describe "MIR certs" $ do
+
+    it "MirToStakeAddresses on MirReserves writes one reserve row" $ do
+      let act = MirToStakeAddresses [(stakeCred, 7_500_000)]
+      written <- runWith emptyBlockLedgerData (blockWithMir MirReserves act)
+      length (twReserves written) `shouldBe` 1
+      length (twTreasuries written) `shouldBe` 0
+      case twReserves written of
+        [(_, r)] -> do
+          fromDbInt65 (SEB.reserveAmount r) `shouldBe` 7_500_000
+        _ -> panic "expected one reserve row"
+
+    it "MirToStakeAddresses on MirTreasury writes one treasury row" $ do
+      let act = MirToStakeAddresses [(stakeCred, 4_000_000)]
+      written <- runWith emptyBlockLedgerData (blockWithMir MirTreasury act)
+      length (twTreasuries written) `shouldBe` 1
+      length (twReserves written) `shouldBe` 0
+      case twTreasuries written of
+        [(_, t)] -> do
+          fromDbInt65 (SEB.treasuryAmount t) `shouldBe` 4_000_000
+        _ -> panic "expected one treasury row"
+
+    it "multi-recipient MIR writes one row per recipient" $ do
+      let act = MirToStakeAddresses
+            [ (stakeCred,           1_000_000)
+            , (BS.replicate 28 0xcd, 2_000_000)
+            , (BS.replicate 28 0xef, 3_000_000)
+            ]
+      written <- runWith emptyBlockLedgerData (blockWithMir MirReserves act)
+      length (twReserves written) `shouldBe` 3
+      map (fromDbInt65 . SEB.reserveAmount . snd) (twReserves written)
+        `shouldBe` [1_000_000, 2_000_000, 3_000_000]
+
+    it "MirPotToPot on MirReserves: treasury +xfer, reserves -xfer" $ do
+      written <- runWith emptyBlockLedgerData
+                   (blockWithMir MirReserves (MirPotToPot 100))
+      case twPotTransfers written of
+        [(_, pt)] -> do
+          fromDbInt65 (SEB.potTransferTreasury pt) `shouldBe`  100
+          fromDbInt65 (SEB.potTransferReserves pt) `shouldBe` -100
+        _ -> panic "expected one pot_transfer row"
+
+    it "MirPotToPot on MirTreasury: treasury -xfer, reserves +xfer" $ do
+      written <- runWith emptyBlockLedgerData
+                   (blockWithMir MirTreasury (MirPotToPot 100))
+      case twPotTransfers written of
+        [(_, pt)] -> do
+          fromDbInt65 (SEB.potTransferTreasury pt) `shouldBe` -100
+          fromDbInt65 (SEB.potTransferReserves pt) `shouldBe`  100
+        _ -> panic "expected one pot_transfer row"
 
 -- ---------------------------------------------------------------------------
 -- Plumbing
@@ -164,3 +215,36 @@ shelleyBlock = GenericBlock
 blockWithStakeReg :: Maybe Word64 -> GenericBlock
 blockWithStakeReg mDeposit =
   shelleyBlock { blkTxs = [txWithStakeReg mDeposit] }
+
+txWithMir :: MirPot -> MirAction -> GenericTx
+txWithMir pot act = GenericTx
+  { txHash             = BS.replicate 32 0x02
+  , txBlockIndex       = 0
+  , txSize             = 200
+  , txFee              = 170_000
+  , txOutSum           = 0
+  , txValidContract    = True
+  , txScriptSize       = 0
+  , txTreasuryDonation = 0
+  , txInvalidBefore    = Nothing
+  , txInvalidHereafter = Nothing
+  , txInputs           = []
+  , txOutputs          = []
+  , txCollateralInputs = []
+  , txReferenceInputs  = []
+  , txCollateralOutput = Nothing
+  , txCertificates =
+      [ GenericTxCertificate
+          { txCertIndex  = 0
+          , txCertAction = CertMir pot act
+          }
+      ]
+  , txWithdrawals      = []
+  , txMetadata         = Nothing
+  , txMint             = []
+  , txCborRaw          = Nothing
+  }
+
+blockWithMir :: MirPot -> MirAction -> GenericBlock
+blockWithMir pot act =
+  shelleyBlock { blkTxs = [txWithMir pot act] }

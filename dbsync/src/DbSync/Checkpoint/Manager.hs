@@ -110,6 +110,12 @@ mkBoundarySyncStateRow slotNo blockNo blockHash counters addressIdCounter schema
     , ssrEpochSyncStatsIdCounter       = icNext (icEpochSyncStatsId      counters)
     , ssrAdaPotsIdCounter              = icNext (icAdaPotsId             counters)
     , ssrCollateralTxOutIdCounter      = icNext (icCollateralTxOutId     counters)
+    , ssrEpochParamIdCounter           = icNext (icEpochParamId          counters)
+    , ssrEpochStateIdCounter           = icNext (icEpochStateId          counters)
+    , ssrCostModelIdCounter            = icNext (icCostModelId           counters)
+    , ssrPotTransferIdCounter          = icNext (icPotTransferId         counters)
+    , ssrTreasuryIdCounter             = icNext (icTreasuryId            counters)
+    , ssrReserveIdCounter              = icNext (icReserveId             counters)
     , ssrSchemaVersionApplied          = schemaVersion
     , ssrLedgerEnabled                 = ledgerEnabled
     , ssrSyncComplete                  = False
@@ -151,6 +157,13 @@ mkResumeExtractState row =
         , icEpochSyncStatsId      = mkIdCounter (ssrEpochSyncStatsIdCounter      row)
         , icAdaPotsId             = mkIdCounter (ssrAdaPotsIdCounter             row)
         , icCollateralTxOutId     = mkIdCounter (ssrCollateralTxOutIdCounter     row)
+        , icEpochParamId          = mkIdCounter (ssrEpochParamIdCounter          row)
+        , icEpochStateId          = mkIdCounter (ssrEpochStateIdCounter          row)
+        , icCostModelId           = mkIdCounter (ssrCostModelIdCounter           row)
+        , icPotTransferId         = mkIdCounter (ssrPotTransferIdCounter         row)
+        , icTreasuryId            = mkIdCounter (ssrTreasuryIdCounter            row)
+        , icReserveId             = mkIdCounter (ssrReserveIdCounter             row)
         }
-    , esLastBlockId = Nothing
+    , esLastBlockId    = Nothing
+    , esCostModelCache = mempty
     }

@@ -51,6 +51,7 @@ import qualified DbSync.Phase.CurrentSpec as PhaseCurrentSpec
 import qualified DbSync.Schema.AdaPotsSpec as SchemaAdaPotsSpec
 import qualified DbSync.Schema.AddressSpec as SchemaAddressSpec
 import qualified DbSync.Schema.CoreSpec as SchemaCoreSpec
+import qualified DbSync.Schema.EpochBoundarySpec as SchemaEpochBoundarySpec
 import qualified DbSync.Schema.GenerateSpec as SchemaGenerateSpec
 import qualified DbSync.Schema.GovernanceSpec as SchemaGovernanceSpec
 import qualified DbSync.Schema.RewardSpec as SchemaRewardSpec
@@ -144,6 +145,7 @@ main = hspec $ do
     SchemaAdaPotsSpec.spec
     SchemaAddressSpec.spec
     SchemaCoreSpec.spec
+    SchemaEpochBoundarySpec.spec
     SchemaGenerateSpec.spec
     SchemaGovernanceSpec.spec
     SchemaRewardSpec.spec

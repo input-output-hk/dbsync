@@ -21,6 +21,14 @@ import DbSync.Db.Schema.Core
   , encodeSlotLeaderCopy
   , encodeTxCopy
   )
+import DbSync.Db.Schema.EpochBoundary
+  ( encodeCostModelCopy
+  , encodeEpochParamCopy
+  , encodeEpochStateCopy
+  , encodePotTransferCopy
+  , encodeReserveCopy
+  , encodeTreasuryCopy
+  )
 import DbSync.Db.Schema.UTxO
   ( encodeTxOutCopy
   , encodeTxInCopy
@@ -131,6 +139,18 @@ mkWriter bs = Writer
     -- EpochBoundary
   , writeAdaPots = \apid pots ->
       lsWriteRow bs "ada_pots" (encodeAdaPotsCopy apid pots)
+  , writeEpochParam = \epid ep ->
+      lsWriteRow bs "epoch_param" (encodeEpochParamCopy epid ep)
+  , writeEpochState = \esid es ->
+      lsWriteRow bs "epoch_state" (encodeEpochStateCopy esid es)
+  , writeCostModel = \cmid cm ->
+      lsWriteRow bs "cost_model" (encodeCostModelCopy cmid cm)
+  , writePotTransfer = \ptid pt ->
+      lsWriteRow bs "pot_transfer" (encodePotTransferCopy ptid pt)
+  , writeTreasury = \tid t ->
+      lsWriteRow bs "treasury" (encodeTreasuryCopy tid t)
+  , writeReserve = \rid r ->
+      lsWriteRow bs "reserve" (encodeReserveCopy rid r)
 
     -- Transaction control
   , commit = lsCommit bs

@@ -121,6 +121,7 @@ test-suite dbsync-test
     DbSync.Schema.AdaPotsSpec
     DbSync.Schema.AddressSpec
     DbSync.Schema.CoreSpec
+    DbSync.Schema.EpochBoundarySpec
     DbSync.Schema.GenerateSpec
     DbSync.Schema.GovernanceSpec
     DbSync.Schema.RewardSpec

@@ -43,6 +43,14 @@ import DbSync.Db.Schema.AdaPots (adaPotsTableDef)
 import DbSync.Db.Schema.Address (addressTableDef)
 import DbSync.Db.Schema.CBOR (txCborTableDef)
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
+import DbSync.Db.Schema.EpochBoundary
+  ( costModelTableDef
+  , epochParamTableDef
+  , epochStateTableDef
+  , potTransferTableDef
+  , reserveTableDef
+  , treasuryTableDef
+  )
 import DbSync.Db.Schema.EpochSyncStats (epochSyncStatsTableDef)
 import DbSync.Db.Schema.Metadata (txMetadataTableDef)
 import DbSync.Db.Schema.MultiAsset
@@ -122,6 +130,12 @@ data SyncStateRow = SyncStateRow
   , ssrEpochSyncStatsIdCounter       :: !Int64
   , ssrAdaPotsIdCounter              :: !Int64
   , ssrCollateralTxOutIdCounter      :: !Int64
+  , ssrEpochParamIdCounter           :: !Int64
+  , ssrEpochStateIdCounter           :: !Int64
+  , ssrCostModelIdCounter            :: !Int64
+  , ssrPotTransferIdCounter          :: !Int64
+  , ssrTreasuryIdCounter             :: !Int64
+  , ssrReserveIdCounter              :: !Int64
   , ssrSchemaVersionApplied          :: !Int
   , ssrLedgerEnabled                 :: !Bool
   , ssrSyncComplete                  :: !Bool
@@ -242,6 +256,12 @@ idCounterByTable =
   , (tdName epochSyncStatsTableDef,       ssrEpochSyncStatsIdCounter)
   , (tdName adaPotsTableDef,              ssrAdaPotsIdCounter)
   , (tdName collateralTxOutTableDef,      ssrCollateralTxOutIdCounter)
+  , (tdName epochParamTableDef,           ssrEpochParamIdCounter)
+  , (tdName epochStateTableDef,           ssrEpochStateIdCounter)
+  , (tdName costModelTableDef,            ssrCostModelIdCounter)
+  , (tdName potTransferTableDef,          ssrPotTransferIdCounter)
+  , (tdName treasuryTableDef,             ssrTreasuryIdCounter)
+  , (tdName reserveTableDef,              ssrReserveIdCounter)
   ]
 
 -- ---------------------------------------------------------------------------
@@ -284,6 +304,12 @@ syncStateRowEncoder =
   <> (ssrEpochSyncStatsIdCounter                   >$< E.param (E.nonNullable E.int8))
   <> (ssrAdaPotsIdCounter                          >$< E.param (E.nonNullable E.int8))
   <> (ssrCollateralTxOutIdCounter                  >$< E.param (E.nonNullable E.int8))
+  <> (ssrEpochParamIdCounter                       >$< E.param (E.nonNullable E.int8))
+  <> (ssrEpochStateIdCounter                       >$< E.param (E.nonNullable E.int8))
+  <> (ssrCostModelIdCounter                        >$< E.param (E.nonNullable E.int8))
+  <> (ssrPotTransferIdCounter                      >$< E.param (E.nonNullable E.int8))
+  <> (ssrTreasuryIdCounter                         >$< E.param (E.nonNullable E.int8))
+  <> (ssrReserveIdCounter                          >$< E.param (E.nonNullable E.int8))
   <> (fromIntegral . ssrSchemaVersionApplied       >$< E.param (E.nonNullable E.int4))
   <> (ssrLedgerEnabled                             >$< E.param (E.nonNullable E.bool))
 
@@ -331,6 +357,12 @@ syncStateRowDecoder =
         <*> D.column (D.nonNullable D.int8)                        -- epoch_sync_stats_id_counter
         <*> D.column (D.nonNullable D.int8)                        -- ada_pots_id_counter
         <*> D.column (D.nonNullable D.int8)                        -- collateral_tx_out_id_counter
+        <*> D.column (D.nonNullable D.int8)                        -- epoch_param_id_counter
+        <*> D.column (D.nonNullable D.int8)                        -- epoch_state_id_counter
+        <*> D.column (D.nonNullable D.int8)                        -- cost_model_id_counter
+        <*> D.column (D.nonNullable D.int8)                        -- pot_transfer_id_counter
+        <*> D.column (D.nonNullable D.int8)                        -- treasury_id_counter
+        <*> D.column (D.nonNullable D.int8)                        -- reserve_id_counter
         <*> (fromIntegral <$> D.column (D.nonNullable D.int4))     -- schema_version_applied
         <*> D.column (D.nonNullable D.bool)                        -- ledger_enabled
         <*> D.column (D.nonNullable D.bool)                        -- sync_complete

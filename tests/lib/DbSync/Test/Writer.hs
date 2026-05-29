@@ -17,6 +17,7 @@ import Data.IORef (IORef, atomicModifyIORef')
 
 import DbSync.Db.Schema.Address (Address)
 import DbSync.Db.Schema.Core (Block, SlotLeader, Tx)
+import DbSync.Db.Schema.EpochBoundary (PotTransfer, Reserve, Treasury)
 import DbSync.Db.Schema.Ids
   ( AddressId
   , BlockId
@@ -25,10 +26,13 @@ import DbSync.Db.Schema.Ids
   , MaTxMintId
   , PoolHashId
   , PoolUpdateId
+  , PotTransferId
   , ReferenceTxInId
+  , ReserveId
   , SlotLeaderId
   , StakeAddressId
   , StakeRegistrationId
+  , TreasuryId
   , TxId
   , TxInId
   , TxMetadataId
@@ -62,6 +66,9 @@ data TestWriterState = TestWriterState
   , twPoolUpdates       :: ![(PoolUpdateId, PoolUpdate)]
   , twTxMetadata        :: ![(TxMetadataId, TxMetadata)]
   , twMaTxMints         :: ![(MaTxMintId, MaTxMint)]
+  , twPotTransfers      :: ![(PotTransferId, PotTransfer)]
+  , twTreasuries        :: ![(TreasuryId, Treasury)]
+  , twReserves          :: ![(ReserveId, Reserve)]
   , twCommits           :: !Int
   }
   deriving stock (Show)
@@ -84,6 +91,9 @@ emptyTestWriterState = TestWriterState
   , twPoolUpdates       = []
   , twTxMetadata        = []
   , twMaTxMints         = []
+  , twPotTransfers     = []
+  , twTreasuries       = []
+  , twReserves         = []
   , twCommits           = 0
   }
 
@@ -168,8 +178,20 @@ mkTestWriter ref = Writer
     -- EpochSyncStats (no-op)
   , writeEpochSyncStats = \_ _ -> pure ()
 
-    -- EpochBoundary (no-op)
-  , writeAdaPots = \_ _ -> pure ()
+    -- EpochBoundary
+  , writeAdaPots     = \_ _ -> pure ()
+  , writeEpochParam  = \_ _ -> pure ()
+  , writeEpochState  = \_ _ -> pure ()
+  , writeCostModel   = \_ _ -> pure ()
+  , writePotTransfer = \ptid pt ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twPotTransfers = twPotTransfers s ++ [(ptid, pt)] }, ())
+  , writeTreasury    = \tid t ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twTreasuries = twTreasuries s ++ [(tid, t)] }, ())
+  , writeReserve     = \rid r ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twReserves = twReserves s ++ [(rid, r)] }, ())
 
     -- Transaction control
   , commit =

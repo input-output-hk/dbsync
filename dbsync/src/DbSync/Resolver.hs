@@ -23,6 +23,7 @@ import Cardano.Prelude
 import Data.ByteString.Short (ShortByteString)
 import DbSync.Db.Schema.Address (Address)
 import DbSync.Db.Schema.Core (SlotLeader)
+import DbSync.Db.Schema.EpochBoundary (CostModel)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.MultiAsset (MultiAsset)
 import DbSync.Db.Schema.Pool (PoolHash)
@@ -174,6 +175,26 @@ data IdResolver m = IdResolver
 
     -- | Assign the next ada_pots ID.
   , assignAdaPotsId :: !(m AdaPotsId)
+
+    -- | Assign the next epoch_param ID.
+  , assignEpochParamId :: !(m EpochParamId)
+
+    -- | Assign the next epoch_state ID.
+  , assignEpochStateId :: !(m EpochStateId)
+
+    -- | Resolve a cost_model by its 32-byte canonical hash.
+    -- Returns @(CostModelId, isNew)@; the caller writes the
+    -- 'CostModel' row when @isNew = True@.
+  , resolveCostModel :: !(ByteString -> CostModel -> m (CostModelId, Bool))
+
+    -- | Assign the next pot_transfer ID.
+  , assignPotTransferId :: !(m PotTransferId)
+
+    -- | Assign the next treasury ID.
+  , assignTreasuryId :: !(m TreasuryId)
+
+    -- | Assign the next reserve ID.
+  , assignReserveId :: !(m ReserveId)
 
     -- ---------------------------------------------------------------
     -- Inline value resolution (Follow path)

@@ -51,7 +51,7 @@ import qualified Cardano.Ledger.Alonzo.TxOut as Alonzo
 import qualified Cardano.Ledger.Alonzo.TxWits as Alonzo
 import Cardano.Ledger.BaseTypes (Anchor (..), TxIx (..), strictMaybeToMaybe, unboundRational, portToWord16, dnsToText, urlToText)
 import qualified Cardano.Ledger.Babbage.TxOut as Babbage
-import Cardano.Ledger.Coin (Coin (..))
+import Cardano.Ledger.Coin (Coin (..), DeltaCoin (..))
 import Cardano.Ledger.Conway.TxBody (ctbTreasuryDonation)
 import Cardano.Ledger.Conway.TxCert
 import qualified Cardano.Ledger.Credential as Ledger
@@ -100,6 +100,8 @@ import DbSync.Block.Types
   , CertAction (..)
   , DRepIdent (..)
   , AnchorData (..)
+  , MirAction (..)
+  , MirPot (..)
   , PoolRegistrationData (..)
   , PoolRelayData (..)
   )
@@ -240,18 +242,42 @@ mkTxCertificatesShelleyEra convert bd =
 
 -- | Convert a ShelleyTxCert (any Shelley-Babbage era) to CertAction.
 --
--- The 'EraTxCert' constraint gives us 'EncCBOR' for the whole
--- 'ShelleyTxCert' so we can preserve the raw cert bytes for the
--- variants we don't structurally decode.
+-- Genesis-key delegation certs are pre-Shelley housekeeping with no
+-- downstream consumer; the parser collapses them into 'CertOther'
+-- and the downstream extractors ignore them.
 shelleyCertToAction
   :: forall era. EraTxCert era
   => ShelleyTxCert era -> CertAction
 shelleyCertToAction = \case
   ShelleyTxCertDelegCert deleg -> shelleyDelegAction deleg
   ShelleyTxCertPool pool       -> poolCertAction pool
-  cert@(ShelleyTxCertMir _)    -> CertMIR (LedgerCBOR.serialize' shelleyProtVer cert)
+  ShelleyTxCertMir mir         -> mirCertAction mir
   cert@(ShelleyTxCertGenesisDeleg _) ->
-    CertGenesisDelegation (LedgerCBOR.serialize' shelleyProtVer cert)
+    CertOther (LedgerCBOR.serialize' shelleyProtVer cert)
+
+-- | Destructure a Shelley-era MIR certificate into our structured
+-- 'CertMir' representation. The two payload shapes are kept
+-- separate at the type level so the 'stake_delegation' extractor
+-- can dispatch without re-parsing CBOR.
+mirCertAction :: MIRCert -> CertAction
+mirCertAction mc =
+  CertMir (mirPotToOurs (mirPot mc)) (mirTargetToAction (mirRewards mc))
+  where
+    mirPotToOurs :: MIRPot -> MirPot
+    mirPotToOurs ReservesMIR = MirReserves
+    mirPotToOurs TreasuryMIR = MirTreasury
+
+    mirTargetToAction :: MIRTarget -> MirAction
+    mirTargetToAction (StakeAddressesMIR rwds) =
+      MirToStakeAddresses
+        [ (credToBytes cred, deltaCoinToInteger d)
+        | (cred, d) <- Map.toList rwds
+        ]
+    mirTargetToAction (SendToOppositePotMIR coin) =
+      MirPotToPot (unCoin coin)
+
+    deltaCoinToInteger :: DeltaCoin -> Integer
+    deltaCoinToInteger (DeltaCoin i) = i
 
 -- | Convert a ConwayTxCert to CertAction.
 conwayCertToAction :: ConwayTxCert era -> CertAction

@@ -76,13 +76,9 @@ module DbSync.Db.Schema.Pool
 
 import Cardano.Prelude
 
-import Data.ByteString.Builder (Builder, byteString)
-import qualified Data.ByteString.Char8 as BS8
 import Data.Functor.Contravariant ((>$<))
-import qualified Data.Text as T
 import qualified Hasql.Decoders as D
 import qualified Hasql.Encoders as E
-import qualified Text.Read as TR
 
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
@@ -90,10 +86,13 @@ import DbSync.Db.Schema.Types
 import DbSync.Db.Types
   ( DbLovelace (..)
   , DbWord64 (..)
+  , bDouble
   , dbLovelaceValueDecoder
   , dbLovelaceValueEncoder
   , dbWord64ValueDecoder
   , dbWord64ValueEncoder
+  , doubleAsTextDecoder
+  , doubleAsTextEncoder
   , maybeDbLovelaceDecoder
   , maybeDbLovelaceEncoder
   )
@@ -492,22 +491,6 @@ encodeReservedPoolTickerCopy (ReservedPoolTickerId rid) rpt =
 -- * Hasql encoders / decoders
 -- ---------------------------------------------------------------------------
 
--- | The original schema stores @pool_update.margin@ as @text@ holding
--- a Haskell 'show' of the rational margin (e.g. @"5.0e-2"@). We
--- mirror that representation: encode via 'show', decode via
--- 'TR.readMaybe' wrapped in 'D.refine' so a malformed row surfaces
--- as a parse error rather than a runtime panic.
-doubleAsTextEncoder :: E.Value Double
-doubleAsTextEncoder = T.pack . show >$< E.text
-
-doubleAsTextDecoder :: D.Value Double
-doubleAsTextDecoder = D.refine parseDouble D.text
-  where
-    parseDouble :: Text -> Either Text Double
-    parseDouble t = case TR.readMaybe (T.unpack t) of
-      Just d  -> Right d
-      Nothing -> Left ("pool_update.margin: not a Double: " <> t)
-
 -- PoolHash -----------------------------------------------------------------
 
 poolHashEncoder :: E.Params PoolHash
@@ -711,11 +694,3 @@ entityReservedPoolTickerDecoder :: D.Row (ReservedPoolTickerId, ReservedPoolTick
 entityReservedPoolTickerDecoder = (,)
   <$> idDecoder ReservedPoolTickerId
   <*> reservedPoolTickerDecoder
-
--- ---------------------------------------------------------------------------
--- * Internal helpers
--- ---------------------------------------------------------------------------
-
--- | Encode a 'Double' as decimal ASCII into a 'Builder'.
-bDouble :: Double -> Builder
-bDouble = byteString . BS8.pack . show

@@ -26,6 +26,8 @@ import DbSync.Db.Schema.AdaPots (AdaPots)
 import DbSync.Db.Schema.Address (Address)
 import DbSync.Db.Schema.CBOR (TxCbor)
 import DbSync.Db.Schema.Core (Block, SlotLeader, Tx)
+import DbSync.Db.Schema.EpochBoundary
+  ( CostModel, EpochParam, EpochState, PotTransfer, Reserve, Treasury )
 import DbSync.Db.Schema.EpochSyncStats (EpochSyncStats)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Metadata (TxMetadata)
@@ -104,7 +106,13 @@ data Writer m = Writer
     -- ---------------------------------------------------------------
     -- EpochBoundary tables
     -- ---------------------------------------------------------------
-  , writeAdaPots :: !(AdaPotsId -> AdaPots -> m ())
+  , writeAdaPots     :: !(AdaPotsId -> AdaPots -> m ())
+  , writeEpochParam  :: !(EpochParamId -> EpochParam -> m ())
+  , writeEpochState  :: !(EpochStateId -> EpochState -> m ())
+  , writeCostModel   :: !(CostModelId -> CostModel -> m ())
+  , writePotTransfer :: !(PotTransferId -> PotTransfer -> m ())
+  , writeTreasury    :: !(TreasuryId -> Treasury -> m ())
+  , writeReserve     :: !(ReserveId -> Reserve -> m ())
 
     -- ---------------------------------------------------------------
     -- Transaction control

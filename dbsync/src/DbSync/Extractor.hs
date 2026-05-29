@@ -194,11 +194,15 @@ class HasLedgerData env where
 -- NOT used during 'FollowingChainTip' — the 'IdResolver' handles
 -- ID assignment via PostgreSQL directly.
 data ExtractState = ExtractState
-  { esIdCounters  :: !IdCounters
+  { esIdCounters     :: !IdCounters
       -- ^ Per-table monotonic ID counters
-  , esLastBlockId :: !(Maybe Int64)
+  , esLastBlockId    :: !(Maybe Int64)
       -- ^ ID of the most recently processed block (for previous_id).
       --   'Nothing' before any block has been processed.
+  , esCostModelCache :: !(Map ByteString Int64)
+      -- ^ Hash → cost_model.id dedup cache. Populated at boot from
+      --   the @cost_model@ table when resuming an existing sync;
+      --   empty on a fresh start.
   }
   deriving stock (Eq, Show)
 
@@ -206,6 +210,7 @@ data ExtractState = ExtractState
 -- previously-seen block.
 freshExtractState :: ExtractState
 freshExtractState = ExtractState
-  { esIdCounters  = freshIdCounters
-  , esLastBlockId = Nothing
+  { esIdCounters     = freshIdCounters
+  , esLastBlockId    = Nothing
+  , esCostModelCache = mempty
   }

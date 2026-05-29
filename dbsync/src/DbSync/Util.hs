@@ -18,12 +18,18 @@ module DbSync.Util
   , coinToWord64
   , coinToInt64
 
+    -- * Nonce / UnitInterval conversions
+  , nonceToBytes
+  , unitIntervalToDouble
+
     -- * Reward address
   , rewardAddrCred
   ) where
 
 import Cardano.Prelude
 
+import qualified Cardano.Crypto.Hash as Crypto
+import qualified Cardano.Ledger.BaseTypes as Ledger
 import Cardano.Ledger.Coin (Coin (..))
 
 import qualified Data.ByteString as BS
@@ -70,6 +76,22 @@ coinToWord64 (Coin n) = fromInteger n
 -- legitimately hold a negative delta (e.g. tx deposit refunds).
 coinToInt64 :: Coin -> Int64
 coinToInt64 (Coin n) = fromInteger n
+
+-- ---------------------------------------------------------------------------
+-- * Nonce / UnitInterval conversions
+-- ---------------------------------------------------------------------------
+
+-- | A neutral nonce maps to @NULL@ in @nonce@ \/ @extra_entropy@
+-- columns; an actual epoch nonce maps to its 32-byte digest.
+nonceToBytes :: Ledger.Nonce -> Maybe ByteString
+nonceToBytes = \case
+  Ledger.NeutralNonce -> Nothing
+  Ledger.Nonce hash   -> Just (Crypto.hashToBytes hash)
+
+-- | A 'UnitInterval' is a 'Rational' in [0, 1]; database columns
+-- store it as a text-encoded 'Double'.
+unitIntervalToDouble :: Ledger.UnitInterval -> Double
+unitIntervalToDouble = fromRational . Ledger.unboundRational
 
 -- ---------------------------------------------------------------------------
 -- * Reward address

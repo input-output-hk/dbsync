@@ -1,27 +1,31 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeApplications #-}
 
 -- | Tests for the EpochBoundary extractor.
 --
 -- The extractor itself has a no-op 'pdProcess' (boundary work is
 -- driven by the consumer at boundary blocks, not the per-block
--- callback). Tests here cover:
+-- callback). Tests cover:
 --
 -- * Extractor metadata: name, version, dependencies, registered tables.
 -- * 'runEpochBoundary' dispatch logic: no-op when @apNewEpoch@ is
---   'Nothing' (non-boundary block) or when @neAdaPots@ is 'Nothing'
---   (Byron-era boundary).
---
--- The "happy path" — where 'runEpochBoundary' constructs an
--- 'AdaPots' row from a real 'Shelley.AdaPots' — is deferred to the
--- Phase 6 fixture work that produces a realistic 'ApplyResult'
--- (matches the deferral pattern already in 'DbSync.Ledger.StateSpec').
+--   'Nothing' (non-boundary block) or when @neAdaPots@ \/ @euProtoParams@
+--   are 'Nothing' (Byron-era boundary).
+-- * 'runEpochBoundary' with populated @euProtoParams@ writes the
+--   expected boundary rows, and the @cost_model@ dedup path returns
+--   the same id on a repeat boundary.
 module DbSync.Extractor.EpochBoundarySpec (spec) where
 
 import Cardano.Prelude
 
 import Cardano.Slotting.Slot (EpochNo (..), EpochSize (..), SlotNo (..))
 import qualified Cardano.Ledger.BaseTypes as Ledger
+import Cardano.Ledger.Coin (Coin (..))
+import qualified Cardano.Ledger.Alonzo.Scripts as Alonzo
+import Cardano.Ledger.Plutus.Language (Language)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
+import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Strict.Maybe as Strict
 import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
@@ -29,22 +33,26 @@ import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 import Test.Hspec (Spec, describe, expectationFailure, it, shouldBe)
 
 import qualified DbSync.Ledger.EpochUpdate as Generic
+import qualified DbSync.Ledger.ProtoParams as Proto
 import qualified DbSync.Ledger.StakeDist as Generic
 import DbSync.Db.Schema.AdaPots (AdaPots, adaPotsTableDef)
 import DbSync.Db.Schema.Ids (AdaPotsId (..), BlockId (..))
 import DbSync.Db.Schema.Types (TableDef (..))
-import DbSync.Extractor (ExtractorDef (..))
+import DbSync.Extractor (ExtractorDef (..), freshExtractState)
 import DbSync.Extractor.EpochBoundary (epochBoundaryExtractor, runEpochBoundary)
 import DbSync.Ledger.Types
   ( ApplyResult (..)
   , emptyDepositsMap
   )
 import DbSync.AppM (runAppM)
+import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
 import DbSync.Resolver (IdResolver)
 import DbSync.StateQuery (SlotDetails (..))
+import DbSync.Test.Lsm (withTestIngestStores)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
+import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Writer (Writer (..))
-import DbSync.Test.Writer (emptyTestWriterState, mkTestWriter)
+import DbSync.Test.Writer (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 
 -- ---------------------------------------------------------------------------
 
@@ -60,18 +68,17 @@ spec = do
     it "depends on 'core' (block_id is an FK target)" $
       pdDependencies epochBoundaryExtractor `shouldBe` [("core", 1)]
 
-    it "registers exactly one table" $
-      length (pdTables epochBoundaryExtractor) `shouldBe` 1
+    it "registers four tables" $
+      length (pdTables epochBoundaryExtractor) `shouldBe` 4
 
-    it "registers the ada_pots table" $
-      case pdTables epochBoundaryExtractor of
-        td : _ -> tdName td `shouldBe` "ada_pots"
-        []     -> expectationFailure "expected one table, got none"
+    it "registers ada_pots, epoch_param, epoch_state, cost_model" $
+      map tdName (pdTables epochBoundaryExtractor)
+        `shouldBe` ["ada_pots", "epoch_param", "epoch_state", "cost_model"]
 
-    it "is structurally identical to adaPotsTableDef" $
+    it "ada_pots entry is structurally identical to adaPotsTableDef" $
       case pdTables epochBoundaryExtractor of
         td : _ -> td `shouldBe` adaPotsTableDef
-        []     -> expectationFailure "expected one table, got none"
+        []     -> expectationFailure "expected at least one table"
 
   describe "runEpochBoundary — no-op cases" $ do
     it "does nothing when apNewEpoch is Nothing (not a boundary)" $ do
@@ -103,11 +110,44 @@ spec = do
       adaPotsCalls <- readIORef counterRef
       adaPotsCalls `shouldBe` 0
 
-    -- Note: the "happy path" — where neAdaPots is 'Just' and a row is
-    -- produced — needs a real 'Cardano.Ledger.Shelley.AdaPots' value
-    -- (its constructor lives in cardano-ledger-shelley with no
-    -- convenient zero-arg builder). Deferred to Phase 6 alongside the
+    -- The "ada_pots happy path" needs a real 'Cardano.Ledger.Shelley.AdaPots'
+    -- value — deferred to fixture work that lives alongside the
     -- existing genesis-fixture deferrals in DbSync.Ledger.StateSpec.
+
+  describe "runEpochBoundary — proto-param boundary writes" $ do
+    it "writes no new rows when euProtoParams is Nothing (Byron boundary)" $ do
+      written <- runBoundary $
+        mkApplyResult $ Strict.Just $ mkNewEpochWith (EpochNo 1) Strict.Nothing
+      twEpochParams written `shouldBe` []
+      twEpochStates written `shouldBe` []
+      twCostModels  written `shouldBe` []
+
+    it "populated euProtoParams (no cost models) writes 1 epoch_param + 1 epoch_state" $ do
+      written <- runBoundary $
+        mkApplyResult $ Strict.Just $
+          mkNewEpochWith (EpochNo 1) (Strict.Just dummyProtoParams)
+      length (twEpochParams written) `shouldBe` 1
+      length (twEpochStates written) `shouldBe` 1
+      length (twCostModels  written) `shouldBe` 0
+
+    it "populated euProtoParams with cost models writes 1 cost_model" $ do
+      let params = dummyProtoParams { Proto.ppCostmdls = Just Map.empty }
+      written <- runBoundary $
+        mkApplyResult $ Strict.Just $
+          mkNewEpochWith (EpochNo 1) (Strict.Just params)
+      length (twCostModels  written) `shouldBe` 1
+      length (twEpochParams written) `shouldBe` 1
+      length (twEpochStates written) `shouldBe` 1
+
+    it "two boundaries with the same cost models write only one cost_model row" $ do
+      let params = dummyProtoParams { Proto.ppCostmdls = Just Map.empty }
+          boundary epoch =
+            mkApplyResult $ Strict.Just $
+              mkNewEpochWith epoch (Strict.Just params)
+      written <- runBoundaries [boundary (EpochNo 1), boundary (EpochNo 2)]
+      length (twCostModels  written) `shouldBe` 1
+      length (twEpochParams written) `shouldBe` 2
+      length (twEpochStates written) `shouldBe` 2
 
 -- ---------------------------------------------------------------------------
 -- Test fixtures
@@ -196,3 +236,95 @@ countingAdaPotsWriter ref inner = inner
 -- only in the test-double signature above.
 _unused :: AdaPotsId -> AdaPots -> ()
 _unused _ _ = ()
+
+-- ---------------------------------------------------------------------------
+-- Real-resolver harness for the boundary-write tests
+-- ---------------------------------------------------------------------------
+
+-- | Run a single boundary against a real 'mkIngestResolver' and a
+-- 'TestWriter'. The resulting state captures rows written for any
+-- of the boundary tables.
+runBoundary :: ApplyResult -> IO TestWriterState
+runBoundary applyResult = runBoundaries [applyResult]
+
+-- | Run a sequence of boundaries on a single shared resolver +
+-- writer pair. Used to exercise cross-boundary state like the
+-- 'esCostModelCache' dedup.
+runBoundaries :: [ApplyResult] -> IO TestWriterState
+runBoundaries applyResults = withTestIngestStores $ \utxoStore dedupStores -> do
+  stRef   <- newIORef freshExtractState
+  addrBuf <- newAddressBufferRef
+  wrRef   <- newIORef emptyTestWriterState
+  let resolver = mkIngestResolver stRef dedupStores addrBuf utxoStore Nothing
+      writer   = mkTestWriter wrRef
+      env      = mkTestPipelineEnv resolver writer []
+  forM_ applyResults $ \r ->
+    runAppM env (runEpochBoundary r (BlockId 100))
+  readIORef wrRef
+
+-- | 'Generic.NewEpoch' with the supplied protocol-params payload.
+mkNewEpochWith :: EpochNo -> Strict.Maybe Proto.ProtoParams -> Generic.NewEpoch
+mkNewEpochWith epoch mPp =
+  Generic.NewEpoch
+    { Generic.neEpoch       = epoch
+    , Generic.neIsEBB       = False
+    , Generic.neAdaPots     = Strict.Nothing
+    , Generic.neEpochUpdate =
+        Generic.EpochUpdate
+          { Generic.euProtoParams = mPp
+          , Generic.euNonce       = Ledger.NeutralNonce
+          }
+    , Generic.neDRepState   = Strict.Nothing
+    , Generic.neEnacted     = Strict.Nothing
+    , Generic.nePoolDistr   = Strict.Nothing
+    }
+
+-- | Minimum 'ProtoParams' fixture: every mandatory field at zero \/
+-- 'minBound', every Alonzo+Conway field 'Nothing'. Tests that need
+-- specific values override fields one at a time.
+dummyProtoParams :: Proto.ProtoParams
+dummyProtoParams = Proto.ProtoParams
+  { Proto.ppMinfeeA              = 0
+  , Proto.ppMinfeeB              = 0
+  , Proto.ppMaxBBSize            = 0
+  , Proto.ppMaxTxSize            = 0
+  , Proto.ppMaxBHSize            = 0
+  , Proto.ppKeyDeposit           = Coin 0
+  , Proto.ppPoolDeposit          = Coin 0
+  , Proto.ppMaxEpoch             = Ledger.EpochInterval 0
+  , Proto.ppOptimalPoolCount     = 0
+  , Proto.ppInfluence            = 0
+  , Proto.ppMonetaryExpandRate   = minBound
+  , Proto.ppTreasuryGrowthRate   = minBound
+  , Proto.ppDecentralisation     = minBound
+  , Proto.ppExtraEntropy         = Ledger.NeutralNonce
+  , Proto.ppProtocolVersion      =
+      Ledger.ProtVer (Ledger.natVersion @9) 0
+  , Proto.ppMinUTxOValue         = Coin 0
+  , Proto.ppMinPoolCost          = Coin 0
+  , Proto.ppCoinsPerUtxo         = Nothing
+  , Proto.ppCostmdls             = Nothing
+  , Proto.ppPriceMem             = Nothing
+  , Proto.ppPriceStep            = Nothing
+  , Proto.ppMaxTxExMem           = Nothing
+  , Proto.ppMaxTxExSteps         = Nothing
+  , Proto.ppMaxBlockExMem        = Nothing
+  , Proto.ppMaxBlockExSteps      = Nothing
+  , Proto.ppMaxValSize           = Nothing
+  , Proto.ppCollateralPercentage = Nothing
+  , Proto.ppMaxCollateralInputs  = Nothing
+  , Proto.ppPoolVotingThresholds       = Nothing
+  , Proto.ppDRepVotingThresholds       = Nothing
+  , Proto.ppCommitteeMinSize           = Nothing
+  , Proto.ppCommitteeMaxTermLength     = Nothing
+  , Proto.ppGovActionLifetime          = Nothing
+  , Proto.ppGovActionDeposit           = Nothing
+  , Proto.ppDRepDeposit                = Nothing
+  , Proto.ppDRepActivity               = Nothing
+  , Proto.ppMinFeeRefScriptCostPerByte = Nothing
+  }
+
+-- Silence -Wunused-imports for type aliases that only surface in
+-- type signatures via the boundary fixtures.
+_unusedTypes :: (Language, Alonzo.CostModel) -> ()
+_unusedTypes _ = ()

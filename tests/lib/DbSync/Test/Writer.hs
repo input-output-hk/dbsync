@@ -17,12 +17,16 @@ import Data.IORef (IORef, atomicModifyIORef')
 
 import DbSync.Db.Schema.Address (Address)
 import DbSync.Db.Schema.Core (Block, SlotLeader, Tx)
-import DbSync.Db.Schema.EpochBoundary (PotTransfer, Reserve, Treasury)
+import DbSync.Db.Schema.EpochBoundary
+  ( CostModel, EpochParam, EpochState, PotTransfer, Reserve, Treasury )
 import DbSync.Db.Schema.Ids
   ( AddressId
   , BlockId
   , CollateralTxInId
   , CollateralTxOutId
+  , CostModelId
+  , EpochParamId
+  , EpochStateId
   , MaTxMintId
   , PoolHashId
   , PoolUpdateId
@@ -69,6 +73,9 @@ data TestWriterState = TestWriterState
   , twPotTransfers      :: ![(PotTransferId, PotTransfer)]
   , twTreasuries        :: ![(TreasuryId, Treasury)]
   , twReserves          :: ![(ReserveId, Reserve)]
+  , twEpochParams       :: ![(EpochParamId, EpochParam)]
+  , twEpochStates       :: ![(EpochStateId, EpochState)]
+  , twCostModels        :: ![(CostModelId, CostModel)]
   , twCommits           :: !Int
   }
   deriving stock (Show)
@@ -94,6 +101,9 @@ emptyTestWriterState = TestWriterState
   , twPotTransfers     = []
   , twTreasuries       = []
   , twReserves         = []
+  , twEpochParams      = []
+  , twEpochStates      = []
+  , twCostModels       = []
   , twCommits           = 0
   }
 
@@ -180,9 +190,15 @@ mkTestWriter ref = Writer
 
     -- EpochBoundary
   , writeAdaPots     = \_ _ -> pure ()
-  , writeEpochParam  = \_ _ -> pure ()
-  , writeEpochState  = \_ _ -> pure ()
-  , writeCostModel   = \_ _ -> pure ()
+  , writeEpochParam  = \epid ep ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twEpochParams = twEpochParams s ++ [(epid, ep)] }, ())
+  , writeEpochState  = \esid es ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twEpochStates = twEpochStates s ++ [(esid, es)] }, ())
+  , writeCostModel   = \cmid cm ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twCostModels = twCostModels s ++ [(cmid, cm)] }, ())
   , writePotTransfer = \ptid pt ->
       atomicModifyIORef' ref $ \s ->
         (s { twPotTransfers = twPotTransfers s ++ [(ptid, pt)] }, ())

@@ -1,59 +1,68 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-{- |
-Module      : DbSync.Extractor.EpochBoundary
-Description : Epoch-boundary projection — writes ada_pots (and, in
-              future, reward / drep_distr / pool_stat / epoch_param
-              / epoch_state) at each epoch transition.
-
-Owns the @ada_pots@ table (and the other epoch-derived tables as
-they land — see LEDGER-PLAN.md §15). Driven not by the per-block
-'pdProcess' callback but by the consumer's epoch-boundary handler
-in 'DbSync.Phase.Ingest.Consumer', which:
-
-  1. Detects a boundary by comparing the current block's epoch to
-     the previously-observed one.
-  2. Waits on 'leLatestApplyResult' until the LedgerWorker has
-     produced an 'ApplyResult' carrying @apNewEpoch = Just …@ for
-     this transition.
-  3. Calls 'runEpochBoundary' (this module) to write the boundary
-     rows to the per-table loader-stream queues.
-  4. Calls 'lsCommit' which drains every queue (including the
-     boundary-table queues) /in parallel/ across the per-table
-     worker connections — that parallelism is option γ from
-     LEDGER-PLAN.md §15.
-
-When the ledger feature is disabled, 'runEpochBoundary' is never
-called (the consumer skips it on the ledger-disabled arm) and the
-@ada_pots@ table is never written to. The schema is still created
-because the extractor's 'pdTables' is unconditional — operators who
-flip the ledger flag mid-deployment hit a clean
-@dbsync_sync_state.ledger_enabled@ mismatch error rather than an
-ambiguous schema state.
--}
+-- | Epoch-boundary projection.
+--
+-- Owns the boundary-triggered tables: @ada_pots@, @epoch_param@,
+-- @epoch_state@, @cost_model@. The per-block 'pdProcess' callback
+-- is a no-op; 'runEpochBoundary' is invoked by the consumer when
+-- it detects an epoch transition and the LedgerWorker has produced
+-- the matching 'ApplyResult'.
+--
+-- When the ledger feature is off the consumer never calls
+-- 'runEpochBoundary' and these tables stay empty. The schemas are
+-- created unconditionally so operators can flip the ledger flag
+-- without re-syncing.
 module DbSync.Extractor.EpochBoundary
   ( -- * Extractor registration
     epochBoundaryExtractor
 
     -- * Boundary handler (called by the consumer)
   , runEpochBoundary
+
+    -- * Internal helpers (exported for tests)
+  , mkEpochParamRow
+  , mkEpochStateRow
+  , mkCostModelRow
+  , hashCostModels
   ) where
 
 import Cardano.Prelude
 
+import qualified Cardano.Crypto as Crypto
+import qualified Cardano.Ledger.BaseTypes as Ledger
+import Cardano.Ledger.Conway.Core
+  ( DRepVotingThresholds (..)
+  , PoolVotingThresholds (..)
+  )
+import Cardano.Ledger.Plutus.CostModels (mkCostModels)
+import Cardano.Ledger.Plutus.Language (Language)
+import qualified Cardano.Ledger.Alonzo.Scripts as Alonzo
 import qualified Cardano.Ledger.Shelley.AdaPots as Shelley
 import qualified Cardano.Ledger.State as Ledger
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
+import qualified Data.Aeson as Aeson
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Strict.Maybe as Strict
+import qualified Data.Text.Encoding as Text
 
 import qualified DbSync.Ledger.EpochUpdate as Generic
 import DbSync.Db.Schema.AdaPots (AdaPots (..), adaPotsTableDef)
-import DbSync.Db.Schema.Ids (BlockId)
+import DbSync.Db.Schema.EpochBoundary
+  ( CostModel (..)
+  , EpochParam (..)
+  , EpochState (..)
+  , costModelTableDef
+  , epochParamTableDef
+  , epochStateTableDef
+  )
+import DbSync.Db.Schema.Ids (BlockId, CostModelId)
+import DbSync.Db.Types (DbWord64 (..))
 import DbSync.Extractor (ExtractorDef (..))
+import qualified DbSync.Ledger.ProtoParams as Proto
 import DbSync.Ledger.Types (ApplyResult (..))
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
 import DbSync.StateQuery (SlotDetails (..))
-import DbSync.Util (coinToDbLovelace)
+import DbSync.Util (coinToDbLovelace, nonceToBytes, unitIntervalToDouble)
 import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- ---------------------------------------------------------------------------
@@ -62,22 +71,21 @@ import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- | The EpochBoundary extractor.
 --
--- Only registers tables — the per-block 'pdProcess' is a no-op
--- because epoch-boundary work is event-driven, not block-driven.
--- 'runEpochBoundary' is what actually does the work, called from
--- 'DbSync.Phase.Ingest.Consumer' when a boundary is detected.
---
--- Currently registers @ada_pots@. Other boundary tables
--- (@reward@, @reward_rest@, @drep_distr@, @pool_stat@,
--- @epoch_param@, @epoch_state@) will be added here as they land —
--- see LEDGER-PLAN.md §15.5.
+-- Registers the four boundary-triggered tables. The per-block
+-- 'pdProcess' is a no-op; 'runEpochBoundary' is the entry point
+-- the consumer calls when an epoch crosses.
 epochBoundaryExtractor :: ExtractorDef
 epochBoundaryExtractor = ExtractorDef
   { pdName         = "epoch_boundary"
   , pdVersion      = 1
   , pdDependencies = [("core", 1)]
-  , pdTables       = [adaPotsTableDef]
-  , pdProcess      = \_ -> pure ()  -- No-op; consumer drives runEpochBoundary
+  , pdTables       =
+      [ adaPotsTableDef
+      , epochParamTableDef
+      , epochStateTableDef
+      , costModelTableDef
+      ]
+  , pdProcess      = \_ -> pure ()
   }
 
 -- ---------------------------------------------------------------------------
@@ -86,17 +94,22 @@ epochBoundaryExtractor = ExtractorDef
 
 -- | Run the epoch-boundary writes for a single transition.
 --
--- Reads the @apNewEpoch.neAdaPots@ payload from the 'ApplyResult'
--- and (if the ledger emitted ada-pots data for this boundary —
--- always 'Just' from Shelley onward) builds an 'AdaPots' row and
--- dispatches it to the @ada_pots@ COPY queue via 'writeAdaPots'.
+-- Dispatches to four per-table writers when 'apNewEpoch' is
+-- populated:
 --
--- Pre-Shelley boundaries don't emit ada-pots (the @AdaPots@ event
--- doesn't exist in Byron) and this function is a no-op for them.
+--   * @ada_pots@ — when the ledger reported pots data for the
+--     boundary (always from Shelley onward, never from Byron).
+--   * @cost_model@ — when the protocol parameters carry Plutus
+--     cost models (Alonzo onward); deduped by Blake2b hash of the
+--     canonical CBOR encoding.
+--   * @epoch_param@ — every Shelley-onward boundary.
+--   * @epoch_state@ — every Shelley-onward boundary. The three
+--     governance FK columns are written 'Nothing' until the
+--     governance writers produce committee \/ no-confidence \/
+--     constitution IDs.
 --
--- Idempotent in the sense that the consumer is responsible for
--- calling it exactly once per boundary. Calling it twice would
--- write two rows for the same epoch.
+-- Idempotency is the caller's responsibility — invoking this twice
+-- for the same boundary writes duplicate rows.
 runEpochBoundary
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
   => ApplyResult
@@ -104,8 +117,10 @@ runEpochBoundary
   -> m ()
 runEpochBoundary applyResult blockId =
   case apNewEpoch applyResult of
-    Strict.Nothing -> pure ()  -- Not a boundary, or worker hasn't caught up
-    Strict.Just newEpoch -> writeBoundaryAdaPots applyResult newEpoch blockId
+    Strict.Nothing -> pure ()
+    Strict.Just newEpoch -> do
+      writeBoundaryAdaPots applyResult newEpoch blockId
+      writeBoundaryProtoParams newEpoch blockId
 
 -- ---------------------------------------------------------------------------
 -- * AdaPots
@@ -165,4 +180,174 @@ mkAdaPotsRow applyResult newEpoch blockId pots =
     oblgs :: Ledger.Obligations
     oblgs = Shelley.obligationsPot pots
 
+-- ---------------------------------------------------------------------------
+-- * Protocol parameters (cost_model, epoch_param, epoch_state)
+-- ---------------------------------------------------------------------------
+
+-- | Build and dispatch the cost_model, epoch_param, and epoch_state
+-- rows for the boundary. No-op if the ledger emitted no protocol
+-- params (Byron boundaries).
+writeBoundaryProtoParams
+  :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
+  => Generic.NewEpoch
+  -> BlockId
+  -> m ()
+writeBoundaryProtoParams newEpoch blockId =
+  case Generic.euProtoParams (Generic.neEpochUpdate newEpoch) of
+    Strict.Nothing -> pure ()
+    Strict.Just params -> do
+      resolver <- asks getResolver
+      writer   <- asks getWriter
+      let epoch = unEpochNo (Generic.neEpoch newEpoch)
+          nonce = Generic.euNonce (Generic.neEpochUpdate newEpoch)
+      mCostModelId <- writeBoundaryCostModel resolver writer (Proto.ppCostmdls params)
+      epId <- liftIO $ assignEpochParamId resolver
+      liftIO $ writeEpochParam writer epId
+        (mkEpochParamRow params epoch blockId nonce mCostModelId)
+      esId <- liftIO $ assignEpochStateId resolver
+      liftIO $ writeEpochState writer esId (mkEpochStateRow epoch)
+
+-- | Dedup-write a cost_model row. Returns the (possibly already
+-- existing) row id when cost models are present in the protocol
+-- params, 'Nothing' for pre-Alonzo eras.
+writeBoundaryCostModel
+  :: MonadIO m
+  => IdResolver IO
+  -> Writer IO
+  -> Maybe (Map Language Alonzo.CostModel)
+  -> m (Maybe CostModelId)
+writeBoundaryCostModel _ _ Nothing = pure Nothing
+writeBoundaryCostModel resolver writer (Just cms) = do
+  let row = mkCostModelRow cms
+  (cmId, isNew) <- liftIO $ resolveCostModel resolver (costModelHash row) row
+  when isNew $ liftIO $ writeCostModel writer cmId row
+  pure (Just cmId)
+
+-- ---------------------------------------------------------------------------
+-- * Row builders
+-- ---------------------------------------------------------------------------
+
+-- | Map a 'ProtoParams' snapshot to the 53-column 'EpochParam' row.
+mkEpochParamRow
+  :: Proto.ProtoParams
+  -> Word64
+  -> BlockId
+  -> Ledger.Nonce
+  -> Maybe CostModelId
+  -> EpochParam
+mkEpochParamRow pp epoch blockId nonce mCostModelId =
+  EpochParam
+    { epochParamEpochNo                    = epoch
+    , epochParamMinFeeA                    = fromIntegral (Proto.ppMinfeeA pp)
+    , epochParamMinFeeB                    = fromIntegral (Proto.ppMinfeeB pp)
+    , epochParamMaxBlockSize               = fromIntegral (Proto.ppMaxBBSize pp)
+    , epochParamMaxTxSize                  = fromIntegral (Proto.ppMaxTxSize pp)
+    , epochParamMaxBhSize                  = fromIntegral (Proto.ppMaxBHSize pp)
+    , epochParamKeyDeposit                 = coinToDbLovelace (Proto.ppKeyDeposit pp)
+    , epochParamPoolDeposit                = coinToDbLovelace (Proto.ppPoolDeposit pp)
+    , epochParamMaxEpoch                   =
+        fromIntegral (Ledger.unEpochInterval (Proto.ppMaxEpoch pp))
+    , epochParamOptimalPoolCount           = fromIntegral (Proto.ppOptimalPoolCount pp)
+    , epochParamInfluence                  = fromRational (Proto.ppInfluence pp)
+    , epochParamMonetaryExpandRate         =
+        unitIntervalToDouble (Proto.ppMonetaryExpandRate pp)
+    , epochParamTreasuryGrowthRate         =
+        unitIntervalToDouble (Proto.ppTreasuryGrowthRate pp)
+    , epochParamDecentralisation           =
+        unitIntervalToDouble (Proto.ppDecentralisation pp)
+    , epochParamProtocolMajor              =
+        fromIntegral @Word64 @Word16
+          (Ledger.getVersion (Ledger.pvMajor (Proto.ppProtocolVersion pp)))
+    , epochParamProtocolMinor              =
+        fromIntegral (Ledger.pvMinor (Proto.ppProtocolVersion pp))
+    , epochParamMinUtxoValue               = coinToDbLovelace (Proto.ppMinUTxOValue pp)
+    , epochParamMinPoolCost                = coinToDbLovelace (Proto.ppMinPoolCost pp)
+    , epochParamNonce                      = nonceToBytes nonce
+    , epochParamCostModelId                = mCostModelId
+    , epochParamPriceMem                   = fmap fromRational (Proto.ppPriceMem pp)
+    , epochParamPriceStep                  = fmap fromRational (Proto.ppPriceStep pp)
+    , epochParamMaxTxExMem                 = DbWord64 <$> Proto.ppMaxTxExMem pp
+    , epochParamMaxTxExSteps               = DbWord64 <$> Proto.ppMaxTxExSteps pp
+    , epochParamMaxBlockExMem              = DbWord64 <$> Proto.ppMaxBlockExMem pp
+    , epochParamMaxBlockExSteps            = DbWord64 <$> Proto.ppMaxBlockExSteps pp
+    , epochParamMaxValSize                 =
+        DbWord64 . fromIntegral <$> Proto.ppMaxValSize pp
+    , epochParamCollateralPercent          =
+        fromIntegral <$> Proto.ppCollateralPercentage pp
+    , epochParamMaxCollateralInputs        =
+        fromIntegral <$> Proto.ppMaxCollateralInputs pp
+    , epochParamBlockId                    = blockId
+    , epochParamExtraEntropy               = nonceToBytes (Proto.ppExtraEntropy pp)
+    , epochParamCoinsPerUtxoSize           = coinToDbLovelace <$> Proto.ppCoinsPerUtxo pp
+    , epochParamPvtMotionNoConfidence      =
+        unitIntervalToDouble . pvtMotionNoConfidence <$> Proto.ppPoolVotingThresholds pp
+    , epochParamPvtCommitteeNormal         =
+        unitIntervalToDouble . pvtCommitteeNormal <$> Proto.ppPoolVotingThresholds pp
+    , epochParamPvtCommitteeNoConfidence   =
+        unitIntervalToDouble . pvtCommitteeNoConfidence <$> Proto.ppPoolVotingThresholds pp
+    , epochParamPvtHardForkInitiation      =
+        unitIntervalToDouble . pvtHardForkInitiation <$> Proto.ppPoolVotingThresholds pp
+    , epochParamDvtMotionNoConfidence      =
+        unitIntervalToDouble . dvtMotionNoConfidence <$> Proto.ppDRepVotingThresholds pp
+    , epochParamDvtCommitteeNormal         =
+        unitIntervalToDouble . dvtCommitteeNormal <$> Proto.ppDRepVotingThresholds pp
+    , epochParamDvtCommitteeNoConfidence   =
+        unitIntervalToDouble . dvtCommitteeNoConfidence <$> Proto.ppDRepVotingThresholds pp
+    , epochParamDvtUpdateToConstitution    =
+        unitIntervalToDouble . dvtUpdateToConstitution <$> Proto.ppDRepVotingThresholds pp
+    , epochParamDvtHardForkInitiation      =
+        unitIntervalToDouble . dvtHardForkInitiation <$> Proto.ppDRepVotingThresholds pp
+    , epochParamDvtPPNetworkGroup          =
+        unitIntervalToDouble . dvtPPNetworkGroup <$> Proto.ppDRepVotingThresholds pp
+    , epochParamDvtPPEconomicGroup         =
+        unitIntervalToDouble . dvtPPEconomicGroup <$> Proto.ppDRepVotingThresholds pp
+    , epochParamDvtPPTechnicalGroup        =
+        unitIntervalToDouble . dvtPPTechnicalGroup <$> Proto.ppDRepVotingThresholds pp
+    , epochParamDvtPPGovGroup              =
+        unitIntervalToDouble . dvtPPGovGroup <$> Proto.ppDRepVotingThresholds pp
+    , epochParamDvtTreasuryWithdrawal      =
+        unitIntervalToDouble . dvtTreasuryWithdrawal <$> Proto.ppDRepVotingThresholds pp
+    , epochParamCommitteeMinSize           =
+        DbWord64 . fromIntegral <$> Proto.ppCommitteeMinSize pp
+    , epochParamCommitteeMaxTermLength     =
+        DbWord64 . fromIntegral . Ledger.unEpochInterval <$> Proto.ppCommitteeMaxTermLength pp
+    , epochParamGovActionLifetime          =
+        DbWord64 . fromIntegral . Ledger.unEpochInterval <$> Proto.ppGovActionLifetime pp
+    , epochParamGovActionDeposit           =
+        DbWord64 . fromIntegral <$> Proto.ppGovActionDeposit pp
+    , epochParamDrepDeposit                =
+        DbWord64 . fromIntegral <$> Proto.ppDRepDeposit pp
+    , epochParamDrepActivity               =
+        DbWord64 . fromIntegral . Ledger.unEpochInterval <$> Proto.ppDRepActivity pp
+    , epochParamPvtppSecurityGroup         =
+        unitIntervalToDouble . pvtPPSecurityGroup <$> Proto.ppPoolVotingThresholds pp
+    , epochParamMinFeeRefScriptCostPerByte =
+        fmap fromRational (Proto.ppMinFeeRefScriptCostPerByte pp)
+    }
+
+-- | Build the 'EpochState' row. The three governance FK columns are
+-- written 'Nothing'; a later slice that wires the governance
+-- writers will populate them.
+mkEpochStateRow :: Word64 -> EpochState
+mkEpochStateRow epoch = EpochState
+  { epochStateCommitteeId    = Nothing
+  , epochStateNoConfidenceId = Nothing
+  , epochStateConstitutionId = Nothing
+  , epochStateEpochNo        = epoch
+  }
+
+-- | Build the 'CostModel' row from a Plutus cost-model map. The
+-- @costs@ column is the canonical JSON encoding; @hash@ is the
+-- Blake2b_256 of the CBOR-serialised 'CostModels' wrapper — same
+-- bytes as the dedup key.
+mkCostModelRow :: Map Language Alonzo.CostModel -> CostModel
+mkCostModelRow cms = CostModel
+  { costModelCosts = Text.decodeUtf8 . LBS.toStrict $ Aeson.encode cms
+  , costModelHash  = hashCostModels cms
+  }
+
+-- | Blake2b_256 of the CBOR-encoded 'CostModels' newtype.
+hashCostModels :: Map Language Alonzo.CostModel -> ByteString
+hashCostModels =
+  Crypto.abstractHashToBytes . Crypto.serializeCborHash . mkCostModels
 

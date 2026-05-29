@@ -35,11 +35,15 @@ module DbSync.Checkpoint.SyncState
 
     -- * Dedup store rebuild
   , rebuildDedupMaps
+
+    -- * Resume-time cache populate
+  , populateCostModelCache
   ) where
 
 import Cardano.Prelude
 
 import qualified Data.ByteString.Short as SBS
+import qualified Data.Map.Strict as Map
 import Data.Time.Clock (diffUTCTime, getCurrentTime)
 import qualified Hasql.Connection as Conn
 import qualified Hasql.Connection.Settings as Settings
@@ -274,6 +278,44 @@ populateMultiAsset store =
     liftIO $ forM_ rows $ \(rowId, policy, name) ->
       insertExisting (hashDedupKey (policy <> name)) rowId store
     pure (fromIntegral (length rows))
+
+-- ---------------------------------------------------------------------------
+-- * Resume-time cache populate
+-- ---------------------------------------------------------------------------
+
+-- | Seed the in-process cost_model dedup cache from PG so a resumed
+-- Ingest that re-encounters a known cost model finds the existing
+-- row id rather than allocating a fresh one (and conflicting on the
+-- UNIQUE(hash) at the LOGGED flip).
+--
+-- Skipped when @cost_model@ is absent from the active schema —
+-- callers run this unconditionally; the empty result is harmless.
+populateCostModelCache
+  :: ( HasCallStack
+     , HasTracer env
+     , HasControlConnection env
+     , MonadReader env m
+     , MonadIO m
+     )
+  => [TableDef]
+  -> m (Map ByteString Int64)
+populateCostModelCache tableDefs
+  | "cost_model" `notElem` map tdName tableDefs = pure Map.empty
+  | otherwise = do
+      tracer <- asks getTracer
+      liftIO $ traceWith tracer $ LogMsg Info "DedupRebuild"
+        "cost_model: loading" Nothing
+      start <- liftIO getCurrentTime
+      rows  <- runCtrlStmt "populateCostModelCache" ()
+                 (selectDedupSingleStmt "cost_model" "hash")
+      end   <- liftIO getCurrentTime
+      let !cache = Map.fromList [(hash, rowId) | (rowId, hash) <- rows]
+      liftIO $ traceWith tracer $ LogMsg Info "DedupRebuild" (
+          "cost_model: " <> fmtCount (fromIntegral (Map.size cache) :: Int64)
+            <> " rows in "
+            <> fmtDuration (realToFrac (diffUTCTime end start))
+        ) Nothing
+      pure cache
 
 -- | Wrap one table's repopulation in start/end trace lines and time
 -- the inner action. The returned row count from the action is

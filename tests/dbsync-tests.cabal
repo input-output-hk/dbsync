@@ -182,6 +182,7 @@ test-suite dbsync-test
     , hasql
     , hspec
     , cardano-crypto-class
+    , cardano-ledger-alonzo
     , cardano-ledger-binary
     , cardano-ledger-core
     , cardano-prelude

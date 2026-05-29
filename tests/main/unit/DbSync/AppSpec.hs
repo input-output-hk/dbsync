@@ -61,6 +61,7 @@ optionsWith enabled = SyncOptions
   , pcCbor            = mk "cbor"
   , pcEpochSyncStats  = mk "epoch_sync_stats"
   , pcEpochBoundary   = mk "epoch_boundary"
+  , pcEpoch           = mk "epoch"
   , pcCurrentState    = mk "current_state"
   }
   where
@@ -95,12 +96,12 @@ spec = describe "DbSync.App" $ do
       logRef <- newIORef []
       let tracer = mkTestTracer logRef
       env <- buildCoreEnv tracer syncCfg nodeCfg Mainnet
-      -- full-config.json: 10 enabled (core, utxo, multi_asset, metadata,
-      -- stake_delegation, pool, scripts_datums, governance, epoch_sync_stats,
-      -- epoch_boundary)
-      -- 2 disabled (cbor, current_state)
+      -- full-config.json enables 10 explicitly (core, utxo, multi_asset,
+      -- metadata, stake_delegation, pool, scripts_datums, governance,
+      -- epoch_sync_stats, epoch_boundary). 'epoch' defaults to true so
+      -- the resolved list has 11 entries; cbor and current_state stay off.
       let projCount = length (ceExtractors env)
-      projCount `shouldBe` 10
+      projCount `shouldBe` 11
 
     it "uses real coreExtractor (not a stub) for 'core'" $ do
       (syncCfg, nodeCfg) <- loadTestConfigs
@@ -280,7 +281,7 @@ spec = describe "DbSync.App" $ do
         Left other -> panic ("expected AppInternalError, got: " <> show other)
         Right _    -> panic "expected buildCoreEnv to throw"
 
-    it "default options (everything off) yields just the core extractor" $ do
+    it "default options yield core + epoch (epoch defaults to true)" $ do
       case buildExtractors defaultSyncOptions of
         Left err -> panic ("unexpected validation failure: " <> err)
-        Right xs -> map pdName xs `shouldBe` ["core"]
+        Right xs -> map pdName xs `shouldBe` ["core", "epoch"]

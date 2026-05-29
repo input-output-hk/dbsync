@@ -127,6 +127,7 @@ allImplementedExtractors = SyncOptions
   , pcCbor            = SyncOption True
   , pcEpochSyncStats  = SyncOption True
   , pcEpochBoundary   = SyncOption True
+  , pcEpoch           = SyncOption True
   , pcCurrentState    = SyncOption False
   }
 

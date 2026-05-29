@@ -103,6 +103,9 @@ spec = describe "DbSync.Config" $ do
           prEnabled (pcCbor (scOptions cfg))            `shouldBe` False
           prEnabled (pcEpochSyncStats (scOptions cfg))  `shouldBe` False
           prEnabled (pcEpochBoundary (scOptions cfg))   `shouldBe` False
+          -- 'epoch' is the sole opt-out: defaults to true when the
+          -- profile omits the key.
+          prEnabled (pcEpoch (scOptions cfg))           `shouldBe` True
           prEnabled (pcCurrentState (scOptions cfg))    `shouldBe` False
 
   describe "parseConfig (no-database.json)" $ do
@@ -123,6 +126,25 @@ spec = describe "DbSync.Config" $ do
           uoEnabled (pcUtxo (scOptions cfg))            `shouldBe` False
           prEnabled (pcGovernance (scOptions cfg))      `shouldBe` False
           prEnabled (pcPool (scOptions cfg))            `shouldBe` False
+
+  describe "pcEpoch opt-out semantics" $ do
+    it "defaults to true when db_options omits 'epoch'" $ do
+      result <- parseConfig "fixtures/full-config.json"
+      case result of
+        Left err  -> panic $ "Parse failed: " <> show err
+        Right cfg -> prEnabled (pcEpoch (scOptions cfg)) `shouldBe` True
+
+    it "defaults to true on a profile with no db_options block at all" $ do
+      result <- parseConfig "fixtures/minimal-config.json"
+      case result of
+        Left err  -> panic $ "Parse failed: " <> show err
+        Right cfg -> prEnabled (pcEpoch (scOptions cfg)) `shouldBe` True
+
+    it "accepts 'epoch': false explicitly" $ do
+      result <- parseConfig "fixtures/epoch-disabled.json"
+      case result of
+        Left err  -> panic $ "Parse failed: " <> show err
+        Right cfg -> prEnabled (pcEpoch (scOptions cfg)) `shouldBe` False
 
   describe "parseConfig (ingest-mode.json)" $ do
     it "parses ingest sync mode" $ do

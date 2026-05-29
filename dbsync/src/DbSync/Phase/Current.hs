@@ -48,7 +48,7 @@ setCurrentPhase (CurrentPhase v) next = do
     pure cur
   when (prev /= next) $
     liftIO $ traceWith tracer $ LogMsg Info "Phase"
-      ("phase " <> renderPhase prev <> " -> " <> renderPhase next)
+      (renderPhase prev <> " -> " <> renderPhase next)
       Nothing
 
 -- ---------------------------------------------------------------------------

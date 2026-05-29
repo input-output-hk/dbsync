@@ -34,6 +34,7 @@ import qualified DbSync.Db.Statement.SequencesSpec as DbStatementSequencesSpec
 import qualified DbSync.Db.TypesSpec as DbTypesSpec
 import qualified DbSync.Extractor.CoreSpec as ExtractorCoreSpec
 import qualified DbSync.Extractor.EpochBoundarySpec as ExtractorEpochBoundarySpec
+import qualified DbSync.Extractor.EpochSpec as ExtractorEpochSpec
 import qualified DbSync.Extractor.PoolSpec as ExtractorPoolSpec
 import qualified DbSync.Extractor.StakeDelegationSpec as ExtractorStakeDelegationSpec
 import qualified DbSync.Extractor.UTxOSpec as ExtractorUTxOSpec
@@ -52,6 +53,7 @@ import qualified DbSync.Schema.AdaPotsSpec as SchemaAdaPotsSpec
 import qualified DbSync.Schema.AddressSpec as SchemaAddressSpec
 import qualified DbSync.Schema.CoreSpec as SchemaCoreSpec
 import qualified DbSync.Schema.EpochBoundarySpec as SchemaEpochBoundarySpec
+import qualified DbSync.Schema.EpochViewSpec as SchemaEpochViewSpec
 import qualified DbSync.Schema.GenerateSpec as SchemaGenerateSpec
 import qualified DbSync.Schema.GovernanceSpec as SchemaGovernanceSpec
 import qualified DbSync.Schema.RewardSpec as SchemaRewardSpec
@@ -128,6 +130,7 @@ main = hspec $ do
     DbTypesSpec.spec
     ExtractorCoreSpec.spec
     ExtractorEpochBoundarySpec.spec
+    ExtractorEpochSpec.spec
     ExtractorPoolSpec.spec
     ExtractorStakeDelegationSpec.spec
     ExtractorUTxOSpec.spec
@@ -146,6 +149,7 @@ main = hspec $ do
     SchemaAddressSpec.spec
     SchemaCoreSpec.spec
     SchemaEpochBoundarySpec.spec
+    SchemaEpochViewSpec.spec
     SchemaGenerateSpec.spec
     SchemaGovernanceSpec.spec
     SchemaRewardSpec.spec

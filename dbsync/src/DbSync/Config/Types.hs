@@ -283,6 +283,7 @@ data SyncOptions = SyncOptions
   , pcCbor            :: !SyncOption
   , pcEpochSyncStats  :: !SyncOption
   , pcEpochBoundary   :: !SyncOption
+  , pcEpoch           :: !SyncOption
   , pcCurrentState    :: !SyncOption
   }
   deriving stock (Eq, Show)
@@ -300,13 +301,17 @@ instance FromJSON SyncOptions where
       <*> o .:? "cbor"             .!= disabled
       <*> o .:? "epoch_sync_stats" .!= disabled
       <*> o .:? "epoch_boundary"   .!= disabled
+      <*> o .:? "epoch"            .!= epochDefault
       <*> o .:? "current_state"    .!= disabled
     where
-      disabled = SyncOption False
+      disabled     = SyncOption False
+      epochDefault = SyncOption True
 
 -- | Default option config used when the @"db_options"@ section is
--- omitted: every optional extractor off. The unconditional @core@
--- extractor is added by @buildExtractors@ and is not represented here.
+-- omitted: every optional extractor off /except/ 'pcEpoch', which
+-- defaults to true so the @epoch@ view machinery is available
+-- without an explicit opt-in. The unconditional @core@ extractor is
+-- added by @buildExtractors@ and is not represented here.
 defaultSyncOptions :: SyncOptions
 defaultSyncOptions = SyncOptions
   { pcUtxo            = defaultUtxoOption
@@ -319,6 +324,7 @@ defaultSyncOptions = SyncOptions
   , pcCbor            = SyncOption False
   , pcEpochSyncStats  = SyncOption False
   , pcEpochBoundary   = SyncOption False
+  , pcEpoch           = SyncOption True
   , pcCurrentState    = SyncOption False
   }
 

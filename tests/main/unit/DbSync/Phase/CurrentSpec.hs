@@ -48,7 +48,7 @@ spec = describe "DbSync.Phase.Current" $ do
       runAppM tracer (setCurrentPhase ref PreparingForVolatileTail)
       logs <- readLogs
       map lmMessage logs `shouldBe`
-        ["phase IngestChainHistory -> PreparingForVolatileTail"]
+        ["IngestChainHistory -> PreparingForVolatileTail"]
 
     it "is a no-op when the value already matches" $ do
       (tracer, readLogs) <- capturingTracer
@@ -69,11 +69,11 @@ spec = describe "DbSync.Phase.Current" $ do
       runAppM tracer (setCurrentPhase ref FollowingChainTip)
       logs <- readLogs
       map lmMessage logs `shouldBe`
-        [ "phase IngestChainHistory -> PreparingForVolatileTail"
-        , "phase PreparingForVolatileTail -> FollowingVolatileTail"
-        , "phase FollowingVolatileTail -> FollowingChainTip"
-        , "phase FollowingChainTip -> FollowingVolatileTail"
-        , "phase FollowingVolatileTail -> FollowingChainTip"
+        [ "IngestChainHistory -> PreparingForVolatileTail"
+        , "PreparingForVolatileTail -> FollowingVolatileTail"
+        , "FollowingVolatileTail -> FollowingChainTip"
+        , "FollowingChainTip -> FollowingVolatileTail"
+        , "FollowingVolatileTail -> FollowingChainTip"
         ]
 
 -- | hspec equivalent of @action `shouldReturn` x@ with a tighter name.

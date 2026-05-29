@@ -55,6 +55,7 @@ library
     DbSync.Db.Schema.EpochSyncStats
     DbSync.Db.Schema.AdaPots
     DbSync.Db.Schema.EpochBoundary
+    DbSync.Db.Schema.EpochView
     DbSync.Db.Schema.SyncState
     DbSync.Db.Schema.EpochParamPending
     DbSync.Db.Schema.Generate
@@ -71,6 +72,7 @@ library
     DbSync.Db.Statement.CollateralTxOut
     DbSync.Db.Statement.ConsumedBy
     DbSync.Db.Statement.Delegation
+    DbSync.Db.Statement.EpochFinalized
     DbSync.Db.Statement.EpochParamPending
     DbSync.Db.Statement.IdAllocator
     DbSync.Db.Statement.Indexes

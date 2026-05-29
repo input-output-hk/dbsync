@@ -51,6 +51,7 @@ import DbSync.Checkpoint.SyncState
   , markSyncComplete
   , openControlConnection
   , readPendingRollbackSlot
+  , populateCostModelCache
   , readSyncState
   , rebuildDedupMaps
   , seedSyncState
@@ -78,7 +79,7 @@ import DbSync.Db.Schema.Init
   , showWalLevel
   )
 import DbSync.Env (CoreEnv (..), FollowEnv (..), IngestEnv (..), mkFollowEnvFromIngest)
-import DbSync.Extractor (ExtractState, ExtractorDef (..), freshExtractState)
+import DbSync.Extractor (ExtractState (..), ExtractorDef (..), freshExtractState)
 import DbSync.Phase.Ingest.DedupStore (closeStores, newStores)
 import DbSync.Phase.Ingest.Consumer (runConsumer)
 import DbSync.Phase.Ingest.PipelineStats (emptyPipelineStats)
@@ -370,6 +371,8 @@ runApp tracer args = do
         logInfo "Rebuilding dedup stores from PG…"
         stores <- runAppM (TracerWithControl tracer consumerCtrlConn)
                     (rebuildDedupMaps tableDefs lsmSession)
+        cmCache <- runAppM (TracerWithControl tracer consumerCtrlConn)
+                     (populateCostModelCache tableDefs)
 
         (replayBs, replaySt) <- case (hasLedgerEnv, rcChosenSnapshot rc) of
           (LedgerDisabled _, _) -> pure (Nothing, Nothing)
@@ -404,8 +407,10 @@ runApp tracer args = do
             panic "BootResume (ledger enabled) returned without a chosen snapshot"
 
         ireq <- resolveIntersection logInfo logError consumerCtrlConn rc
+        let resumeState = (mkResumeExtractState row)
+              { esCostModelCache = cmCache }
         pure $ Just
-          ( mkResumeExtractState row
+          ( resumeState
           , stores
           , ireq
           , replayBs

@@ -180,8 +180,7 @@ affectsDeposit = \case
   G.CertDRepUpdate{}           -> False
   G.CertCommitteeAuth{}        -> False
   G.CertCommitteeResign{}      -> False
-  G.CertMIR{}                  -> False
-  G.CertGenesisDelegation{}    -> False
+  G.CertMir{}                  -> False
 
 -- ---------------------------------------------------------------------------
 -- * Record builders (pure, shared across phases)

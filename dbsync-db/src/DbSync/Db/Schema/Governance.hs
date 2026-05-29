@@ -96,13 +96,9 @@ module DbSync.Db.Schema.Governance
 
 import Cardano.Prelude
 
-import Data.ByteString.Builder (Builder, byteString)
-import qualified Data.ByteString.Char8 as BS8
 import Data.Functor.Contravariant ((>$<))
-import qualified Data.Text as T
 import qualified Hasql.Decoders as D
 import qualified Hasql.Encoders as E
-import qualified Text.Read as TR
 
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
@@ -118,11 +114,14 @@ import DbSync.Db.Types
   , anchorTypeDecoder
   , anchorTypeEncoder
   , bAnchorType
+  , bDouble
   , bGovActionType
   , bVote
   , bVoterRole
   , dbLovelaceValueDecoder
   , dbLovelaceValueEncoder
+  , doubleAsTextDecoder
+  , doubleAsTextEncoder
   , govActionTypeDecoder
   , govActionTypeEncoder
   , maybeDbLovelaceDecoder
@@ -1507,26 +1506,3 @@ entityEventInfoDecoder :: D.Row (EventInfoId, EventInfo)
 entityEventInfoDecoder = (,)
   <$> idDecoder EventInfoId
   <*> eventInfoDecoder
-
--- ---------------------------------------------------------------------------
--- * Internal: Double encoding via TEXT
--- ---------------------------------------------------------------------------
---
--- @param_proposal@ has 22 'Double' columns. The codebase already
--- carries the same TEXT-stored-double pattern in @pool_update.margin@
--- and @epoch_sync_stats@; replicating it here keeps the migration
--- path straightforward. A future cleanup can promote these helpers
--- to a shared module and switch the column type to PG @float8@.
-
-bDouble :: Double -> Builder
-bDouble = byteString . BS8.pack . show
-
-doubleAsTextEncoder :: E.Value Double
-doubleAsTextEncoder = T.pack . show >$< E.text
-
-doubleAsTextDecoder :: D.Value Double
-doubleAsTextDecoder = D.refine parseDouble D.text
-  where
-    parseDouble t = case TR.readMaybe (T.unpack t) of
-      Just d  -> Right d
-      Nothing -> Left $ "could not parse double: " <> t

@@ -107,6 +107,12 @@ mkWriter conn = Writer
 
   , writeEpochSyncStats = \_ _ -> todo "writeEpochSyncStats"
   , writeAdaPots        = \_ _ -> todo "writeAdaPots"
+  , writeEpochParam     = \_ _ -> todo "writeEpochParam"
+  , writeEpochState     = \_ _ -> todo "writeEpochState"
+  , writeCostModel      = \_ _ -> todo "writeCostModel"
+  , writePotTransfer    = \_ _ -> todo "writePotTransfer"
+  , writeTreasury       = \_ _ -> todo "writeTreasury"
+  , writeReserve        = \_ _ -> todo "writeReserve"
 
     -- No-op: the per-block transaction envelope is owned by
     -- @Phase.Following.Run@, not the Writer.
@@ -164,6 +170,12 @@ mkBufferedWriter buf = Writer
 
   , writeEpochSyncStats = \_ _ -> todo "writeEpochSyncStats"
   , writeAdaPots        = \_ _ -> todo "writeAdaPots"
+  , writeEpochParam     = \_ _ -> todo "writeEpochParam"
+  , writeEpochState     = \_ _ -> todo "writeEpochState"
+  , writeCostModel      = \_ _ -> todo "writeCostModel"
+  , writePotTransfer    = \_ _ -> todo "writePotTransfer"
+  , writeTreasury       = \_ _ -> todo "writeTreasury"
+  , writeReserve        = \_ _ -> todo "writeReserve"
 
   , commit = pure ()
   }

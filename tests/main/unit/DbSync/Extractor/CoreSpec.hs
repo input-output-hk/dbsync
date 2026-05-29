@@ -330,8 +330,7 @@ spec = do
     it "False for CertDRepUpdate"          $ affectsDeposit drepUpdateAction                           `shouldBe` False
     it "False for CertCommitteeAuth"       $ affectsDeposit committeeAuthAction                        `shouldBe` False
     it "False for CertCommitteeResign"     $ affectsDeposit (CertCommitteeResign "" Nothing)           `shouldBe` False
-    it "False for CertMIR"                 $ affectsDeposit (CertMIR "")                               `shouldBe` False
-    it "False for CertGenesisDelegation"   $ affectsDeposit (CertGenesisDelegation "")                 `shouldBe` False
+    it "False for CertMir"                 $ affectsDeposit (CertMir G.MirReserves (G.MirToStakeAddresses [])) `shouldBe` False
 
 -- ---------------------------------------------------------------------------
 -- Test helpers

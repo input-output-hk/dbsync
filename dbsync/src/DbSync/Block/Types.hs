@@ -22,6 +22,8 @@ module DbSync.Block.Types
   , CertAction (..)
   , DRepIdent (..)
   , AnchorData (..)
+  , MirPot (..)
+  , MirAction (..)
   , PoolRegistrationData (..)
   , PoolRelayData (..)
   , BlockEra (..)
@@ -218,18 +220,35 @@ data CertAction
       !ByteString              -- ^ Cold key credential hash
       !(Maybe AnchorData)      -- ^ Anchor (URL + hash) if present
 
-  -- | Move-Instantaneous-Reward cert (Shelley-Babbage). Carries the
-  -- raw CBOR of the cert; the epoch-boundary extractor decodes it to
-  -- emit @treasury@ / @reserve@ rows.
-  | CertMIR !ByteString
-
-  -- | Genesis-key delegation cert (Shelley-Babbage). Carries the raw
-  -- CBOR; no current consumer reads it.
-  | CertGenesisDelegation !ByteString
+  -- | Move-Instantaneous-Reward cert (Shelley-Babbage). The
+  -- 'stake_delegation' extractor writes @treasury@ \/ @reserve@ rows
+  -- for 'MirToStakeAddresses' and a single @pot_transfer@ row for
+  -- 'MirPotToPot'. Conway+ removes MIR from the cert sum, so the
+  -- type-level guarantee is that this constructor never appears on
+  -- a Conway+ block.
+  | CertMir
+      !MirPot
+      !MirAction
 
   -- Fallback for unhandled/future certificate types
   | CertOther !ByteString      -- ^ Raw CBOR bytes
   deriving stock (Show)
+
+-- | Which protocol pot a MIR certificate names.
+data MirPot
+  = MirReserves
+  | MirTreasury
+  deriving stock (Eq, Show)
+
+-- | Payload of a MIR certificate.
+data MirAction
+  = MirToStakeAddresses ![(ByteString, Integer)]
+      -- ^ Per-recipient (stake credential hash, delta-coin). Positive
+      --   means \"credit the recipient from the named pot\".
+  | MirPotToPot !Integer
+      -- ^ Pot-to-pot transfer. Positive means \"send this much from
+      --   the named pot to the other pot\".
+  deriving stock (Eq, Show)
 
 -- | DRep delegation target — a specific DRep credential, or one of
 -- the protocol-defined \"always abstain\" / \"always no-confidence\"

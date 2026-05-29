@@ -60,6 +60,12 @@ data IdCounters = IdCounters
   , icEpochSyncStatsId      :: !IdCounter
   , icAdaPotsId             :: !IdCounter
   , icCollateralTxOutId     :: !IdCounter
+  , icEpochParamId          :: !IdCounter
+  , icEpochStateId          :: !IdCounter
+  , icCostModelId           :: !IdCounter
+  , icPotTransferId         :: !IdCounter
+  , icTreasuryId            :: !IdCounter
+  , icReserveId             :: !IdCounter
   }
   deriving stock (Eq, Show)
 
@@ -101,6 +107,12 @@ freshIdCounters = IdCounters
   , icEpochSyncStatsId      = mkIdCounter 1
   , icAdaPotsId             = mkIdCounter 1
   , icCollateralTxOutId     = mkIdCounter 1
+  , icEpochParamId          = mkIdCounter 1
+  , icEpochStateId          = mkIdCounter 1
+  , icCostModelId           = mkIdCounter 1
+  , icPotTransferId         = mkIdCounter 1
+  , icTreasuryId            = mkIdCounter 1
+  , icReserveId             = mkIdCounter 1
   }
 
 -- * Operations

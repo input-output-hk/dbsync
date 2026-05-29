@@ -184,6 +184,12 @@ resolver conn lastBlock = IdResolver
   -- construction.
   , assignEpochSyncStatsId   = todo "assignEpochSyncStatsId"
   , assignAdaPotsId          = todo "assignAdaPotsId"
+  , assignEpochParamId       = todo "assignEpochParamId"
+  , assignEpochStateId       = todo "assignEpochStateId"
+  , resolveCostModel         = \_ _ -> todo "resolveCostModel"
+  , assignPotTransferId      = todo "assignPotTransferId"
+  , assignTreasuryId         = todo "assignTreasuryId"
+  , assignReserveId          = todo "assignReserveId"
 
     -- Inline value resolution: per-pair SELECT against tx_out.
   , resolveInputValues = \pairs ->
@@ -387,6 +393,12 @@ bufferedResolver conn preAlloc buf lastBlock cache = IdResolver
     -- never call them.
     assignEpochSyncStatsId = todo "assignEpochSyncStatsId"
   , assignAdaPotsId        = todo "assignAdaPotsId"
+  , assignEpochParamId     = todo "assignEpochParamId"
+  , assignEpochStateId     = todo "assignEpochStateId"
+  , resolveCostModel       = \_ _ -> todo "resolveCostModel"
+  , assignPotTransferId    = todo "assignPotTransferId"
+  , assignTreasuryId       = todo "assignTreasuryId"
+  , assignReserveId        = todo "assignReserveId"
 
   , -- @resolveInputValues@ stays per-pair for now. The pairs could
     -- be batched into one pipeline at the cost of some interface

@@ -18,12 +18,13 @@ module DbSync.Phase.Ingest.Resolver
 import Cardano.Prelude
 
 import Data.IORef (IORef, atomicModifyIORef', readIORef)
+import qualified Data.Map.Strict as Map
 
 import qualified Data.ByteString.Short as SBS
 
 import DbSync.Db.Schema.Ids
 import DbSync.Extractor (ExtractState (..))
-import DbSync.Phase.Ingest.Counter (IdCounters (..), nextId)
+import DbSync.Phase.Ingest.Counter (IdCounter, IdCounters (..), nextId)
 import DbSync.Phase.Ingest.DedupStore (DedupStores (..), lookupOrInsert)
 import DbSync.Phase.Ingest.UtxoStore (UtxoStore)
 import qualified DbSync.Phase.Ingest.UtxoStore as UtxoStore
@@ -67,21 +68,15 @@ mkIngestResolver
 mkIngestResolver stRef dedupStores addrBufRef utxoStore mConsumedByBuf = IdResolver
   { -- Core shared IDs
     assignBlockId = atomicModifyIORef' stRef $ \st ->
-      let (bid, ctr') = nextId (icBlockId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icBlockId = ctr' }
-                    , esLastBlockId = Just bid
-                    }
+      let (bid, ctr') = nextId (icBlockId (esIdCounters st))
+          st' = st
+            { esIdCounters  = (esIdCounters st) { icBlockId = ctr' }
+            , esLastBlockId = Just bid
+            }
       in (st', BlockId bid)
 
-  , assignTxId = atomicModifyIORef' stRef $ \st ->
-      let (tid, ctr') = nextId (icTxId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icTxId = ctr' } }
-      in (st', TxId tid)
-
-  , assignTxOutId = atomicModifyIORef' stRef $ \st ->
-      let (oid, ctr') = nextId (icTxOutId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icTxOutId = ctr' } }
-      in (st', TxOutId oid)
+  , assignTxId    = bump icTxId    (\cs c -> cs { icTxId    = c }) TxId
+  , assignTxOutId = bump icTxOutId (\cs c -> cs { icTxOutId = c }) TxOutId
 
     -- Dedup: SlotLeader
   , resolveSlotLeader = \hash _leader -> do
@@ -91,10 +86,10 @@ mkIngestResolver stRef dedupStores addrBufRef utxoStore mConsumedByBuf = IdResol
 
   , resolvePrevBlock = \_ -> do
       st <- readIORef stRef
-      pure $ BlockId <$> esLastBlockId st
+      pure (BlockId <$> esLastBlockId st)
 
     -- Address: queue raw bytes + derived fields for the worker.
-  , recordTxOutAddress = recordTxOut addrBufRef
+  , recordTxOutAddress           = recordTxOut addrBufRef
   , recordCollateralTxOutAddress = recordCollateralTxOut addrBufRef
 
     -- Follow-only entry point. Ingest extractors must record via the
@@ -104,31 +99,13 @@ mkIngestResolver stRef dedupStores addrBufRef utxoStore mConsumedByBuf = IdResol
       panic "Phase.Ingest.Resolver: resolveAddressId is Follow-only; use recordTxOutAddress"
 
     -- UTxO IDs
-  , assignTxInId = atomicModifyIORef' stRef $ \st ->
-      let (iid, ctr') = nextId (icTxInId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icTxInId = ctr' } }
-      in (st', TxInId iid)
-
-  , assignCollateralTxInId = atomicModifyIORef' stRef $ \st ->
-      let (iid, ctr') = nextId (icCollateralTxInId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icCollateralTxInId = ctr' } }
-      in (st', CollateralTxInId iid)
-
-  , assignCollateralTxOutId = atomicModifyIORef' stRef $ \st ->
-      let (iid, ctr') = nextId (icCollateralTxOutId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icCollateralTxOutId = ctr' } }
-      in (st', CollateralTxOutId iid)
-
-  , assignReferenceTxInId = atomicModifyIORef' stRef $ \st ->
-      let (iid, ctr') = nextId (icReferenceTxInId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icReferenceTxInId = ctr' } }
-      in (st', ReferenceTxInId iid)
+  , assignTxInId            = bump icTxInId            (\cs c -> cs { icTxInId            = c }) TxInId
+  , assignCollateralTxInId  = bump icCollateralTxInId  (\cs c -> cs { icCollateralTxInId  = c }) CollateralTxInId
+  , assignCollateralTxOutId = bump icCollateralTxOutId (\cs c -> cs { icCollateralTxOutId = c }) CollateralTxOutId
+  , assignReferenceTxInId   = bump icReferenceTxInId   (\cs c -> cs { icReferenceTxInId   = c }) ReferenceTxInId
 
     -- Metadata IDs
-  , assignTxMetadataId = atomicModifyIORef' stRef $ \st ->
-      let (mid, ctr') = nextId (icTxMetadataId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icTxMetadataId = ctr' } }
-      in (st', TxMetadataId mid)
+  , assignTxMetadataId = bump icTxMetadataId (\cs c -> cs { icTxMetadataId = c }) TxMetadataId
 
     -- Dedup: MultiAsset
     -- Key arrives as ShortByteString (already unpinned) from the extractor.
@@ -136,15 +113,8 @@ mkIngestResolver stRef dedupStores addrBufRef utxoStore mConsumedByBuf = IdResol
       (maId, isNew) <- lookupOrInsert skey (dstMultiAsset dedupStores)
       pure (MultiAssetId maId, isNew)
 
-  , assignMaTxMintId = atomicModifyIORef' stRef $ \st ->
-      let (mid, ctr') = nextId (icMaTxMintId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icMaTxMintId = ctr' } }
-      in (st', MaTxMintId mid)
-
-  , assignMaTxOutId = atomicModifyIORef' stRef $ \st ->
-      let (mid, ctr') = nextId (icMaTxOutId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icMaTxOutId = ctr' } }
-      in (st', MaTxOutId mid)
+  , assignMaTxMintId = bump icMaTxMintId (\cs c -> cs { icMaTxMintId = c }) MaTxMintId
+  , assignMaTxOutId  = bump icMaTxOutId  (\cs c -> cs { icMaTxOutId  = c }) MaTxOutId
 
     -- Dedup: StakeAddress
   , resolveStakeAddress = \hash _sa -> do
@@ -152,25 +122,10 @@ mkIngestResolver stRef dedupStores addrBufRef utxoStore mConsumedByBuf = IdResol
       (saId, isNew) <- lookupOrInsert key (dstStakeAddress dedupStores)
       pure (StakeAddressId saId, isNew)
 
-  , assignStakeRegistrationId = atomicModifyIORef' stRef $ \st ->
-      let (i, ctr') = nextId (icStakeRegistrationId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icStakeRegistrationId = ctr' } }
-      in (st', StakeRegistrationId i)
-
-  , assignStakeDeregistrationId = atomicModifyIORef' stRef $ \st ->
-      let (i, ctr') = nextId (icStakeDeregistrationId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icStakeDeregistrationId = ctr' } }
-      in (st', StakeDeregistrationId i)
-
-  , assignDelegationId = atomicModifyIORef' stRef $ \st ->
-      let (i, ctr') = nextId (icDelegationId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icDelegationId = ctr' } }
-      in (st', DelegationId i)
-
-  , assignWithdrawalId = atomicModifyIORef' stRef $ \st ->
-      let (i, ctr') = nextId (icWithdrawalId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icWithdrawalId = ctr' } }
-      in (st', WithdrawalId i)
+  , assignStakeRegistrationId   = bump icStakeRegistrationId   (\cs c -> cs { icStakeRegistrationId   = c }) StakeRegistrationId
+  , assignStakeDeregistrationId = bump icStakeDeregistrationId (\cs c -> cs { icStakeDeregistrationId = c }) StakeDeregistrationId
+  , assignDelegationId          = bump icDelegationId          (\cs c -> cs { icDelegationId          = c }) DelegationId
+  , assignWithdrawalId          = bump icWithdrawalId          (\cs c -> cs { icWithdrawalId          = c }) WithdrawalId
 
     -- Dedup: PoolHash
   , resolvePoolHash = \hash _ph -> do
@@ -178,48 +133,39 @@ mkIngestResolver stRef dedupStores addrBufRef utxoStore mConsumedByBuf = IdResol
       (phId, isNew) <- lookupOrInsert key (dstPoolHash dedupStores)
       pure (PoolHashId phId, isNew)
 
-  , assignPoolUpdateId = atomicModifyIORef' stRef $ \st ->
-      let (i, ctr') = nextId (icPoolUpdateId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icPoolUpdateId = ctr' } }
-      in (st', PoolUpdateId i)
-
-  , assignPoolMetadataRefId = atomicModifyIORef' stRef $ \st ->
-      let (i, ctr') = nextId (icPoolMetadataRefId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icPoolMetadataRefId = ctr' } }
-      in (st', PoolMetadataRefId i)
-
-  , assignPoolOwnerId = atomicModifyIORef' stRef $ \st ->
-      let (i, ctr') = nextId (icPoolOwnerId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icPoolOwnerId = ctr' } }
-      in (st', PoolOwnerId i)
-
-  , assignPoolRetireId = atomicModifyIORef' stRef $ \st ->
-      let (i, ctr') = nextId (icPoolRetireId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icPoolRetireId = ctr' } }
-      in (st', PoolRetireId i)
-
-  , assignPoolRelayId = atomicModifyIORef' stRef $ \st ->
-      let (i, ctr') = nextId (icPoolRelayId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icPoolRelayId = ctr' } }
-      in (st', PoolRelayId i)
+  , assignPoolUpdateId      = bump icPoolUpdateId      (\cs c -> cs { icPoolUpdateId      = c }) PoolUpdateId
+  , assignPoolMetadataRefId = bump icPoolMetadataRefId (\cs c -> cs { icPoolMetadataRefId = c }) PoolMetadataRefId
+  , assignPoolOwnerId       = bump icPoolOwnerId       (\cs c -> cs { icPoolOwnerId       = c }) PoolOwnerId
+  , assignPoolRetireId      = bump icPoolRetireId      (\cs c -> cs { icPoolRetireId      = c }) PoolRetireId
+  , assignPoolRelayId       = bump icPoolRelayId       (\cs c -> cs { icPoolRelayId       = c }) PoolRelayId
 
     -- CBOR IDs
-  , assignTxCborId = atomicModifyIORef' stRef $ \st ->
-      let (i, ctr') = nextId (icTxCborId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icTxCborId = ctr' } }
-      in (st', TxCborId i)
+  , assignTxCborId = bump icTxCborId (\cs c -> cs { icTxCborId = c }) TxCborId
 
     -- EpochSyncStats IDs
-  , assignEpochSyncStatsId = atomicModifyIORef' stRef $ \st ->
-      let (i, ctr') = nextId (icEpochSyncStatsId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icEpochSyncStatsId = ctr' } }
-      in (st', EpochSyncStatsId i)
+  , assignEpochSyncStatsId = bump icEpochSyncStatsId (\cs c -> cs { icEpochSyncStatsId = c }) EpochSyncStatsId
 
     -- EpochBoundary IDs
-  , assignAdaPotsId = atomicModifyIORef' stRef $ \st ->
-      let (i, ctr') = nextId (icAdaPotsId $ esIdCounters st)
-          st' = st { esIdCounters = (esIdCounters st) { icAdaPotsId = ctr' } }
-      in (st', AdaPotsId i)
+  , assignAdaPotsId     = bump icAdaPotsId     (\cs c -> cs { icAdaPotsId     = c }) AdaPotsId
+  , assignEpochParamId  = bump icEpochParamId  (\cs c -> cs { icEpochParamId  = c }) EpochParamId
+  , assignEpochStateId  = bump icEpochStateId  (\cs c -> cs { icEpochStateId  = c }) EpochStateId
+  , assignPotTransferId = bump icPotTransferId (\cs c -> cs { icPotTransferId = c }) PotTransferId
+  , assignTreasuryId    = bump icTreasuryId    (\cs c -> cs { icTreasuryId    = c }) TreasuryId
+  , assignReserveId     = bump icReserveId     (\cs c -> cs { icReserveId     = c }) ReserveId
+
+    -- Dedup: cost_model. Cache lives in 'ExtractState' so resume
+    -- pre-population from the database surfaces here without
+    -- threading a separate IORef through the constructor.
+  , resolveCostModel = \hash _cm -> atomicModifyIORef' stRef $ \st ->
+      case Map.lookup hash (esCostModelCache st) of
+        Just existing -> (st, (CostModelId existing, False))
+        Nothing ->
+          let (i, ctr') = nextId (icCostModelId (esIdCounters st))
+              st' = st
+                { esIdCounters     = (esIdCounters st) { icCostModelId = ctr' }
+                , esCostModelCache = Map.insert hash i (esCostModelCache st)
+                }
+          in (st', (CostModelId i, True))
 
     -- UTxO lookups consult the in-process cache. A miss returns
     -- 'Nothing' and the row is written with @tx_out_id = NULL@; the
@@ -239,3 +185,19 @@ mkIngestResolver stRef dedupStores addrBufRef utxoStore mConsumedByBuf = IdResol
 
   , deleteCachedUtxo = UtxoStore.deleteConsumed utxoStore
   }
+  where
+    -- | Atomically allocate the next id from the supplied counter
+    -- field and wrap it with the matching newtype constructor.
+    -- The setter takes the existing 'IdCounters' first, then the new
+    -- 'IdCounter', so per-field setters read as
+    -- @\\cs c -> cs { fieldName = c }@ — matching the visual order
+    -- of a record update.
+    bump
+      :: (IdCounters -> IdCounter)
+      -> (IdCounters -> IdCounter -> IdCounters)
+      -> (Int64 -> a)
+      -> IO a
+    bump getCtr setCtr wrapId = atomicModifyIORef' stRef $ \st ->
+      let (i, ctr') = nextId (getCtr (esIdCounters st))
+          st' = st { esIdCounters = setCtr (esIdCounters st) ctr' }
+      in (st', wrapId i)

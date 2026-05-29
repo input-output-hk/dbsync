@@ -69,6 +69,7 @@ module DbSync.Db.Types
     -- * COPY encoding helpers
   , bInt65
   , bWord128
+  , bDouble
   , bScriptPurpose
   , bScriptType
   , bRewardSource
@@ -77,6 +78,12 @@ module DbSync.Db.Types
   , bVoterRole
   , bGovActionType
   , bAnchorType
+
+    -- * Double-as-text hasql codecs (PostgreSQL @text@ column type)
+  , doubleAsTextEncoder
+  , doubleAsTextDecoder
+  , maybeDoubleAsTextEncoder
+  , maybeDoubleAsTextDecoder
 
     -- * Hasql encoders \/ decoders for enum types
   , scriptPurposeEncoder
@@ -105,9 +112,11 @@ import Data.ByteString.Builder (Builder, byteString)
 import qualified Data.ByteString.Char8 as BS8
 import Data.Functor.Contravariant ((>$<))
 import qualified Data.Scientific as Sci
+import qualified Data.Text as T
 import Data.WideWord (Word128)
 import qualified Hasql.Decoders as D
 import qualified Hasql.Encoders as E
+import qualified Text.Read as TR
 
 import DbSync.Db.Loader.Encoder (bInt64)
 
@@ -306,6 +315,12 @@ bInt65 = bInt64 . fromDbInt65
 bWord128 :: Word128 -> Builder
 bWord128 = byteString . BS8.pack . show . toInteger
 
+-- | COPY-builder for a 'Double' that lands in a TEXT column. The
+-- wire format is @show \@Double@.
+{-# INLINE bDouble #-}
+bDouble :: Double -> Builder
+bDouble = byteString . BS8.pack . show
+
 -- ---------------------------------------------------------------------------
 -- ** Per-enum COPY builders
 -- ---------------------------------------------------------------------------
@@ -482,6 +497,26 @@ word128Encoder = word128ToScientific >$< E.numeric
 
 word128Decoder :: D.Value Word128
 word128Decoder = scientificToWord128 <$> D.numeric
+
+-- | 'Double' encoder against a @text@ column. Encodes via 'show' so
+-- the wire format matches 'bDouble'.
+doubleAsTextEncoder :: E.Value Double
+doubleAsTextEncoder = (T.pack . show) >$< E.text
+
+-- | 'Double' decoder against a @text@ column. A malformed value
+-- surfaces as a 'D.refine' error rather than a silent default.
+doubleAsTextDecoder :: D.Value Double
+doubleAsTextDecoder = D.refine parse D.text
+  where
+    parse t = case TR.readMaybe (T.unpack t) of
+      Just d  -> Right d
+      Nothing -> Left ("doubleAsTextDecoder: not a Double: " <> t)
+
+maybeDoubleAsTextEncoder :: E.Params (Maybe Double)
+maybeDoubleAsTextEncoder = E.param (E.nullable doubleAsTextEncoder)
+
+maybeDoubleAsTextDecoder :: D.Row (Maybe Double)
+maybeDoubleAsTextDecoder = D.column (D.nullable doubleAsTextDecoder)
 
 -- ---------------------------------------------------------------------------
 -- * Hasql encoders / decoders for enum types

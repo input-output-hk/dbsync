@@ -86,8 +86,8 @@ spec = describe "DbSync.Db.Schema.SyncState" $ do
     it "matches the table's column order" $
       syncStateColumns `shouldBe` map cdName (tdColumns syncStateTableDef)
 
-    it "contains 38 columns (id + 3 last_committed + last_snapshot_slot + 28 counters + 4 metadata + pending_rollback_slot)" $
-      length syncStateColumns `shouldBe` 38
+    it "contains 44 columns (id + 3 last_committed + last_snapshot_slot + 34 counters + 4 metadata + pending_rollback_slot)" $
+      length syncStateColumns `shouldBe` 44
 
     it "starts with id" $
       head syncStateColumns `shouldBe` Just "id"
@@ -96,8 +96,8 @@ spec = describe "DbSync.Db.Schema.SyncState" $ do
       last syncStateColumns `shouldBe` "updated_at"
 
   describe "syncStateCounterColumns" $ do
-    it "lists 28 counters — one per current IdCounters field" $
-      length syncStateCounterColumns `shouldBe` 28
+    it "lists 34 counters — one per current IdCounters field" $
+      length syncStateCounterColumns `shouldBe` 34
 
     it "is a subset of syncStateColumns" $
       all (`elem` syncStateColumns) syncStateCounterColumns `shouldBe` True
@@ -197,6 +197,12 @@ goldenDdl = T.unlines
   , "  \"epoch_sync_stats_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"ada_pots_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"collateral_tx_out_id_counter\" BIGINT NOT NULL DEFAULT 1,"
+  , "  \"epoch_param_id_counter\" BIGINT NOT NULL DEFAULT 1,"
+  , "  \"epoch_state_id_counter\" BIGINT NOT NULL DEFAULT 1,"
+  , "  \"cost_model_id_counter\" BIGINT NOT NULL DEFAULT 1,"
+  , "  \"pot_transfer_id_counter\" BIGINT NOT NULL DEFAULT 1,"
+  , "  \"treasury_id_counter\" BIGINT NOT NULL DEFAULT 1,"
+  , "  \"reserve_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"schema_version_applied\" INTEGER NOT NULL,"
   , "  \"ledger_enabled\" BOOLEAN NOT NULL,"
   , "  \"sync_complete\" BOOLEAN NOT NULL DEFAULT false,"

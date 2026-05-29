@@ -42,6 +42,8 @@ import DbSync.Db.Schema.Ids (getPoolUpdateId, getTxId, getTxOutId)
 import qualified DbSync.Db.Schema.Pool as Pool
 import DbSync.Db.Schema.Types (ForeignKey (..), TableDef (..))
 import qualified DbSync.Db.Schema.UTxO as UTxO
+import DbSync.Db.Schema.EpochView (epochFinalizedTableName)
+import DbSync.Db.Statement.EpochFinalized (deleteEpochFinalizedFromEpochStmt)
 import DbSync.Db.Statement.Rollback
   ( deleteBlockAfterIdStmt
   , deleteWhereGteStmt
@@ -89,7 +91,7 @@ rollbackToPoint tableDefs point = case point of
 
     mTarget <- runSess "queryBlockAtPointStmt"
       ((rawSlot, rawHash), queryBlockAtPointStmt)
-    (targetBlockId, targetBlockNo) <- case mTarget of
+    (targetBlockId, targetBlockNo, mTargetEpoch) <- case mTarget of
       Just t  -> pure t
       Nothing -> panic $
         "rollbackToPoint: no block in PG at slot " <> show rawSlot
@@ -166,6 +168,15 @@ rollbackToPoint tableDefs point = case point of
           (getTxId minTxId, deleteWhereGteStmt txTbl "id")
       void $ runSess ("delete " <> tdName Core.blockTableDef)
         (targetBlockId, deleteBlockAfterIdStmt)
+
+      -- Drop finalised-epoch rows at or past the rollback target;
+      -- the target's own epoch becomes the new unfinalised epoch
+      -- served by @epoch_current@. No-op when the @epoch@ extractor
+      -- is disabled or when the target predates any epoch (Byron).
+      when (any ((== epochFinalizedTableName) . tdName) tableDefs) $
+        for_ mTargetEpoch $ \targetEpoch ->
+          void $ runSess "deleteEpochFinalizedFromEpochStmt"
+            (targetEpoch, deleteEpochFinalizedFromEpochStmt)
 
       -- Sync-state advance. The target block is the new chain tip.
       void $ runSess "writeSyncStateSlotStmt"

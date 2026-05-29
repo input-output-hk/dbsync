@@ -51,25 +51,31 @@ import DbSync.Db.Sql (quoteIdent)
 -- * Resolving the rollback point
 -- ---------------------------------------------------------------------------
 
--- | Look up the @(block_id, block_no)@ of the block at @(slot, hash)@.
--- 'Nothing' when the rollback point doesn't exist in PG — that's a
--- protocol violation (the node sent a point we never saw); the caller
--- panics.
-queryBlockAtPointStmt :: Stmt.Statement (Word64, ByteString) (Maybe (BlockId, Word64))
+-- | Look up the @(block_id, block_no, epoch_no)@ of the block at
+-- @(slot, hash)@. @epoch_no@ is 'Nothing' for Byron EBBs that
+-- predate the field; callers needing the rollback target's epoch
+-- treat that as \"no epoch boundary to invalidate\".
+--
+-- The outer 'Nothing' means the rollback point doesn't exist in PG
+-- — a protocol violation the caller turns into a panic.
+queryBlockAtPointStmt
+  :: Stmt.Statement (Word64, ByteString) (Maybe (BlockId, Word64, Maybe Word64))
 queryBlockAtPointStmt =
   Stmt.preparable sql encoder decoder
   where
     sql = T.concat
-      [ "SELECT id, block_no FROM ", quoteIdent (tdName Core.blockTableDef)
+      [ "SELECT id, block_no, epoch_no FROM "
+      , quoteIdent (tdName Core.blockTableDef)
       , " WHERE slot_no = $1 AND hash = $2"
       , " LIMIT 1"
       ]
     encoder =
          (fst >$< E.param (E.nonNullable (fromIntegral >$< E.int8)))
       <> (snd >$< E.param (E.nonNullable E.bytea))
-    decoder = D.rowMaybe $ (,)
+    decoder = D.rowMaybe $ (,,)
       <$> idDecoder BlockId
       <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
+      <*> (fmap fromIntegral <$> D.column (D.nullable D.int8))
 
 -- | Current @last_committed_slot@ in the sync-state singleton.
 -- 'Nothing' when nothing has been committed yet (fresh DB).

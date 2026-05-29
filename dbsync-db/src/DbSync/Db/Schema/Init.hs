@@ -56,6 +56,11 @@ import DbSync.Db.Schema.EpochParamPending
   ( epochParamPendingTableDef
   , epochParamPendingTableName
   )
+import DbSync.Db.Schema.EpochView
+  ( createEpochViewsSql
+  , dropEpochViewsSql
+  , epochFinalizedTableName
+  )
 import DbSync.Db.Schema.Generate (generateCreateTable)
 import DbSync.Db.Schema.SyncState (syncStateTableDef, syncStateTableName)
 import DbSync.Db.Schema.Types (TableDef (..), TableMode (..))
@@ -163,6 +168,12 @@ initSchema tableDefs extractorVersions connStr = do
       allDDL = T.unlines ddlStatements
   execPsql connStr allDDL
 
+  -- If the @epoch@ extractor is enabled (i.e. @epoch_finalized@ is
+  -- one of the data tables), emit the @epoch_current@ and @epoch@
+  -- view DDL on top of it.
+  when (any ((== epochFinalizedTableName) . tdName) tableDefs) $
+    execPsql connStr createEpochViewsSql
+
   -- Record extractor versions
   forM_ extractorVersions $ \(name, ver) ->
     execPsql connStr $ insertVersionSQL name ver
@@ -180,6 +191,10 @@ initSchema tableDefs extractorVersions connStr = do
 -- Safe to call on an empty database (every statement uses @IF EXISTS@).
 dropSchema :: [TableDef] -> [(Text, Int)] -> Text -> IO ()
 dropSchema tableDefs _extractorVersions connStr = do
+  -- Drop epoch views first; they reference @epoch_finalized@.
+  when (any ((== epochFinalizedTableName) . tdName) tableDefs) $
+    execPsql connStr dropEpochViewsSql
+
   -- Drop data tables
   forM_ tableDefs $ \td ->
     execPsql connStr $ "DROP TABLE IF EXISTS " <> quoteIdent (tdName td) <> " CASCADE;"

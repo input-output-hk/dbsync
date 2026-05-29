@@ -50,6 +50,7 @@ import DbSync.Extractor.MultiAsset (multiAssetExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Extractor.Pool (poolExtractor)
 import DbSync.Extractor.Cbor (cborExtractor)
+import DbSync.Extractor.Epoch (epochExtractor)
 import DbSync.Extractor.EpochBoundary (epochBoundaryExtractor)
 import DbSync.Extractor.EpochSyncStats (epochSyncStatsExtractor)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..), severityFromText)
@@ -115,6 +116,7 @@ buildExtractors pc = do
     resolveExtractor "cbor"             = cborExtractor
     resolveExtractor "epoch_sync_stats" = epochSyncStatsExtractor
     resolveExtractor "epoch_boundary"   = epochBoundaryExtractor
+    resolveExtractor "epoch"            = epochExtractor
     resolveExtractor name               = stubExtractor name
 
     -- | (extractor name, enabled?). 'utxo' reads from the structured
@@ -131,6 +133,7 @@ buildExtractors pc = do
       , ("cbor",             prEnabled (pcCbor pc))
       , ("epoch_sync_stats", prEnabled (pcEpochSyncStats pc))
       , ("epoch_boundary",   prEnabled (pcEpochBoundary pc))
+      , ("epoch",            prEnabled (pcEpoch pc))
       , ("current_state",    prEnabled (pcCurrentState pc))
       ]
 

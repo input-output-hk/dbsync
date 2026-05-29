@@ -7,6 +7,7 @@ module DbSync.Phase.Preparing.Backfill
   ( backfillTxColumns
   , applyDepositPending
   , truncateDepositPending
+  , backfillEpochFinalized
   ) where
 
 import Cardano.Prelude
@@ -22,13 +23,14 @@ import DbSync.Db.Statement.Backfill
   , backfillPhaseTwoFeeStmt
   , backfillValidContractDepositStmt
   )
+import DbSync.Db.Statement.EpochFinalized (backfillEpochFinalizedStmt)
 import DbSync.Db.Statement.EpochParamPending
   ( applyPoolUpdateDepositStmt
   , applyStakeRegistrationDepositStmt
   , truncateEpochParamPendingStmt
   )
 import DbSync.Db.Transaction (HasHasqlConnection (..))
-import DbSync.Trace.Timing (timedTrace)
+import DbSync.Trace.Timing (timedTrace, timedTrace_)
 
 -- | Execute the four backfill UPDATEs. Must run after
 -- 'DbSync.Phase.Preparing.Resolve.resolveForeignKeys' so
@@ -73,6 +75,21 @@ truncateDepositPending = do
   case result of
     Right () -> pure ()
     Left  e  -> panic $ "Phase.Preparing.Backfill: " <> show e
+
+-- | One-shot @INSERT … SELECT@ that fills @epoch_finalized@ from
+-- every closed epoch in @block@. Run by 'Phase.Preparing.Run' when
+-- the @epoch@ extractor is enabled. The current (open) epoch stays
+-- in @epoch_current@'s domain.
+backfillEpochFinalized
+  :: (LoggingM env m, HasHasqlConnection env)
+  => m ()
+backfillEpochFinalized =
+  timedTrace_ "PreparingForVolatileTail" "backfill epoch_finalized" $ do
+    conn <- asks getHasqlConnection
+    result <- liftIO $ Conn.use conn (Sess.statement () backfillEpochFinalizedStmt)
+    case result of
+      Right () -> pure ()
+      Left  e  -> panic $ "Phase.Preparing.Backfill.backfillEpochFinalized: " <> show e
 
 runRowsAffected
   :: (HasHasqlConnection env, MonadReader env m, MonadIO m)

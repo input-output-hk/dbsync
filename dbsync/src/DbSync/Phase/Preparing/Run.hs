@@ -47,6 +47,7 @@ import qualified Hasql.Session as Sess
 import DbSync.AppM (LoggingM)
 import DbSync.Db.Pool (usePool, withPrepPool)
 import DbSync.Db.Schema.Core (blockTableDef, txTableDef)
+import DbSync.Db.Schema.EpochView (epochFinalizedTableName)
 import DbSync.Db.Schema.Init
   ( analyzeSql
   , perTableSchemaForFollowTipSql
@@ -134,6 +135,9 @@ run connSettings tuning tables = do
 
   withPrepPool connSettings tuning (ptPoolSize tuning) $
     Indexes.createIndexes tables
+
+  when (any ((== epochFinalizedTableName) . tdName) tables)
+    Backfill.backfillEpochFinalized
 
   timedTrace_ prepComponent "flip UNLOGGED \x2192 LOGGED + attach sequences" $
     withPrepPool connSettings tuning (ptPoolSize tuning) $

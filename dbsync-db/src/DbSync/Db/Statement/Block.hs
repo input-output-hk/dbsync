@@ -17,6 +17,7 @@ module DbSync.Db.Statement.Block
   , queryBlockIdByHashStmt
   , queryBlockCountStmt
   , queryLatestBlockNoStmt
+  , queryLatestEpochNoStmt
   , queryLatestSlotNoStmt
   , queryLatestBlockIdStmt
   ) where
@@ -88,6 +89,15 @@ queryLatestBlockNoStmt =
     (D.singleRow $ D.column (D.nullable $ fromIntegral <$> D.int8))
   where
     sql = "SELECT MAX(block_no) FROM " <> table <> " WHERE block_no IS NOT NULL"
+
+-- | The largest @epoch_no@ stored. 'Nothing' on a Byron-only table
+-- (no row has an epoch yet) or an empty table.
+queryLatestEpochNoStmt :: Stmt.Statement () (Maybe Word64)
+queryLatestEpochNoStmt =
+  Stmt.preparable sql E.noParams
+    (D.singleRow $ D.column (D.nullable $ fromIntegral <$> D.int8))
+  where
+    sql = "SELECT MAX(epoch_no) FROM " <> table <> " WHERE epoch_no IS NOT NULL"
 
 -- | The largest @slot_no@ stored, or @0@ if no slot-bearing block
 -- exists yet. Used at boot to find the ChainSync intersection point.

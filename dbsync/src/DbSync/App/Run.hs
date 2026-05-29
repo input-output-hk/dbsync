@@ -266,8 +266,8 @@ runApp tracer args = do
       ledgerCfg   = scLedger validProfile
       expectedFp  = computeFingerprint genesisCfg
 
-  -- Validate chain-identity fingerprint before opening the LSM
-  -- session. A 'FingerprintFresh' result triggers a write below.
+  -- Validate chain-identity fingerprint before opening the LSM session.
+  -- A 'FingerprintFresh' result triggers a write below.
   fpCheck <-
     if lcEnabled ledgerCfg
       then checkFingerprint ledgerStateDir expectedFp
@@ -343,6 +343,8 @@ runApp tracer args = do
   -- 'Nothing'; the rest of runApp (which is the Ingest pipeline) then
   -- short-circuits. The other two branches return 'Just' with the
   -- initial state the Ingest setup needs.
+
+  -- TODO: I don't like returning tupples larger than 3 values let's make this into a type
   mIngestState <-
     case bootDecision of
       BootFresh -> do
@@ -501,7 +503,7 @@ runApp tracer args = do
           }
 
     logInfo "Starting block ingestion..."
-
+    -- TODO: to me it's not clear where we chose to do Ingest with COPY or Prep or Follow
     -- Cleanup of Ingest-only resources. Runs whether the consumer
     -- exits cleanly at the rollback boundary or aborts with an
     -- exception.
@@ -997,6 +999,7 @@ runFollowRestart
           link nodeThread
           racedFollow
 
+-- TODO: I don't think this should be in here?
 -- | Cadence between snapshot-load heartbeat lines. Tuned so a fast
 -- load doesn't emit any heartbeats while a slow one still gives the
 -- operator visibility within the first minute.

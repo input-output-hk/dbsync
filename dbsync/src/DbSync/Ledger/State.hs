@@ -298,6 +298,7 @@ mkHasLedgerEnv
   -> Word64                                         -- ^ Max Lovelace supply
   -> SystemStart
   -> Word64                                         -- ^ \"near tip\" epoch threshold (default 580)
+  -- TODO: I don't like these being Bools can easily get them the wrong way round
   -> Bool                                           -- ^ Capture rewards events in 'ApplyResult'
   -> Bool                                           -- ^ Abort on invalid ledger state
   -> LedgerBackend

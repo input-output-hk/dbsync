@@ -109,6 +109,7 @@ library
     DbSync.Extractor.Cbor
     DbSync.Extractor.EpochSyncStats
     DbSync.Extractor.EpochBoundary
+    DbSync.Extractor.Epoch
     DbSync.Db.Loader
     DbSync.Db.Loader.Connection
     DbSync.Db.Transaction

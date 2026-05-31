@@ -92,12 +92,12 @@ uniqueConstraintIndexName td n =
   tdName td <> "_unique_" <> show n <> "_idx"
 
 -- | Indexes the @IngestChainHistory@ per-epoch address-resolver
--- worker ('DbSync.Worker.TxOut') needs to avoid hash-joining the
+-- worker ('DbSync.Worker.TxOut.Worker') needs to avoid hash-joining the
 -- unindexed @tx_out@ / @address@ / @collateral_tx_out@ heaps once
 -- per epoch.
 --
 -- Built once at the start of @IngestChainHistory@ (see
--- 'DbSync.Phase.Ingest.IngestIndexes.createIngestResolveIndexes') on
+-- 'DbSync.Phase.Ingest.Indexes.createIngestResolveIndexes') on
 -- still-UNLOGGED tables, so the build skips WAL writes. Index names
 -- match what 'tableIndexStatements' would emit later, so the
 -- schema-driven Prep pass dedupes them via @IF NOT EXISTS@.

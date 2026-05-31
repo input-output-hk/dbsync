@@ -24,7 +24,7 @@ import Data.IORef (IORef, newIORef, readIORef)
 
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
-import DbSync.Config.Types (SyncConfig)
+import DbSync.App.Config.Types (SyncConfig)
 import DbSync.Db.Schema.Address (addressTableDef)
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
 import DbSync.Db.Schema.Pool (poolHashTableDef)

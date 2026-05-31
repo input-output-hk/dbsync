@@ -107,7 +107,7 @@ selectMultiAssetDedupStmt =
         <*> D.column (D.nonNullable D.bytea)
 
 -- | @SELECT hash FROM block WHERE slot_no = $1 LIMIT 1@. Used by
--- 'DbSync.Checkpoint.SyncState.fetchBlockHashAtSlot' at boot.
+-- 'DbSync.SyncState.Row.fetchBlockHashAtSlot' at boot.
 selectBlockHashAtSlotStmt :: Stmt.Statement Word64 (Maybe ByteString)
 selectBlockHashAtSlotStmt =
   Stmt.preparable

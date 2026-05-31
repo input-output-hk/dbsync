@@ -17,8 +17,8 @@ import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Strict as Map
 import qualified Data.Text.Encoding as Text
 
-import DbSync.Block.Metadata (metadataValueToJson, serialiseSingleton)
-import DbSync.Block.Types (GenericTx (..))
+import DbSync.Parser.Metadata (metadataValueToJson, serialiseSingleton)
+import DbSync.Parser.Types (GenericTx (..))
 import DbSync.Db.Schema.Metadata
 import DbSync.Db.Types (DbWord64 (..))
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))

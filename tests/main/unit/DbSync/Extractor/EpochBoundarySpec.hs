@@ -32,15 +32,15 @@ import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 
 import Test.Hspec (Spec, describe, expectationFailure, it, shouldBe)
 
-import qualified DbSync.Ledger.EpochUpdate as Generic
-import qualified DbSync.Ledger.ProtoParams as Proto
-import qualified DbSync.Ledger.StakeDist as Generic
+import qualified DbSync.Worker.Ledger.EpochUpdate as Generic
+import qualified DbSync.Worker.Ledger.ProtoParams as Proto
+import qualified DbSync.Worker.Ledger.StakeDist as Generic
 import DbSync.Db.Schema.AdaPots (AdaPots, adaPotsTableDef)
 import DbSync.Db.Schema.Ids (AdaPotsId (..), BlockId (..))
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Extractor (ExtractorDef (..), freshExtractState)
 import DbSync.Extractor.EpochBoundary (epochBoundaryExtractor, runEpochBoundary)
-import DbSync.Ledger.Types
+import DbSync.Worker.Ledger.Types
   ( ApplyResult (..)
   , emptyDepositsMap
   )
@@ -112,7 +112,7 @@ spec = do
 
     -- The "ada_pots happy path" needs a real 'Cardano.Ledger.Shelley.AdaPots'
     -- value — deferred to fixture work that lives alongside the
-    -- existing genesis-fixture deferrals in DbSync.Ledger.StateSpec.
+    -- existing genesis-fixture deferrals in DbSync.Worker.Ledger.StateSpec.
 
   describe "runEpochBoundary — proto-param boundary writes" $ do
     it "writes no new rows when euProtoParams is Nothing (Byron boundary)" $ do

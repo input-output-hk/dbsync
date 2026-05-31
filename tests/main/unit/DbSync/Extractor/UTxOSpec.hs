@@ -16,7 +16,7 @@ import qualified Data.Map.Strict as Map
 
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
-import DbSync.Block.Types
+import DbSync.Parser.Types
   ( BlockEra (..)
   , GenericBlock (..)
   , GenericTx (..)
@@ -36,7 +36,7 @@ import DbSync.Extractor.UTxO
   , utxoExtractor
   )
 
-import DbSync.Block.Pipeline (processBlock)
+import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.Worker.TxOut.AddressBuffer
   ( EpochAddressBuffer (..)
   , newAddressBufferRef

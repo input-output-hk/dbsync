@@ -9,11 +9,11 @@
 --
 -- == Lifecycle
 --
--- * 'openLsmSession' is called once when 'DbSync.Env.IngestEnv' is
+-- * 'openLsmSession' is called once when 'DbSync.App.Env.IngestEnv' is
 --   built. If the directory exists it is restored, otherwise a
 --   fresh session is created.
 -- * 'lsmClose' is the idempotent shutdown action stored in the
---   record (same shape as 'DbSync.Ledger.Types.leClose'). Called
+--   record (same shape as 'DbSync.Worker.Ledger.Types.leClose'). Called
 --   either via 'closeLsmSession' (close only — preserves the
 --   on-disk session for the next boot) or
 --   'closeAndDeleteLsmSession' (close + remove
@@ -90,7 +90,7 @@ import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 -- — see 'lsmSessionTracerFromApp').
 type LsmSessionTracer = Tracer IO LSMTree.LSMTreeTrace
 
--- | Handle owned by 'DbSync.Env.IngestEnv'. Carries every resource
+-- | Handle owned by 'DbSync.App.Env.IngestEnv'. Carries every resource
 -- that needs releasing on shutdown plus the directory the session
 -- writes to (needed by 'closeAndDeleteLsmSession').
 data LsmSession = LsmSession
@@ -104,7 +104,7 @@ data LsmSession = LsmSession
     -- ^ Absolute path to @\<state-dir\>/dbsync-ledger/ingest-lsm/@.
   , lsmClose      :: !(IO ())
     -- ^ Idempotent shutdown action. Mirrors
-    -- 'DbSync.Ledger.Types.leClose' so the App-level cleanup treats
+    -- 'DbSync.Worker.Ledger.Types.leClose' so the App-level cleanup treats
     -- both LSM sessions uniformly. Internally guards @closeSession@
     -- and @BlockApi.close@ behind an 'IORef Bool' so a second call
     -- is a no-op.

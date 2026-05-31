@@ -17,7 +17,7 @@ import Cardano.Prelude
 
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 
-import DbSync.Block.Types
+import DbSync.Parser.Types
   ( GenericBlock (..)
   , GenericTx (..)
   , GenericTxCertificate (..)

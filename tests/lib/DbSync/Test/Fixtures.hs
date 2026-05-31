@@ -47,7 +47,7 @@ import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 
 import qualified Data.ByteString as BS
 
-import DbSync.Block.Types
+import DbSync.Parser.Types
   ( BlockEra (..)
   , CertAction (..)
   , GenericBlock (..)

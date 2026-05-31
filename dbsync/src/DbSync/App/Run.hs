@@ -36,13 +36,13 @@ import Ouroboros.Consensus.Shelley.Node (ShelleyGenesis (..))
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..), listSnapshots)
 import Ouroboros.Network.Magic (NetworkMagic)
 
-import DbSync.App (buildCoreEnv, runStartup)
+import DbSync.App.Setup (buildCoreEnv, runStartup)
 import DbSync.App.Args (AppArgs (..))
 import DbSync.AppM (runAppM)
-import DbSync.Block.Types (CardanoPoint)
-import DbSync.Checkpoint.Manager (mkResumeExtractState)
-import DbSync.Checkpoint.Resume (CleanupMode (..), deleteRowsPastSlot)
-import DbSync.Checkpoint.SyncState
+import DbSync.Parser.Types (CardanoPoint)
+import DbSync.SyncState.Manager (mkResumeExtractState)
+import DbSync.SyncState.Resume (CleanupMode (..), deleteRowsPastSlot)
+import DbSync.SyncState.Row
   ( ControlConnection (..)
   , SyncStateRow (..)
   , clearPendingRollbackSlot
@@ -56,14 +56,14 @@ import DbSync.Checkpoint.SyncState
   , rebuildDedupMaps
   , seedSyncState
   )
-import DbSync.Env (CoreWithConn (..), TracerWithControl (..))
-import DbSync.Config.Genesis
+import DbSync.App.Env (CoreWithConn (..), TracerWithControl (..))
+import DbSync.App.Config.Genesis
   ( GenesisConfig (..)
   , ShelleyConfig (..)
   , mkProtocolInfoCardano
   , mkTopLevelConfig
   )
-import DbSync.Config.Types
+import DbSync.App.Config.Types
   ( DatabaseConfig (..)
   , LedgerConfig (..)
   , SyncConfig (..)
@@ -78,29 +78,29 @@ import DbSync.Db.Schema.Init
   , renderSchemaMismatch
   , showWalLevel
   )
-import DbSync.Env (CoreEnv (..), FollowEnv (..), IngestEnv (..), mkFollowEnvFromIngest)
+import DbSync.App.Env (CoreEnv (..), FollowEnv (..), IngestEnv (..), mkFollowEnvFromIngest)
 import DbSync.Extractor (ExtractState (..), ExtractorDef (..), freshExtractState)
 import DbSync.Phase.Ingest.DedupStore (closeStores, newStores)
 import DbSync.Phase.Ingest.Consumer (runConsumer)
 import DbSync.Phase.Ingest.PipelineStats (emptyPipelineStats)
 import DbSync.Phase.Ingest.ReceiverStats (newReceiverStats)
-import DbSync.Ledger.Fingerprint
+import DbSync.Worker.Ledger.Fingerprint
   ( FingerprintCheck (..)
   , checkFingerprint
   , computeFingerprint
   , writeFingerprint
   )
-import DbSync.Ledger.Snapshot (deleteNewerSnapshots, runLedgerStateWriteThread)
-import DbSync.Ledger.State
+import DbSync.Worker.Ledger.Snapshot (deleteNewerSnapshots, runLedgerStateWriteThread)
+import DbSync.Worker.Ledger.State
   ( dropLedgerStateDir
   , initLedgerDbFromGenesis
   , initLedgerDbFromSnapshot
   , mkHasLedgerEnv
   , readCurrentStateUnsafe
   )
-import DbSync.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..), mkNoLedgerEnv)
-import DbSync.Ledger.Worker (runLedgerWorker)
-import DbSync.Node.Connection (IntersectionRequirement (..), connectToNode, getNetworkMagic)
+import DbSync.Worker.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..), mkNoLedgerEnv)
+import DbSync.Worker.Ledger.Worker (runLedgerWorker)
+import DbSync.ChainSync.Connection (IntersectionRequirement (..), connectToNode, getNetworkMagic)
 import qualified DbSync.Phase.Following.Run as Follow
 import qualified DbSync.Phase.Following.Rollback as Rollback
 import DbSync.Db.Schema.Types (TableDef)
@@ -120,7 +120,7 @@ import DbSync.Phase.Current (setCurrentPhase)
 import qualified DbSync.Phase.Preparing.Run as Prep
 import DbSync.Phase.Preparing.Tuning (defaultPrepTuning)
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
-import DbSync.Worker.TxOut
+import DbSync.Worker.TxOut.Worker
   ( awaitTxOutDrained
   , closeTxOutWorker
   , mkTxOutWorker
@@ -128,7 +128,7 @@ import DbSync.Worker.TxOut
 import DbSync.Phase.Following.Resolver (mkFollowResolver)
 import DbSync.Phase.Following.Tuning (defaultFollowTuning, setFollowSessionGUCs)
 import DbSync.Phase.Ingest.FdLimit (raiseFdLimit)
-import DbSync.Phase.Ingest.IngestIndexes (createIngestResolveIndexes)
+import DbSync.Phase.Ingest.Indexes (createIngestResolveIndexes)
 import DbSync.Phase.Ingest.LsmSession
   ( closeAndDeleteLsmSession
   , closeLsmSession
@@ -138,7 +138,7 @@ import DbSync.Phase.Ingest.LsmSession
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
 import DbSync.Phase.Ingest.UtxoStore (closeUtxoStore, openUtxoStore)
 import DbSync.Worker.TxOut.ConsumedByBuffer (newConsumedByBufferRef)
-import DbSync.Config.Types (SyncOptions (..), UtxoOption (..))
+import DbSync.App.Config.Types (SyncOptions (..), UtxoOption (..))
 import DbSync.StateQuery (StateQueryVar, newStateQueryVar, seedInterpreterFromLedgerState)
 import DbSync.Trace.Timing (withHeartbeatIO)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
@@ -437,12 +437,13 @@ runApp tracer args = do
             consumerCtrlConn frc mShutdown iomgr watchdog
         pure Nothing
 
+  -- TODO: I think this needs a comment as it's not too clear what is happening here
   for_ mIngestState $ \(initialExtractState, dedupStores, intersectReq, replayBoundary, replayStart, initialAddressId) -> do
 
     -- 12. Build the per-epoch resolver's working indexes on the
     -- still-UNLOGGED Ingest tables. Without these, the bulk
     -- @UPDATE tx_out@ / @UPDATE collateral_tx_out@ and
-    -- @SELECT address@ in 'DbSync.Worker.TxOut' hash-join the full
+    -- @SELECT address@ in 'DbSync.Worker.TxOut.Worker' hash-join the full
     -- heap once per epoch; cost grows linearly with chain history
     -- and produces the long @awaitTxOutDrained (epoch N-1)@ stalls
     -- seen at epoch boundaries late in IngestChainHistory.
@@ -527,7 +528,8 @@ runApp tracer args = do
           closeStores dedupStores
             `catch` \(e :: SomeException) ->
               logError $ "Error closing dedup stores: " <> show e
-
+        
+        -- TODO: need to explain this too as I feel it is important
         ingestAction = runAppM ingestEnv runConsumer `finally` shutdownIngest
 
         shutdownPostIngest = do
@@ -575,6 +577,7 @@ runApp tracer args = do
           , wisReceiverStats = receiverStats
           , wisUtxoStore     = utxoStore
           }
+    -- TODO: is this the location we decide if we run ingest or follow?
     withIOManager (\iomgr ->
       withLedgerThreads hasLedgerEnv replayBoundary stateQueryVar watchdog $
         withAsyncs

@@ -48,9 +48,9 @@ import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..))
 import Ouroboros.Network.Block (pattern BlockPoint, pattern GenesisPoint)
 import Cardano.Slotting.Slot (SlotNo (..))
 
-import DbSync.Block.Types (CardanoPoint)
+import DbSync.Parser.Types (CardanoPoint)
 import DbSync.Db.Schema.SyncState (SyncStateRow (..))
-import DbSync.Ledger.Fingerprint (LedgerStateFingerprint, renderFingerprint)
+import DbSync.Worker.Ledger.Fingerprint (LedgerStateFingerprint, renderFingerprint)
 
 -- ---------------------------------------------------------------------------
 -- * Types

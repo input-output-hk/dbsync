@@ -1,157 +1,117 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Bridges the typed 'Writer IO' interface to the 'LoaderStream'.
 --
--- The extractors call @Writer.writeBlock@, @Writer.writeTx@, etc. with
--- typed records. This adapter encodes each record to the loader-stream
--- wire format and dispatches to the queue for the appropriate table.
+-- Each per-table write function lives in @Writer\/\<extractor\>.hs@
+-- next door. This module composes them into a single 'Writer' record.
 module DbSync.Phase.Ingest.Writer
-  ( -- * Construction
-    mkWriter
+  ( mkWriter
   ) where
 
 import Cardano.Prelude
 
 import DbSync.Db.Loader (LoaderStream (..))
-import DbSync.Db.Schema.AdaPots (encodeAdaPotsCopy)
-import DbSync.Db.Schema.Address (encodeAddressCopy)
-import DbSync.Db.Schema.CBOR (encodeTxCborCopy)
-import DbSync.Db.Schema.Core
-  ( encodeBlockCopy
-  , encodeSlotLeaderCopy
-  , encodeTxCopy
+import DbSync.Phase.Ingest.Writer.Cbor (writeTxCborCopy)
+import DbSync.Phase.Ingest.Writer.Core
+  ( writeBlockCopy
+  , writeSlotLeaderCopy
+  , writeTxCopy
   )
-import DbSync.Db.Schema.EpochBoundary
-  ( encodeCostModelCopy
-  , encodeEpochParamCopy
-  , encodeEpochStateCopy
-  , encodePotTransferCopy
-  , encodeReserveCopy
-  , encodeTreasuryCopy
+import DbSync.Phase.Ingest.Writer.Epoch (writeEpochSyncStatsCopy)
+import DbSync.Phase.Ingest.Writer.EpochBoundary
+  ( writeAdaPotsCopy
+  , writeCostModelCopy
+  , writeEpochParamCopy
+  , writeEpochStateCopy
   )
-import DbSync.Db.Schema.UTxO
-  ( encodeTxOutCopy
-  , encodeTxInCopy
-  , encodeCollateralTxInCopy
-  , encodeCollateralTxOutCopy
-  , encodeReferenceTxInCopy
+import DbSync.Phase.Ingest.Writer.Metadata (writeTxMetadataCopy)
+import DbSync.Phase.Ingest.Writer.MultiAsset
+  ( writeMaTxMintCopy
+  , writeMaTxOutCopy
+  , writeMultiAssetCopy
   )
-import DbSync.Db.Schema.Metadata (encodeTxMetadataCopy)
-import DbSync.Db.Schema.MultiAsset
-  ( encodeMultiAssetCopy
-  , encodeMaTxMintCopy
-  , encodeMaTxOutCopy
+import DbSync.Phase.Ingest.Writer.Pool
+  ( writePoolHashCopy
+  , writePoolMetadataRefCopy
+  , writePoolOwnerCopy
+  , writePoolRelayCopy
+  , writePoolRetireCopy
+  , writePoolUpdateCopy
   )
-import DbSync.Db.Schema.StakeDelegation
-  ( encodeStakeAddressCopy
-  , encodeStakeRegistrationCopy
-  , encodeStakeDeregistrationCopy
-  , encodeDelegationCopy
-  , encodeWithdrawalCopy
+import DbSync.Phase.Ingest.Writer.StakeDelegation
+  ( writeDelegationCopy
+  , writePotTransferCopy
+  , writeReserveCopy
+  , writeStakeAddressCopy
+  , writeStakeDeregistrationCopy
+  , writeStakeRegistrationCopy
+  , writeTreasuryCopy
+  , writeWithdrawalCopy
   )
-import DbSync.Db.Schema.EpochSyncStats (encodeEpochSyncStatsCopy)
-import DbSync.Db.Schema.Pool
-  ( encodePoolHashCopy
-  , encodePoolUpdateCopy
-  , encodePoolMetadataRefCopy
-  , encodePoolOwnerCopy
-  , encodePoolRetireCopy
-  , encodePoolRelayCopy
+import DbSync.Phase.Ingest.Writer.UTxO
+  ( writeAddressCopy
+  , writeCollateralTxInCopy
+  , writeCollateralTxOutCopy
+  , writeReferenceTxInCopy
+  , writeTxInCopy
+  , writeTxOutCopy
   )
 import DbSync.Writer (Writer (..))
 
--- ---------------------------------------------------------------------------
--- * Construction
--- ---------------------------------------------------------------------------
-
 -- | Build a 'Writer IO' that encodes typed records and dispatches to
--- a 'LoaderStream'.
+-- a 'LoaderStream'. One field per table, sourced from the
+-- corresponding per-extractor module.
 mkWriter :: LoaderStream -> Writer IO
-mkWriter bs = Writer
+mkWriter ls = Writer
   { -- Core
-    writeBlock = \bid blk ->
-      lsWriteRow bs "block" (encodeBlockCopy bid blk)
-  , writeTx = \tid tx ->
-      lsWriteRow bs "tx" (encodeTxCopy tid tx)
-  , writeSlotLeader = \slid sl ->
-      lsWriteRow bs "slot_leader" (encodeSlotLeaderCopy slid sl)
+    writeBlock      = writeBlockCopy ls
+  , writeTx         = writeTxCopy ls
+  , writeSlotLeader = writeSlotLeaderCopy ls
 
     -- UTxO
-  , writeAddress = \aid addr ->
-      lsWriteRow bs "address" (encodeAddressCopy aid addr)
-  , writeTxOut = \oid txo ->
-      lsWriteRow bs "tx_out" (encodeTxOutCopy oid txo)
-  , writeTxIn = \iid ti ->
-      lsWriteRow bs "tx_in" (encodeTxInCopy iid ti)
-  , writeCollateralTxIn = \iid ci ->
-      lsWriteRow bs "collateral_tx_in" (encodeCollateralTxInCopy iid ci)
-  , writeCollateralTxOut = \oid co ->
-      lsWriteRow bs "collateral_tx_out" (encodeCollateralTxOutCopy oid co)
-  , writeReferenceTxIn = \iid ri ->
-      lsWriteRow bs "reference_tx_in" (encodeReferenceTxInCopy iid ri)
+  , writeAddress         = writeAddressCopy ls
+  , writeTxOut           = writeTxOutCopy ls
+  , writeTxIn            = writeTxInCopy ls
+  , writeCollateralTxIn  = writeCollateralTxInCopy ls
+  , writeCollateralTxOut = writeCollateralTxOutCopy ls
+  , writeReferenceTxIn   = writeReferenceTxInCopy ls
 
     -- Metadata
-  , writeTxMetadata = \mid md ->
-      lsWriteRow bs "tx_metadata" (encodeTxMetadataCopy mid md)
+  , writeTxMetadata = writeTxMetadataCopy ls
 
     -- MultiAsset
-  , writeMultiAsset = \mid ma ->
-      lsWriteRow bs "multi_asset" (encodeMultiAssetCopy mid ma)
-  , writeMaTxMint = \mid m ->
-      lsWriteRow bs "ma_tx_mint" (encodeMaTxMintCopy mid m)
-  , writeMaTxOut = \mid m ->
-      lsWriteRow bs "ma_tx_out" (encodeMaTxOutCopy mid m)
+  , writeMultiAsset = writeMultiAssetCopy ls
+  , writeMaTxMint   = writeMaTxMintCopy ls
+  , writeMaTxOut    = writeMaTxOutCopy ls
 
-    -- StakeDelegation
-  , writeStakeAddress = \sid sa ->
-      lsWriteRow bs "stake_address" (encodeStakeAddressCopy sid sa)
-  , writeStakeRegistration = \sid sr ->
-      lsWriteRow bs "stake_registration" (encodeStakeRegistrationCopy sid sr)
-  , writeStakeDeregistration = \sid sd ->
-      lsWriteRow bs "stake_deregistration" (encodeStakeDeregistrationCopy sid sd)
-  , writeDelegation = \did d ->
-      lsWriteRow bs "delegation" (encodeDelegationCopy did d)
-  , writeWithdrawal = \wid w ->
-      lsWriteRow bs "withdrawal" (encodeWithdrawalCopy wid w)
+    -- StakeDelegation (incl. pot rebalancing)
+  , writeStakeAddress        = writeStakeAddressCopy ls
+  , writeStakeRegistration   = writeStakeRegistrationCopy ls
+  , writeStakeDeregistration = writeStakeDeregistrationCopy ls
+  , writeDelegation          = writeDelegationCopy ls
+  , writeWithdrawal          = writeWithdrawalCopy ls
+  , writePotTransfer         = writePotTransferCopy ls
+  , writeTreasury            = writeTreasuryCopy ls
+  , writeReserve             = writeReserveCopy ls
 
     -- Pool
-  , writePoolHash = \pid ph ->
-      lsWriteRow bs "pool_hash" (encodePoolHashCopy pid ph)
-  , writePoolUpdate = \puid pu ->
-      lsWriteRow bs "pool_update" (encodePoolUpdateCopy puid pu)
-  , writePoolMetadataRef = \pmid pm ->
-      lsWriteRow bs "pool_metadata_ref" (encodePoolMetadataRefCopy pmid pm)
-  , writePoolOwner = \poid po ->
-      lsWriteRow bs "pool_owner" (encodePoolOwnerCopy poid po)
-  , writePoolRetire = \prid pr ->
-      lsWriteRow bs "pool_retire" (encodePoolRetireCopy prid pr)
-  , writePoolRelay = \prid pr ->
-      lsWriteRow bs "pool_relay" (encodePoolRelayCopy prid pr)
+  , writePoolHash        = writePoolHashCopy ls
+  , writePoolUpdate      = writePoolUpdateCopy ls
+  , writePoolMetadataRef = writePoolMetadataRefCopy ls
+  , writePoolOwner       = writePoolOwnerCopy ls
+  , writePoolRetire      = writePoolRetireCopy ls
+  , writePoolRelay       = writePoolRelayCopy ls
 
     -- CBOR
-  , writeTxCbor = \tcid tc ->
-      lsWriteRow bs "tx_cbor" (encodeTxCborCopy tcid tc)
+  , writeTxCbor = writeTxCborCopy ls
 
     -- EpochSyncStats
-  , writeEpochSyncStats = \essid ess ->
-      lsWriteRow bs "epoch_sync_stats" (encodeEpochSyncStatsCopy essid ess)
+  , writeEpochSyncStats = writeEpochSyncStatsCopy ls
 
     -- EpochBoundary
-  , writeAdaPots = \apid pots ->
-      lsWriteRow bs "ada_pots" (encodeAdaPotsCopy apid pots)
-  , writeEpochParam = \epid ep ->
-      lsWriteRow bs "epoch_param" (encodeEpochParamCopy epid ep)
-  , writeEpochState = \esid es ->
-      lsWriteRow bs "epoch_state" (encodeEpochStateCopy esid es)
-  , writeCostModel = \cmid cm ->
-      lsWriteRow bs "cost_model" (encodeCostModelCopy cmid cm)
-  , writePotTransfer = \ptid pt ->
-      lsWriteRow bs "pot_transfer" (encodePotTransferCopy ptid pt)
-  , writeTreasury = \tid t ->
-      lsWriteRow bs "treasury" (encodeTreasuryCopy tid t)
-  , writeReserve = \rid r ->
-      lsWriteRow bs "reserve" (encodeReserveCopy rid r)
+  , writeAdaPots     = writeAdaPotsCopy ls
+  , writeEpochParam  = writeEpochParamCopy ls
+  , writeEpochState  = writeEpochStateCopy ls
+  , writeCostModel   = writeCostModelCopy ls
 
     -- Transaction control
-  , commit = lsCommit bs
+  , commit = lsCommit ls
   }

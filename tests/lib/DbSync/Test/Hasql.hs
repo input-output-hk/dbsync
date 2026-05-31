@@ -8,9 +8,9 @@
 -- 'try' work without coupling the test to production-side
 -- 'AppError' decoding).
 --
--- == Why a separate test runner instead of reusing 'DbSync.Checkpoint.SyncState.runStmt'
+-- == Why a separate test runner instead of reusing 'DbSync.SyncState.Row.runStmt'
 --
--- The production runner ('runStmt' inside 'DbSync.Checkpoint.SyncState')
+-- The production runner ('runStmt' inside 'DbSync.SyncState.Row')
 -- wraps every 'Hasql.Session.SessionError' into 'AppDatabaseError'.
 -- Tests that want to assert on the underlying error shape (e.g.
 -- "hasql reported a constraint violation", "the prepared statement

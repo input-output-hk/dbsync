@@ -11,7 +11,7 @@
 module DbSync.Extractor.Core
   ( coreExtractor
 
-    -- * Slot-leader construction (used by 'DbSync.Block.Pipeline').
+    -- * Slot-leader construction (used by 'DbSync.Extractor.Pipeline').
   , mkSlotLeader
 
     -- * Deposit dispatch helpers (exported for testing).
@@ -26,8 +26,8 @@ import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 
 import qualified Data.ByteString as BS
 
-import DbSync.Block.Types (GenericBlock (..))
-import qualified DbSync.Block.Types as G
+import DbSync.Parser.Types (GenericBlock (..))
+import qualified DbSync.Parser.Types as G
 import DbSync.Db.Schema.Core
   ( Block (..)
   , SlotLeader (..)
@@ -45,7 +45,7 @@ import DbSync.Extractor
   , ProcessBlockFn
   , TxContext (..)
   )
-import DbSync.Ledger.Types (lookupDepositsMap)
+import DbSync.Worker.Ledger.Types (lookupDepositsMap)
 import DbSync.Phase.Type (isFollowPath)
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
 import DbSync.Util (coinToInt64)

@@ -41,40 +41,108 @@ library
   import:         warnings, defaults
   hs-source-dirs: src
   exposed-modules:
-    -- Modules
+    -- Top-level plumbing
     DbSync.App
+    DbSync.AppM
+    DbSync.Error
+    DbSync.Util
+    DbSync.Metrics
+
+    -- Boot / wiring
     DbSync.App.Args
     DbSync.App.Boot
+    DbSync.App.Cli
+    DbSync.App.Config.Genesis
+    DbSync.App.Config.Node
+    DbSync.App.Config.Types
+    DbSync.App.Config.Validation
+    DbSync.App.Env
     DbSync.App.Run
-    DbSync.AppM
-    DbSync.Cli
-    DbSync.Config
-    DbSync.Config.Genesis
-    DbSync.Config.Node
-    DbSync.Config.Types
-    DbSync.Config.Validation
-    DbSync.Env
-    DbSync.Error
+    DbSync.App.Setup
+
+    -- Trace
     DbSync.Trace
-    DbSync.Trace.Types
     DbSync.Trace.Backend
     DbSync.Trace.Pulse
     DbSync.Trace.Replay
     DbSync.Trace.Timing
+    DbSync.Trace.Types
     DbSync.Trace.Watchdog
+
+    -- ChainSync (node-to-client receiver)
+    DbSync.ChainSync.Connection
+    DbSync.ChainSync.Msg
+
+    -- Parser (HFC era dispatch + GenericBlock types)
+    DbSync.Parser.Block
+    DbSync.Parser.Byron
+    DbSync.Parser.Dispatch
+    DbSync.Parser.Metadata
+    DbSync.Parser.Tx
+    DbSync.Parser.Types
+
+    -- Cross-phase extractor interface + implementations
+    DbSync.Extractor
+    DbSync.Extractor.Cbor
+    DbSync.Extractor.Core
+    DbSync.Extractor.Epoch
+    DbSync.Extractor.EpochBoundary
+    DbSync.Extractor.EpochSyncStats
+    DbSync.Extractor.Metadata
+    DbSync.Extractor.MultiAsset
+    DbSync.Extractor.Pipeline
+    DbSync.Extractor.Pool
+    DbSync.Extractor.SharedDedup
+    DbSync.Extractor.StakeDelegation
+    DbSync.Extractor.UTxO
+
+    -- Cross-phase resolver / writer interfaces
+    DbSync.Resolver
+    DbSync.Writer
+
+    -- Db (libpq loader-stream + hasql)
+    DbSync.Db.Loader
+    DbSync.Db.Loader.Connection
+    DbSync.Db.Pool
+    DbSync.Db.Transaction
+
+    -- Phase state machine
     DbSync.Phase.Current
     DbSync.Phase.Type
+
+    -- Phase: Ingest
     DbSync.Phase.Ingest.Consumer
     DbSync.Phase.Ingest.Counter
     DbSync.Phase.Ingest.DedupStore
     DbSync.Phase.Ingest.FdLimit
-    DbSync.Phase.Ingest.IngestIndexes
+    DbSync.Phase.Ingest.Indexes
     DbSync.Phase.Ingest.LsmSession
     DbSync.Phase.Ingest.PipelineStats
     DbSync.Phase.Ingest.ReceiverStats
     DbSync.Phase.Ingest.Resolver
+    DbSync.Phase.Ingest.Resolver.Cbor
+    DbSync.Phase.Ingest.Resolver.Core
+    DbSync.Phase.Ingest.Resolver.Epoch
+    DbSync.Phase.Ingest.Resolver.EpochBoundary
+    DbSync.Phase.Ingest.Resolver.Internal
+    DbSync.Phase.Ingest.Resolver.Metadata
+    DbSync.Phase.Ingest.Resolver.MultiAsset
+    DbSync.Phase.Ingest.Resolver.Pool
+    DbSync.Phase.Ingest.Resolver.StakeDelegation
+    DbSync.Phase.Ingest.Resolver.UTxO
     DbSync.Phase.Ingest.UtxoStore
     DbSync.Phase.Ingest.Writer
+    DbSync.Phase.Ingest.Writer.Cbor
+    DbSync.Phase.Ingest.Writer.Core
+    DbSync.Phase.Ingest.Writer.Epoch
+    DbSync.Phase.Ingest.Writer.EpochBoundary
+    DbSync.Phase.Ingest.Writer.Metadata
+    DbSync.Phase.Ingest.Writer.MultiAsset
+    DbSync.Phase.Ingest.Writer.Pool
+    DbSync.Phase.Ingest.Writer.StakeDelegation
+    DbSync.Phase.Ingest.Writer.UTxO
+
+    -- Phase: Preparing
     DbSync.Phase.Preparing.Backfill
     DbSync.Phase.Preparing.Indexes
     DbSync.Phase.Preparing.PreResolveIndexes
@@ -82,70 +150,71 @@ library
     DbSync.Phase.Preparing.Run
     DbSync.Phase.Preparing.Sequences
     DbSync.Phase.Preparing.Tuning
-    DbSync.Db.Pool
-    DbSync.Phase.Following.IdCounts
+
+    -- Phase: Following
     DbSync.Phase.Following.IdAllocator
+    DbSync.Phase.Following.IdCounts
     DbSync.Phase.Following.Resolver
+    DbSync.Phase.Following.Resolver.Cbor
+    DbSync.Phase.Following.Resolver.Core
+    DbSync.Phase.Following.Resolver.Epoch
+    DbSync.Phase.Following.Resolver.EpochBoundary
+    DbSync.Phase.Following.Resolver.Internal
+    DbSync.Phase.Following.Resolver.Metadata
+    DbSync.Phase.Following.Resolver.MultiAsset
+    DbSync.Phase.Following.Resolver.Pool
+    DbSync.Phase.Following.Resolver.StakeDelegation
+    DbSync.Phase.Following.Resolver.UTxO
     DbSync.Phase.Following.Rollback
     DbSync.Phase.Following.Run
     DbSync.Phase.Following.Tuning
     DbSync.Phase.Following.WriteBuffer
     DbSync.Phase.Following.Writer
-    DbSync.Block.Metadata
-    DbSync.Block.Parser
-    DbSync.Block.Parser.Block
-    DbSync.Block.Parser.Byron
-    DbSync.Block.Parser.Tx
-    DbSync.Block.Pipeline
-    DbSync.Block.Types
-    DbSync.Extractor
-    DbSync.Extractor.Core
-    DbSync.Extractor.UTxO
-    DbSync.Extractor.MultiAsset
-    DbSync.Extractor.Metadata
-    DbSync.Extractor.StakeDelegation
-    DbSync.Extractor.Pool
-    DbSync.Extractor.SharedDedup
-    DbSync.Extractor.Cbor
-    DbSync.Extractor.EpochSyncStats
-    DbSync.Extractor.EpochBoundary
-    DbSync.Extractor.Epoch
-    DbSync.Db.Loader
-    DbSync.Db.Loader.Connection
-    DbSync.Db.Transaction
-    DbSync.Resolver
-    DbSync.Worker.TxOut
+    DbSync.Phase.Following.Writer.Cbor
+    DbSync.Phase.Following.Writer.Core
+    DbSync.Phase.Following.Writer.Epoch
+    DbSync.Phase.Following.Writer.EpochBoundary
+    DbSync.Phase.Following.Writer.Internal
+    DbSync.Phase.Following.Writer.Metadata
+    DbSync.Phase.Following.Writer.MultiAsset
+    DbSync.Phase.Following.Writer.Pool
+    DbSync.Phase.Following.Writer.StakeDelegation
+    DbSync.Phase.Following.Writer.UTxO
+
+    -- Side-channel workers
+    DbSync.Worker.Ledger.DepositAccumulator
+    DbSync.Worker.Ledger.EpochUpdate
+    DbSync.Worker.Ledger.Event
+    DbSync.Worker.Ledger.Fingerprint
+    DbSync.Worker.Ledger.Keys
+    DbSync.Worker.Ledger.ProtoParams
+    DbSync.Worker.Ledger.Rewards
+    DbSync.Worker.Ledger.Snapshot
+    DbSync.Worker.Ledger.StakeDist
+    DbSync.Worker.Ledger.State
+    DbSync.Worker.Ledger.Types
+    DbSync.Worker.Ledger.Worker
+    DbSync.Worker.OffChain.Fetcher
+    DbSync.Worker.OffChain.Pool
+    DbSync.Worker.OffChain.Types
+    DbSync.Worker.OffChain.Vote
     DbSync.Worker.TxOut.AddressBuffer
     DbSync.Worker.TxOut.ConsumedByBuffer
+    DbSync.Worker.TxOut.Worker
+
+    -- SyncState
+    DbSync.SyncState.Manager
+    DbSync.SyncState.Resume
+    DbSync.SyncState.Row
+
+    -- StateQuery (slot-details service)
     DbSync.StateQuery
+    DbSync.StateQuery.Handler
+    DbSync.StateQuery.Observe
     DbSync.StateQuery.ObservedSummary
+    DbSync.StateQuery.Seed
     DbSync.StateQuery.Types
-    DbSync.Writer
-    DbSync.Checkpoint.Manager
-    DbSync.Checkpoint.Resume
-    DbSync.Checkpoint.SyncState
-    DbSync.Checkpoint.Types
-    DbSync.Checkpoint.Serialise
-    DbSync.Ledger.DepositAccumulator
-    DbSync.Ledger.EpochUpdate
-    DbSync.Ledger.Event
-    DbSync.Ledger.Fingerprint
-    DbSync.Ledger.Keys
-    DbSync.Ledger.ProtoParams
-    DbSync.Ledger.Rewards
-    DbSync.Ledger.Snapshot
-    DbSync.Ledger.StakeDist
-    DbSync.Ledger.State
-    DbSync.Ledger.Types
-    DbSync.Ledger.Worker
-    DbSync.Node.ChainSyncMsg
-    DbSync.Node.Connection
-    DbSync.Util
-    DbSync.OffChain.Types
-    DbSync.OffChain.Fetcher
-    DbSync.OffChain.Pool
-    DbSync.OffChain.Vote
-    DbSync.Metrics
+    DbSync.StateQuery.Var
   build-depends:
     -- Base
       base                            >= 4.14 && < 5

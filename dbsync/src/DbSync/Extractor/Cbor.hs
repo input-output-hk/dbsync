@@ -13,7 +13,7 @@ module DbSync.Extractor.Cbor
 
 import Cardano.Prelude
 
-import DbSync.Block.Types (GenericTx (..))
+import DbSync.Parser.Types (GenericTx (..))
 import DbSync.Db.Schema.CBOR
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
 import DbSync.Resolver (HasResolver (..), IdResolver (..))

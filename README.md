@@ -233,24 +233,24 @@ optional **Ledger Worker** (kept off the critical path during Ingest) and the
 └── dbsync/           # The sync engine
     ├── app/          # Executable entrypoint (Main.hs)
     └── src/DbSync/
-        ├── App.hs / AppM.hs / Cli.hs / Env.hs / Error.hs / Util.hs   # Top-level wiring & CLI
-        ├── App/                          # Orchestrator: boot decision, run loop, AppArgs
-        ├── Phase/                        # Phase state machine — SyncPhase type, live Current carrier,
-        │                                 #   Ingest/ (incl. Counter, DedupStore) / Preparing / Following
-        ├── Block/                        # ChainSync receiver + HFC-era-dispatching block/tx parser
+        ├── App.hs / AppM.hs / Error.hs / Util.hs   # Top-level umbrella + AppM monad + AppError + utilities
+        ├── App/                          # Boot decision, CLI parser, env records, Config/ parsing,
+        │                                 #   buildCoreEnv + buildExtractors (Setup.hs), runApp (Run.hs)
+        ├── ChainSync/                    # Unix-socket node-to-client connection + ChainSyncMsg type
+        ├── Parser/                       # HFC era dispatch + GenericBlock / GenericTx types (Byron, Shelley+)
         ├── Extractor.hs + Extractor/     # Pure GenericBlock → [Row] projections (Core, UTxO, Pool, …)
+        ├── Phase/                        # Phase state machine — SyncPhase type, live Current carrier,
+        │                                 #   Ingest/ (Counter, DedupStore, LsmSession, Resolver/, Writer/) /
+        │                                 #   Preparing/ (post-COPY index + sequence backfill) /
+        │                                 #   Following/ (per-block hasql INSERT path, own Resolver/ + Writer/)
         ├── Db/                           # Loader-stream COPY writer + hasql pool + transaction bracket
-        ├── Writer.hs                     # hasql INSERT/SELECT writer interface (Preparing/Following path)
-        ├── Address/                      # Async address-resolution worker (fills tx_out.address_id)
         ├── Resolver.hs                   # IdResolver interface shared by Ingest and Following extractors
+        ├── Writer.hs                     # Writer interface — loader stream (Ingest) or hasql INSERT (Following)
         ├── StateQuery.hs + StateQuery/   # LocalStateQuery driver + observed-summary cache
-        ├── Checkpoint/                   # Epoch-aligned checkpoint manager + resume logic
-        ├── Ledger/                       # Optional ledger-state worker (off the critical path) +
-        │                                 #   era-collapsed projections (Rewards, EpochUpdate,
-        │                                 #   ProtoParams, StakeDist)
-        ├── OffChain/                     # Off-chain metadata fetchers (pool / vote)
-        ├── Node/                         # Unix-socket node connection
-        ├── Config.hs + Config/           # Profile + node-config parsing & validation
+        ├── SyncState/                    # dbsync_sync_state row wrapper + epoch-commit + resume-time row cleanup
+        ├── Worker/                       # Side-channel workers: Ledger/ (optional ledger-state thread +
+        │                                 #   era-collapsed projections), OffChain/ (pool / vote metadata
+        │                                 #   fetchers), TxOut/ (async address + consumed-by fill-in)
         ├── Trace.hs + Trace/             # contra-tracer setup and structured logging
         └── Metrics.hs                    # Prometheus metric definitions
 ```

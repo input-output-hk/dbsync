@@ -45,7 +45,7 @@ import System.Timeout (timeout)
 
 import DbSync.App.Args (AppArgs)
 import DbSync.App.Run (runApp)
-import DbSync.Config.Types (SyncConfig)
+import DbSync.App.Config.Types (SyncConfig)
 import DbSync.Db.Schema.Core (blockTableDef)
 import DbSync.Db.Schema.SyncState (syncStateTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))

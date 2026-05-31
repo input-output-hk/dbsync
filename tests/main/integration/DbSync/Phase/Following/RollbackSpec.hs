@@ -29,11 +29,11 @@ import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 
-import qualified DbSync.Block.Metadata as Metadata
+import qualified DbSync.Parser.Metadata as Metadata
 
 import Test.Hspec (Spec, afterAll_, beforeAll_, before_, describe, it, shouldBe, shouldMatchList, shouldThrow)
 
-import DbSync.Block.Types
+import DbSync.Parser.Types
   ( BlockEra (..)
   , CardanoPoint
   , GenericBlock (..)
@@ -80,7 +80,7 @@ import DbSync.Db.Schema.UTxO
   , txOutTableDef
   )
 import DbSync.Db.Transaction (HasHasqlConnection (..))
-import DbSync.Env (HasSecurityParam (..))
+import DbSync.App.Env (HasSecurityParam (..))
 import DbSync.Extractor (ExtractorDef, emptyBlockLedgerData)
 import qualified Hasql.Connection as Conn
 import DbSync.Extractor.Cbor (cborExtractor)
@@ -90,7 +90,7 @@ import DbSync.Extractor.MultiAsset (multiAssetExtractor)
 import DbSync.Extractor.Pool (poolExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Extractor.UTxO (utxoExtractor)
-import DbSync.Block.Pipeline (processBlock)
+import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.AppM (runAppM)
 import qualified DbSync.Phase.Following.Rollback as Rollback

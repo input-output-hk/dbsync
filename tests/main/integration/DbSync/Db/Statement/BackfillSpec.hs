@@ -90,9 +90,9 @@ import DbSync.Extractor.Pool (poolExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Extractor.UTxO (utxoExtractor)
 
-import DbSync.Block.Pipeline (processBlock)
+import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.AppM (runAppM)
-import DbSync.Env (TracerWithConn (..))
+import DbSync.App.Env (TracerWithConn (..))
 import qualified DbSync.Phase.Preparing.PreResolveIndexes as PreResolveIndexes
 import qualified DbSync.Phase.Preparing.Resolve as Resolve
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)

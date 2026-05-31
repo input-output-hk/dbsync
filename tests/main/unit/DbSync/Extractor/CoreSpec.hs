@@ -23,7 +23,7 @@ import qualified Data.Map.Strict as Map
 import Cardano.Ledger.BaseTypes (Network (..))
 import Cardano.Ledger.Coin (Coin (..))
 
-import DbSync.Block.Types
+import DbSync.Parser.Types
   ( BlockEra (..)
   , CertAction (..)
   , GenericBlock (..)
@@ -33,7 +33,7 @@ import DbSync.Block.Types
   , GenericTxOut (..)
   , GenericTxWithdrawal (..)
   )
-import qualified DbSync.Block.Types as G
+import qualified DbSync.Parser.Types as G
 import DbSync.Db.Schema.Core (Block (..), SlotLeader (..))
 import qualified DbSync.Db.Schema.Core as SC
 import DbSync.Db.Schema.Ids (BlockId (..), TxId (..))
@@ -45,9 +45,9 @@ import DbSync.Extractor
   , freshExtractState
   )
 import DbSync.Extractor.Core (affectsDeposit, coreExtractor, hasNoDepositActivity)
-import DbSync.Block.Pipeline (processBlock)
+import DbSync.Extractor.Pipeline (processBlock)
 
-import DbSync.Ledger.Types (DepositsMap (..))
+import DbSync.Worker.Ledger.Types (DepositsMap (..))
 import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Resolver (IdResolver (..))
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)

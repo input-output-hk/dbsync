@@ -38,11 +38,11 @@ import Cardano.Prelude
 import Cardano.Ledger.BaseTypes (Network)
 import Cardano.Ledger.Coin (Coin)
 
-import DbSync.Block.Types (GenericBlock, GenericTx)
+import DbSync.Parser.Types (GenericBlock, GenericTx)
 import DbSync.Phase.Ingest.Counter (IdCounters, freshIdCounters)
 import DbSync.Db.Schema.Ids (BlockId, PoolHashId, SlotLeaderId, StakeAddressId, TxId, TxOutId)
 import DbSync.Db.Schema.Types (TableDef)
-import DbSync.Ledger.Types (DepositsMap, emptyDepositsMap)
+import DbSync.Worker.Ledger.Types (DepositsMap, emptyDepositsMap)
 import DbSync.Phase.Type (SyncPhase)
 import DbSync.Resolver (HasResolver)
 import DbSync.Writer (HasWriter)
@@ -55,8 +55,8 @@ import DbSync.Writer (HasWriter)
 -- environment. Read once at startup from the Shelley genesis and
 -- never changes for the lifetime of a sync.
 --
--- Lives here (rather than in "DbSync.Env") because 'ProcessBlockFn'
--- needs the constraint and the env definitions in "DbSync.Env"
+-- Lives here (rather than in "DbSync.App.Env") because 'ProcessBlockFn'
+-- needs the constraint and the env definitions in "DbSync.App.Env"
 -- already depend on this module via 'HasExtractors'\/'HasLedgerData'.
 class HasNetwork env where
   getNetwork :: env -> Network

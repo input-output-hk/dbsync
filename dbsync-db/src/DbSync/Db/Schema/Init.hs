@@ -144,7 +144,7 @@ data SchemaAction
 -- must call 'dropSchema' first — the boot flow only does so when the
 -- operator explicitly passes @--resync-from-genesis@.
 --
--- 'DbSync.Checkpoint.SyncState.seedSyncState' is __not__ called here;
+-- 'DbSync.SyncState.Row.seedSyncState' is __not__ called here;
 -- seeding is the caller's responsibility so that the @ledger_enabled@ flag
 -- comes from runtime configuration.
 initSchema :: [TableDef] -> [(Text, Int)] -> Text -> IO ()

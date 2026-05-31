@@ -46,10 +46,10 @@ import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
 import Ouroboros.Consensus.Shelley.HFEras ()                -- per-era HFC instances
 import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()  -- LedgerSupportsProtocol orphans
 
-import DbSync.Block.Parser (parseBlock)
+import DbSync.Parser.Dispatch (parseBlock)
 import DbSync.Extractor (ExtractorDef, freshExtractState)
 
-import DbSync.Block.Pipeline (processBlock)
+import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
 import DbSync.Test.Lsm (withTestIngestStores)

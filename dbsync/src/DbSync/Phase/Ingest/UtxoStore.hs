@@ -7,7 +7,7 @@
 -- the producing tx's @(TxId, TxOutId, value)@.
 --
 -- One entry per unspent output. Populated as each tx is processed
--- by 'DbSync.Block.Pipeline'; consulted by 'DbSync.Extractor.UTxO'
+-- by 'DbSync.Extractor.Pipeline'; consulted by 'DbSync.Extractor.UTxO'
 -- when resolving inputs; entries are removed by 'deleteConsumed'
 -- when a regular input consumes them (or when a phase-2 failed
 -- tx's collateral is consumed).
@@ -90,7 +90,7 @@ data StoreStats = StoreStats
 
 -- | Cache handle. Owns one table under the session passed to
 -- 'openUtxoStore'; the session itself is owned by
--- 'DbSync.Env.IngestEnv' \/ closed at App-level shutdown.
+-- 'DbSync.App.Env.IngestEnv' \/ closed at App-level shutdown.
 --
 -- The table handle is wrapped in an 'IORef' so 'compactUtxoStore'
 -- can atomically replace it with a freshly-opened-from-snapshot

@@ -3,7 +3,7 @@
 -- to its producer.
 --
 -- The consumer hands the snapshot to the
--- 'DbSync.Worker.TxOut.TxOutWorker' at each epoch boundary; the
+-- 'DbSync.Worker.TxOut.Worker.TxOutWorker' at each epoch boundary; the
 -- worker fans the pairs into one bulk UPDATE against
 -- @tx_out.consumed_by_tx_id@ on its dedicated backend, matching rows
 -- by @tx_out.id@ (PK lookup, no index on @(tx_id, index)@ needed

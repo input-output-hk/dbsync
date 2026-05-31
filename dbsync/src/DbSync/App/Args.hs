@@ -13,8 +13,8 @@ module DbSync.App.Args
 
 import Cardano.Prelude
 
-import DbSync.Config.Genesis (GenesisConfig)
-import DbSync.Config.Types (NodeConfig, SyncConfig)
+import DbSync.App.Config.Genesis (GenesisConfig)
+import DbSync.App.Config.Types (NodeConfig, SyncConfig)
 import DbSync.StateQuery.Types (StateQueryVar)
 
 -- | Everything 'DbSync.App.Run.runApp' needs to boot a sync.

@@ -103,11 +103,11 @@ test-suite dbsync-test
   ghc-options:    -threaded
   other-modules:
     DbSync.AppSpec
-    DbSync.CliSpec
-    DbSync.Config.TypesSpec
-    DbSync.Config.ValidationSpec
-    DbSync.Config.NodeSpec
-    DbSync.Config.GenesisSpec
+    DbSync.App.CliSpec
+    DbSync.App.Config.TypesSpec
+    DbSync.App.Config.NodeSpec
+    DbSync.App.Config.ValidationSpec
+    DbSync.App.Config.GenesisSpec
     DbSync.Db.Statement.BackfillSpec
     DbSync.Db.Statement.BlockSpec
     DbSync.Db.Statement.IndexesSpec
@@ -117,7 +117,7 @@ test-suite dbsync-test
     DbSync.Db.Statement.SyncStateSpec
     DbSync.Db.TypesSpec
     DbSync.PropertySpec
-    DbSync.Worker.TxOutSpec
+    DbSync.Worker.TxOut.WorkerSpec
     DbSync.Schema.AdaPotsSpec
     DbSync.Schema.AddressSpec
     DbSync.Schema.CoreSpec
@@ -130,27 +130,27 @@ test-suite dbsync-test
     DbSync.Schema.SyncStateSpec
     DbSync.Util.Bech32Spec
     DbSync.Util.DedupHashSpec
-    DbSync.Block.MetadataSpec
     DbSync.Extractor.CoreSpec
     DbSync.Extractor.EpochBoundarySpec
     DbSync.Extractor.EpochSpec
+    DbSync.Extractor.PipelineSpec
     DbSync.Extractor.PoolSpec
     DbSync.Extractor.StakeDelegationSpec
     DbSync.Extractor.UTxOSpec
-    DbSync.Block.PipelineSpec
+    DbSync.Parser.MetadataSpec
     DbSync.Phase.Ingest.ConsumerSpec
     DbSync.Phase.Ingest.DedupStoreSpec
     DbSync.Phase.Ingest.UtxoStoreSpec
     DbSync.Schema.InitSpec
     DbSync.Db.LoaderSpec
-    DbSync.Ledger.DepositAccumulatorSpec
-    DbSync.Ledger.FingerprintSpec
-    DbSync.Ledger.StateSpec
-    DbSync.Ledger.TypesSpec
-    DbSync.Ledger.WorkerSpec
-    DbSync.Checkpoint.ManagerSpec
-    DbSync.Checkpoint.ResumeSpec
-    DbSync.Checkpoint.SyncStateSpec
+    DbSync.Worker.Ledger.DepositAccumulatorSpec
+    DbSync.Worker.Ledger.FingerprintSpec
+    DbSync.Worker.Ledger.StateSpec
+    DbSync.Worker.Ledger.TypesSpec
+    DbSync.Worker.Ledger.WorkerSpec
+    DbSync.SyncState.ManagerSpec
+    DbSync.SyncState.ResumeSpec
+    DbSync.SyncState.RowSpec
     DbSync.App.BootSpec
     DbSync.Phase.CurrentSpec
     DbSync.Phase.Following.BufferedDiffSpec

@@ -21,7 +21,7 @@ import Test.Hspec (Spec, describe, it, shouldBe)
 import Cardano.Ledger.BaseTypes (Network (..))
 import Cardano.Ledger.Coin (Coin (..))
 
-import DbSync.Block.Types
+import DbSync.Parser.Types
   ( BlockEra (..)
   , CertAction (..)
   , GenericBlock (..)
@@ -41,7 +41,7 @@ import DbSync.Extractor
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 
-import DbSync.Block.Pipeline (processBlock)
+import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)

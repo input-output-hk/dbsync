@@ -36,7 +36,7 @@ import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()    -- LedgerSuppor
 import Ouroboros.Network.Block (pattern BlockPoint, pattern GenesisPoint)
 import Cardano.Slotting.Slot (SlotNo (..))
 
-import DbSync.Block.Types (CardanoPoint)
+import DbSync.Parser.Types (CardanoPoint)
 import qualified DbSync.Db.Schema.Core as Core
 import DbSync.Db.Schema.Ids (getPoolUpdateId, getTxId, getTxOutId)
 import qualified DbSync.Db.Schema.Pool as Pool
@@ -56,7 +56,7 @@ import DbSync.Db.Statement.Rollback
   )
 import DbSync.Db.Statement.SyncState (writeSyncStateSlotStmt)
 import DbSync.Db.Transaction (HasHasqlConnection (..), withTransaction)
-import DbSync.Env (HasSecurityParam (..))
+import DbSync.App.Env (HasSecurityParam (..))
 
 -- | Delete every row past the rollback target and advance
 -- @dbsync_sync_state.last_committed_*@ to match.

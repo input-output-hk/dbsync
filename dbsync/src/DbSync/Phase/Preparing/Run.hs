@@ -61,7 +61,7 @@ import DbSync.Db.Schema.UTxO
   , txOutTableDef
   )
 import DbSync.Db.Transaction (HasHasqlConnection (..))
-import DbSync.Env (HasConfig)
+import DbSync.App.Env (HasConfig)
 import qualified DbSync.Phase.Preparing.Backfill as Backfill
 import qualified DbSync.Phase.Preparing.Indexes as Indexes
 import qualified DbSync.Phase.Preparing.PreResolveIndexes as PreResolveIndexes

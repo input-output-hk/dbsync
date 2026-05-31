@@ -16,8 +16,8 @@ import Cardano.Prelude
 
 import Cardano.Ledger.BaseTypes (Network (..))
 
-import DbSync.Block.Types (GenericBlock)
-import DbSync.Env (HasNetwork (..))
+import DbSync.Parser.Types (GenericBlock)
+import DbSync.App.Env (HasNetwork (..))
 import DbSync.Extractor
   ( BlockLedgerData
   , ExtractorDef

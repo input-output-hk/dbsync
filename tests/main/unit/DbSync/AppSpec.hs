@@ -21,9 +21,9 @@ import DbSync.App
   , validateExtractorDeps
   )
 import DbSync.AppM (runAppM)
-import DbSync.Config (parseConfig)
-import DbSync.Config.Node (parseNodeConfig)
-import DbSync.Config.Types
+import DbSync.App.Config.Types (parseConfig)
+import DbSync.App.Config.Node (parseNodeConfig)
+import DbSync.App.Config.Types
   ( NodeConfig
   , SyncConfig (..)
   , SyncOptions (..)
@@ -32,8 +32,8 @@ import DbSync.Config.Types
   , defaultSyncOptions
   , defaultUtxoOption
   )
-import DbSync.Config.Validation (validateConfig)
-import DbSync.Env (CoreEnv (..))
+import DbSync.App.Config.Validation (validateConfig)
+import DbSync.App.Env (CoreEnv (..))
 import DbSync.Error (AppError (..))
 import DbSync.Extractor (ExtractorDef (..))
 import DbSync.Trace.Backend (mkTestTracer)

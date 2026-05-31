@@ -54,7 +54,7 @@ import DbSync.Db.Statement.Indexes (uniqueConstraintIndexName)
 import DbSync.Extractor (ExtractorDef (..))
 import DbSync.Trace.Backend (mkNullTracer, mkStdErrTracer)
 import DbSync.Trace.Types (AppTracer, Severity)
-import DbSync.Config.Types
+import DbSync.App.Config.Types
   ( DatabaseConfig (..)
   , LedgerConfig (..)
   , LogFormat (..)
@@ -142,9 +142,7 @@ profileWithOptions opts = SyncConfig
       , dcPassword = ""
       }
   , scSync = SyncSettings
-      { ssMode            = SyncModeAuto
-      , ssCheckpointDir   = "/tmp/dbsync-test-checkpoints"
-      , ssLoaderConnections = 4
+      { ssMode = SyncModeAuto
       }
   , scLedger = LedgerConfig
       { lcEnabled              = False
@@ -229,7 +227,7 @@ preResolveIndexNames =
   , "collateral_tx_in_tx_in_id_idx"
   ]
 
--- | Indexes 'DbSync.Phase.Ingest.IngestIndexes.createIngestResolveIndexes'
+-- | Indexes 'DbSync.Phase.Ingest.Indexes.createIngestResolveIndexes'
 -- builds at the start of @IngestChainHistory@ on the still-UNLOGGED
 -- tables. Kept in sync by hand with
 -- 'DbSync.Db.Statement.Indexes.ingestResolveIndexStatements'.

@@ -45,8 +45,8 @@ import Ouroboros.Consensus.HardFork.Combinator.Basics (hardForkLedgerConfigShape
 import qualified Ouroboros.Consensus.HardFork.History as History
 import qualified Ouroboros.Network.Protocol.LocalStateQuery.Type as LSQ
 
-import DbSync.Config.Genesis (mkTopLevelConfig, readCardanoGenesisConfig)
-import DbSync.Config.Node (parseNodeConfig)
+import DbSync.App.Config.Genesis (mkTopLevelConfig, readCardanoGenesisConfig)
+import DbSync.App.Config.Node (parseNodeConfig)
 import DbSync.StateQuery
   ( CardanoInterpreter
   , RetryConfig (..)

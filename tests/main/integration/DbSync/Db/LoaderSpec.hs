@@ -22,7 +22,7 @@ import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import Test.Hspec (Spec, afterAll_, beforeAll_, describe, it, shouldBe)
 
-import DbSync.Block.Types
+import DbSync.Parser.Types
   ( BlockEra (..)
   , GenericBlock (..)
   , GenericTx (..)
@@ -35,7 +35,7 @@ import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Extractor (freshExtractState)
 import DbSync.Extractor.Core (coreExtractor)
 
-import DbSync.Block.Pipeline (processBlock)
+import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
 import DbSync.Test.Lsm (withTestIngestStores)
@@ -46,7 +46,7 @@ import qualified DbSync.Phase.Ingest.Writer as IngestWriter
 -- | The tables this spec exercises. @pool_hash@ is included because
 -- the pipeline (not 'coreExtractor' itself) writes a @pool_hash@ row
 -- for the slot leader on every Shelley+ block — see
--- 'DbSync.Block.Pipeline.resolveSlotLeaderPoolHash'. Omitting it
+-- 'DbSync.Extractor.Pipeline.resolveSlotLeaderPoolHash'. Omitting it
 -- causes the loader stream to panic on the first non-Byron block.
 coreTables :: [TableDef]
 coreTables = [blockTableDef, txTableDef, slotLeaderTableDef, poolHashTableDef]

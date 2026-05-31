@@ -9,17 +9,17 @@ import System.FilePath (takeDirectory, (</>))
 
 import DbSync.App.Args (AppArgs (..))
 import DbSync.App.Run (runApp)
-import DbSync.Cli (CliArgs (..), parseCliArgs)
-import DbSync.Config (parseConfig)
-import DbSync.Config.Genesis (GenesisConfig, readCardanoGenesisConfig)
-import DbSync.Config.Node (parseDbSyncNodeConfig, parseNodeConfig)
-import DbSync.Config.Types
+import DbSync.App.Cli (CliArgs (..), parseCliArgs)
+import DbSync.App.Config.Types (parseConfig)
+import DbSync.App.Config.Genesis (GenesisConfig, readCardanoGenesisConfig)
+import DbSync.App.Config.Node (parseDbSyncNodeConfig, parseNodeConfig)
+import DbSync.App.Config.Types
   ( DbSyncNodeConfig (..)
   , LoggingConfig (..)
   , NodeConfig
   , SyncConfig (..)
   )
-import DbSync.Config.Validation (validateConfig)
+import DbSync.App.Config.Validation (validateConfig)
 import DbSync.Trace.Backend (mkStdErrTracer)
 import DbSync.Trace.Types (LogMsg (..), Severity (..), severityFromText)
 

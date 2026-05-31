@@ -45,7 +45,7 @@ import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Strict.Maybe as Strict
 import qualified Data.Text.Encoding as Text
 
-import qualified DbSync.Ledger.EpochUpdate as Generic
+import qualified DbSync.Worker.Ledger.EpochUpdate as Generic
 import DbSync.Db.Schema.AdaPots (AdaPots (..), adaPotsTableDef)
 import DbSync.Db.Schema.EpochBoundary
   ( CostModel (..)
@@ -58,8 +58,8 @@ import DbSync.Db.Schema.EpochBoundary
 import DbSync.Db.Schema.Ids (BlockId, CostModelId)
 import DbSync.Db.Types (DbWord64 (..))
 import DbSync.Extractor (ExtractorDef (..))
-import qualified DbSync.Ledger.ProtoParams as Proto
-import DbSync.Ledger.Types (ApplyResult (..))
+import qualified DbSync.Worker.Ledger.ProtoParams as Proto
+import DbSync.Worker.Ledger.Types (ApplyResult (..))
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
 import DbSync.StateQuery (SlotDetails (..))
 import DbSync.Util (coinToDbLovelace, nonceToBytes, unitIntervalToDouble)
@@ -152,7 +152,7 @@ writeBoundaryAdaPots applyResult newEpoch blockId =
 -- 'Shelley.AdaPots' itself.
 --
 -- @utxo@ is taken /verbatim/ from the supplied pots — the caller
--- (the LedgerWorker via 'DbSync.Ledger.State.applyBlock') has
+-- (the LedgerWorker via 'DbSync.Worker.Ledger.State.applyBlock') has
 -- already applied the @fixUTxOPots@ correction so that the sum of
 -- pots equals @maxLovelaceSupply@.
 mkAdaPotsRow

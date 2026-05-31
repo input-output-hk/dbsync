@@ -18,7 +18,7 @@ module DbSync.AppM
 
     -- * Constraint synonyms
   , LoggingM
-  , CheckpointM
+  , SyncStateM
   , DbConnM
   , ExtractorC
   ) where
@@ -27,14 +27,14 @@ import Cardano.Prelude
 
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 
-import DbSync.Checkpoint.SyncState (HasControlConnection)
+import DbSync.SyncState.Row (HasControlConnection)
 import DbSync.Db.Transaction (HasHasqlConnection)
-import DbSync.Env (CoreEnv, FollowEnv, IngestEnv)
+import DbSync.App.Env (CoreEnv, FollowEnv, IngestEnv)
 import DbSync.Extractor (HasExtractors)
-import DbSync.Ledger.Types (LedgerEnv)
+import DbSync.Worker.Ledger.Types (LedgerEnv)
 import DbSync.Resolver (HasResolver)
 import DbSync.Trace (HasTracer)
-import DbSync.Env (HasNetwork)
+import DbSync.App.Env (HasNetwork)
 import DbSync.Writer (HasWriter)
 
 -- | The core application monad: @ReaderT env IO@.
@@ -73,7 +73,7 @@ type LoggingM env m =
   (HasTracer env, MonadReader env m, MonadIO m)
 
 -- | Writes against the @sync_state@ control connection, logged.
-type CheckpointM env m =
+type SyncStateM env m =
   ( HasTracer env
   , HasControlConnection env
   , MonadReader env m

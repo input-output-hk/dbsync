@@ -19,7 +19,7 @@ module DbSync.Phase.Following.IdCounts
 
 import Cardano.Prelude
 
-import DbSync.Block.Types
+import DbSync.Parser.Types
   ( CertAction (..)
   , GenericBlock (..)
   , GenericTx (..)

@@ -22,7 +22,7 @@ import DbSync.Db.Schema.Ids (MultiAssetId, PoolHashId, StakeAddressId)
 import DbSync.Db.Schema.MultiAsset (MultiAsset (..))
 import DbSync.Db.Schema.Pool (PoolHash (..))
 import DbSync.Db.Schema.StakeDelegation (StakeAddress (..))
-import DbSync.Env (HasNetwork (..))
+import DbSync.App.Env (HasNetwork (..))
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
 import DbSync.Util.Bech32
   ( mkAssetFingerprint
@@ -100,7 +100,7 @@ resolveAndWriteStakeAddress credHash = do
 -- @multi_asset@ row on first sighting.
 --
 -- The in-memory dedup key is @hashDedupKey (policy <> name)@. The
--- boot-time rebuild path in 'DbSync.Checkpoint.SyncState.populateMultiAsset'
+-- boot-time rebuild path in 'DbSync.SyncState.Row.populateMultiAsset'
 -- MUST apply the same hash to the same input; otherwise resumed
 -- runs will allocate fresh ids for already-known assets.
 resolveAndWriteMultiAsset

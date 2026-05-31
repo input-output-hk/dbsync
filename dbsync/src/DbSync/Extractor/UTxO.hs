@@ -24,8 +24,8 @@ import Cardano.Prelude
 import qualified Data.ByteString as BS
 import Data.List (zip3)
 
-import DbSync.Block.Types (GenericTx (..), GenericTxIn (..))
-import qualified DbSync.Block.Types as G
+import DbSync.Parser.Types (GenericTx (..), GenericTxIn (..))
+import qualified DbSync.Parser.Types as G
 import DbSync.Phase.Type (isFollowPath)
 import DbSync.Db.Schema.Address (Address (..), addressTableDef)
 import DbSync.Db.Schema.Ids (AddressId, StakeAddressId, TxId (..))

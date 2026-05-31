@@ -6,12 +6,12 @@
 -- @DbSync.Db.Statement.<Name>Spec@ pattern: open a test connection,
 -- 'runStatement' the value under test, assert. Wrapper-level
 -- coverage for the same Statements (going through
--- 'DbSync.Checkpoint.SyncState.readSyncState' /
--- 'DbSync.Checkpoint.SyncState.seedSyncState' /
--- 'DbSync.Checkpoint.SyncState.writeSyncState' /
--- 'DbSync.Checkpoint.SyncState.markSnapshotComplete' /
--- 'DbSync.Checkpoint.SyncState.markSyncComplete') lives in
--- 'DbSync.Checkpoint.SyncStateSpec'; the wrappers add caller-name
+-- 'DbSync.SyncState.Row.readSyncState' /
+-- 'DbSync.SyncState.Row.seedSyncState' /
+-- 'DbSync.SyncState.Row.writeSyncState' /
+-- 'DbSync.SyncState.Row.markSnapshotComplete' /
+-- 'DbSync.SyncState.Row.markSyncComplete') lives in
+-- 'DbSync.SyncState.RowSpec'; the wrappers add caller-name
 -- error context and \"row count\" assertions on top of the bare
 -- Statement, so each layer pulls its own weight in tests.
 --

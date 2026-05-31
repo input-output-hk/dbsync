@@ -14,7 +14,7 @@ module DbSync.Extractor.MultiAsset
 
 import Cardano.Prelude
 
-import DbSync.Block.Types (GenericTx (..), GenericTxOut (..))
+import DbSync.Parser.Types (GenericTx (..), GenericTxOut (..))
 import DbSync.Db.Schema.MultiAsset
 import DbSync.Db.Types (DbWord64 (..))
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))

@@ -19,11 +19,11 @@ import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 
-import qualified DbSync.Block.Metadata as Metadata
+import qualified DbSync.Parser.Metadata as Metadata
 
 import Test.Hspec (Spec, afterAll_, beforeAll_, before_, describe, it, shouldBe)
 
-import DbSync.Block.Types
+import DbSync.Parser.Types
   ( BlockEra (..)
   , CertAction (..)
   , GenericBlock (..)
@@ -73,7 +73,7 @@ import DbSync.Extractor.MultiAsset (multiAssetExtractor)
 import DbSync.Extractor.Pool (poolExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Extractor.UTxO (utxoExtractor)
-import DbSync.Block.Pipeline (processBlock)
+import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Phase.Following.Resolver (mkFollowResolver)
 import DbSync.Test.Database

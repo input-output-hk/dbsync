@@ -2,7 +2,7 @@
 
 -- | Receiver-thread cumulative counters, sampled by the watchdog.
 --
--- The ChainSync receiver in 'DbSync.Node.Connection' increments these
+-- The ChainSync receiver in 'DbSync.ChainSync.Connection' increments these
 -- counters as it pulls blocks from the node. The watchdog reads them
 -- at each sample interval, computes its own deltas against the
 -- previously-seen value, and surfaces @blocked=+N@ at Debug level

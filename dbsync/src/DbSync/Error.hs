@@ -8,7 +8,7 @@
 --
 -- == Picking a thrower
 --
--- Prefer the per-kind helpers ('throwDb', 'throwCheckpoint',
+-- Prefer the per-kind helpers ('throwDb', 'throwSyncState',
 -- 'throwLedger', 'throwBlock', 'throwSchema', 'throwNetwork',
 -- 'throwInternal') over the generic 'throwAppError': they read more
 -- naturally at the call site and use 'withFrozenCallStack' so the
@@ -27,7 +27,7 @@ module DbSync.Error
 
     -- * Throwing — per kind
   , throwDb
-  , throwCheckpoint
+  , throwSyncState
   , throwLedger
   , throwBlock
   , throwSchema
@@ -53,7 +53,7 @@ import DbSync.Trace.Types (SrcInfo, captureCallSite)
 -- | Application-wide error type. Every constructor carries source location.
 data AppError
   = AppDatabaseError   !SrcInfo !Text   -- ^ PostgreSQL connection or query failure
-  | AppCheckpointError !SrcInfo !Text   -- ^ Checkpoint read/write failure
+  | AppSyncStateError !SrcInfo !Text   -- ^ Sync-state row read/write failure
   | AppLedgerError     !SrcInfo !Text   -- ^ Ledger state application failure
   | AppBlockError      !SrcInfo !Text   -- ^ Block parsing failure
   | AppSchemaError     !SrcInfo !Text   -- ^ Schema generation or migration failure
@@ -87,9 +87,9 @@ throwAppError ctor msg = liftIO $ throwIO (ctor (captureCallSite callStack) msg)
 throwDb :: (HasCallStack, MonadIO m) => Text -> m a
 throwDb msg = withFrozenCallStack (throwAppError AppDatabaseError msg)
 
--- | Raise an 'AppCheckpointError' with the caller's source location.
-throwCheckpoint :: (HasCallStack, MonadIO m) => Text -> m a
-throwCheckpoint msg = withFrozenCallStack (throwAppError AppCheckpointError msg)
+-- | Raise an 'AppSyncStateError' with the caller's source location.
+throwSyncState :: (HasCallStack, MonadIO m) => Text -> m a
+throwSyncState msg = withFrozenCallStack (throwAppError AppSyncStateError msg)
 
 -- | Raise an 'AppLedgerError' with the caller's source location.
 throwLedger :: (HasCallStack, MonadIO m) => Text -> m a

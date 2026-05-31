@@ -25,8 +25,8 @@ import Test.Consensus.Cardano.Generators ()  -- Arbitrary (CardanoBlock Standard
 import Ouroboros.Consensus.Block (blockSlot)
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
 
-import qualified DbSync.Block.Types as G
-import DbSync.Block.Parser (parseBlock)
+import qualified DbSync.Parser.Types as G
+import DbSync.Parser.Dispatch (parseBlock)
 import qualified DbSync.Db.Schema.Core as SC
 import DbSync.Db.Schema.Ids (BlockId (..))
 import DbSync.Extractor (ExtractorDef)

@@ -32,7 +32,7 @@ import qualified Hasql.Session as Sess
 
 import Test.Hspec (Spec, afterAll_, beforeAll_, before_, describe, it, shouldBe)
 
-import DbSync.Block.Types (GenericBlock)
+import DbSync.Parser.Types (GenericBlock)
 import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Db.Transaction (withTransactionOn)
 import DbSync.Extractor (ExtractorDef, emptyBlockLedgerData)
@@ -43,7 +43,7 @@ import DbSync.Extractor.MultiAsset (multiAssetExtractor)
 import DbSync.Extractor.Pool (poolExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Extractor.UTxO (utxoExtractor)
-import DbSync.Block.Pipeline (processBlock)
+import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.Db.Schema.Address (addressTableDef)
 import DbSync.Db.Schema.CBOR (txCborTableDef)
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)

@@ -45,7 +45,7 @@ import Test.Hspec
   , shouldBe
   )
 
-import DbSync.Block.Types (GenericBlock)
+import DbSync.Parser.Types (GenericBlock)
 import DbSync.Db.Loader (LoaderStream (..), closeLoaderStream, mkLoaderStream)
 import DbSync.Db.Schema.Address (addressTableDef)
 import DbSync.Db.Schema.CBOR (txCborTableDef)
@@ -89,9 +89,9 @@ import DbSync.Extractor.Pool (poolExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Extractor.UTxO (utxoExtractor)
 
-import DbSync.Block.Pipeline (processBlock)
+import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.AppM (runAppM)
-import DbSync.Env (TracerWithConn (..))
+import DbSync.App.Env (TracerWithConn (..))
 import qualified DbSync.Phase.Preparing.Run as Prep
 import DbSync.Phase.Preparing.Tuning (defaultPrepTuning)
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)

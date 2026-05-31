@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeApplications #-}
 
--- | Local state query integration for epoch\/slot computation.
+-- | Slot-details service.
 --
 -- Computes 'SlotDetails' (epoch, time, slot-within-epoch, epoch size)
 -- via a 'History.Interpreter' wrapping a hard-fork 'Summary'.
@@ -21,50 +21,52 @@
 --    'isObservationBroken' is set — a broken summary would still
 --    answer (its current era is 'EraUnbounded'), but with the wrong
 --    era classification because the past-era list is missing entries.
---    On a clean genesis sync where every transition is observed it's
---    a free local answer; on a resume from a non-Byron tip it's
---    bypassed and we go straight to (3).
 --
--- 3. /Node 'GetInterpreter'/ via the LSQ protocol. Last resort:
+-- 3. /Node 'GetInterpreter'/ via the LSQ protocol (driven by
+--    'DbSync.StateQuery.Handler.localStateQueryHandler'). Last resort:
 --    round-trips through the node's LedgerDB. Validated against the
 --    requested slot before being cached; if the node's LedgerDB is
 --    still behind the chain tip, the response cannot answer and we
 --    back off and retry instead of poisoning the cache.
 --
--- The retry on (3) is the safety net for the parallel-sync workflow
--- where dbsync's ChainSync stream runs ahead of cardano-node's
--- LedgerDB replay: the node's interpreter is then a snapshot of an
--- early-replay state and cannot answer slots the consumer is
--- processing. Each retry re-checks the local sources first so the
--- moment the ledger worker lands a fresh seed in 'sqvInterpreterVar'
--- we use it instead of going back to the node.
+-- == Module layout
+--
+-- This module hosts the 'getSlotDetails*' entry points and the
+-- helpers that thread them together. The pieces it depends on live
+-- in:
+--
+-- * "DbSync.StateQuery.Types"   — 'SlotDetails', 'StateQueryVar', accessor classes
+-- * "DbSync.StateQuery.Var"     — 'newStateQueryVar', 'RetryConfig'
+-- * "DbSync.StateQuery.Observe" — 'observeBlockSTM' (called from the ChainSync receiver)
+-- * "DbSync.StateQuery.Seed"    — 'seedInterpreterFromLedgerState', 'isInterpreterCached'
+-- * "DbSync.StateQuery.Handler" — LSQ mini-protocol driver
 module DbSync.StateQuery
-  ( -- * Types
+  ( -- * Types (re-exports from .Types)
     SlotDetails (..)
   , CardanoInterpreter
   , StateQueryVar (..)
-  , RetryConfig (..)
 
-    -- * Construction
+    -- * Construction + retry policy (re-exports from .Var)
   , newStateQueryVar
+  , RetryConfig (..)
   , defaultRetryConfig
 
     -- * Querying
   , getSlotDetails
   , getSlotDetailsIO
   , getSlotDetailsIOWith
-  , isInterpreterCached
 
-    -- * Local observation
+    -- * Local observation (re-exports from .Observe / .ObservedSummary)
   , observeBlockSTM
   , ObservationResult (..)
   , ObservedTransition (..)
   , EraIdx (..)
 
-    -- * Snapshot-derived interpreter seeding
+    -- * Snapshot-derived interpreter seeding (re-exports from .Seed)
   , seedInterpreterFromLedgerState
+  , isInterpreterCached
 
-    -- * Protocol handler
+    -- * Protocol handler (re-exports from .Handler)
   , localStateQueryHandler
   ) where
 
@@ -75,7 +77,6 @@ import Cardano.Slotting.Slot (SlotNo (..))
 import Control.Concurrent.STM
   ( atomically
   , newEmptyTMVarIO
-  , newTVarIO
   , putTMVar
   , readTVar
   , takeTMVar
@@ -89,18 +90,11 @@ import Ouroboros.Consensus.BlockchainTime.WallClock.Types
   ( RelativeTime (..)
   , SystemStart (..)
   )
-import Ouroboros.Consensus.Cardano.Block
-  ( BlockQuery (QueryHardFork)
-  , CardanoBlock
-  , StandardCrypto
-  )
+import Ouroboros.Consensus.Cardano.Block (BlockQuery (QueryHardFork))
 import Ouroboros.Consensus.Cardano.Node ()
-import Ouroboros.Consensus.Config (TopLevelConfig, configLedger)
-import Ouroboros.Consensus.HardFork.Abstract (hardForkSummary)
 import Ouroboros.Consensus.HardFork.Combinator.Ledger.Query
   ( QueryHardFork (GetInterpreter)
   )
-import qualified Ouroboros.Consensus.HardFork.History as History
 import Ouroboros.Consensus.HardFork.History.Qry
   ( Expr (..)
   , PastHorizonException
@@ -109,29 +103,20 @@ import Ouroboros.Consensus.HardFork.History.Qry
   , qryFromExpr
   , slotToEpoch'
   )
-import Ouroboros.Consensus.Ledger.Extended (ExtLedgerState (..))
 import Ouroboros.Consensus.Ledger.Query (Query (..))
-import Ouroboros.Network.Block (Point)
-import Ouroboros.Network.Protocol.LocalStateQuery.Client
-  ( ClientStAcquired (..)
-  , ClientStAcquiring (..)
-  , ClientStIdle (..)
-  , ClientStQuerying (..)
-  , LocalStateQueryClient (..)
-  )
-import Ouroboros.Network.Protocol.LocalStateQuery.Type (AcquireFailure (..), Target (..))
+import Ouroboros.Network.Protocol.LocalStateQuery.Type (AcquireFailure (..))
 
 import DbSync.Error (throwBlock)
+import DbSync.StateQuery.Handler (localStateQueryHandler)
+import DbSync.StateQuery.Observe (observeBlockSTM)
 import DbSync.StateQuery.ObservedSummary
   ( EraIdx (..)
   , ObservationResult (..)
   , ObservedTransition (..)
   , currentInterpreter
-  , initObservedSummary
   , isObservationBroken
-  , observeBlock
   )
-import qualified DbSync.StateQuery.Types as SQT
+import DbSync.StateQuery.Seed (isInterpreterCached, seedInterpreterFromLedgerState)
 import DbSync.StateQuery.Types
   ( CardanoInterpreter
   , HasStateQueryVar (..)
@@ -139,110 +124,10 @@ import DbSync.StateQuery.Types
   , SlotDetails (..)
   , StateQueryVar (..)
   )
+import qualified DbSync.StateQuery.Types as SQT
+import DbSync.StateQuery.Var (RetryConfig (..), defaultRetryConfig, newStateQueryVar)
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
-
--- ---------------------------------------------------------------------------
--- * Construction
--- ---------------------------------------------------------------------------
-
--- | Create a new 'StateQueryVar' with an empty interpreter cache and a
--- Byron-only initial observed summary derived from the consensus
--- 'TopLevelConfig'.
-newStateQueryVar
-  :: TopLevelConfig (CardanoBlock StandardCrypto)
-  -> IO StateQueryVar
-newStateQueryVar topLevelCfg =
-  StateQueryVar
-    <$> newEmptyTMVarIO
-    <*> newTVarIO Nothing
-    <*> newTVarIO (initObservedSummary topLevelCfg)
-
--- ---------------------------------------------------------------------------
--- * Snapshot-derived interpreter seeding
--- ---------------------------------------------------------------------------
-
--- | Pre-fill 'sqvInterpreterVar' from a loaded ledger state's
--- hard-fork summary.
---
--- Used at boot when resuming from a snapshot: 'hardForkSummary'
--- produces the same 'Interpreter' the node would return via
--- @GetInterpreter@, so per-block 'getSlotDetails' calls serve
--- locally instead of round-tripping to the node. The summary only
--- covers eras up to the snapshot's tip; queries past its horizon
--- fall through to 'getHistoryInterpreterIO' as before.
-seedInterpreterFromLedgerState
-  :: TopLevelConfig (CardanoBlock StandardCrypto)
-  -> ExtLedgerState (CardanoBlock StandardCrypto) mk
-  -> StateQueryVar
-  -> IO ()
-seedInterpreterFromLedgerState topLevelCfg ExtLedgerState{ ledgerState = ls } sqv = do
-  let summary = hardForkSummary (configLedger topLevelCfg) ls
-      interp  = History.mkInterpreter summary
-  atomically $ writeTVar (sqvInterpreterVar sqv) (Just interp)
-
--- | True when 'sqvInterpreterVar' has been seeded (snapshot or node).
--- Lets callers suppress observed-summary fallback diagnostics that
--- would otherwise mislead.
-isInterpreterCached
-  :: (HasStateQueryVar env, MonadReader env m, MonadIO m)
-  => m Bool
-isInterpreterCached = do
-  sqv <- asks getStateQueryVar
-  liftIO $ isJust <$> atomically (readTVar (sqvInterpreterVar sqv))
-
--- ---------------------------------------------------------------------------
--- * Local observation
--- ---------------------------------------------------------------------------
-
--- | Atomically feed a block to the locally-observed summary.
---
--- Returns the 'ObservationResult' so the caller can trace era
--- transitions. Intended to be called once per block by the consumer,
--- /before/ the corresponding 'getSlotDetails' call so that the
--- transition's epoch boundary is in the summary by the time slot
--- details are computed.
-observeBlockSTM
-  :: StateQueryVar
-  -> CardanoBlock StandardCrypto
-  -> STM ObservationResult
-observeBlockSTM sqv blk = do
-  os <- readTVar (sqvObservedVar sqv)
-  let (result, os') = observeBlock blk os
-  writeTVar (sqvObservedVar sqv) os'
-  pure result
-
--- ---------------------------------------------------------------------------
--- * Retry policy
--- ---------------------------------------------------------------------------
-
--- | Retry policy for the node-interpreter fallback in 'getSlotDetailsIOWith'.
---
--- The fallback is taken when neither the cached interpreter nor the
--- observed summary can answer for the requested slot. Each attempt
--- queries the node, validates the response against that slot, and (on
--- failure) sleeps for @'rcBackoffMicros' n@ microseconds before
--- attempt @n + 1@.
-data RetryConfig = RetryConfig
-  { rcMaxAttempts   :: !Int
-    -- ^ Total number of node-query attempts. The last attempt does
-    -- not back off; if it fails the call throws.
-  , rcBackoffMicros :: !(Int -> Int)
-    -- ^ Microseconds to wait between attempts. Argument is the
-    -- zero-based index of the attempt that just failed (so the wait
-    -- before attempt @n + 1@).
-  }
-
--- | Production retry policy: 10 attempts; geometric backoff capped at
--- 300 seconds; the nine backoffs between the ten attempts sum to
--- 1,800 seconds (= 30 minutes).
---
--- Sequence: 20, 40, 80, 160, 300, 300, 300, 300, 300 seconds.
-defaultRetryConfig :: RetryConfig
-defaultRetryConfig = RetryConfig
-  { rcMaxAttempts   = 10
-  , rcBackoffMicros = \n -> 1_000_000 * min 300 (20 * (2 ^ min n (4 :: Int)))
-  }
 
 -- ---------------------------------------------------------------------------
 -- * Querying
@@ -269,9 +154,8 @@ getSlotDetails slot = do
 
 -- | Get 'SlotDetails' for a given 'SlotNo' (raw 'IO' bridge).
 --
--- This is the implementation 'getSlotDetails' calls under the hood.
 -- Exposed so that callers without an 'IngestEnv' on hand (notably the
--- 'DbSync.Ledger.Worker' hooks, which only have 'LedgerEnv' +
+-- 'DbSync.Worker.Ledger.Worker' hooks, which only have 'LedgerEnv' +
 -- 'StateQueryVar') can still reach it without spinning up an
 -- 'IngestM' action.
 --
@@ -294,13 +178,10 @@ getSlotDetailsIO = getSlotDetailsIOWith defaultRetryConfig
 --
 -- 1. Cached interpreter ('sqvInterpreterVar'). On success, return.
 -- 2. Locally-observed summary ('sqvObservedVar'), unless
---    'isObservationBroken' is set. A broken summary would answer
---    (its current era is unbounded) but with the wrong era
---    classification, so we skip it and go to (3) instead.
+--    'isObservationBroken' is set.
 -- 3. Node 'GetInterpreter' via the LSQ request channel. Validated
 --    against the requested slot; if too narrow, do not cache, back off
---    per 'RetryConfig', and retry. Each retry re-checks the local
---    sources first.
+--    per 'RetryConfig', and retry.
 --
 -- Throws 'AppBlockError' if all attempts in (3) fail, or if the LSQ
 -- channel returns an unexpected 'AcquireFailure' other than
@@ -330,14 +211,6 @@ getSlotDetailsIOWith rc tracer sqv systemStart slot = do
 -- | Try the cached interpreter and then the observed summary. Returns
 -- 'Just sd' the first time either source can answer; 'Nothing' if
 -- neither can.
---
--- The observed summary is skipped when 'isObservationBroken' is set:
--- a broken summary still has its current era as 'EraUnbounded' and
--- would happily answer any slot — but with the /wrong/ era
--- classification, since past-era transitions are missing. Returning a
--- wrong 'SlotDetails' is worse than going to the node, so we only
--- trust the observed summary when it has tracked every era boundary
--- since genesis.
 tryLocalInterpreters
   :: StateQueryVar
   -> (CardanoInterpreter -> Either PastHorizonException SlotDetails)
@@ -354,17 +227,6 @@ tryLocalInterpreters sqv eval = do
 
 -- | Acquire an interpreter from the node, retrying on too-narrow
 -- horizon and on transient 'AcquireFailurePointTooOld' replies.
---
--- The retry loop re-checks the local sources at the start of every
--- iteration: if the ledger worker (or chainsync observer) has
--- advanced state during the previous backoff, we use it instead of
--- going back to the node.
---
--- A response interpreter is only written to 'sqvInterpreterVar' once
--- it has been validated against the requested slot. Caching a too-narrow
--- interpreter would make every subsequent 'getSlotDetailsIO' call fail
--- until the worker re-seeded, which historically manifested as a hard
--- crash mid-ingest against a node still replaying its LedgerDB.
 fetchFromNodeWithRetry
   :: HasCallStack
   => RetryConfig
@@ -471,41 +333,3 @@ querySlotDetails start absSlot = do
 -- | Convert a 'RelativeTime' to 'UTCTime' given a 'SystemStart'.
 relToUTCTime :: SystemStart -> RelativeTime -> UTCTime
 relToUTCTime (SystemStart start) (RelativeTime rel) = addUTCTime rel start
-
--- ---------------------------------------------------------------------------
--- * Protocol handler
--- ---------------------------------------------------------------------------
-
--- | LocalStateQuery protocol client that handles interpreter requests.
---
--- Loops forever, reading requests from the 'StateQueryVar' TMVar,
--- sending them to the node via Acquire → Query → Release, and
--- writing responses back to the response TMVar.
-localStateQueryHandler
-  :: StateQueryVar
-  -> LocalStateQueryClient
-       (CardanoBlock StandardCrypto)
-       (Point (CardanoBlock StandardCrypto))
-       (Query (CardanoBlock StandardCrypto))
-       IO
-       a
-localStateQueryHandler sqv =
-  LocalStateQueryClient idleState
-  where
-    idleState :: IO (ClientStIdle (CardanoBlock StandardCrypto) (Point (CardanoBlock StandardCrypto)) (Query (CardanoBlock StandardCrypto)) IO a)
-    idleState = do
-      (query, respVar) <- atomically $ takeTMVar (sqvRequestVar sqv)
-      pure
-        . SendMsgAcquire VolatileTip
-        $ ClientStAcquiring
-          { recvMsgAcquired =
-              pure . SendMsgQuery query $
-                ClientStQuerying
-                  { recvMsgResult = \result -> do
-                      atomically $ putTMVar respVar (Right result)
-                      pure $ SendMsgRelease idleState
-                  }
-          , recvMsgFailure = \failure -> do
-              atomically $ putTMVar respVar (Left failure)
-              idleState
-          }

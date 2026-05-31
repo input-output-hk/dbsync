@@ -7,9 +7,7 @@
     "password": ""
   },
   "sync": {
-    "mode": "auto",
-    "checkpoint_dir": "/data/checkpoints",
-    "loader_connections": 8
+    "mode": "auto"
   },
   "ledger": {
     "enabled": false

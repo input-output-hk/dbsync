@@ -24,11 +24,11 @@ import Test.Hspec (SpecWith, around_, describe, expectationFailure, hspec)
 
 -- Unit tests
 import qualified DbSync.AppSpec as AppSpec
-import qualified DbSync.CliSpec as CliSpec
-import qualified DbSync.Config.GenesisSpec as ConfigGenesisSpec
-import qualified DbSync.Config.NodeSpec as ConfigNodeSpec
-import qualified DbSync.Config.TypesSpec as ConfigTypesSpec
-import qualified DbSync.Config.ValidationSpec as ConfigValidationSpec
+import qualified DbSync.App.CliSpec as CliSpec
+import qualified DbSync.App.Config.GenesisSpec as ConfigGenesisSpec
+import qualified DbSync.App.Config.NodeSpec as ConfigNodeSpec
+import qualified DbSync.App.Config.TypesSpec as ConfigTypesSpec
+import qualified DbSync.App.Config.ValidationSpec as ConfigValidationSpec
 import qualified DbSync.Db.Statement.IndexesSpec as DbStatementIndexesSpec
 import qualified DbSync.Db.Statement.SequencesSpec as DbStatementSequencesSpec
 import qualified DbSync.Db.TypesSpec as DbTypesSpec
@@ -41,12 +41,12 @@ import qualified DbSync.Extractor.UTxOSpec as ExtractorUTxOSpec
 import qualified DbSync.Phase.Ingest.ConsumerSpec as IngestConsumerSpec
 import qualified DbSync.Phase.Ingest.DedupStoreSpec as IngestDedupStoreSpec
 import qualified DbSync.Phase.Ingest.UtxoStoreSpec as IngestUtxoStoreSpec
-import qualified DbSync.Block.PipelineSpec as BlockPipelineSpec
-import qualified DbSync.Ledger.DepositAccumulatorSpec as LedgerDepositAccumulatorSpec
-import qualified DbSync.Ledger.FingerprintSpec as LedgerFingerprintSpec
-import qualified DbSync.Ledger.StateSpec as LedgerStateSpec
-import qualified DbSync.Ledger.TypesSpec as LedgerTypesSpec
-import qualified DbSync.Ledger.WorkerSpec as LedgerWorkerSpec
+import qualified DbSync.Extractor.PipelineSpec as BlockPipelineSpec
+import qualified DbSync.Worker.Ledger.DepositAccumulatorSpec as LedgerDepositAccumulatorSpec
+import qualified DbSync.Worker.Ledger.FingerprintSpec as LedgerFingerprintSpec
+import qualified DbSync.Worker.Ledger.StateSpec as LedgerStateSpec
+import qualified DbSync.Worker.Ledger.TypesSpec as LedgerTypesSpec
+import qualified DbSync.Worker.Ledger.WorkerSpec as LedgerWorkerSpec
 import qualified DbSync.App.BootSpec as AppBootSpec
 import qualified DbSync.Phase.CurrentSpec as PhaseCurrentSpec
 import qualified DbSync.Schema.AdaPotsSpec as SchemaAdaPotsSpec
@@ -62,18 +62,18 @@ import qualified DbSync.Schema.SyncStateSpec as SchemaSyncStateSpec
 import qualified DbSync.StateQuery.ObservedSummarySpec as ObservedSummarySpec
 import qualified DbSync.StateQuery.SlotDetailsSpec as SlotDetailsSpec
 import qualified DbSync.Trace.ReplaySpec as TraceReplaySpec
-import qualified DbSync.Block.MetadataSpec as BlockMetadataSpec
+import qualified DbSync.Parser.MetadataSpec as BlockMetadataSpec
 import qualified DbSync.Util.Bech32Spec as UtilBech32Spec
 import qualified DbSync.Util.DedupHashSpec as UtilDedupHashSpec
 
 -- Property tests
 import qualified DbSync.PropertySpec as PropertySpec
-import qualified DbSync.Worker.TxOutSpec as WorkerTxOutSpec
+import qualified DbSync.Worker.TxOut.WorkerSpec as WorkerTxOutSpec
 
 -- Database integration
-import qualified DbSync.Checkpoint.ManagerSpec as CheckpointManagerSpec
-import qualified DbSync.Checkpoint.ResumeSpec as CheckpointResumeSpec
-import qualified DbSync.Checkpoint.SyncStateSpec as CheckpointSyncStateSpec
+import qualified DbSync.SyncState.ManagerSpec as SyncStateManagerSpec
+import qualified DbSync.SyncState.ResumeSpec as SyncStateResumeSpec
+import qualified DbSync.SyncState.RowSpec as SyncStateRowSpec
 import qualified DbSync.Db.LoaderSpec as LoaderSpec
 import qualified DbSync.Db.Statement.BackfillSpec as DbStatementBackfillSpec
 import qualified DbSync.Db.Statement.BlockSpec as DbStatementBlockSpec
@@ -168,9 +168,9 @@ main = hspec $ do
     PropertySpec.spec
 
   describe "Database integration" $ withTimeoutSeconds integrationTimeoutSeconds $ do
-    CheckpointManagerSpec.spec
-    CheckpointResumeSpec.spec
-    CheckpointSyncStateSpec.spec
+    SyncStateManagerSpec.spec
+    SyncStateResumeSpec.spec
+    SyncStateRowSpec.spec
     LoaderSpec.spec
     DbStatementBackfillSpec.spec
     DbStatementBlockSpec.spec

@@ -1,5 +1,5 @@
 -- | Per-epoch buffer of address-resolution work waiting for the
--- 'DbSync.Worker.TxOut.TxOutWorker'.
+-- 'DbSync.Worker.TxOut.Worker.TxOutWorker'.
 --
 -- During @IngestChainHistory@ the UTxO extractor does not look up
 -- 'AddressId's synchronously. Instead it appends two facts to this

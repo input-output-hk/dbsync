@@ -38,23 +38,16 @@ import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
 import Ouroboros.Network.Block (pattern BlockPoint)
 
 import DbSync.AppM (FollowM, runAppM)
-import DbSync.Block.Parser (parseBlock)
-import DbSync.Block.Types (CardanoPoint, GenericBlock (..))
+import DbSync.Parser.Dispatch (parseBlock)
+import DbSync.Parser.Types (CardanoPoint, GenericBlock (..))
 import DbSync.Phase.Type (SyncPhase (..), renderPhase)
-import DbSync.Db.Schema.EpochView (epochFinalizedTableName)
-import DbSync.Db.Schema.Types (TableDef (..))
-import DbSync.Db.Statement.Block (queryLatestEpochNoStmt)
-import DbSync.Db.Statement.EpochFinalized
-  ( appendEpochFinalizedStmt
-  , backfillEpochFinalizedStmt
-  )
 import DbSync.Db.Statement.SyncState (writeSyncStateSlotStmt)
 import DbSync.Db.Statement.Transaction (beginSql, commitSql, rollbackSql)
 
-import DbSync.Env (CoreEnv (..), FollowEnv (..))
+import DbSync.App.Env (CoreEnv (..), FollowEnv (..))
 import DbSync.Extractor (ExtractorDef (..))
-import DbSync.Block.Pipeline (processBlock)
-import DbSync.Node.ChainSyncMsg (ChainSyncMsg (..))
+import DbSync.Extractor.Pipeline (processBlock)
+import DbSync.ChainSync.Msg (ChainSyncMsg (..))
 import DbSync.Phase.Following.IdAllocator (allocateAllIds)
 import DbSync.Phase.Following.IdCounts (countAssignableIds)
 import DbSync.Phase.Following.Resolver (mkBufferedFollowResolver)
@@ -123,39 +116,18 @@ data FollowProgress = FollowProgress
 -- target slot.
 run :: FollowM ()
 run = do
-  FollowEnv{feCore, feBlockQueue, feHasqlConnection, feReplayBootSlot} <- ask
-  let tracer    = ceTracer    feCore
-      phaseRef  = ceCurrentPhase feCore
-      tableDefs = concatMap pdTables (ceExtractors feCore)
-      epochFinalizedEnabled =
-        any ((== epochFinalizedTableName) . tdName) tableDefs
+  FollowEnv{feCore, feBlockQueue, feReplayBootSlot} <- ask
+  let tracer   = ceTracer    feCore
+      phaseRef = ceCurrentPhase feCore
   liftIO $ do
     component <- readPhaseComponent phaseRef
     traceWith tracer $ LogMsg Info component
       "consumer started; draining chainsync queue" Nothing
-  -- Catch-up backfill + seed of the per-block boundary tracker.
-  -- The backfill is idempotent; steady-state Follow does almost no
-  -- work here. The seed makes the first forward block compare
-  -- against the real tip's epoch, so a Follow that restarts /across/
-  -- a boundary block still appends the closing epoch.
-  initialEpoch <-
-    if epochFinalizedEnabled
-      then liftIO $ do
-        runSession feHasqlConnection
-          (Sess.statement () backfillEpochFinalizedStmt)
-          "follow start: backfill epoch_finalized"
-        result <- Conn.use feHasqlConnection
-          (Sess.statement () queryLatestEpochNoStmt)
-        case result of
-          Right e -> pure e
-          Left  e -> panic $
-            "follow start: queryLatestEpochNoStmt: " <> show e
-      else pure Nothing
   startedAt <- liftIO getCurrentTime
   progressRef <- liftIO $ newIORef FollowProgress
     { fpWindowStart      = startedAt
     , fpBlocksThisWindow = 0
-    , fpLastEpoch        = initialEpoch
+    , fpLastEpoch        = Nothing
     , fpLastBlockAt      = Nothing
     , fpLastSlot         = Nothing
     }
@@ -169,8 +141,7 @@ run = do
     mMsg <- liftIO $
       waitForMsgOrHeartbeat feBlockQueue phaseRef idleHeartbeatMicros
     case mMsg of
-      Just (MsgForward  blk)   ->
-        processForward progressRef replayRef epochFinalizedEnabled blk
+      Just (MsgForward  blk)   -> processForward progressRef replayRef blk
       Just (MsgRollback point) -> processRollback point
       Nothing                  -> emitIdleHeartbeat progressRef
 
@@ -230,12 +201,9 @@ readPhaseComponent = fmap renderPhase . readCurrentPhase
 processForward
   :: IORef FollowProgress
   -> IORef ReplayLogState
-  -> Bool
-  -- ^ Whether the @epoch@ extractor is enabled. When 'True' the
-  -- per-boundary @epoch_finalized@ append runs post-commit.
   -> CardanoBlock StandardCrypto
   -> FollowM ()
-processForward progressRef replayRef epochFinalizedEnabled cardanoBlock = do
+processForward progressRef replayRef cardanoBlock = do
   env@FollowEnv
     { feWatchdog
     , feStateQueryVar
@@ -285,9 +253,6 @@ processForward progressRef replayRef epochFinalizedEnabled cardanoBlock = do
         runFlush `onException` rollbackQuiet feHasqlConnection
         setConsumerNote feWatchdog "follow: COMMIT"
         runSession feHasqlConnection (Sess.script commitSql) "COMMIT"
-      when epochFinalizedEnabled $
-        liftIO $
-          maybeAppendEpochFinalized feHasqlConnection progressRef genBlock
       maybeFlipToTip (blkSlotNo genBlock)
       maybeLogProgress progressRef genBlock
 
@@ -340,25 +305,6 @@ rollbackQuiet :: Conn.Connection -> IO ()
 rollbackQuiet conn =
   void (Conn.use conn (Sess.script rollbackSql))
     `catch` \(_ :: SomeException) -> pure ()
-
--- | Append the previous epoch to @epoch_finalized@ when the just-
--- applied block crossed an epoch boundary. The append is its own
--- transaction; @ON CONFLICT (no) DO UPDATE@ inside the statement
--- makes the re-issue safe.
-maybeAppendEpochFinalized
-  :: Conn.Connection
-  -> IORef FollowProgress
-  -> GenericBlock
-  -> IO ()
-maybeAppendEpochFinalized conn progressRef gb = do
-  progress <- readIORef progressRef
-  let !curEpoch = unEpochNo (blkEpochNo gb)
-  case fpLastEpoch progress of
-    Just prevEpoch | prevEpoch < curEpoch ->
-      runSession conn
-        (Sess.statement prevEpoch appendEpochFinalizedStmt)
-        ("append epoch_finalized for epoch " <> show prevEpoch)
-    _ -> pure ()
 
 -- | Flip the phase from 'FollowingVolatileTail' to
 -- 'FollowingChainTip' once the consumer has caught the receiver's

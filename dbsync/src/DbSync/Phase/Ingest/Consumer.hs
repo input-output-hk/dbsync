@@ -67,16 +67,16 @@ import System.Mem (performMajorGC)
 import Text.Printf (printf)
 
 import DbSync.AppM (IngestM, runAppM)
-import DbSync.Block.Parser (parseBlock)
-import DbSync.Block.Types (GenericBlock (..))
-import DbSync.Checkpoint.Manager (mkBoundarySyncStateRow)
-import DbSync.Checkpoint.SyncState (ControlConnection (..), writeSyncState)
+import DbSync.Parser.Dispatch (parseBlock)
+import DbSync.Parser.Types (GenericBlock (..))
+import DbSync.SyncState.Manager (mkBoundarySyncStateRow)
+import DbSync.SyncState.Row (ControlConnection (..), writeSyncState)
 import DbSync.Phase.Ingest.Counter (IdCounters)
-import DbSync.Config.Types (LedgerConfig (..), SyncConfig (..))
+import DbSync.App.Config.Types (LedgerConfig (..), SyncConfig (..))
 import DbSync.Db.Loader (LoaderStream (..))
 import DbSync.Db.Schema.EpochSyncStats (EpochSyncStats (..))
 import DbSync.Db.Schema.Ids (BlockId (..))
-import DbSync.Env (CoreEnv (..), HasConfig (..), IngestEnv (..))
+import DbSync.App.Env (CoreEnv (..), HasConfig (..), IngestEnv (..))
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Extractor.EpochBoundary (runEpochBoundary)
 import DbSync.Phase.Ingest.DedupStore (dedupStoreSizes)
@@ -90,19 +90,19 @@ import DbSync.Trace.Replay
   , advanceReplay
   , renderReplayPercent
   )
-import DbSync.Block.Pipeline (processBlock)
+import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.Phase.Type (SyncPhase (..), renderPhase)
-import DbSync.Ledger.DepositAccumulator (drainCompletedEpochs, flushEpochParams)
-import DbSync.Ledger.Types
+import DbSync.Worker.Ledger.DepositAccumulator (drainCompletedEpochs, flushEpochParams)
+import DbSync.Worker.Ledger.Types
   ( ApplyResult (..)
   , HasLedgerEnv (..)
   , LedgerEnv (..)
   )
-import DbSync.Node.ChainSyncMsg (ChainSyncMsg (..))
+import DbSync.ChainSync.Msg (ChainSyncMsg (..))
 import DbSync.Resolver (IdResolver (..))
 import DbSync.Worker.TxOut.AddressBuffer (emptyEpochAddressBuffer, takeAndReset)
 import qualified DbSync.Worker.TxOut.ConsumedByBuffer as ConsumedByBuffer
-import DbSync.Worker.TxOut
+import DbSync.Worker.TxOut.Worker
   ( TxOutJob (..)
   , awaitTxOutDrained
   , enqueueTxOutJob
@@ -704,7 +704,7 @@ diagnose batchSz bps ps mBaseline
 -- until the worker writes a fresh 'ApplyResult'.
 --
 -- The worker writes 'leLatestApplyResult' on every successful
--- 'applyBlock' (DbSync.Ledger.State), so the wait progresses
+-- 'applyBlock' (DbSync.Worker.Ledger.State), so the wait progresses
 -- deterministically — no polling, no sleep loops.
 waitForApplyResultAt :: LedgerEnv -> SlotNo -> IO ApplyResult
 waitForApplyResultAt lenv targetSlot = Strict.atomically $ do

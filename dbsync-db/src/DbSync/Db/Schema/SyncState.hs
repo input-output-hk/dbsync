@@ -215,7 +215,7 @@ syncStateCounterColumns = map ((<> "_id_counter") . fst) idCounterByTable
 -- | Data-table to its @next-id-to-assign@ selector on
 -- 'SyncStateRow'. The single source of truth for which counter goes
 -- with which table — drives both the resume-time cleanup in
--- 'DbSync.Checkpoint.Resume.deleteRowsPastSlot' and the derived
+-- 'DbSync.SyncState.Resume.deleteRowsPastSlot' and the derived
 -- 'syncStateCounterColumns' / DDL above.
 --
 -- Order matches the field order in 'SyncStateRow' and the encoder /

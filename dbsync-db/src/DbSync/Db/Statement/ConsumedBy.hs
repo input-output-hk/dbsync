@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Hasql 'Statement' for the per-epoch @tx_out.consumed_by_tx_id@
--- bulk UPDATE driven by 'DbSync.Worker.TxOut'.
+-- bulk UPDATE driven by 'DbSync.Worker.TxOut.Worker'.
 module DbSync.Db.Statement.ConsumedBy
   ( bulkUpdateConsumedByTxIdStmt
   ) where

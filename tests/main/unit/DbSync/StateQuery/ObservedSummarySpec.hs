@@ -25,8 +25,8 @@ import qualified Ouroboros.Consensus.HardFork.History as History
 import Ouroboros.Consensus.HardFork.History.Qry (interpretQuery, qryFromExpr)
 import qualified Ouroboros.Consensus.HardFork.History.Qry as Qry
 
-import DbSync.Config.Genesis (mkTopLevelConfig, readCardanoGenesisConfig)
-import DbSync.Config.Node (parseNodeConfig)
+import DbSync.App.Config.Genesis (mkTopLevelConfig, readCardanoGenesisConfig)
+import DbSync.App.Config.Node (parseNodeConfig)
 import DbSync.StateQuery.ObservedSummary
   ( EraIdx (..)
   , ObservationResult (..)

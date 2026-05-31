@@ -12,7 +12,7 @@ import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 
 import DbSync.AppM (LoggingM)
-import DbSync.Config.Types (SyncConfig (..), SyncOptions (..), UtxoOption (..))
+import DbSync.App.Config.Types (SyncConfig (..), SyncOptions (..), UtxoOption (..))
 import DbSync.Db.Statement.Resolve
   ( resolveCollateralTxInScript
   , resolveConsumedByTxIdStmt
@@ -20,7 +20,7 @@ import DbSync.Db.Statement.Resolve
   , resolveTxInScript
   )
 import DbSync.Db.Transaction (HasHasqlConnection (..))
-import DbSync.Env (HasConfig (..))
+import DbSync.App.Env (HasConfig (..))
 import DbSync.Trace.Timing (timedTrace_, timedTrace)
 
 -- | CTAS the three input tables, then fill the consumed-by

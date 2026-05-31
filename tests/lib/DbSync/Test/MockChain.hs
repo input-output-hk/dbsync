@@ -24,7 +24,7 @@
 --
 -- Skips the chain-sync layer entirely. A future iteration can plug
 -- the vendored 'Cardano.Mock.ChainSync.Server' between the
--- interpreter and our 'DbSync.Node.Connection' for socket-level
+-- interpreter and our 'DbSync.ChainSync.Connection' for socket-level
 -- coverage; the present harness is the minimum that gets us
 -- ledger-derived data (rewards, epoch_stake, ada_pots) into PG.
 module DbSync.Test.MockChain
@@ -77,19 +77,19 @@ import qualified Cardano.Mock.Forging.Interpreter as Mock
 import qualified Cardano.Mock.Forging.Tx.Conway as Conway
 import qualified Cardano.Mock.Forging.Types as Mock
 
-import DbSync.Block.Parser (parseBlock)
-import DbSync.Config.Genesis
+import DbSync.Parser.Dispatch (parseBlock)
+import DbSync.App.Config.Genesis
   ( GenesisConfig (..)
   , ShelleyConfig (..)
   , mkProtocolInfoCardanoForging
   , mkTopLevelConfig
   , readCardanoGenesisConfig
   )
-import DbSync.Config.Node (parseNodeConfig)
-import DbSync.Config.Types (NodeConfig (..))
+import DbSync.App.Config.Node (parseNodeConfig)
+import DbSync.App.Config.Types (NodeConfig (..))
 import DbSync.Extractor (ExtractorDef)
 import DbSync.Extractor (emptyBlockLedgerData)
-import DbSync.Block.Pipeline (processBlock)
+import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Phase.Following.Resolver (mkFollowResolver)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnvWith)

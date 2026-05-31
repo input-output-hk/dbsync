@@ -34,7 +34,7 @@
 --
 -- The LSM snapshot persists the @(key, id)@ table contents but
 -- /not/ the next-id counter. On a resumed boot
--- 'DbSync.Checkpoint.SyncState.rebuildDedupMaps' calls
+-- 'DbSync.SyncState.Row.rebuildDedupMaps' calls
 -- 'insertExisting' once per existing row, which raises the counter
 -- to @max(existingId) + 1@.
 module DbSync.Phase.Ingest.DedupStore
@@ -129,7 +129,7 @@ newtype DedupIdBytes = DedupIdBytes ShortByteString
 -- If the session already has a snapshot saved under the supplied
 -- name, restore from it; otherwise create a fresh empty table with
 -- 'defaultIngestTableConfig'. The counter is initialised to 1 in
--- both cases; 'DbSync.Checkpoint.SyncState.rebuildDedupMaps' is
+-- both cases; 'DbSync.SyncState.Row.rebuildDedupMaps' is
 -- responsible for bumping it past existing ids on a resumed boot.
 openDedupStore
   :: LsmSession

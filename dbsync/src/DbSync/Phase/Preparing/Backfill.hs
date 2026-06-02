@@ -12,11 +12,11 @@ module DbSync.Phase.Preparing.Backfill
 
 import Cardano.Prelude
 
-import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 import qualified Hasql.Statement as Stmt
 
 import DbSync.AppM (LoggingM)
+import DbSync.Db.Run (useConn)
 import DbSync.Db.Statement.Backfill
   ( backfillByronFeeStmt
   , backfillPhaseTwoDepositStmt
@@ -71,10 +71,8 @@ truncateDepositPending
   => m ()
 truncateDepositPending = do
   conn <- asks getHasqlConnection
-  result <- liftIO $ Conn.use conn (Sess.statement () truncateEpochParamPendingStmt)
-  case result of
-    Right () -> pure ()
-    Left  e  -> panic $ "Phase.Preparing.Backfill: " <> show e
+  useConn "Phase.Preparing.Backfill.truncateDepositPending" conn
+    (Sess.statement () truncateEpochParamPendingStmt)
 
 -- | One-shot @INSERT … SELECT@ that fills @epoch_finalized@ from
 -- every closed epoch in @block@. Run by 'Phase.Preparing.Run' when
@@ -86,17 +84,12 @@ backfillEpochFinalized
 backfillEpochFinalized =
   timedTrace_ "PreparingForVolatileTail" "backfill epoch_finalized" $ do
     conn <- asks getHasqlConnection
-    result <- liftIO $ Conn.use conn (Sess.statement () backfillEpochFinalizedStmt)
-    case result of
-      Right () -> pure ()
-      Left  e  -> panic $ "Phase.Preparing.Backfill.backfillEpochFinalized: " <> show e
+    useConn "Phase.Preparing.Backfill.backfillEpochFinalized" conn
+      (Sess.statement () backfillEpochFinalizedStmt)
 
 runRowsAffected
   :: (HasHasqlConnection env, MonadReader env m, MonadIO m)
   => Stmt.Statement () Int64 -> m Int64
 runRowsAffected stmt = do
   conn <- asks getHasqlConnection
-  result <- liftIO $ Conn.use conn (Sess.statement () stmt)
-  case result of
-    Right n -> pure n
-    Left  e -> panic $ "Phase.Preparing.Backfill: " <> show e
+  useConn "Phase.Preparing.Backfill.runRowsAffected" conn (Sess.statement () stmt)

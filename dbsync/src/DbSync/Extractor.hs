@@ -21,7 +21,12 @@ module DbSync.Extractor
 
     -- * Per-block ledger output
   , BlockLedgerData (..)
+  , LedgerOutputs (..)
   , emptyBlockLedgerData
+  , emptyLedgerOutputs
+  , blockDepositsMap
+  , blockStakeKeyDeposit
+  , blockPoolDeposit
 
     -- * Accessor classes
   , HasExtractors (..)
@@ -145,25 +150,57 @@ data TxContext = TxContext
 -- ---------------------------------------------------------------------------
 
 -- | One block's worth of ledger-worker output, consumed by extractors.
-data BlockLedgerData = BlockLedgerData
-  { bldLedgerEnabled   :: !Bool
-      -- ^ False disables the other fields; extractors fall through.
-  , bldDepositsMap     :: !DepositsMap
+--
+-- 'LedgerDataOff' is the only valid shape when the ledger feature is
+-- disabled; the per-block 'Maybe' fields are unconstructible in that
+-- case so the impossible "off-with-populated-fields" state is ruled
+-- out at the type level.
+data BlockLedgerData
+  = LedgerDataOff
+  | LedgerDataOn !LedgerOutputs
+  deriving stock (Eq, Show)
+
+-- | Per-block ledger output when the ledger feature is on.
+data LedgerOutputs = LedgerOutputs
+  { loDepositsMap     :: !DepositsMap
       -- ^ Per-tx deposits, keyed by tx-body hash. Plain txs aren't here.
-  , bldStakeKeyDeposit :: !(Maybe Coin)
+  , loStakeKeyDeposit :: !(Maybe Coin)
       -- ^ Protocol-param stake-key deposit at this block.
-  , bldPoolDeposit     :: !(Maybe Coin)
+  , loPoolDeposit     :: !(Maybe Coin)
       -- ^ Protocol-param pool deposit at this block.
   }
+  deriving stock (Eq, Show)
 
 -- | Default for the ledger-disabled case.
 emptyBlockLedgerData :: BlockLedgerData
-emptyBlockLedgerData = BlockLedgerData
-  { bldLedgerEnabled   = False
-  , bldDepositsMap     = emptyDepositsMap
-  , bldStakeKeyDeposit = Nothing
-  , bldPoolDeposit     = Nothing
+emptyBlockLedgerData = LedgerDataOff
+
+-- | All-zero/Nothing 'LedgerOutputs'. Convenient base for tests and
+-- for the worker before any deposit observation has landed.
+emptyLedgerOutputs :: LedgerOutputs
+emptyLedgerOutputs = LedgerOutputs
+  { loDepositsMap     = emptyDepositsMap
+  , loStakeKeyDeposit = Nothing
+  , loPoolDeposit     = Nothing
   }
+
+-- | Per-tx deposits map; 'emptyDepositsMap' when ledger is off.
+blockDepositsMap :: BlockLedgerData -> DepositsMap
+blockDepositsMap = \case
+  LedgerDataOff   -> emptyDepositsMap
+  LedgerDataOn lo -> loDepositsMap lo
+
+-- | Protocol-param stake-key deposit; 'Nothing' when ledger is off.
+blockStakeKeyDeposit :: BlockLedgerData -> Maybe Coin
+blockStakeKeyDeposit = \case
+  LedgerDataOff   -> Nothing
+  LedgerDataOn lo -> loStakeKeyDeposit lo
+
+-- | Protocol-param pool deposit; 'Nothing' when ledger is off.
+blockPoolDeposit :: BlockLedgerData -> Maybe Coin
+blockPoolDeposit = \case
+  LedgerDataOff   -> Nothing
+  LedgerDataOn lo -> loPoolDeposit lo
 
 -- ---------------------------------------------------------------------------
 -- * Accessor classes

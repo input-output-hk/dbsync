@@ -170,12 +170,6 @@ byronRegularBlockHash = Crypto.abstractHashToBytes . Byron.blockHashAnnotated
 byronBlockNumber :: Byron.ABlock ByteString -> Word64
 byronBlockNumber = Byron.unChainDifficulty . Byron.headerDifficulty . Byron.blockHeader
 
--- TODO: re-enable when a caller needs to read the slot directly from a Byron
--- header (currently we use 'sdSlotNo' from 'SlotDetails').
---
--- byronSlotNumber :: Byron.ABlock ByteString -> Word64
--- byronSlotNumber = Byron.unSlotNumber . Byron.headerSlot . Byron.blockHeader
-
 byronPreviousHash :: Byron.ABlock a -> ByteString
 byronPreviousHash = Crypto.abstractHashToBytes . Byron.headerPrevHash . Byron.blockHeader
 

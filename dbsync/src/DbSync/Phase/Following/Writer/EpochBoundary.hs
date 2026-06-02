@@ -1,7 +1,6 @@
--- | hasql writers for tables owned by the @epoch_boundary@ extractor.
---
--- Follow-phase insert plumbing not landed yet for any of these
--- tables; all flavours fall through to 'todoWrite' for now.
+-- | hasql writers for tables owned by the @epoch_boundary@
+-- extractor. All flavours panic via 'todoWrite' until the insert
+-- statements are wired.
 module DbSync.Phase.Following.Writer.EpochBoundary
   ( writeAdaPotsConn
   , writeAdaPotsBuf

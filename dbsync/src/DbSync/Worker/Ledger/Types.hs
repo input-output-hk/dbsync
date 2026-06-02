@@ -32,6 +32,9 @@ module DbSync.Worker.Ledger.Types
   , LedgerEnv (..)
   , mkNoLedgerEnv
 
+    -- * Configuration switches
+  , PanicPolicy (..)
+
     -- * LedgerDB and its elements
   , LedgerDB (..)
   , DbSyncStateRef (..)
@@ -112,7 +115,7 @@ import DbSync.App.Config.Types (LedgerBackend)
 import qualified DbSync.Worker.Ledger.EpochUpdate as Generic
 import qualified DbSync.Worker.Ledger.ProtoParams as Generic
 import qualified DbSync.Worker.Ledger.StakeDist as Generic
-import DbSync.Worker.Ledger.Event (LedgerEvent)
+import DbSync.Worker.Ledger.Event (LedgerEvent, RewardsCapture)
 import DbSync.Worker.Ledger.Keys (PoolKeyHash)
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock)
 import Ouroboros.Consensus.Shelley.HFEras ()                -- per-era HFC instances
@@ -172,9 +175,9 @@ data NoLedgerEnv = NoLedgerEnv
 --   genesis or from a disk snapshot.
 data LedgerEnv = LedgerEnv
   { leTracer               :: !AppTracer
-  , leHasRewards           :: !Bool
-    -- ^ If 'False', reward-related 'LedgerEvent' values are dropped
-    -- at the consensus-event conversion boundary.
+  , leRewardsCapture       :: !RewardsCapture
+    -- ^ When 'DropRewards', reward-related 'LedgerEvent' values are
+    -- dropped at the consensus-event conversion boundary.
   , leProtocolInfo         :: !(Consensus.ProtocolInfo (CardanoBlock StandardCrypto))
   , leDir                  :: !FilePath
     -- ^ Root state directory (LSM session + snapshot headers
@@ -182,7 +185,10 @@ data LedgerEnv = LedgerEnv
   , leNetwork              :: !Ledger.Network
   , leMaxSupply            :: !Word64
   , leSystemStart          :: !SystemStart
-  , leAbortOnPanic         :: !Bool
+  , lePanicPolicy          :: !PanicPolicy
+    -- ^ What the worker does when it observes an invalid ledger
+    -- state. 'AbortOnPanic' tears the process down; 'LogAndContinue'
+    -- records the error and keeps applying.
   , leSnapshotNearTipEpoch :: !Word64
     -- ^ Epoch threshold past which we always snapshot every epoch,
     -- regardless of sync-state cadence. Default 580.
@@ -260,6 +266,17 @@ mkNoLedgerEnv tracer pinfo start network =
       , nleSystemStart  = start
       , nleNetwork      = network
       }
+
+-- ---------------------------------------------------------------------------
+-- * Configuration switches
+-- ---------------------------------------------------------------------------
+
+-- | What the ledger worker does when it observes an invalid ledger
+-- state.
+data PanicPolicy
+  = AbortOnPanic
+  | LogAndContinue
+  deriving stock (Eq, Show)
 
 -- ---------------------------------------------------------------------------
 -- * LedgerDB and its elements
@@ -385,6 +402,7 @@ data SnapshotPoint
 newtype DepositsMap = DepositsMap
   { unDepositsMap :: Map ByteString Coin
   }
+  deriving stock (Eq, Show)
 
 -- | 'Just' the deposit for this tx-body hash, or 'Nothing' if no
 -- deposit event was observed (plain transfer).

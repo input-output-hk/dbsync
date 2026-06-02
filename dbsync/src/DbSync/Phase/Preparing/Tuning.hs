@@ -23,9 +23,9 @@ module DbSync.Phase.Preparing.Tuning
 
 import Cardano.Prelude
 
-import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 
+import DbSync.Db.Run (useConn)
 import DbSync.Db.Statement.Tuning (prepGucSql)
 import DbSync.Db.Transaction (HasHasqlConnection (..))
 
@@ -74,18 +74,15 @@ prepSessionGUCsSession :: PrepTuning -> Sess.Session ()
 prepSessionGUCsSession t = Sess.script (gucSql t)
 
 -- | Issue the @SET@ statements that bring the env's connection up
--- to the requested 'PrepTuning'. Panics on driver failure — these
--- are unconditionally valid GUCs and a failure here points at a
--- connection-level problem worth surfacing immediately.
+-- to the requested 'PrepTuning'. Surfaces driver failures as
+-- 'AppDatabaseError' — these are unconditionally valid GUCs, so a
+-- failure here points at a connection-level problem.
 setPrepSessionGUCs
   :: (HasHasqlConnection env, MonadReader env m, MonadIO m)
   => PrepTuning -> m ()
 setPrepSessionGUCs t = do
   conn <- asks getHasqlConnection
-  result <- liftIO $ Conn.use conn (prepSessionGUCsSession t)
-  case result of
-    Right () -> pure ()
-    Left  e  -> panic $ "Phase.Preparing.Tuning: " <> show e
+  useConn "Phase.Preparing.Tuning" conn (prepSessionGUCsSession t)
 
 gucSql :: PrepTuning -> Text
 gucSql t =

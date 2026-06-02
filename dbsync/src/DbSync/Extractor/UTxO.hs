@@ -26,7 +26,7 @@ import Data.List (zip3)
 
 import DbSync.Parser.Types (GenericTx (..), GenericTxIn (..))
 import qualified DbSync.Parser.Types as G
-import DbSync.Phase.Type (isFollowPath)
+import DbSync.Phase.Type (SyncPhase, isFollowPath)
 import DbSync.Db.Schema.Address (Address (..), addressTableDef)
 import DbSync.Db.Schema.Ids (AddressId, StakeAddressId, TxId (..))
 import DbSync.Db.Schema.UTxO
@@ -64,7 +64,8 @@ processUTxO :: ProcessBlockFn
 processUTxO ctx = do
   resolver <- asks getResolver
   writer   <- asks getWriter
-  let followPath = isFollowPath (bcSyncPhase ctx)
+  let phase      = bcSyncPhase ctx
+      followPath = isFollowPath phase
   forM_ (bcTxs ctx) $ \tc -> do
     let txId    = tcTxId tc
         gtx     = tcGenTx tc
@@ -78,7 +79,7 @@ processUTxO ctx = do
         forM_ (zip3 outIds stakeIds (txOutputs gtx)) $ \(outId, mStakeId, gout) -> do
           let raw  = G.txOutAddressRaw gout
               addr = mkAddress mStakeId gout
-          mAid <- followAddressId followPath resolver raw addr
+          mAid <- followAddressId phase resolver raw addr
           liftIO $ writeTxOut writer outId (mkTxOut txId mAid mStakeId gout)
           unless followPath $
             liftIO $ recordTxOutAddress resolver outId raw addr
@@ -109,7 +110,7 @@ processUTxO ctx = do
           mStakeId <- resolveCollateralStake gout
           let raw  = G.txOutAddressRaw gout
               addr = mkAddress mStakeId gout
-          mAid <- followAddressId followPath resolver raw addr
+          mAid <- followAddressId phase resolver raw addr
           liftIO $ writeCollateralTxOut writer outId (mkCollateralTxOut txId mAid mStakeId gout)
           unless followPath $
             liftIO $ recordCollateralTxOutAddress resolver outId raw addr
@@ -147,10 +148,10 @@ processUTxO ctx = do
 -- bulk UPDATE an epoch later.
 followAddressId
   :: MonadIO m
-  => Bool -> IdResolver IO -> ByteString -> Address -> m (Maybe AddressId)
-followAddressId followPath resolver raw addr
-  | followPath = Just <$> liftIO (resolveAddressId resolver raw addr)
-  | otherwise  = pure Nothing
+  => SyncPhase -> IdResolver IO -> ByteString -> Address -> m (Maybe AddressId)
+followAddressId phase resolver raw addr
+  | isFollowPath phase = Just <$> liftIO (resolveAddressId resolver raw addr)
+  | otherwise          = pure Nothing
 
 -- ---------------------------------------------------------------------------
 -- * Record builders

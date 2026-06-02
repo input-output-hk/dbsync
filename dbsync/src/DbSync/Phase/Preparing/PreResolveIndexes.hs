@@ -16,10 +16,10 @@ module DbSync.Phase.Preparing.PreResolveIndexes
 
 import Cardano.Prelude
 
-import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 
 import DbSync.AppM (LoggingM)
+import DbSync.Db.Run (useConn)
 import DbSync.Db.Statement.Indexes
   ( postResolveIndexStatements
   , preResolveIndexStatements
@@ -57,8 +57,4 @@ runDdl
   => Text -> m ()
 runDdl ddl = do
   conn <- asks getHasqlConnection
-  result <- liftIO $ Conn.use conn (Sess.script ddl)
-  case result of
-    Right () -> pure ()
-    Left  e  -> panic $
-      "Phase.Preparing.PreResolveIndexes: " <> show e <> " for " <> ddl
+  useConn "Phase.Preparing.PreResolveIndexes" conn (Sess.script ddl)

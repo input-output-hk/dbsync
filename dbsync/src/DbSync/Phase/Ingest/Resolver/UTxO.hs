@@ -39,7 +39,7 @@ import DbSync.Db.Schema.Ids
 import DbSync.Db.Types (DbLovelace)
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Phase.Ingest.Counter (IdCounters (..))
-import DbSync.Phase.Ingest.Resolver.Internal (bump)
+import DbSync.Phase.Ingest.Resolver.Internal (allocateNextId)
 import DbSync.Phase.Ingest.UtxoStore (UtxoStore, UtxoTxEntry)
 import qualified DbSync.Phase.Ingest.UtxoStore as UtxoStore
 import DbSync.Worker.TxOut.AddressBuffer
@@ -54,16 +54,20 @@ import DbSync.Worker.TxOut.ConsumedByBuffer (ConsumedByBufferRef, recordConsumed
 -- ---------------------------------------------------------------------------
 
 assignTxInIdIngest :: IORef ExtractState -> IO TxInId
-assignTxInIdIngest stRef = bump stRef icTxInId (\cs c -> cs { icTxInId = c }) TxInId
+assignTxInIdIngest extractStateRef =
+  allocateNextId extractStateRef icTxInId (\cs c -> cs { icTxInId = c }) TxInId
 
 assignCollateralTxInIdIngest :: IORef ExtractState -> IO CollateralTxInId
-assignCollateralTxInIdIngest stRef = bump stRef icCollateralTxInId (\cs c -> cs { icCollateralTxInId = c }) CollateralTxInId
+assignCollateralTxInIdIngest extractStateRef =
+  allocateNextId extractStateRef icCollateralTxInId (\cs c -> cs { icCollateralTxInId = c }) CollateralTxInId
 
 assignCollateralTxOutIdIngest :: IORef ExtractState -> IO CollateralTxOutId
-assignCollateralTxOutIdIngest stRef = bump stRef icCollateralTxOutId (\cs c -> cs { icCollateralTxOutId = c }) CollateralTxOutId
+assignCollateralTxOutIdIngest extractStateRef =
+  allocateNextId extractStateRef icCollateralTxOutId (\cs c -> cs { icCollateralTxOutId = c }) CollateralTxOutId
 
 assignReferenceTxInIdIngest :: IORef ExtractState -> IO ReferenceTxInId
-assignReferenceTxInIdIngest stRef = bump stRef icReferenceTxInId (\cs c -> cs { icReferenceTxInId = c }) ReferenceTxInId
+assignReferenceTxInIdIngest extractStateRef =
+  allocateNextId extractStateRef icReferenceTxInId (\cs c -> cs { icReferenceTxInId = c }) ReferenceTxInId
 
 -- ---------------------------------------------------------------------------
 -- * Address buffering

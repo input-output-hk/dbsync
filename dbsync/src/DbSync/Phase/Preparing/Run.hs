@@ -40,12 +40,12 @@ import Cardano.Prelude
 import Control.Concurrent.Async (forConcurrently_)
 import Control.Monad.IO.Unlift (withRunInIO)
 import Control.Tracer (traceWith)
-import qualified Hasql.Connection as Conn
 import qualified Hasql.Connection.Settings as ConnSettings
 import qualified Hasql.Session as Sess
 
 import DbSync.AppM (LoggingM)
 import DbSync.Db.Pool (usePool, withPrepPool)
+import DbSync.Db.Run (useConn)
 import DbSync.Db.Schema.Core (blockTableDef, txTableDef)
 import DbSync.Db.Schema.EpochView (epochFinalizedTableName)
 import DbSync.Db.Schema.Init
@@ -173,8 +173,4 @@ runDdl
   => Text -> m ()
 runDdl ddl = do
   conn <- asks getHasqlConnection
-  result <- liftIO $ Conn.use conn (Sess.script ddl)
-  case result of
-    Right () -> pure ()
-    Left  e  -> panic $
-      "Phase.Preparing.Run.runDdl: " <> show e <> " for " <> ddl
+  useConn "Phase.Preparing.Run.runDdl" conn (Sess.script ddl)

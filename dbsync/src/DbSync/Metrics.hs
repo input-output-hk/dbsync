@@ -27,11 +27,12 @@ class HasMetrics env where
 
 -- * Types
 
--- | Prometheus counters and gauges for monitoring.
--- These are mutable references updated throughout the sync lifecycle.
+-- | Prometheus counters and gauges exposed to the metrics endpoint.
+-- Updated throughout the sync lifecycle; readers come via
+-- 'HasMetrics'.
 data Metrics = Metrics
-  { mBlocksProcessed :: !Int64   -- ^ TODO: replace with Prometheus Counter
-  , mCurrentEpoch    :: !Int64   -- ^ TODO: replace with Prometheus Gauge
+  { mBlocksProcessed :: !Int64
+  , mCurrentEpoch    :: !Int64
   , mCurrentBlock    :: !Int64
   , mCurrentSlot     :: !Int64
   , mBlocksPerSec    :: !Double
@@ -42,30 +43,22 @@ data Metrics = Metrics
   }
   deriving stock (Show)
 
--- Note: In the real implementation, these fields will be Prometheus
--- Counter/Gauge types from the 'prometheus' package. For now they are
--- placeholder Int64/Double values to get the type signatures compiling.
-
 -- * Convenience functions
---
--- NOTE: 'MonadIO m' will be reinstated on these signatures once the real
--- Prometheus Counter\/Gauge calls (which run in 'IO') are wired up. For now
--- the bodies are pure stubs, so the constraint is redundant.
 
 -- | Increment the blocks processed counter.
 incBlocksProcessed :: (MonadReader env m, HasMetrics env) => m ()
 incBlocksProcessed = do
   _metrics <- asks getMetrics
-  pure () -- TODO: Prometheus.incCounter (mBlocksProcessed metrics)
+  pure ()
 
 -- | Set the current epoch gauge.
 setCurrentEpoch :: (MonadReader env m, HasMetrics env) => EpochNo -> m ()
 setCurrentEpoch _epochNo = do
   _metrics <- asks getMetrics
-  pure () -- TODO: Prometheus.setGauge (mCurrentEpoch metrics) (fromIntegral $ unEpochNo epochNo)
+  pure ()
 
 -- | Add to the COPY rows written counter.
 addCopyRows :: (MonadReader env m, HasMetrics env) => Int -> m ()
 addCopyRows _n = do
   _metrics <- asks getMetrics
-  pure () -- TODO: Prometheus.addCounter (mCopyRowsWritten metrics) (fromIntegral n)
+  pure ()

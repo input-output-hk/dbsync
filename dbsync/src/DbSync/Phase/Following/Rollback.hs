@@ -25,7 +25,6 @@ module DbSync.Phase.Following.Rollback
 import Cardano.Prelude
 
 import Control.Monad.IO.Unlift (MonadUnliftIO)
-import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 import qualified Hasql.Statement as Stmt
 import Ouroboros.Consensus.Block.Abstract (fromRawHash, toRawHash)
@@ -54,6 +53,7 @@ import DbSync.Db.Statement.Rollback
   , queryMinTxOutIdAfterBlockStmt
   , queryTipBlockNoStmt
   )
+import DbSync.Db.Run (useConn)
 import DbSync.Db.Statement.SyncState (writeSyncStateSlotStmt)
 import DbSync.Db.Transaction (HasHasqlConnection (..), withTransaction)
 import DbSync.App.Env (HasSecurityParam (..))
@@ -221,8 +221,8 @@ childrenOf tableDefs parentTable =
   ]
 
 -- | Run a single 'Stmt.Statement' against the env's connection.
--- Panics with the caller-supplied label on a session error so the
--- rollback's stack trace stays legible.
+-- Failures surface as 'AppDatabaseError' tagged with the caller-
+-- supplied label.
 runSess
   :: (HasHasqlConnection env, MonadReader env m, MonadIO m)
   => Text                          -- ^ caller label
@@ -230,7 +230,4 @@ runSess
   -> m b
 runSess label (params, stmt) = do
   conn <- asks getHasqlConnection
-  r <- liftIO $ Conn.use conn (Sess.statement params stmt)
-  case r of
-    Right b -> pure b
-    Left e  -> panic $ "rollbackToPoint: " <> label <> ": " <> show e
+  useConn ("rollbackToPoint: " <> label) conn (Sess.statement params stmt)

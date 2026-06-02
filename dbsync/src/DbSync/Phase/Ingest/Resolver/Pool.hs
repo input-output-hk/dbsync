@@ -25,7 +25,7 @@ import DbSync.Db.Schema.Pool (PoolHash)
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Phase.Ingest.Counter (IdCounters (..))
 import DbSync.Phase.Ingest.DedupStore (DedupStores (..), lookupOrInsert)
-import DbSync.Phase.Ingest.Resolver.Internal (bump)
+import DbSync.Phase.Ingest.Resolver.Internal (allocateNextId)
 
 -- | Dedup lookup against the LSM-backed pool_hash table.
 resolvePoolHashIngest
@@ -36,16 +36,21 @@ resolvePoolHashIngest dedupStores hash _ph = do
   pure (PoolHashId phId, isNew)
 
 assignPoolUpdateIdIngest :: IORef ExtractState -> IO PoolUpdateId
-assignPoolUpdateIdIngest stRef = bump stRef icPoolUpdateId (\cs c -> cs { icPoolUpdateId = c }) PoolUpdateId
+assignPoolUpdateIdIngest extractStateRef =
+  allocateNextId extractStateRef icPoolUpdateId (\cs c -> cs { icPoolUpdateId = c }) PoolUpdateId
 
 assignPoolMetadataRefIdIngest :: IORef ExtractState -> IO PoolMetadataRefId
-assignPoolMetadataRefIdIngest stRef = bump stRef icPoolMetadataRefId (\cs c -> cs { icPoolMetadataRefId = c }) PoolMetadataRefId
+assignPoolMetadataRefIdIngest extractStateRef =
+  allocateNextId extractStateRef icPoolMetadataRefId (\cs c -> cs { icPoolMetadataRefId = c }) PoolMetadataRefId
 
 assignPoolOwnerIdIngest :: IORef ExtractState -> IO PoolOwnerId
-assignPoolOwnerIdIngest stRef = bump stRef icPoolOwnerId (\cs c -> cs { icPoolOwnerId = c }) PoolOwnerId
+assignPoolOwnerIdIngest extractStateRef =
+  allocateNextId extractStateRef icPoolOwnerId (\cs c -> cs { icPoolOwnerId = c }) PoolOwnerId
 
 assignPoolRetireIdIngest :: IORef ExtractState -> IO PoolRetireId
-assignPoolRetireIdIngest stRef = bump stRef icPoolRetireId (\cs c -> cs { icPoolRetireId = c }) PoolRetireId
+assignPoolRetireIdIngest extractStateRef =
+  allocateNextId extractStateRef icPoolRetireId (\cs c -> cs { icPoolRetireId = c }) PoolRetireId
 
 assignPoolRelayIdIngest :: IORef ExtractState -> IO PoolRelayId
-assignPoolRelayIdIngest stRef = bump stRef icPoolRelayId (\cs c -> cs { icPoolRelayId = c }) PoolRelayId
+assignPoolRelayIdIngest extractStateRef =
+  allocateNextId extractStateRef icPoolRelayId (\cs c -> cs { icPoolRelayId = c }) PoolRelayId

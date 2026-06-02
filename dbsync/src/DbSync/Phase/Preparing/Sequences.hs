@@ -11,10 +11,10 @@ module DbSync.Phase.Preparing.Sequences
 
 import Cardano.Prelude
 
-import qualified Hasql.Connection as Conn
 import qualified Hasql.Pipeline as Pipeline
 import qualified Hasql.Session as Sess
 
+import DbSync.Db.Run (useConn)
 import DbSync.Db.Schema.Types (TableDef (..), TableMode (..))
 import DbSync.Db.Statement.Sequences (resetSequenceStmt)
 import DbSync.Db.Transaction (HasHasqlConnection (..))
@@ -27,11 +27,9 @@ resetSequences
   => [TableDef] -> m ()
 resetSequences tables = do
   conn <- asks getHasqlConnection
-  result <- liftIO $ Conn.use conn $ Sess.pipeline $
-    traverse_ pipelineSetval (filter ((== TableUnlogged) . tdMode) tables)
-  case result of
-    Right () -> pure ()
-    Left  e  -> panic $ "Phase.Preparing.Sequences: " <> show e
+  useConn "Phase.Preparing.Sequences" conn $
+    Sess.pipeline $
+      traverse_ pipelineSetval (filter ((== TableUnlogged) . tdMode) tables)
   where
     pipelineSetval td =
       void (Pipeline.statement () (resetSequenceStmt (tdName td)))

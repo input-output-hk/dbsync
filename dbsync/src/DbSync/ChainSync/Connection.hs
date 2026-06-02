@@ -329,21 +329,19 @@ nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats watchd
 -- liveness sampling). Both fields here are read and written only by
 -- the receiver thread.
 data SessionState = SessionState
-  { ssHaveSeenBlock     :: !(IORef Bool)
-    -- ^ 'False' until the first forward block of this session
-    -- arrives. The node always sends a confirming 'MsgRollBackward'
+  { ssPostIntersect   :: !(IORef Bool)
+    -- ^ 'True' once the first 'MsgRollForward' of this session has
+    -- arrived. The node always sends a confirming 'MsgRollBackward'
     -- to the chosen intersection point right after
-    -- 'MsgIntersectFound'; that rollback is a protocol artefact, not
-    -- a real chain reorganisation, so it must not propagate as a
-    -- 'MsgRollback' to downstream consumers. Flipped to 'True' on
-    -- the first 'MsgRollForward'.
-  , ssFirstBlocksLogged :: !(IORef Int)
-    -- ^ Counter that starts at 'firstBlocksToLog' and decrements per
-    -- forward block. While positive the receiver logs slot+blockNo
-    -- at 'Info' so the operator can confirm the new session is
-    -- producing — important on reconnect / handoff where the first
-    -- block has a large BlockNo and the historical "blockNo == 1"
-    -- trigger never fires.
+    -- 'MsgIntersectFound'; while this flag is 'False' the receiver
+    -- treats that rollback as a protocol artefact (not a real
+    -- reorg) and does not propagate it to downstream consumers.
+  , ssBlocksLeftToLog :: !(IORef Int)
+    -- ^ How many forward blocks remain to log at 'Info' (counts
+    -- down from 'firstBlocksToLog'). Lets the operator confirm the
+    -- new session is producing on reconnect / handoff, where the
+    -- first block has a large BlockNo and the historical
+    -- "blockNo == 1" trigger never fires.
   }
 
 newSessionState :: IO SessionState
@@ -430,7 +428,7 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
     onIntersectFound ss chosen tip = do
       traceWith appTracer $ LogMsg Info "ChainSync"
         ("Intersected at " <> show chosen <> " (server tip " <> show tip <> ")") Nothing
-      atomicWriteIORef (ssHaveSeenBlock ss) False
+      atomicWriteIORef (ssPostIntersect ss) False
       pure $ goTip ss policy Zero Origin tip
 
     onIntersectNotFound isResume ss tip
@@ -444,7 +442,7 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
           IntersectGenesis -> do
             traceWith appTracer $ LogMsg Info "ChainSync"
               "Node also has no chain yet; following from origin" Nothing
-            atomicWriteIORef (ssHaveSeenBlock ss) False
+            atomicWriteIORef (ssPostIntersect ss) False
             pure $ goTip ss policy Zero Origin tip
           IntersectAt ps ->
             throwNetwork $
@@ -511,7 +509,7 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
             -- BlockNo that the historical "block 1" trigger missed.
             traceWith appTracer $ LogMsg Debug "ChainSync"
               ("Block " <> show bn) Nothing
-            remaining <- atomicModifyIORef' (ssFirstBlocksLogged ss) $ \r ->
+            remaining <- atomicModifyIORef' (ssBlocksLeftToLog ss) $ \r ->
               if r > 0 then (r - 1, r) else (0, 0)
             when (remaining > 0) $
               traceWith appTracer $ LogMsg Info "ChainSync"
@@ -522,27 +520,13 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
             bumpReceiver watchdog blkSlot
             -- Mark the post-intersect handshake as complete; any
             -- subsequent rollback is a real chain reorganisation.
-            atomicWriteIORef (ssHaveSeenBlock ss) True
+            atomicWriteIORef (ssPostIntersect ss) True
             -- The rollback boundary moves with the node tip; publish
             -- it before enqueuing so a slow consumer never sees a
             -- block whose ancestor has already passed the boundary.
             publishRollbackBoundary tip
-            -- Try a non-blocking write first so we can tell whether the
-            -- queue was full at the moment of arrival. A non-zero
-            -- 'rsWritesBlocked' means the consumer is the bottleneck;
-            -- a zero count with low drain averages means the upstream
-            -- node is. ('stm' has 'tryReadTBQueue' but no 'tryWriteTBQueue',
-            -- so we synthesise the same semantics from 'isFullTBQueue' +
-            -- 'writeTBQueue' inside a single STM transaction.)
             let msg = MsgForward blk
-            ok <- atomically $ do
-              full <- isFullTBQueue blockQueue
-              if full
-                then pure False
-                else writeTBQueue blockQueue msg >> pure True
-            unless ok $ do
-              recordWriteBlocked receiverStats
-              atomically $ writeTBQueue blockQueue msg
+            enqueueWithBackpressure receiverStats blockQueue msg
             -- Fan-out to the ledger worker (when enabled). The
             -- worker is a single consumer with a shallower queue, so
             -- we accept that the receiver may block here if the
@@ -563,7 +547,7 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
             -- point — a protocol artefact, not a chain reorganisation.
             -- Don't surface it to downstream consumers; just record
             -- the position and continue.
-            isConfirmingRollback <- atomicModifyIORef' (ssHaveSeenBlock ss)
+            isConfirmingRollback <- atomicModifyIORef' (ssPostIntersect ss)
               (\seen -> (True, not seen))
             -- Confirming rollbacks log at Debug (benign protocol
             -- step; same severity as the regular per-block trace);
@@ -598,3 +582,28 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
               | n >= kBlocks -> Just (BlockNo (n - kBlocks))
               | otherwise    -> Nothing
       atomically $ writeTVar rollbackBoundary boundary
+
+-- | Enqueue a 'ChainSyncMsg' on the consumer's block queue, counting
+-- the moment-of-arrival fullness so 'ReceiverStats' can distinguish
+-- "consumer is the bottleneck" from "upstream node is".
+--
+-- 'stm' has 'tryReadTBQueue' but no 'tryWriteTBQueue', so the
+-- non-blocking probe is synthesised from 'isFullTBQueue' +
+-- 'writeTBQueue' inside a single STM transaction. On a full queue
+-- we record the blocked write and fall back to a blocking
+-- 'writeTBQueue' — back-pressure into the receiver is the right
+-- response; dropping is not an option.
+enqueueWithBackpressure
+  :: ReceiverStats
+  -> TBQueue ChainSyncMsg
+  -> ChainSyncMsg
+  -> IO ()
+enqueueWithBackpressure stats queue msg = do
+  ok <- atomically $ do
+    full <- isFullTBQueue queue
+    if full
+      then pure False
+      else writeTBQueue queue msg >> pure True
+  unless ok $ do
+    recordWriteBlocked stats
+    atomically $ writeTBQueue queue msg

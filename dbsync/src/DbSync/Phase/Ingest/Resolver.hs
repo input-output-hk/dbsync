@@ -53,22 +53,22 @@ mkIngestResolver
   -- ^ 'Just' enables 'recordConsumed' to enqueue triples; 'Nothing'
   -- (feature off) drops them silently.
   -> IdResolver IO
-mkIngestResolver stRef dedupStores addrBufRef utxoStore mConsumedByBuf = IdResolver
+mkIngestResolver extractStateRef dedupStores addrBufRef utxoStore mConsumedByBuf = IdResolver
   { -- Core
-    assignBlockId     = Core.assignBlockIdIngest     stRef
-  , assignTxId        = Core.assignTxIdIngest        stRef
-  , assignTxOutId     = Core.assignTxOutIdIngest     stRef
+    assignBlockId     = Core.assignBlockIdIngest     extractStateRef
+  , assignTxId        = Core.assignTxIdIngest        extractStateRef
+  , assignTxOutId     = Core.assignTxOutIdIngest     extractStateRef
   , resolveSlotLeader = Core.resolveSlotLeaderIngest dedupStores
-  , resolvePrevBlock  = Core.resolvePrevBlockIngest  stRef
+  , resolvePrevBlock  = Core.resolvePrevBlockIngest  extractStateRef
 
     -- UTxO
   , recordTxOutAddress           = UTxO.recordTxOutAddressIngest           addrBufRef
   , recordCollateralTxOutAddress = UTxO.recordCollateralTxOutAddressIngest addrBufRef
   , resolveAddressId             = UTxO.resolveAddressIdIngest
-  , assignTxInId                 = UTxO.assignTxInIdIngest                 stRef
-  , assignCollateralTxInId       = UTxO.assignCollateralTxInIdIngest       stRef
-  , assignCollateralTxOutId      = UTxO.assignCollateralTxOutIdIngest      stRef
-  , assignReferenceTxInId        = UTxO.assignReferenceTxInIdIngest        stRef
+  , assignTxInId                 = UTxO.assignTxInIdIngest                 extractStateRef
+  , assignCollateralTxInId       = UTxO.assignCollateralTxInIdIngest       extractStateRef
+  , assignCollateralTxOutId      = UTxO.assignCollateralTxOutIdIngest      extractStateRef
+  , assignReferenceTxInId        = UTxO.assignReferenceTxInIdIngest        extractStateRef
   , resolveInputValues           = UTxO.resolveInputValuesIngest           utxoStore
   , resolveInputUtxo             = UTxO.resolveInputUtxoIngest             utxoStore
   , recordTxOutputs              = UTxO.recordTxOutputsIngest              utxoStore
@@ -76,40 +76,40 @@ mkIngestResolver stRef dedupStores addrBufRef utxoStore mConsumedByBuf = IdResol
   , deleteCachedUtxo             = UTxO.deleteCachedUtxoIngest             utxoStore
 
     -- Metadata
-  , assignTxMetadataId = Metadata.assignTxMetadataIdIngest stRef
+  , assignTxMetadataId = Metadata.assignTxMetadataIdIngest extractStateRef
 
     -- MultiAsset
   , resolveMultiAsset = MultiAsset.resolveMultiAssetIngest dedupStores
-  , assignMaTxMintId  = MultiAsset.assignMaTxMintIdIngest  stRef
-  , assignMaTxOutId   = MultiAsset.assignMaTxOutIdIngest   stRef
+  , assignMaTxMintId  = MultiAsset.assignMaTxMintIdIngest  extractStateRef
+  , assignMaTxOutId   = MultiAsset.assignMaTxOutIdIngest   extractStateRef
 
     -- StakeDelegation (incl. pot rebalancing)
   , resolveStakeAddress         = Stake.resolveStakeAddressIngest         dedupStores
-  , assignStakeRegistrationId   = Stake.assignStakeRegistrationIdIngest   stRef
-  , assignStakeDeregistrationId = Stake.assignStakeDeregistrationIdIngest stRef
-  , assignDelegationId          = Stake.assignDelegationIdIngest          stRef
-  , assignWithdrawalId          = Stake.assignWithdrawalIdIngest          stRef
-  , assignPotTransferId         = Stake.assignPotTransferIdIngest         stRef
-  , assignTreasuryId            = Stake.assignTreasuryIdIngest            stRef
-  , assignReserveId             = Stake.assignReserveIdIngest             stRef
+  , assignStakeRegistrationId   = Stake.assignStakeRegistrationIdIngest   extractStateRef
+  , assignStakeDeregistrationId = Stake.assignStakeDeregistrationIdIngest extractStateRef
+  , assignDelegationId          = Stake.assignDelegationIdIngest          extractStateRef
+  , assignWithdrawalId          = Stake.assignWithdrawalIdIngest          extractStateRef
+  , assignPotTransferId         = Stake.assignPotTransferIdIngest         extractStateRef
+  , assignTreasuryId            = Stake.assignTreasuryIdIngest            extractStateRef
+  , assignReserveId             = Stake.assignReserveIdIngest             extractStateRef
 
     -- Pool
   , resolvePoolHash         = Pool.resolvePoolHashIngest         dedupStores
-  , assignPoolUpdateId      = Pool.assignPoolUpdateIdIngest      stRef
-  , assignPoolMetadataRefId = Pool.assignPoolMetadataRefIdIngest stRef
-  , assignPoolOwnerId       = Pool.assignPoolOwnerIdIngest       stRef
-  , assignPoolRetireId      = Pool.assignPoolRetireIdIngest      stRef
-  , assignPoolRelayId       = Pool.assignPoolRelayIdIngest       stRef
+  , assignPoolUpdateId      = Pool.assignPoolUpdateIdIngest      extractStateRef
+  , assignPoolMetadataRefId = Pool.assignPoolMetadataRefIdIngest extractStateRef
+  , assignPoolOwnerId       = Pool.assignPoolOwnerIdIngest       extractStateRef
+  , assignPoolRetireId      = Pool.assignPoolRetireIdIngest      extractStateRef
+  , assignPoolRelayId       = Pool.assignPoolRelayIdIngest       extractStateRef
 
     -- CBOR
-  , assignTxCborId = Cbor.assignTxCborIdIngest stRef
+  , assignTxCborId = Cbor.assignTxCborIdIngest extractStateRef
 
     -- EpochSyncStats
-  , assignEpochSyncStatsId = Epoch.assignEpochSyncStatsIdIngest stRef
+  , assignEpochSyncStatsId = Epoch.assignEpochSyncStatsIdIngest extractStateRef
 
     -- EpochBoundary
-  , assignAdaPotsId    = EpochBoundary.assignAdaPotsIdIngest    stRef
-  , assignEpochParamId = EpochBoundary.assignEpochParamIdIngest stRef
-  , assignEpochStateId = EpochBoundary.assignEpochStateIdIngest stRef
-  , resolveCostModel   = EpochBoundary.resolveCostModelIngest   stRef
+  , assignAdaPotsId    = EpochBoundary.assignAdaPotsIdIngest    extractStateRef
+  , assignEpochParamId = EpochBoundary.assignEpochParamIdIngest extractStateRef
+  , assignEpochStateId = EpochBoundary.assignEpochStateIdIngest extractStateRef
+  , resolveCostModel   = EpochBoundary.resolveCostModelIngest   extractStateRef
   }

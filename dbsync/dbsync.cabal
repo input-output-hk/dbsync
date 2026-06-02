@@ -104,6 +104,7 @@ library
     DbSync.Db.Loader
     DbSync.Db.Loader.Connection
     DbSync.Db.Pool
+    DbSync.Db.Run
     DbSync.Db.Transaction
 
     -- Phase state machine
@@ -111,6 +112,7 @@ library
     DbSync.Phase.Type
 
     -- Phase: Ingest
+    DbSync.Phase.Ingest.Boundary
     DbSync.Phase.Ingest.Consumer
     DbSync.Phase.Ingest.Counter
     DbSync.Phase.Ingest.DedupStore

@@ -39,6 +39,7 @@ import Control.Tracer (traceWith)
 import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 
+import DbSync.Db.Run (useConn)
 import DbSync.Db.Statement.Indexes (ingestResolveIndexStatements)
 import DbSync.Trace.Timing (timedTraceIO_)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
@@ -61,11 +62,4 @@ createIngestResolveIndexes tracer conn = do
   for_ (zip [1 :: Int ..] ingestResolveIndexStatements) $ \(i, ddl) ->
     timedTraceIO_ tracer component
       ("ingest-resolve index " <> show i)
-      (runDdl ddl)
-  where
-    runDdl ddl = do
-      result <- Conn.use conn (Sess.script ddl)
-      case result of
-        Right () -> pure ()
-        Left  e  -> panic $
-          "Phase.Ingest.IngestIndexes: " <> show e <> " for " <> ddl
+      (useConn "Phase.Ingest.IngestIndexes" conn (Sess.script ddl))

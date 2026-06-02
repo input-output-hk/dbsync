@@ -30,10 +30,10 @@ import DbSync.Db.Schema.Pool
 import DbSync.Db.Types (DbLovelace (..))
 import DbSync.Extractor
   ( BlockContext (..)
-  , BlockLedgerData (..)
   , ExtractorDef (..)
   , ProcessBlockFn
   , TxContext (..)
+  , blockPoolDeposit
   )
 import DbSync.Extractor.SharedDedup (resolveAndWritePoolHash, resolveAndWriteStakeAddress)
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
@@ -72,7 +72,7 @@ processPool ctx = do
       -- Worker-supplied protocol param when ledger ON; 'Nothing'
       -- otherwise — pool_update.deposit stays NULL to match the
       -- original schema's behaviour for ledger-disabled runs.
-      mPoolDeposit = bldPoolDeposit (bcLedgerData ctx)
+      mPoolDeposit = blockPoolDeposit (bcLedgerData ctx)
 
   forM_ (bcTxs ctx) $ \tc -> when (txValidContract (tcGenTx tc)) $ do
     let txId = tcTxId tc

@@ -39,11 +39,11 @@ import DbSync.Db.Schema.StakeDelegation
 import DbSync.Db.Types (DbLovelace (..), toDbInt65)
 import DbSync.Extractor
   ( BlockContext (..)
-  , BlockLedgerData (..)
   , ExtractorDef (..)
   , HasNetwork (..)
   , ProcessBlockFn
   , TxContext (..)
+  , blockStakeKeyDeposit
   )
 import DbSync.Extractor.SharedDedup (resolveAndWritePoolHash, resolveAndWriteStakeAddress)
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
@@ -204,7 +204,7 @@ processStakeDelegation ctx = do
     -- on the worker's protocol-param value when the ledger is on.
     stakeDeposit :: Maybe Word64 -> Maybe DbLovelace
     stakeDeposit (Just d) = Just (DbLovelace d)
-    stakeDeposit Nothing  = coinToDbLovelace <$> bldStakeKeyDeposit (bcLedgerData ctx)
+    stakeDeposit Nothing  = coinToDbLovelace <$> blockStakeKeyDeposit (bcLedgerData ctx)
 
 -- ---------------------------------------------------------------------------
 -- * MIR cert handling

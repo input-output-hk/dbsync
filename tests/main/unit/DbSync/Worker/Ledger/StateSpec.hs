@@ -23,8 +23,12 @@ import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 
 import qualified DbSync.Worker.Ledger.EpochUpdate as Generic
 import qualified DbSync.Worker.Ledger.StakeDist as Generic
+import DbSync.Parser.Types (EraStakeModel (..))
+import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Worker.Ledger.State
-  ( applyToEpochBlockNo
+  ( BoundaryStatus (..)
+  , TipProximity (..)
+  , applyToEpochBlockNo
   , ledgerDbCheckpointBufferSize
   , pruneStrictSeq
   , shouldSnapshotAtEpoch
@@ -44,18 +48,18 @@ spec :: Spec
 spec = do
   describe "applyToEpochBlockNo" $ do
     it "byron-era state stays at ByronEpochBlockNo regardless of inputs" $ do
-      applyToEpochBlockNo True False (EpochBlockNo 5)  `shouldBe` ByronEpochBlockNo
-      applyToEpochBlockNo True True  (EpochBlockNo 5)  `shouldBe` ByronEpochBlockNo
-      applyToEpochBlockNo True True  ByronEpochBlockNo `shouldBe` ByronEpochBlockNo
+      applyToEpochBlockNo NoStakeSlices InEpoch    (EpochBlockNo 5)  `shouldBe` ByronEpochBlockNo
+      applyToEpochBlockNo NoStakeSlices EpochStart (EpochBlockNo 5)  `shouldBe` ByronEpochBlockNo
+      applyToEpochBlockNo NoStakeSlices EpochStart ByronEpochBlockNo `shouldBe` ByronEpochBlockNo
 
     it "new epoch resets the counter to 0 (Shelley+)" $
-      applyToEpochBlockNo False True (EpochBlockNo 99) `shouldBe` EpochBlockNo 0
+      applyToEpochBlockNo StandardSlices EpochStart (EpochBlockNo 99) `shouldBe` EpochBlockNo 0
 
     it "non-epoch-boundary increments the counter" $
-      applyToEpochBlockNo False False (EpochBlockNo 7) `shouldBe` EpochBlockNo 8
+      applyToEpochBlockNo StandardSlices InEpoch (EpochBlockNo 7) `shouldBe` EpochBlockNo 8
 
     it "first block after Byron seeds the counter at 0" $
-      applyToEpochBlockNo False False ByronEpochBlockNo `shouldBe` EpochBlockNo 0
+      applyToEpochBlockNo StandardSlices InEpoch ByronEpochBlockNo `shouldBe` EpochBlockNo 0
 
   describe "shouldSnapshotAtEpoch" $ do
     let mkResult mEpoch =
@@ -88,59 +92,58 @@ spec = do
             }
 
     it "returns False when not on an epoch boundary" $
-      shouldSnapshotAtEpoch (mkResult Strict.Nothing) True True 580 `shouldBe` False
+      shouldSnapshotAtEpoch (mkResult Strict.Nothing) FollowingChainTip NearTip 580 `shouldBe` False
 
     it "returns False at epoch 0 (we never snapshot the boot epoch)" $
       shouldSnapshotAtEpoch
-        (mkResult (Strict.Just (newEpoch 0))) True True 580
+        (mkResult (Strict.Just (newEpoch 0))) FollowingChainTip NearTip 580
         `shouldBe` False
 
-    it "snapshots every epoch when consistent + near tip" $
+    it "snapshots every epoch when on the Follow path + near tip" $
       shouldSnapshotAtEpoch
-        (mkResult (Strict.Just (newEpoch 7))) True True 580
+        (mkResult (Strict.Just (newEpoch 7))) FollowingChainTip NearTip 580
         `shouldBe` True
 
-    it "snapshots every 10 epochs when lagging (not near tip)" $ do
+    it "snapshots every 10 epochs when lagging the tip" $ do
       shouldSnapshotAtEpoch
-        (mkResult (Strict.Just (newEpoch 7))) True False 580
+        (mkResult (Strict.Just (newEpoch 7))) FollowingChainTip LaggingTip 580
         `shouldBe` False
       shouldSnapshotAtEpoch
-        (mkResult (Strict.Just (newEpoch 10))) True False 580
+        (mkResult (Strict.Just (newEpoch 10))) FollowingChainTip LaggingTip 580
         `shouldBe` True
       shouldSnapshotAtEpoch
-        (mkResult (Strict.Just (newEpoch 100))) True False 580
+        (mkResult (Strict.Just (newEpoch 100))) FollowingChainTip LaggingTip 580
         `shouldBe` True
 
-    it "snapshots every epoch past the near-tip-epoch threshold even when lagging" $ do
+    it "snapshots every epoch past the near-tip-epoch threshold on the Follow path" $ do
       shouldSnapshotAtEpoch
-        (mkResult (Strict.Just (newEpoch 581))) True False 580
+        (mkResult (Strict.Just (newEpoch 581))) FollowingChainTip LaggingTip 580
         `shouldBe` True
       shouldSnapshotAtEpoch
-        (mkResult (Strict.Just (newEpoch 580))) True False 580
+        (mkResult (Strict.Just (newEpoch 580))) FollowingChainTip LaggingTip 580
         `shouldBe` True
       shouldSnapshotAtEpoch
-        (mkResult (Strict.Just (newEpoch 579))) True False 580
+        (mkResult (Strict.Just (newEpoch 579))) FollowingChainTip LaggingTip 580
         `shouldBe` False
 
-    it "ignores the near-tip flag if we're not consistent with the chain tip" $
+    it "ignores the near-tip flag during Ingest" $
       shouldSnapshotAtEpoch
-        (mkResult (Strict.Just (newEpoch 7))) False True 580
+        (mkResult (Strict.Just (newEpoch 7))) IngestChainHistory NearTip 580
         `shouldBe` False
 
     it "Ingest stays on every-10 cadence past the near-tip threshold" $ do
-      -- Bug fix: the threshold only relaxes the cadence during
-      -- Follow. During Ingest (consistent = False) it stays at
-      -- every 10 epochs regardless of epoch number, so resuming
-      -- from a high-epoch snapshot doesn't trigger a snapshot
-      -- per epoch.
+      -- The threshold only relaxes the cadence on the Follow path.
+      -- Ingest stays at every 10 epochs regardless of epoch number,
+      -- so resuming from a high-epoch snapshot doesn't trigger a
+      -- snapshot per epoch.
       shouldSnapshotAtEpoch
-        (mkResult (Strict.Just (newEpoch 581))) False False 580
+        (mkResult (Strict.Just (newEpoch 581))) IngestChainHistory LaggingTip 580
         `shouldBe` False
       shouldSnapshotAtEpoch
-        (mkResult (Strict.Just (newEpoch 840))) False False 580
+        (mkResult (Strict.Just (newEpoch 840))) IngestChainHistory LaggingTip 580
         `shouldBe` True   -- 840 `mod` 10 == 0
       shouldSnapshotAtEpoch
-        (mkResult (Strict.Just (newEpoch 845))) False False 580
+        (mkResult (Strict.Just (newEpoch 845))) IngestChainHistory LaggingTip 580
         `shouldBe` False
 
   -- Exercise the underlying polymorphic spine logic on plain Ints.

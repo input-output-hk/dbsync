@@ -28,6 +28,10 @@ module DbSync.Parser.Types
   , PoolRelayData (..)
   , BlockEra (..)
 
+    -- * Era classification
+  , EraStakeModel (..)
+  , classifyEra
+
     -- * Cardano point alias
   , CardanoPoint
   ) where
@@ -67,6 +71,28 @@ data BlockEra
   | Conway
   | Dijkstra
   deriving stock (Eq, Show, Bounded, Enum)
+
+-- | Whether an era participates in the in-epoch stake-slice counter.
+-- Pre-Shelley eras have no stake distribution; Shelley onward share
+-- the same counter model.
+data EraStakeModel
+  = NoStakeSlices
+  | StandardSlices
+  deriving stock (Eq, Show)
+
+-- | Classify a 'BlockEra' for stake-slice purposes. Exhaustive on
+-- 'BlockEra' so a future era added there is flagged here at compile
+-- time.
+classifyEra :: BlockEra -> EraStakeModel
+classifyEra = \case
+  Byron    -> NoStakeSlices
+  Shelley  -> StandardSlices
+  Allegra  -> StandardSlices
+  Mary     -> StandardSlices
+  Alonzo   -> StandardSlices
+  Babbage  -> StandardSlices
+  Conway   -> StandardSlices
+  Dijkstra -> StandardSlices
 
 -- | Era-independent block representation.
 -- Produced by era-specific converters from cardano-ledger types.

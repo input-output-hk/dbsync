@@ -29,6 +29,7 @@ module DbSync.Worker.Ledger.Worker
   ( -- * Entry points
     runLedgerWorker
   , runLedgerWorkerWith
+  , withLedgerThreads
 
     -- * Test hooks
   , WorkerHooks (..)
@@ -54,15 +55,16 @@ import DbSync.AppM (LedgerM, runAppM)
 import DbSync.Parser.Types (CardanoPoint)
 import DbSync.SyncState.Row (writePendingRollbackSlot)
 import DbSync.Error (throwLedger)
-import DbSync.Phase.Type (isFollowPath)
+
 import qualified DbSync.Worker.Ledger.EpochUpdate as Generic
+import DbSync.Worker.Ledger.Snapshot (runLedgerStateWriteThread)
 import DbSync.Worker.Ledger.State
   ( applyBlockAndSnapshot
   , getTopLevelConfig
   , loadLedgerAtPoint
   , readCurrentStateUnsafe
   )
-import DbSync.Worker.Ledger.Types (ApplyResult (..), LedgerEnv (..))
+import DbSync.Worker.Ledger.Types (ApplyResult (..), HasLedgerEnv (..), LedgerEnv (..))
 import DbSync.ChainSync.Msg (ChainSyncMsg (..))
 import DbSync.Phase.Current (readCurrentPhase)
 import DbSync.StateQuery
@@ -87,17 +89,17 @@ import DbSync.Trace.Watchdog (Watchdog, bumpWorker, setWorkerNote)
 -- Polymorphic in @blk@ so test stubs can use simpler types.
 data WorkerHooks blk = WorkerHooks
   { whGetSlotDetails   :: !(blk -> IO SlotDetails)
-  , whApplyAndSnapshot :: !(blk -> SlotDetails -> IO (ApplyResult, Bool))
+  , whApplyAndSnapshot :: !(blk -> SlotDetails -> IO ApplyResult)
   }
 
 -- | Build the production hook set from a 'LedgerEnv', a
 -- 'StateQueryVar', a 'Watchdog' handle, and the optional resume
 -- replay boundary.
 --
--- The /consistent with tip/ flag passed to 'applyBlockAndSnapshot'
--- is derived from the shared 'CurrentPhase' on every apply, so the
--- orchestrator can flip the snapshot cadence (Ingest = every 10
--- epochs, Follow = every epoch) just by transitioning the phase.
+-- 'applyBlockAndSnapshot' receives the live 'SyncPhase' on every
+-- apply so the orchestrator can flip the snapshot cadence (Ingest =
+-- every 10 epochs, Follow = every epoch) just by transitioning the
+-- phase.
 --
 -- The 'Watchdog' note is stamped around each hook call so a hang
 -- inside @applyBlockAndSnapshot@ or @seedInterpreterFromLedgerState@
@@ -115,8 +117,8 @@ realWorkerHooks env sqv wd mReplayBoundary =
         getSlotDetailsIO (leTracer env) sqv (leSystemStart env) (blockSlot blk)
     , whApplyAndSnapshot = \blk sd -> do
         setWorkerNote wd "worker: applyBlockAndSnapshot"
-        consistent <- isFollowPath <$> readCurrentPhase (leCurrentPhase env)
-        result <- runAppM env (applyBlockAndSnapshot blk sd consistent mReplayBoundary)
+        phase <- readCurrentPhase (leCurrentPhase env)
+        result <- runAppM env (applyBlockAndSnapshot blk sd phase mReplayBoundary)
         -- Re-seed the cached HFC interpreter from the post-apply state so
         -- the next getSlotDetailsIO stays inside the summary's horizon.
         setWorkerNote wd "worker: readCurrentStateUnsafe (re-seed)"
@@ -176,7 +178,7 @@ applyForward
   -> IO ()
 applyForward env hooks wd blk = do
   sd <- whGetSlotDetails hooks blk
-  (result, _tookSnap) <- whApplyAndSnapshot hooks blk sd
+  result <- whApplyAndSnapshot hooks blk sd
   bumpWorker wd (sdSlotNo sd)
   case apNewEpoch result of
     SMaybe.Just ne -> do
@@ -278,7 +280,7 @@ runLedgerWorkerWith mTracer hooks mWatchdog queue epochReady epochWait =
       for_ mWatchdog $ \wd -> setWorkerNote wd "worker: readTBQueue (waiting for block)"
       blk <- atomically $ readTBQueue queue
       sd  <- whGetSlotDetails hooks blk
-      (result, _tookSnap) <- whApplyAndSnapshot hooks blk sd
+      result <- whApplyAndSnapshot hooks blk sd
 
       -- Watchdog bump: one applied block.
       for_ mWatchdog $ \wd -> bumpWorker wd (sdSlotNo sd)
@@ -296,3 +298,25 @@ runLedgerWorkerWith mTracer hooks mWatchdog queue epochReady epochWait =
       _ <- atomically $ Strict.tryReadTMVar epochWait
       pure ()
 {-# SCC runLedgerWorkerWith #-}
+
+-- | Run the ledger worker + snapshot-writer asyncs for the duration
+-- of the inner action. No-op when the ledger feature is disabled.
+--
+-- The two threads share the caller's 'Watchdog', so a single sampler
+-- covers their progress alongside the receiver / consumer bumps.
+-- Cancellation propagates to both async children when the inner
+-- action exits or raises.
+withLedgerThreads
+  :: HasLedgerEnv
+  -> Maybe SlotNo
+  -> StateQueryVar
+  -> Watchdog
+  -> IO a
+  -> IO a
+withLedgerThreads (LedgerDisabled _) _ _ _ inner = inner
+withLedgerThreads hasLE@(LedgerEnabled lenv) replayBoundary sqv wd inner =
+  withAsync (runAppM lenv (runLedgerWorker replayBoundary sqv wd)) $ \w -> do
+    link w
+    withAsync (runLedgerStateWriteThread hasLE) $ \s -> do
+      link s
+      inner

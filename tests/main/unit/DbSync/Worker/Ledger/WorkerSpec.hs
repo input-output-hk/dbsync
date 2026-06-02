@@ -185,8 +185,7 @@ countingHooks ref mNewEpoch =
         let neAtCall = case mNewEpoch of
               Just f  -> f n
               Nothing -> SMaybe.Nothing
-            ar = mkApplyResult neAtCall
-        pure (ar, False)
+        pure (mkApplyResult neAtCall)
     }
 
 mkApplyResult :: SMaybe.Maybe Generic.NewEpoch -> ApplyResult

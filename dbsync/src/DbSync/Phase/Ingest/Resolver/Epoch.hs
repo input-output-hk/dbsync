@@ -10,7 +10,8 @@ import Data.IORef (IORef)
 import DbSync.Db.Schema.Ids (EpochSyncStatsId (..))
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Phase.Ingest.Counter (IdCounters (..))
-import DbSync.Phase.Ingest.Resolver.Internal (bump)
+import DbSync.Phase.Ingest.Resolver.Internal (allocateNextId)
 
 assignEpochSyncStatsIdIngest :: IORef ExtractState -> IO EpochSyncStatsId
-assignEpochSyncStatsIdIngest stRef = bump stRef icEpochSyncStatsId (\cs c -> cs { icEpochSyncStatsId = c }) EpochSyncStatsId
+assignEpochSyncStatsIdIngest extractStateRef =
+  allocateNextId extractStateRef icEpochSyncStatsId (\cs c -> cs { icEpochSyncStatsId = c }) EpochSyncStatsId

@@ -30,6 +30,7 @@ import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 import qualified Hasql.Statement as Stmt
 
+import DbSync.Db.Run (useConn)
 import DbSync.Db.Schema.Ids
   ( AddressId
   , MultiAssetId
@@ -42,15 +43,11 @@ import DbSync.Db.Schema.Ids
 -- * Statement execution
 -- ---------------------------------------------------------------------------
 
--- | Run a hasql statement and panic on failure. The Follow loop
--- wraps each block in its own transaction, so a panic here aborts
--- the block.
+-- | Run a hasql statement; failures surface as 'AppDatabaseError'.
+-- The Follow loop's per-block transaction envelope catches it and
+-- rolls back.
 runStmt :: Conn.Connection -> a -> Stmt.Statement a b -> IO b
-runStmt conn p stmt = do
-  result <- Conn.use conn (Sess.statement p stmt)
-  case result of
-    Right b -> pure b
-    Left e  -> panic $ "Follow resolver session failed: " <> show e
+runStmt conn p stmt = useConn "Phase.Following.Resolver" conn (Sess.statement p stmt)
 
 -- ---------------------------------------------------------------------------
 -- * Per-block dedup cache
@@ -114,8 +111,8 @@ resolveDedupSimple conn key mapRef queryStmt nextStmt = do
 -- * Stubs
 -- ---------------------------------------------------------------------------
 
--- | Stand-in for resolver fields whose extractors have not landed
--- yet. Returns an IO action that panics when forced — so record
--- construction succeeds for tests that never call the field.
+-- | Panicking stub used by resolver records whose Follow-phase
+-- plumbing is not yet wired. Construction succeeds; calling the
+-- field panics with the resolver's name.
 todoResolve :: Text -> IO a
 todoResolve name = pure $ panic $ "Phase.Following.Resolver." <> name <> " not yet implemented"

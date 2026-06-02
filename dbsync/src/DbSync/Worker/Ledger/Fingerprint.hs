@@ -31,7 +31,6 @@ import Cardano.Prelude
 
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy as BSL
-import qualified Data.Text as T
 import Data.Time.Clock (UTCTime)
 import System.Directory
   ( createDirectoryIfMissing
@@ -152,9 +151,6 @@ writeFingerprint dir fp = do
 -- | One-line render for operator-facing error messages.
 renderFingerprint :: LedgerStateFingerprint -> Text
 renderFingerprint fp =
-  "format_version=" <> tshow (lsfFormatVersion fp)
-    <> ", network_magic=" <> tshow (lsfNetworkMagic fp)
-    <> ", system_start=" <> tshow (lsfSystemStart fp)
-  where
-    tshow :: Show a => a -> Text
-    tshow = T.pack . show
+  "format_version=" <> show (lsfFormatVersion fp)
+    <> ", network_magic=" <> show (lsfNetworkMagic fp)
+    <> ", system_start=" <> show (lsfSystemStart fp)

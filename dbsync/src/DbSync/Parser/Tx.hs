@@ -207,16 +207,6 @@ mkMaryTxOut dataHash idx txOut =
     , txOutMultiAssets = flattenMultiAsset multiAsset
     }
 
--- TODO: re-enable once a caller needs the per-tx withdrawal total.
--- Kept here (commented) because the LEDGER-PLAN expects this helper to
--- live alongside 'mkTxWithdrawals'.
---
--- -- | Sum of all withdrawal amounts.
--- calcWithdrawalSum :: Core.EraTxBody era => Core.TxBody l era -> Word64
--- calcWithdrawalSum bd =
---   fromIntegral $ sum $ map unCoin $ Map.elems $
---     Ledger.unWithdrawals (bd ^. Core.withdrawalsTxBodyL)
-
 -- | Extract withdrawals. Uses 'EraTxBody' constraint which works across all eras.
 mkTxWithdrawals :: Core.EraTxBody era => Core.TxBody l era -> [GenericTxWithdrawal]
 mkTxWithdrawals bd =

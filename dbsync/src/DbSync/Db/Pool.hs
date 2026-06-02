@@ -27,6 +27,7 @@ import qualified Hasql.Pool.Config as PoolConfig
 import qualified Hasql.Session as Sess
 
 import DbSync.AppM (AppM, runAppM)
+import DbSync.Db.Run (usePoolSession)
 import DbSync.Phase.Preparing.Tuning
   ( PrepTuning
   , prepSessionGUCsSession
@@ -101,9 +102,9 @@ withPrepPoolIO tracer connSettings tuning poolSize action =
 prepAcquisitionTimeout :: DiffTime
 prepAcquisitionTimeout = 6 * 3600  -- 6 hours
 
--- | Run a 'Sess.Session' on the env's pool, panicking on driver
--- failure. Prep is one-shot DDL with no useful retry strategy;
--- surfacing the actual hasql error is the most useful behaviour.
+-- | Run a 'Sess.Session' on the env's pool. Driver failures surface
+-- as 'AppDatabaseError'; Prep is one-shot DDL with no useful retry
+-- strategy.
 usePool
   :: (HasPool env, MonadReader env m, MonadIO m)
   => Text
@@ -111,7 +112,4 @@ usePool
   -> m a
 usePool ctx session = do
   pool <- asks getPool
-  result <- liftIO (Pool.use pool session)
-  case result of
-    Right a -> pure a
-    Left  e -> panic $ "DbSync.Db.Pool." <> ctx <> ": " <> show e
+  usePoolSession ("DbSync.Db.Pool." <> ctx) pool session

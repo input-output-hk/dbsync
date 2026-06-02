@@ -6,11 +6,11 @@
 -- @collateral_tx_out.address_id@, and (when the feature is on)
 -- @tx_out.consumed_by_tx_id@ to PostgreSQL.
 --
--- One worker per writable table is the rule (see
--- PLANS/WORKER-CONVENTIONS.md). The four hook calls run on a single
--- dedicated PG connection in sequence, so the worker cannot deadlock
--- against itself on overlapping @tx_out@ rows even when the same row
--- gets both @address_id@ and @consumed_by_tx_id@ writes in one epoch.
+-- One worker per writable table, on its own dedicated PG connection.
+-- The four hook calls run in sequence on that connection, so the
+-- worker cannot deadlock against itself on overlapping @tx_out@ rows
+-- even when the same row gets both @address_id@ and
+-- @consumed_by_tx_id@ writes in one epoch.
 --
 -- Lifecycle:
 --

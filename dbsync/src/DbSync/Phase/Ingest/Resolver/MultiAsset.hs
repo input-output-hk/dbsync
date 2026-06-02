@@ -15,7 +15,7 @@ import DbSync.Db.Schema.MultiAsset (MultiAsset)
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Phase.Ingest.Counter (IdCounters (..))
 import DbSync.Phase.Ingest.DedupStore (DedupStores (..), lookupOrInsert)
-import DbSync.Phase.Ingest.Resolver.Internal (bump)
+import DbSync.Phase.Ingest.Resolver.Internal (allocateNextId)
 
 -- | Key arrives as 'ShortByteString' (already unpinned) from the
 -- extractor; matches the dedup store's key type.
@@ -26,7 +26,9 @@ resolveMultiAssetIngest dedupStores skey _ma = do
   pure (MultiAssetId maId, isNew)
 
 assignMaTxMintIdIngest :: IORef ExtractState -> IO MaTxMintId
-assignMaTxMintIdIngest stRef = bump stRef icMaTxMintId (\cs c -> cs { icMaTxMintId = c }) MaTxMintId
+assignMaTxMintIdIngest extractStateRef =
+  allocateNextId extractStateRef icMaTxMintId (\cs c -> cs { icMaTxMintId = c }) MaTxMintId
 
 assignMaTxOutIdIngest :: IORef ExtractState -> IO MaTxOutId
-assignMaTxOutIdIngest stRef = bump stRef icMaTxOutId (\cs c -> cs { icMaTxOutId = c }) MaTxOutId
+assignMaTxOutIdIngest extractStateRef =
+  allocateNextId extractStateRef icMaTxOutId (\cs c -> cs { icMaTxOutId = c }) MaTxOutId

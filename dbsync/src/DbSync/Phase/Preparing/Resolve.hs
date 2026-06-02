@@ -8,11 +8,11 @@ module DbSync.Phase.Preparing.Resolve
 
 import Cardano.Prelude
 
-import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 
 import DbSync.AppM (LoggingM)
 import DbSync.App.Config.Types (SyncConfig (..), SyncOptions (..), UtxoOption (..))
+import DbSync.Db.Run (useConn)
 import DbSync.Db.Statement.Resolve
   ( resolveCollateralTxInScript
   , resolveConsumedByTxIdStmt
@@ -40,10 +40,8 @@ resolveForeignKeys = do
   when (uoConsumedByTxId utxoOpts) $ do
     _ <- timedTrace "PreparingForVolatileTail" "resolve tx_out.consumed_by_tx_id" $ do
       conn <- asks getHasqlConnection
-      result <- liftIO $ Conn.use conn (Sess.statement () resolveConsumedByTxIdStmt)
-      case result of
-        Right n -> pure n
-        Left  e -> panic $ "Phase.Preparing.Resolve: " <> show e
+      useConn "Phase.Preparing.Resolve" conn
+        (Sess.statement () resolveConsumedByTxIdStmt)
     pure ()
 
 runScript
@@ -51,7 +49,4 @@ runScript
   => Text -> m ()
 runScript sql = do
   conn <- asks getHasqlConnection
-  result <- liftIO $ Conn.use conn (Sess.script sql)
-  case result of
-    Right () -> pure ()
-    Left  e  -> panic $ "Phase.Preparing.Resolve: " <> show e
+  useConn "Phase.Preparing.Resolve" conn (Sess.script sql)

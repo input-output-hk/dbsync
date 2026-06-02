@@ -10,7 +10,8 @@ import Data.IORef (IORef)
 import DbSync.Db.Schema.Ids (TxMetadataId (..))
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Phase.Ingest.Counter (IdCounters (..))
-import DbSync.Phase.Ingest.Resolver.Internal (bump)
+import DbSync.Phase.Ingest.Resolver.Internal (allocateNextId)
 
 assignTxMetadataIdIngest :: IORef ExtractState -> IO TxMetadataId
-assignTxMetadataIdIngest stRef = bump stRef icTxMetadataId (\cs c -> cs { icTxMetadataId = c }) TxMetadataId
+assignTxMetadataIdIngest extractStateRef =
+  allocateNextId extractStateRef icTxMetadataId (\cs c -> cs { icTxMetadataId = c }) TxMetadataId

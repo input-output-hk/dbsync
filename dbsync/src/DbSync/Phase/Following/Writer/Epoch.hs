@@ -1,7 +1,6 @@
--- | hasql writer for the table owned by the @epoch_sync_stats@ extractor.
---
--- Follow-phase insert plumbing not landed yet; both flavours fall
--- through to 'todoWrite' for now.
+-- | hasql writer for the table owned by the @epoch_sync_stats@
+-- extractor. Both flavours panic via 'todoWrite' until the insert
+-- statements are wired.
 module DbSync.Phase.Following.Writer.Epoch
   ( writeEpochSyncStatsConn
   , writeEpochSyncStatsBuf

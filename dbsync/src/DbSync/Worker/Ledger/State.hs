@@ -15,30 +15,23 @@
 Module      : DbSync.Worker.Ledger.State
 Description : Core ledger-state operations — LedgerDB buffer, block application, rollback.
 
-This module sits between the consensus-provided LedgerDB V2 machinery
-and the rest of the sync engine. It owns:
+Sits between the consensus LedgerDB V2 machinery and the rest of the
+sync engine. Owns:
 
-  * The in-memory 100-entry 'LedgerDB' checkpoint buffer (push/prune,
-    current-tip lookup, atomic read/write against the
-    'LedgerEnv.leStateVar' 'StrictTVar').
-  * 'applyBlock' — the single-block entry point that reads the current
-    checkpoint, runs @tickThenReapply@ against the block, updates the
-    LSM tables handle, and returns an 'ApplyResult' summarising
-    everything the downstream extractors need.
+  * The in-memory 'LedgerDB' checkpoint buffer (push, prune, current
+    tip, atomic read\/write against 'leStateVar').
+  * 'applyBlock' \/ 'applyBlockAndSnapshot' — single-block entry
+    points that tick the chain to the block\'s slot, reapply against
+    the LSM tables, and return an 'ApplyResult' for the downstream
+    extractors.
   * 'loadLedgerAtPoint' — rollback entry point. Walks the in-memory
-    buffer first; falls back to a disk-snapshot load when the target
-    is older than our buffer can reach.
+    buffer first, then falls back to a disk-snapshot load when the
+    target is older than the buffer can reach.
 
-Small projections (@getPrices@, @getRegisteredPools@, @findAdaPots@,
-@findProposedCommittee@, @getStakeSlice@) are pure helpers exported
-for the extractor layer — each reads one thing out of a
-'CardanoLedgerState' or an event stream.
-
-The LSM-dependent parts of @applyBlock@ and the disk-fallback leg of
-@loadLedgerAtPoint@ are staged: they show up here as
-@panic \"TODO: …\"@ placeholders so the module compiles standalone,
-and get wired up when the 'DbSync.Worker.Ledger.Worker' thread and the
-snapshot machinery land.
+Small ledger projections (@getPrices@, @getRegisteredPools@,
+@findAdaPots@, @findProposedCommittee@, @getStakeSlice@) live here
+because each pulls one value out of a 'CardanoLedgerState' or event
+stream.
 -}
 module DbSync.Worker.Ledger.State
   ( -- * LedgerDB management
@@ -63,6 +56,11 @@ module DbSync.Worker.Ledger.State
   , applyToEpochBlockNo
   , ledgerEpochNo
   , shouldSnapshotAtEpoch
+
+    -- * Block-application switches
+  , BoundaryStatus (..)
+  , TipProximity (..)
+  , ledgerStateEra
 
     -- * Rollback
   , loadLedgerAtPoint
@@ -158,6 +156,7 @@ import DbSync.Worker.Ledger.DepositAccumulator
   )
 import DbSync.Worker.Ledger.Event
   ( LedgerEvent (..)
+  , RewardsCapture
   , convertAuxLedgerEvent
   , splitDeposits
   )
@@ -172,6 +171,7 @@ import DbSync.Worker.Ledger.Types
   , HasLedgerEnv (..)
   , LedgerDB (..)
   , LedgerEnv (..)
+  , PanicPolicy
   , initCardanoLedgerState
   , newEpochStateT
   , updatedCommittee
@@ -182,9 +182,15 @@ import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()  -- 'LedgerSupport
 
 import qualified DbSync.Worker.Ledger.Snapshot
 import DbSync.Worker.Ledger.Snapshot (loadSnapshotFromDisk)
-import DbSync.Parser.Types (CardanoPoint)
+import DbSync.Parser.Types
+  ( BlockEra (..)
+  , CardanoPoint
+  , EraStakeModel (..)
+  , classifyEra
+  )
 import DbSync.StateQuery (SlotDetails (..))
 import DbSync.Phase.Current (CurrentPhase)
+import DbSync.Phase.Type (SyncPhase, isFollowPath)
 import DbSync.Trace.Types (AppTracer)
 import DbSync.Util (maybeToStrictMaybe)
 
@@ -298,16 +304,15 @@ mkHasLedgerEnv
   -> Word64                                         -- ^ Max Lovelace supply
   -> SystemStart
   -> Word64                                         -- ^ \"near tip\" epoch threshold (default 580)
-  -- TODO: I don't like these being Bools can easily get them the wrong way round
-  -> Bool                                           -- ^ Capture rewards events in 'ApplyResult'
-  -> Bool                                           -- ^ Abort on invalid ledger state
+  -> RewardsCapture
+  -> PanicPolicy
   -> LedgerBackend
   -> ControlConnection                              -- ^ For 'markSnapshotComplete' from the writer thread
   -> CurrentPhase                                   -- ^ Shared lifecycle phase, read by the worker for snapshot cadence
   -> IO HasLedgerEnv
 mkHasLedgerEnv
   tracer pinfo dir network maxSupply start snapEpoch
-  hasRewards abortOnPanic backend ctrlConn phaseRef = do
+  rewardsCapture panicPolicy backend ctrlConn phaseRef = do
     interpreterVar  <- newTVarIO Strict.Nothing
     stateVar        <- newTVarIO Strict.Nothing
     latestApplyVar  <- newTVarIO Strict.Nothing
@@ -389,13 +394,13 @@ mkHasLedgerEnv
       LedgerEnabled
         LedgerEnv
           { leTracer               = tracer
-          , leHasRewards           = hasRewards
+          , leRewardsCapture       = rewardsCapture
           , leProtocolInfo         = pinfo
           , leDir                  = dir
           , leNetwork              = network
           , leMaxSupply            = maxSupply
           , leSystemStart          = start
-          , leAbortOnPanic         = abortOnPanic
+          , lePanicPolicy          = panicPolicy
           , leSnapshotNearTipEpoch = snapEpoch
           , leLedgerBackend        = backend
           , leInterpreter          = interpreterVar
@@ -424,17 +429,10 @@ mkHasLedgerEnv
     snapshotQueueBound :: Natural
     snapshotQueueBound = 4
 
--- | Seed the in-memory 'LedgerDB' buffer with the genesis state.
---
--- Call this once at boot, on a fresh database, after 'mkHasLedgerEnv'
--- has constructed the 'LedgerEnv'. Without it the buffer stays empty
--- and the first 'applyBlock' crashes in 'readStateUnsafe' with
--- @\"LedgerDB not initialised\"@.
---
--- For a resume from an existing populated database the buffer should
--- be seeded from a matching disk snapshot instead; that path is not
--- implemented yet, so resuming a ledger-enabled database without
--- @--resync-from-genesis@ is currently unsupported.
+-- | Seed the in-memory 'LedgerDB' buffer with the genesis state on
+-- a fresh boot. The resume path uses 'initLedgerDbFromSnapshot'
+-- instead so an existing populated database does not replay from
+-- genesis.
 initLedgerDbFromGenesis :: LedgerM ()
 initLedgerDbFromGenesis = do
   env <- ask
@@ -515,17 +513,15 @@ tickThenReapplyCheckHash cfg block = do
                 block
                 ledgerStateWithTables
             newLedgerStateEmpty = forgetLedgerTables (Consensus.lrResult newLedgerResult)
-            isNewEpoch =
+            !eraModel = classifyEra (ledgerStateEra (ledgerState newLedgerStateEmpty))
+            !boundary =
               case ( ledgerEpochNo env oldExt
                    , ledgerEpochNo env newLedgerStateEmpty
                    ) of
-                (Right oldE, Right newE) -> oldE /= newE
-                _                        -> False
-            isByron = case ledgerState newLedgerStateEmpty of
-                        LedgerStateByron _ -> True
-                        _                  -> False
+                (Right oldE, Right newE) | oldE /= newE -> EpochStart
+                _                                       -> InEpoch
             !newEpochBlockNo =
-              applyToEpochBlockNo isByron isNewEpoch (clsEpochBlockNo oldCls)
+              applyToEpochBlockNo eraModel boundary (clsEpochBlockNo oldCls)
             newCls =
               fmap
                 (\stt ->
@@ -585,7 +581,7 @@ applyBlock blk slotDetails = do
       let !oldCls = srState oldRef
           eventsFull =
             mapMaybe
-              (convertAuxLedgerEvent (leHasRewards env))
+              (convertAuxLedgerEvent (leRewardsCapture env))
               (Consensus.lrEvents newResult)
           (!events, !deposits) = splitDeposits eventsFull
           !rawNewState         = clsState (Consensus.lrResult newResult)
@@ -608,7 +604,7 @@ applyBlock blk slotDetails = do
               , apNewEpoch        = maybeToStrictMaybe newEpoch
               , apDeposits        = maybeToStrictMaybe (Generic.getDeposits finalState)
               , apSlotDetails     = slotDetails
-              , apStakeSlice      = getStakeSlice env newCls' False
+              , apStakeSlice      = getStakeSlice env newCls' Generic.SteadyStateSlice
               , apEvents          = events
               , apGovActionState  = getGovState finalState
               , apDepositsMap     = DepositsMap deposits
@@ -618,8 +614,7 @@ applyBlock blk slotDetails = do
       pure (oldRef, appResult, pruned)
 
 -- | 'applyBlock' plus the snapshot-cadence decision and pruning of
--- old-ref handles. Returns the 'ApplyResult' and whether a snapshot
--- write was enqueued (drained asynchronously by the snapshot writer).
+-- old-ref handles.
 --
 -- Pruned refs are closed only after their 'srCanClose' flag clears,
 -- so an in-flight snapshot write can't lose its handle (I3 in the
@@ -633,13 +628,13 @@ applyBlock blk slotDetails = do
 applyBlockAndSnapshot
   :: CardanoBlock StandardCrypto
   -> SlotDetails
-  -> Bool                                           -- ^ \"consistent with chain tip\"
-  -> Maybe SlotNo                                   -- ^ replay boundary
-  -> LedgerM (ApplyResult, Bool)
-applyBlockAndSnapshot blk slotDetails consistent mReplayBoundary = do
+  -> SyncPhase             -- ^ caller's current lifecycle phase
+  -> Maybe SlotNo          -- ^ replay boundary
+  -> LedgerM ApplyResult
+applyBlockAndSnapshot blk slotDetails phase mReplayBoundary = do
   env <- ask
   (oldRef, appResult, pruned) <- applyBlock blk slotDetails
-  let nearTip        = isSyncedNearTip slotDetails
+  let proximity      = isSyncedNearTip slotDetails
       inReplayWindow = maybe False (blockSlot blk <=) mReplayBoundary
   -- Record this block's epoch params in the in-memory accumulator
   -- so the consumer can flush them at the next epoch boundary.
@@ -647,17 +642,18 @@ applyBlockAndSnapshot blk slotDetails consistent mReplayBoundary = do
   -- @epoch_param_pending@ from the previous run.
   unless inReplayWindow $
     accumulateEpochParams appResult
-  tookSnapshot <-
-    if not inReplayWindow
-       && shouldSnapshotAtEpoch appResult consistent nearTip (leSnapshotNearTipEpoch env)
-      then do
-        DbSync.Worker.Ledger.Snapshot.saveCurrentLedgerState oldRef
-        pure True
-      else pure False
+  -- Snapshot cadence: outside the replay window, at the epoch
+  -- boundaries 'shouldSnapshotAtEpoch' permits for this phase /
+  -- tip-proximity / threshold, hand the prior ref to the snapshot
+  -- writer. The writer drains its queue on its own thread and
+  -- releases 'srCanClose' once the on-disk write completes.
+  when (not inReplayWindow
+        && shouldSnapshotAtEpoch appResult phase proximity (leSnapshotNearTipEpoch env)) $
+    DbSync.Worker.Ledger.Snapshot.saveCurrentLedgerState oldRef
   liftIO $ forM_ pruned $ \sr -> do
     atomically $ readTVar (srCanClose sr) >>= STM.check
     Consensus.close (srTables sr)
-  pure (appResult, tookSnapshot)
+  pure appResult
 
 -- | Project the 'ApplyResult'\'s deposit data into the per-epoch
 -- accumulator. Byron blocks (no @apDeposits@) and pre-Shelley
@@ -683,20 +679,30 @@ accumulateEpochParams result =
 -- * Helpers used by block application
 -- ---------------------------------------------------------------------------
 
+-- | Whether this block opens a new epoch or sits inside one.
+data BoundaryStatus
+  = EpochStart
+  | InEpoch
+  deriving stock (Eq, Show)
+
 -- | Bump the per-epoch block counter following a block application.
---
--- @applyToEpochBlockNo isByron isNewEpoch oldCounter@:
---
--- * Byron eras always read 'ByronEpochBlockNo' (we don't track
---   stake-slice indices pre-Shelley).
--- * A new-epoch boundary resets the counter to @0@.
--- * Non-boundary blocks advance the counter by one (or seed it at
---   @0@ if we just transitioned out of Byron).
-applyToEpochBlockNo :: Bool -> Bool -> EpochBlockNo -> EpochBlockNo
-applyToEpochBlockNo True  _    _              = ByronEpochBlockNo
-applyToEpochBlockNo _     True _              = EpochBlockNo 0
-applyToEpochBlockNo _     _    (EpochBlockNo n) = EpochBlockNo (n + 1)
-applyToEpochBlockNo _     _    ByronEpochBlockNo = EpochBlockNo 0
+applyToEpochBlockNo :: EraStakeModel -> BoundaryStatus -> EpochBlockNo -> EpochBlockNo
+applyToEpochBlockNo NoStakeSlices  _          _                 = ByronEpochBlockNo
+applyToEpochBlockNo StandardSlices EpochStart _                 = EpochBlockNo 0
+applyToEpochBlockNo StandardSlices InEpoch    (EpochBlockNo n)  = EpochBlockNo (n + 1)
+applyToEpochBlockNo StandardSlices InEpoch    ByronEpochBlockNo = EpochBlockNo 0
+
+-- | Map a consensus 'LedgerState' onto our era enum.
+ledgerStateEra :: LedgerState (CardanoBlock StandardCrypto) mk -> BlockEra
+ledgerStateEra = \case
+  LedgerStateByron _    -> Byron
+  LedgerStateShelley _  -> Shelley
+  LedgerStateAllegra _  -> Allegra
+  LedgerStateMary _     -> Mary
+  LedgerStateAlonzo _   -> Alonzo
+  LedgerStateBabbage _  -> Babbage
+  LedgerStateConway _   -> Conway
+  LedgerStateDijkstra _ -> Dijkstra
 
 -- | Project the current 'EpochNo' from a ledger state via the HFC
 -- interpreter built from the ledger's hard-fork summary. Returns
@@ -720,31 +726,37 @@ ledgerEpochNo env st =
         (configLedger (getTopLevelConfig env))
         (Consensus.hardForkLedgerStatePerEra (ledgerState st))
 
+-- | Whether the chain tip is approximately aligned with wall-clock.
+data TipProximity
+  = NearTip
+  | LaggingTip
+  deriving stock (Eq, Show)
+
 -- | Pure decision: should we save a snapshot at this epoch boundary?
 --
 -- Cadence:
 --
 --   * Only fires on epoch boundaries (when @apNewEpoch@ is 'Just').
---   * Never fires at epoch @0@ (the boot epoch — there's nothing to
---     snapshot yet).
---   * Ingest (@consistent = False@): every 10 epochs, full stop. The
---     near-tip-epoch threshold doesn't apply here — Ingest stays on
---     the same coarse cadence whether the resume point is epoch 5 or
---     epoch 1200.
---   * Follow (@consistent = True@): every epoch when @nearTip@, or
---     once we cross the @thresholdEpoch@ (which is meant to catch
---     the "Follow but slightly lagging chain tip" case).
+--   * Never fires at epoch @0@ — nothing to snapshot at boot.
+--   * Ingest path: every 10 epochs, regardless of @nearTip@ or the
+--     epoch threshold. Keeps the same coarse cadence whether the
+--     resume point is epoch 5 or 1200.
+--   * Follow path: every epoch when 'NearTip', or once we cross
+--     @thresholdEpoch@ (catches the "Follow but slightly lagging"
+--     case).
 shouldSnapshotAtEpoch
   :: ApplyResult
-  -> Bool         -- ^ consistent with chain tip (Follow path)
-  -> Bool         -- ^ near tip (e.g. within ~10 days of head)
-  -> Word64       -- ^ near-tip-epoch threshold (e.g. 580)
+  -> SyncPhase     -- ^ caller's current lifecycle phase
+  -> TipProximity  -- ^ relationship between chain tip and wall clock
+  -> Word64        -- ^ near-tip-epoch threshold (e.g. 580)
   -> Bool
-shouldSnapshotAtEpoch result consistent nearTip thresholdEpoch =
+shouldSnapshotAtEpoch result phase proximity thresholdEpoch =
   case apNewEpoch result of
     Strict.Nothing -> False
     Strict.Just ne ->
-      let n = unEpochNo (Generic.neEpoch ne)
+      let n          = unEpochNo (Generic.neEpoch ne)
+          consistent = isFollowPath phase
+          nearTip    = proximity == NearTip
        in n > 0
             && ( (consistent && nearTip)
                  || (consistent && n >= thresholdEpoch)
@@ -752,17 +764,16 @@ shouldSnapshotAtEpoch result consistent nearTip thresholdEpoch =
                )
 
 -- | Approximate "is the chain tip near the current wall-clock time?"
--- — used as the @near tip@ flag for the snapshot cadence decision.
--- 60-second window; matches upstream's heuristic and is generous
--- enough to absorb consumer-side latency.
-isSyncedNearTip :: SlotDetails -> Bool
+-- Uses a 60-second window, generous enough to absorb consumer-side
+-- latency without flapping at the threshold.
+isSyncedNearTip :: SlotDetails -> TipProximity
 isSyncedNearTip sd =
   let secsBehind =
         ceiling
           (realToFrac
              (diffUTCTime' (sdCurrentTime sd) (sdSlotTime sd))
              :: Double) :: Int
-   in abs secsBehind <= 60
+   in if abs secsBehind <= 60 then NearTip else LaggingTip
   where
     diffUTCTime' a b = a `Time.diffUTCTime` b
 
@@ -888,8 +899,12 @@ rollbackBuffer point (LedgerDB s) =
 -- Byron / pre-Shelley states carry 'ByronEpochBlockNo' and yield
 -- 'Generic.NoSlices'; everywhere else we hand the counter to
 -- 'Generic.getStakeSlice' to read the \"mark\" snapshot.
-getStakeSlice :: LedgerEnv -> CardanoLedgerState -> Bool -> Generic.StakeSliceRes
-getStakeSlice env cls isMigration =
+getStakeSlice
+  :: LedgerEnv
+  -> CardanoLedgerState
+  -> Generic.StakeSliceMode
+  -> Generic.StakeSliceRes
+getStakeSlice env cls mode =
   case clsEpochBlockNo cls of
     ByronEpochBlockNo ->
       Generic.NoSlices
@@ -898,7 +913,7 @@ getStakeSlice env cls isMigration =
         (leProtocolInfo env)
         n
         (clsState cls)
-        isMigration
+        mode
 
 -- ---------------------------------------------------------------------------
 -- * Governance / ledger projections

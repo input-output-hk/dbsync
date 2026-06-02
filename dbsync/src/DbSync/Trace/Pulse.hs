@@ -5,11 +5,10 @@
 -- | Consumer in-epoch pulse — a periodic Debug-level liveness log
 -- emitted from a background sampler thread.
 --
--- Same disabled/enabled gating shape as 'DbSync.Trace.Watchdog':
--- when the configured minimum severity is above 'Debug' the whole
--- subsystem short-circuits to a no-op. The hot-path 'bumpPulse'
--- call from the consumer is then a single constructor match and
--- nothing else.
+-- Companion to 'DbSync.Trace.Watchdog': the watchdog samples
+-- per-thread liveness on a slower timer; the pulse fires from the
+-- hot path once per processed block. Both gate on the same Debug
+-- threshold and disable to a no-op above it.
 --
 -- When enabled, the sampler wakes every 'pulseInterval' seconds and
 -- emits one line carrying:

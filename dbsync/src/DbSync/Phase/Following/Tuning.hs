@@ -21,9 +21,9 @@ module DbSync.Phase.Following.Tuning
 
 import Cardano.Prelude
 
-import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 
+import DbSync.Db.Run (useConn)
 import DbSync.Db.Statement.Tuning (followGucSql)
 import DbSync.Db.Transaction (HasHasqlConnection (..))
 
@@ -44,18 +44,15 @@ defaultFollowTuning = FollowTuning
   }
 
 -- | Issue the @SET@ statements that bring the env's connection up
--- to the requested 'FollowTuning'. Panics on driver failure — these
--- are unconditionally valid GUCs and a failure here points at a
--- connection-level problem worth surfacing immediately.
+-- to the requested 'FollowTuning'. Surfaces driver failures as
+-- 'AppDatabaseError' — these are unconditionally valid GUCs, so a
+-- failure here points at a connection-level problem.
 setFollowSessionGUCs
   :: (HasHasqlConnection env, MonadReader env m, MonadIO m)
   => FollowTuning -> m ()
 setFollowSessionGUCs t = do
   conn <- asks getHasqlConnection
-  result <- liftIO $ Conn.use conn (Sess.script (gucSql t))
-  case result of
-    Right () -> pure ()
-    Left  e  -> panic $ "Phase.Following.Tuning: " <> show e
+  useConn "Phase.Following.Tuning" conn (Sess.script (gucSql t))
 
 gucSql :: FollowTuning -> Text
 gucSql t = followGucSql (ftAsyncCommit t)

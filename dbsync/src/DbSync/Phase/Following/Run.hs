@@ -41,6 +41,7 @@ import DbSync.AppM (FollowM, runAppM)
 import DbSync.Parser.Dispatch (parseBlock)
 import DbSync.Parser.Types (CardanoPoint, GenericBlock (..))
 import DbSync.Phase.Type (SyncPhase (..), renderPhase)
+import DbSync.Db.Run (useConn)
 import DbSync.Db.Statement.SyncState (writeSyncStateSlotStmt)
 import DbSync.Db.Statement.Transaction (beginSql, commitSql, rollbackSql)
 
@@ -71,7 +72,7 @@ import DbSync.Trace.Replay
   )
 import DbSync.Trace.Timing (fmtCount, fmtDuration, fmtF2)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
-import DbSync.Trace.Watchdog (bumpConsumer, setConsumerNote)
+import DbSync.Trace.Watchdog (Watchdog, bumpConsumer, setConsumerNote)
 
 -- | Cadence for the periodic Follow-loop progress log while in
 -- 'FollowingVolatileTail'. In 'FollowingChainTip' the loop logs every
@@ -245,14 +246,7 @@ processForward progressRef replayRef cardanoBlock = do
         writes <- drain buf
         let flushAndAdvance =
               writes *> void (Pipeline.statement triple writeSyncStateSlotStmt)
-        setConsumerNote feWatchdog "follow: BEGIN"
-        runSession feHasqlConnection (Sess.script beginSql) "BEGIN"
-        setConsumerNote feWatchdog "follow: flush pipeline"
-        let runFlush = runSession feHasqlConnection
-              (Sess.pipeline flushAndAdvance) "flush"
-        runFlush `onException` rollbackQuiet feHasqlConnection
-        setConsumerNote feWatchdog "follow: COMMIT"
-        runSession feHasqlConnection (Sess.script commitSql) "COMMIT"
+        runFollowBlockTx feHasqlConnection feWatchdog flushAndAdvance
       maybeFlipToTip (blkSlotNo genBlock)
       maybeLogProgress progressRef genBlock
 
@@ -288,16 +282,19 @@ advanceAndLogReplay tracer replayRef mReplayStart mReplayBoot slot = do
           <> "s, resuming Follow PG writes at slot "
           <> show (unSlotNo slot)
 
--- | Run a hasql 'Session' against the supplied connection, panicking
--- with a labelled message on failure. Used by 'processForward' to
--- inline the BEGIN/flush/COMMIT segments with separate timing while
--- preserving the exception semantics of 'withTransactionOn'.
-runSession :: Conn.Connection -> Sess.Session () -> Text -> IO ()
-runSession conn sess label = do
-  r <- Conn.use conn sess
-  case r of
-    Right () -> pure ()
-    Left e   -> panic $ "Following: " <> label <> ": " <> show e
+-- | Wrap one block's worth of pipelined writes in a PG
+-- @BEGIN@/@COMMIT@ envelope. A flush failure triggers a best-effort
+-- ROLLBACK so the open transaction doesn't leak, but the original
+-- exception still propagates.
+runFollowBlockTx :: Conn.Connection -> Watchdog -> Pipeline.Pipeline () -> IO ()
+runFollowBlockTx conn watchdog flush = do
+  setConsumerNote watchdog "follow: BEGIN"
+  useConn "Following.BEGIN" conn (Sess.script beginSql)
+  setConsumerNote watchdog "follow: flush pipeline"
+  useConn "Following.flush" conn (Sess.pipeline flush)
+    `onException` rollbackQuiet conn
+  setConsumerNote watchdog "follow: COMMIT"
+  useConn "Following.COMMIT" conn (Sess.script commitSql)
 
 -- | Best-effort ROLLBACK. Swallows its own errors so a failed
 -- rollback doesn't mask the original exception that triggered it.

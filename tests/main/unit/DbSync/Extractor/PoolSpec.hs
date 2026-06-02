@@ -30,7 +30,8 @@ import DbSync.Db.Types (DbLovelace (..))
 import qualified DbSync.Db.Schema.Pool as SP
 import DbSync.Extractor
   ( BlockLedgerData (..)
-  , emptyBlockLedgerData
+  , LedgerOutputs (..)
+  , emptyLedgerOutputs
   , freshExtractState
   )
 import DbSync.Extractor.Core (coreExtractor)
@@ -82,25 +83,23 @@ spec = do
 
   describe "pool_update.deposit (worker-supplied protocol param)" $ do
     it "is NULL when the ledger feature is OFF" $ do
-      -- Default 'mkTestPipelineEnv' supplies emptyBlockLedgerData, so
-      -- 'bldLedgerEnabled' is False and the deposit stays Nothing.
+      -- Default 'mkTestPipelineEnv' supplies emptyBlockLedgerData
+      -- ('LedgerDataOff'), so the deposit stays Nothing.
       written <- runPool (blockWithPoolReg poolHashA 5)
       let pu = snd (headDef (panic "no pool_update") (twPoolUpdates written))
       SP.poolUpdateDeposit pu `shouldBe` Nothing
 
     it "is the protocol-param value on first registration when ledger ON" $ do
-      let bld = (emptyBlockLedgerData :: BlockLedgerData)
-            { bldLedgerEnabled = True
-            , bldPoolDeposit   = Just (Coin 500_000_000)
+      let bld = LedgerDataOn $ emptyLedgerOutputs
+            { loPoolDeposit = Just (Coin 500_000_000)
             }
       written <- runPoolWith bld (blockWithPoolReg poolHashA 5)
       let pu = snd (headDef (panic "no pool_update") (twPoolUpdates written))
       SP.poolUpdateDeposit pu `shouldBe` Just (DbLovelace 500_000_000)
 
     it "is NULL on a re-registration even when ledger ON" $ do
-      let bld = (emptyBlockLedgerData :: BlockLedgerData)
-            { bldLedgerEnabled = True
-            , bldPoolDeposit   = Just (Coin 500_000_000)
+      let bld = LedgerDataOn $ emptyLedgerOutputs
+            { loPoolDeposit = Just (Coin 500_000_000)
             }
       written <- runPoolWithBlocks bld
                    [blockWithPoolReg poolHashA 5, blockWithPoolReg poolHashA 6]

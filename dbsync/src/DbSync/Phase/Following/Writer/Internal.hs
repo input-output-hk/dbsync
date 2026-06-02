@@ -22,25 +22,21 @@ import qualified Hasql.Pipeline as Pipeline
 import qualified Hasql.Session as Sess
 import qualified Hasql.Statement as Stmt
 
+import DbSync.Db.Run (useConn)
 import DbSync.Phase.Following.WriteBuffer (WriteBuffer, append)
 
 -- | Run an insert statement immediately against the connection.
--- Panics on PG failure — caller is the per-block transaction
--- envelope, so any error already implies we abort the block.
+-- Failures surface as 'AppDatabaseError'; the per-block transaction
+-- envelope catches it and rolls back the block.
 runConn :: Conn.Connection -> a -> Stmt.Statement a () -> IO ()
-runConn conn p stmt = do
-  result <- Conn.use conn (Sess.statement p stmt)
-  case result of
-    Right () -> pure ()
-    Left  e  -> panic $ "Insert writer session failed: " <> show e
+runConn conn p stmt = useConn "Phase.Following.Writer" conn (Sess.statement p stmt)
 
 -- | Append an insert statement to the per-block pipeline buffer.
 queueBuf :: WriteBuffer -> a -> Stmt.Statement a () -> IO ()
 queueBuf buf p stmt = append buf (Pipeline.statement p stmt)
 
--- | Placeholder used by per-extractor writers whose insert plumbing
--- has not landed yet (e.g. epoch-boundary tables in Follow mode).
--- Replaces the inline @\_ _ -> todo "writeX"@ that the original
--- monolithic 'Writer' used.
+-- | Panicking stub used by writer records whose Follow-phase insert
+-- plumbing is not yet wired. Construction succeeds; calling the
+-- field panics with the writer's name.
 todoWrite :: Text -> a -> b -> IO ()
 todoWrite name _ _ = pure $ panic $ "Phase.Following.Writer." <> name <> " not yet implemented"

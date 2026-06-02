@@ -16,6 +16,7 @@ import DbSync.App.Boot
   ( BootDecision (..)
   , BootError (..)
   , FollowRestartContext (..)
+  , FollowRestartMode (..)
   , ResumeContext (..)
   , ResumeIntersection (..)
   , decideBoot
@@ -147,13 +148,23 @@ spec = describe "DbSync.App.Boot.decideBoot" $ do
         `shouldBe` Right BootFresh
 
   describe "sync_complete = True (ledger disabled)" $ do
-    it "is BootFollowRestart with empty candidate list" $ do
+    it "is BootFollowRestart with a pre-built ledger-disabled point" $ do
       let row = (committedRow False) { ssrSyncComplete = True }
       case decideBoot (Just row) [] False of
         Right (BootFollowRestart frc) -> do
-          frcSyncState          frc `shouldBe` row
-          frcCandidateSnapshots frc `shouldBe` []
+          frcSyncState frc `shouldBe` row
+          frcMode      frc `shouldBe`
+            FollowRestartLedgerDisabled
+              (mkCardanoPoint 12_000_000 (BS.replicate 32 0xab))
         other -> expectationFailure $ "unexpected: " <> show other
+
+    it "rejects rows missing (slot, hash)" $ do
+      let row = (committedRow False)
+            { ssrSyncComplete           = True
+            , ssrLastCommittedBlockHash = Nothing
+            }
+      decideBoot (Just row) [] False
+        `shouldBe` Left BootSyncStateMissing
 
   describe "sync_complete = True (ledger enabled)" $ do
     let completedRow = (committedRow True) { ssrSyncComplete = True }
@@ -168,11 +179,12 @@ spec = describe "DbSync.App.Boot.decideBoot" $ do
       case decideBoot (Just completedRow) snaps True of
         Right (BootFollowRestart frc) -> do
           frcSyncState frc `shouldBe` completedRow
-          frcCandidateSnapshots frc
-            `shouldBe` [ snapshotAt 11_900_000
-                       , snapshotAt 11_500_000
-                       , snapshotAt 11_000_000
-                       ]
+          frcMode      frc `shouldBe`
+            FollowRestartLedgerEnabled
+              [ snapshotAt 11_900_000
+              , snapshotAt 11_500_000
+              , snapshotAt 11_000_000
+              ]
         other -> expectationFailure $ "unexpected: " <> show other
 
     it "fails when there are no snapshots on disk" $

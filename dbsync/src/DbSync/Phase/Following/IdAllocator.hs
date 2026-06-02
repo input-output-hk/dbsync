@@ -28,6 +28,7 @@ import qualified Hasql.Connection as Conn
 import qualified Hasql.Pipeline as Pipeline
 import qualified Hasql.Session as Sess
 
+import DbSync.Db.Run (useConn)
 import DbSync.Db.Schema.Ids
   ( CollateralTxInId (..)
   , CollateralTxOutId (..)
@@ -153,7 +154,7 @@ allocateAllIds conn counts = do
           <*> allocFor poolRetireTableDef          (icPoolRetireIds counts)          PoolRetireId
           <*> allocFor poolRelayTableDef           (icPoolRelayIds counts)           PoolRelayId
 
-  raw <- runOrPanic =<< Conn.use conn (Sess.pipeline pipeline)
+  raw <- useConn "Phase.Following.IdAllocator" conn (Sess.pipeline pipeline)
   wrapInRefs raw
 
 -- | Intermediate record carrying the raw lists returned by the
@@ -203,11 +204,6 @@ wrapInRefs r =
     <*> newIORef (rPoolOwnerIds r)
     <*> newIORef (rPoolRetireIds r)
     <*> newIORef (rPoolRelayIds r)
-
-runOrPanic :: Show e => Either e a -> IO a
-runOrPanic = \case
-  Right x  -> pure x
-  Left err -> panic $ "IdAllocator.allocateAllIds: " <> show err
 
 -- | Issue one bulk @nextval@ call for the given table's sequence.
 --

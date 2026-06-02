@@ -12,6 +12,7 @@ import qualified Hasql.Session as Sess
 
 import Control.Monad.IO.Unlift (MonadUnliftIO, withRunInIO)
 
+import DbSync.Db.Run (useConn)
 import DbSync.Db.Statement.Transaction (beginSql, commitSql, rollbackSql)
 
 -- | Per-phase hasql connection used for INSERTs and the rollback
@@ -52,11 +53,7 @@ withTransactionOn conn action =
     pure result
 
 runSql :: Conn.Connection -> Text -> IO ()
-runSql conn sql = do
-  r <- Conn.use conn (Sess.script sql)
-  case r of
-    Right () -> pure ()
-    Left e   -> panic $ "withTransaction: " <> sql <> ": " <> show e
+runSql conn sql = useConn ("withTransaction: " <> sql) conn (Sess.script sql)
 
 rollbackQuiet :: Conn.Connection -> IO ()
 rollbackQuiet conn =

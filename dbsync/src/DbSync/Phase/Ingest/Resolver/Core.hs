@@ -22,24 +22,26 @@ import DbSync.Db.Schema.Ids
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Phase.Ingest.Counter (IdCounters (..), nextId)
 import DbSync.Phase.Ingest.DedupStore (DedupStores (..), lookupOrInsert)
-import DbSync.Phase.Ingest.Resolver.Internal (bump)
+import DbSync.Phase.Ingest.Resolver.Internal (allocateNextId)
 
 -- | Allocate the next 'BlockId' and stash it in 'esLastBlockId' so a
 -- subsequent 'resolvePrevBlockIngest' can answer locally.
 assignBlockIdIngest :: IORef ExtractState -> IO BlockId
-assignBlockIdIngest stRef = atomicModifyIORef' stRef $ \st ->
-  let (bid, ctr') = nextId (icBlockId (esIdCounters st))
+assignBlockIdIngest extractStateRef = atomicModifyIORef' extractStateRef $ \st ->
+  let (rawId, nextCounter) = nextId (icBlockId (esIdCounters st))
       st' = st
-        { esIdCounters  = (esIdCounters st) { icBlockId = ctr' }
-        , esLastBlockId = Just bid
+        { esIdCounters  = (esIdCounters st) { icBlockId = nextCounter }
+        , esLastBlockId = Just rawId
         }
-  in (st', BlockId bid)
+   in (st', BlockId rawId)
 
 assignTxIdIngest :: IORef ExtractState -> IO TxId
-assignTxIdIngest stRef = bump stRef icTxId (\cs c -> cs { icTxId = c }) TxId
+assignTxIdIngest extractStateRef =
+  allocateNextId extractStateRef icTxId (\cs c -> cs { icTxId = c }) TxId
 
 assignTxOutIdIngest :: IORef ExtractState -> IO TxOutId
-assignTxOutIdIngest stRef = bump stRef icTxOutId (\cs c -> cs { icTxOutId = c }) TxOutId
+assignTxOutIdIngest extractStateRef =
+  allocateNextId extractStateRef icTxOutId (\cs c -> cs { icTxOutId = c }) TxOutId
 
 -- | Dedup lookup against the LSM-backed slot-leader table.
 resolveSlotLeaderIngest
@@ -53,6 +55,6 @@ resolveSlotLeaderIngest dedupStores hash _leader = do
 -- ignored in Ingest: there is no fork, and the prior block id is
 -- always the consumer's previous step.
 resolvePrevBlockIngest :: IORef ExtractState -> ByteString -> IO (Maybe BlockId)
-resolvePrevBlockIngest stRef _ = do
-  st <- readIORef stRef
+resolvePrevBlockIngest extractStateRef _ = do
+  st <- readIORef extractStateRef
   pure (BlockId <$> esLastBlockId st)

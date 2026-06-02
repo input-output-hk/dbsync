@@ -25,6 +25,7 @@ module DbSync.Worker.Ledger.StakeDist
   ( -- * Types
     StakeSliceRes (..)
   , StakeSlice (..)
+  , StakeSliceMode (..)
 
     -- * Projections
   , getSecurityParameter
@@ -89,6 +90,14 @@ data StakeSlice = StakeSlice
 emptySlice :: EpochNo -> StakeSlice
 emptySlice epoch = StakeSlice epoch []
 
+-- | Whether the slice computation is running for steady-state
+-- ingestion or for an era-migration backfill (the first Shelley
+-- block following the Byron tail).
+data StakeSliceMode
+  = SteadyStateSlice
+  | EraMigrationSlice
+  deriving stock (Eq, Show)
+
 -- ---------------------------------------------------------------------------
 -- * Security parameter
 -- ---------------------------------------------------------------------------
@@ -123,18 +132,18 @@ getStakeSlice
   => ProtocolInfo blk
   -> Word64
   -> ExtLedgerState (CardanoBlock StandardCrypto) mk
-  -> Bool
+  -> StakeSliceMode
   -> StakeSliceRes
-getStakeSlice pInfo !epochBlockNo els isMigration =
+getStakeSlice pInfo !epochBlockNo els mode =
   case ledgerState els of
     LedgerStateByron _      -> NoSlices
-    LedgerStateShelley sls  -> genericStakeSlice pInfo epochBlockNo sls isMigration
-    LedgerStateAllegra als  -> genericStakeSlice pInfo epochBlockNo als isMigration
-    LedgerStateMary mls     -> genericStakeSlice pInfo epochBlockNo mls isMigration
-    LedgerStateAlonzo als   -> genericStakeSlice pInfo epochBlockNo als isMigration
-    LedgerStateBabbage bls  -> genericStakeSlice pInfo epochBlockNo bls isMigration
-    LedgerStateConway cls   -> genericStakeSlice pInfo epochBlockNo cls isMigration
-    LedgerStateDijkstra dls -> genericStakeSlice pInfo epochBlockNo dls isMigration
+    LedgerStateShelley sls  -> genericStakeSlice pInfo epochBlockNo sls mode
+    LedgerStateAllegra als  -> genericStakeSlice pInfo epochBlockNo als mode
+    LedgerStateMary mls     -> genericStakeSlice pInfo epochBlockNo mls mode
+    LedgerStateAlonzo als   -> genericStakeSlice pInfo epochBlockNo als mode
+    LedgerStateBabbage bls  -> genericStakeSlice pInfo epochBlockNo bls mode
+    LedgerStateConway cls   -> genericStakeSlice pInfo epochBlockNo cls mode
+    LedgerStateDijkstra dls -> genericStakeSlice pInfo epochBlockNo dls mode
 
 genericStakeSlice
   :: forall era blk p mk
@@ -142,14 +151,17 @@ genericStakeSlice
   => ProtocolInfo blk
   -> Word64
   -> LedgerState (ShelleyBlock p era) mk
-  -> Bool
+  -> StakeSliceMode
   -> StakeSliceRes
-genericStakeSlice pInfo epochBlockNo lstate isMigration
+genericStakeSlice pInfo epochBlockNo lstate mode
   | index > delegationsLen                    = NoSlices
   | index == delegationsLen                   = Slice (emptySlice epoch) True
   | index + size > delegationsLen             = Slice (mkSlice (delegationsLen - index)) True
   | otherwise                                 = Slice (mkSlice size) False
   where
+    isMigration :: Bool
+    isMigration = mode == EraMigrationSlice
+
     epoch :: EpochNo
     epoch = EpochNo $ 1 + unEpochNo (Shelley.nesEL (Consensus.shelleyLedgerState lstate))
 

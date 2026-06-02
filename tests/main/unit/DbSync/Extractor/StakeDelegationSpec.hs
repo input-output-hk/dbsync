@@ -35,7 +35,9 @@ import DbSync.Db.Types (DbLovelace (..), fromDbInt65)
 import qualified DbSync.Db.Schema.StakeDelegation as SSD
 import DbSync.Extractor
   ( BlockLedgerData (..)
+  , LedgerOutputs (..)
   , emptyBlockLedgerData
+  , emptyLedgerOutputs
   , freshExtractState
   )
 import DbSync.Extractor.Core (coreExtractor)
@@ -58,9 +60,8 @@ spec = do
 
     it "Conway+ inline deposit wins over the worker value" $ do
       -- Cert carries 1_500_000; worker says 2_000_000. Inline wins.
-      let bld = (emptyBlockLedgerData :: BlockLedgerData)
-            { bldLedgerEnabled    = True
-            , bldStakeKeyDeposit  = Just (Coin 2_000_000)
+      let bld = LedgerDataOn $ emptyLedgerOutputs
+            { loStakeKeyDeposit = Just (Coin 2_000_000)
             }
       written <- runWith bld (blockWithStakeReg (Just 1_500_000))
       case twStakeRegistrations written of
@@ -69,9 +70,8 @@ spec = do
         _ -> panic "expected exactly one stake_registration"
 
     it "Shelley-Babbage cert (no inline deposit) takes the worker value" $ do
-      let bld = (emptyBlockLedgerData :: BlockLedgerData)
-            { bldLedgerEnabled    = True
-            , bldStakeKeyDeposit  = Just (Coin 2_000_000)
+      let bld = LedgerDataOn $ emptyLedgerOutputs
+            { loStakeKeyDeposit = Just (Coin 2_000_000)
             }
       written <- runWith bld (blockWithStakeReg Nothing)
       case twStakeRegistrations written of

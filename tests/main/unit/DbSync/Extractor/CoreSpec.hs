@@ -41,7 +41,9 @@ import DbSync.Db.Types (DbLovelace (..))
 import DbSync.Extractor
   ( BlockLedgerData (..)
   , ExtractorDef (..)
+  , LedgerOutputs (..)
   , emptyBlockLedgerData
+  , emptyLedgerOutputs
   , freshExtractState
   )
 import DbSync.Extractor.Core (affectsDeposit, coreExtractor, hasNoDepositActivity)
@@ -197,9 +199,8 @@ spec = do
         -- A plain transfer cannot have a deposit event in a real chain;
         -- the short-circuit fires before the lookup and ignores the
         -- stale entry. Keeps the post-load backfill targets minimal.
-        let bld = (emptyBlockLedgerData :: BlockLedgerData)
-              { bldLedgerEnabled = True
-              , bldDepositsMap   = DepositsMap
+        let bld = LedgerDataOn $ emptyLedgerOutputs
+              { loDepositsMap = DepositsMap
                   (Map.singleton (G.txHash validTx) (Coin 2_000_000))
               }
         written <- runCoreWith bld IngestChainHistory [] (blockWithTx validTx)
@@ -218,9 +219,8 @@ spec = do
 
     describe "activity-bearing tx, ledger ON" $ do
       it "fills deposit from bcDepositsMap when the lookup succeeds" $ do
-        let bld = (emptyBlockLedgerData :: BlockLedgerData)
-              { bldLedgerEnabled = True
-              , bldDepositsMap   = DepositsMap
+        let bld = LedgerDataOn $ emptyLedgerOutputs
+              { loDepositsMap = DepositsMap
                   (Map.singleton (G.txHash regTx) (Coin 2_000_000))
               }
         written <- runCoreWith bld IngestChainHistory [] (blockWithTx regTx)
@@ -231,7 +231,7 @@ spec = do
       it "leaves deposit NULL when the deposits map has no entry" $ do
         -- Activity tx + empty deposits map = ledger event missing.
         -- The post-load backfill picks it up via the identity formula.
-        let bld = emptyBlockLedgerData { bldLedgerEnabled = True }
+        let bld = LedgerDataOn emptyLedgerOutputs
         written <- runCoreWith bld IngestChainHistory [] (blockWithTx regTx)
         case twTxs written of
           [(_, tx)] -> SC.txDeposit tx `shouldBe` Nothing

@@ -42,6 +42,7 @@ import DbSync.Extractor
   ( BlockContext (..)
   , BlockLedgerData (..)
   , ExtractorDef (..)
+  , LedgerOutputs (..)
   , ProcessBlockFn
   , TxContext (..)
   )
@@ -137,8 +138,8 @@ computeTxFinancials resolver ctx gtx
     valid p bld
       -- Identity formula is 0 by conservation; skip ledger and resolver.
       | hasNoDepositActivity gtx = pure (parserFee, Just 0)
-      | bldLedgerEnabled bld =
-          let mDep = lookupDepositsMap (G.txHash gtx) (bldDepositsMap bld)
+      | LedgerDataOn outputs <- bld =
+          let mDep = lookupDepositsMap (G.txHash gtx) (loDepositsMap outputs)
            in pure (parserFee, fmap coinToInt64 mDep)
       | isFollowPath p = do
           inValues <- resolveInputValues resolver

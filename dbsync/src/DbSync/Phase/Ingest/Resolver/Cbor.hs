@@ -10,7 +10,8 @@ import Data.IORef (IORef)
 import DbSync.Db.Schema.Ids (TxCborId (..))
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Phase.Ingest.Counter (IdCounters (..))
-import DbSync.Phase.Ingest.Resolver.Internal (bump)
+import DbSync.Phase.Ingest.Resolver.Internal (allocateNextId)
 
 assignTxCborIdIngest :: IORef ExtractState -> IO TxCborId
-assignTxCborIdIngest stRef = bump stRef icTxCborId (\cs c -> cs { icTxCborId = c }) TxCborId
+assignTxCborIdIngest extractStateRef =
+  allocateNextId extractStateRef icTxCborId (\cs c -> cs { icTxCborId = c }) TxCborId

@@ -221,13 +221,6 @@ blockIssuerRaw = Crypto.hashToBytes . unKeyHash . hashKey . pHeaderIssuer . bloc
 blockNumber :: ShelleyProtocol p => ShelleyBlock p era -> BlockNo
 blockNumber = pHeaderBlock . blockHeader
 
--- TODO: re-enable when a caller needs the header slot directly (currently we
--- read the slot from 'SlotDetails' provided by the state-query interpreter).
---
--- -- | Slot number (from header).
--- slotNumber :: ShelleyProtocol p => ShelleyBlock p era -> SlotNo
--- slotNumber = pHeaderSlot . blockHeader
-
 -- | Block size in bytes.
 blockSize :: ProtocolHeaderSupportsEnvelope p => ShelleyBlock p era -> Word64
 blockSize = fromIntegral . pHeaderBlockSize . blockHeader

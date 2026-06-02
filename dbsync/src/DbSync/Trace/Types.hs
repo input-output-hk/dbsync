@@ -17,6 +17,11 @@ module DbSync.Trace.Types
     -- * Source-location capture
   , captureCallSite
 
+    -- * IO-level emission
+  , logInfoIO
+  , logWarnIO
+  , logErrorIO
+
     -- * Thread-exit logging
   , logThreadExit
   ) where
@@ -71,6 +76,23 @@ severityFromText t = case Text.toLower (Text.strip t) of
   "warn"    -> Warning
   "error"   -> Error
   _         -> Info
+
+-- | Emit an 'Info' log line through an 'AppTracer'. Used by
+-- IO-level helpers (boot, schema setup, resource shutdown) that
+-- don't have a phase env in scope.
+logInfoIO :: AppTracer -> Text -> Text -> IO ()
+logInfoIO tracer component msg =
+  traceWith tracer (LogMsg Info component msg Nothing)
+
+-- | 'Warning'-level companion to 'logInfoIO'.
+logWarnIO :: AppTracer -> Text -> Text -> IO ()
+logWarnIO tracer component msg =
+  traceWith tracer (LogMsg Warning component msg Nothing)
+
+-- | 'Error'-level companion to 'logInfoIO'.
+logErrorIO :: AppTracer -> Text -> Text -> IO ()
+logErrorIO tracer component msg =
+  traceWith tracer (LogMsg Error component msg Nothing)
 
 -- | Log a background-thread exit. 'AsyncCancelled' is the normal
 -- shutdown signal — log at 'Info' so it doesn't pollute the

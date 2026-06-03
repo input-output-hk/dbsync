@@ -24,3 +24,12 @@ PLANS/
 
 # Serena (MCP code-navigation server)
 .serena/
+
+# Docusaurus
+docs/node_modules/
+docs/build/
+docs/.docusaurus/
+docs/.cache-loader/
+docs/npm-debug.log*
+docs/yarn-debug.log*
+docs/yarn-error.log*

@@ -14,8 +14,9 @@ module DbSync.Phase.Following.Resolver.Internal
   , newBlockDedupCache
   , cacheInsert
 
-    -- * Dedup helper
+    -- * Dedup helpers
   , resolveDedupSimple
+  , resolveDedupWith
 
     -- * Stubs
   , todoResolve
@@ -33,14 +34,18 @@ import qualified Hasql.Statement as Stmt
 import DbSync.Db.Run (useConn)
 import DbSync.Db.Schema.Ids
   ( AddressId
+  , CommitteeHashId
   , CostModelId
   , DatumId
+  , DrepHashId
+  , GovActionProposalId
   , MultiAssetId
   , PoolHashId
   , RedeemerDataId
   , ScriptId
   , SlotLeaderId
   , StakeAddressId
+  , VotingAnchorId
   )
 
 -- ---------------------------------------------------------------------------
@@ -63,20 +68,28 @@ runStmt conn p stmt = useConn "Phase.Following.Resolver" conn (Sess.statement p 
 -- within the block finds the previously-allocated id without
 -- consulting PG. Built fresh per block, discarded after COMMIT.
 data BlockDedupCache = BlockDedupCache
-  { bdcSlotLeader    :: !(IORef (Map ByteString SlotLeaderId))
-  , bdcPoolHash      :: !(IORef (Map ByteString PoolHashId))
-  , bdcStakeAddress  :: !(IORef (Map ByteString StakeAddressId))
-  , bdcMultiAsset    :: !(IORef (Map (ByteString, ByteString) MultiAssetId))
-  , bdcAddress       :: !(IORef (Map ByteString AddressId))
-  , bdcCostModel     :: !(IORef (Map ByteString CostModelId))
-  , bdcDatum         :: !(IORef (Map ByteString DatumId))
-  , bdcScript        :: !(IORef (Map ByteString ScriptId))
-  , bdcRedeemerData  :: !(IORef (Map ByteString RedeemerDataId))
+  { bdcSlotLeader        :: !(IORef (Map ByteString SlotLeaderId))
+  , bdcPoolHash          :: !(IORef (Map ByteString PoolHashId))
+  , bdcStakeAddress      :: !(IORef (Map ByteString StakeAddressId))
+  , bdcMultiAsset        :: !(IORef (Map (ByteString, ByteString) MultiAssetId))
+  , bdcAddress           :: !(IORef (Map ByteString AddressId))
+  , bdcCostModel         :: !(IORef (Map ByteString CostModelId))
+  , bdcDatum             :: !(IORef (Map ByteString DatumId))
+  , bdcScript            :: !(IORef (Map ByteString ScriptId))
+  , bdcRedeemerData      :: !(IORef (Map ByteString RedeemerDataId))
+  , bdcDrepHash          :: !(IORef (Map ByteString DrepHashId))
+  , bdcCommitteeHash     :: !(IORef (Map ByteString CommitteeHashId))
+  , bdcVotingAnchor      :: !(IORef (Map ByteString VotingAnchorId))
+  , bdcGovActionProposal :: !(IORef (Map (ByteString, Word64) GovActionProposalId))
   }
 
 newBlockDedupCache :: IO BlockDedupCache
 newBlockDedupCache = BlockDedupCache
   <$> newIORef Map.empty
+  <*> newIORef Map.empty
+  <*> newIORef Map.empty
+  <*> newIORef Map.empty
+  <*> newIORef Map.empty
   <*> newIORef Map.empty
   <*> newIORef Map.empty
   <*> newIORef Map.empty
@@ -104,19 +117,36 @@ resolveDedupSimple
   -> Stmt.Statement key (Maybe idType)
   -> Stmt.Statement () idType
   -> IO (idType, Bool)
-resolveDedupSimple conn key mapRef queryStmt nextStmt = do
+resolveDedupSimple conn key mapRef queryStmt nextStmt =
+  resolveDedupWith conn key key mapRef queryStmt nextStmt
+
+-- | Like 'resolveDedupSimple' but with the cache key and the SELECT
+-- parameter at different shapes. Used by governance dedup tables
+-- whose cache key is an encoded ByteString (matching the Ingest
+-- 'DedupStore' layout) but whose SELECT keys on a structured tuple
+-- (e.g. @(raw, has_script)@ for @drep_hash@).
+resolveDedupWith
+  :: Ord cacheKey
+  => Conn.Connection
+  -> cacheKey
+  -> selectKey
+  -> IORef (Map cacheKey idType)
+  -> Stmt.Statement selectKey (Maybe idType)
+  -> Stmt.Statement () idType
+  -> IO (idType, Bool)
+resolveDedupWith conn cacheKey selectKey mapRef queryStmt nextStmt = do
   m <- readIORef mapRef
-  case Map.lookup key m of
+  case Map.lookup cacheKey m of
     Just i -> pure (i, False)
     Nothing -> do
-      mId <- runStmt conn key queryStmt
+      mId <- runStmt conn selectKey queryStmt
       case mId of
         Just i -> do
-          cacheInsert mapRef key i
+          cacheInsert mapRef cacheKey i
           pure (i, False)
         Nothing -> do
           i <- runStmt conn () nextStmt
-          cacheInsert mapRef key i
+          cacheInsert mapRef cacheKey i
           pure (i, True)
 
 -- ---------------------------------------------------------------------------

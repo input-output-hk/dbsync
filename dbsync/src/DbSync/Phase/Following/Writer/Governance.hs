@@ -1,8 +1,8 @@
 -- | hasql writers for tables owned by the @governance@ extractor.
 --
--- All flavours panic via 'todoWrite' until the per-table INSERT
--- statements are wired. Both the direct ('*Conn') and buffered
--- ('*Buf') variants share the same stub.
+-- Five FK-referenced tables take a caller-allocated id alongside the
+-- row; three dedup-backed tables share the same shape; eight leaves
+-- ride PG's IDENTITY column and the writer takes just the row.
 module DbSync.Phase.Following.Writer.Governance
   ( -- FK-referenced
     writeGovActionProposalConn,        writeGovActionProposalBuf
@@ -59,8 +59,28 @@ import DbSync.Db.Schema.Ids
   , ParamProposalId
   , VotingAnchorId
   )
+import DbSync.Db.Statement.Committee (insertCommitteeRowStmt)
+import DbSync.Db.Statement.CommitteeDeRegistration
+  ( insertCommitteeDeRegistrationRowStmt
+  )
+import DbSync.Db.Statement.CommitteeHash (insertCommitteeHashRowStmt)
+import DbSync.Db.Statement.CommitteeMember (insertCommitteeMemberRowStmt)
+import DbSync.Db.Statement.CommitteeRegistration
+  ( insertCommitteeRegistrationRowStmt
+  )
+import DbSync.Db.Statement.Constitution (insertConstitutionRowStmt)
+import DbSync.Db.Statement.DelegationVote (insertDelegationVoteRowStmt)
+import DbSync.Db.Statement.DrepDistr (insertDrepDistrRowStmt)
+import DbSync.Db.Statement.DrepHash (insertDrepHashRowStmt)
+import DbSync.Db.Statement.DrepRegistration (insertDrepRegistrationRowStmt)
+import DbSync.Db.Statement.EventInfo (insertEventInfoRowStmt)
+import DbSync.Db.Statement.GovActionProposal (insertGovActionProposalRowStmt)
+import DbSync.Db.Statement.ParamProposal (insertParamProposalRowStmt)
+import DbSync.Db.Statement.TreasuryWithdrawal (insertTreasuryWithdrawalRowStmt)
+import DbSync.Db.Statement.VotingAnchor (insertVotingAnchorRowStmt)
+import DbSync.Db.Statement.VotingProcedure (insertVotingProcedureRowStmt)
 import DbSync.Phase.Following.WriteBuffer (WriteBuffer)
-import DbSync.Phase.Following.Writer.Internal (todoWrite, todoWriteLeaf)
+import DbSync.Phase.Following.Writer.Internal (queueBuf, runConn)
 
 -- ---------------------------------------------------------------------------
 -- * FK-referenced
@@ -68,106 +88,127 @@ import DbSync.Phase.Following.Writer.Internal (todoWrite, todoWriteLeaf)
 
 writeGovActionProposalConn
   :: Conn.Connection -> GovActionProposalId -> GovActionProposal -> IO ()
-writeGovActionProposalConn _ = todoWrite "writeGovActionProposal"
+writeGovActionProposalConn conn gid g =
+  runConn conn (gid, g) insertGovActionProposalRowStmt
 
 writeGovActionProposalBuf
   :: WriteBuffer -> GovActionProposalId -> GovActionProposal -> IO ()
-writeGovActionProposalBuf _ = todoWrite "writeGovActionProposal"
+writeGovActionProposalBuf buf gid g =
+  queueBuf buf (gid, g) insertGovActionProposalRowStmt
 
-writeParamProposalConn :: Conn.Connection -> ParamProposalId -> ParamProposal -> IO ()
-writeParamProposalConn _ = todoWrite "writeParamProposal"
+writeParamProposalConn
+  :: Conn.Connection -> ParamProposalId -> ParamProposal -> IO ()
+writeParamProposalConn conn pid p =
+  runConn conn (pid, p) insertParamProposalRowStmt
 
-writeParamProposalBuf :: WriteBuffer -> ParamProposalId -> ParamProposal -> IO ()
-writeParamProposalBuf _ = todoWrite "writeParamProposal"
+writeParamProposalBuf
+  :: WriteBuffer -> ParamProposalId -> ParamProposal -> IO ()
+writeParamProposalBuf buf pid p =
+  queueBuf buf (pid, p) insertParamProposalRowStmt
 
 writeCommitteeConn :: Conn.Connection -> CommitteeId -> Committee -> IO ()
-writeCommitteeConn _ = todoWrite "writeCommittee"
+writeCommitteeConn conn cid c = runConn conn (cid, c) insertCommitteeRowStmt
 
 writeCommitteeBuf :: WriteBuffer -> CommitteeId -> Committee -> IO ()
-writeCommitteeBuf _ = todoWrite "writeCommittee"
+writeCommitteeBuf buf cid c = queueBuf buf (cid, c) insertCommitteeRowStmt
 
-writeConstitutionConn :: Conn.Connection -> ConstitutionId -> Constitution -> IO ()
-writeConstitutionConn _ = todoWrite "writeConstitution"
+writeConstitutionConn
+  :: Conn.Connection -> ConstitutionId -> Constitution -> IO ()
+writeConstitutionConn conn cid c =
+  runConn conn (cid, c) insertConstitutionRowStmt
 
 writeConstitutionBuf :: WriteBuffer -> ConstitutionId -> Constitution -> IO ()
-writeConstitutionBuf _ = todoWrite "writeConstitution"
+writeConstitutionBuf buf cid c = queueBuf buf (cid, c) insertConstitutionRowStmt
 
 writeEventInfoConn :: Conn.Connection -> EventInfoId -> EventInfo -> IO ()
-writeEventInfoConn _ = todoWrite "writeEventInfo"
+writeEventInfoConn conn eid e = runConn conn (eid, e) insertEventInfoRowStmt
 
 writeEventInfoBuf :: WriteBuffer -> EventInfoId -> EventInfo -> IO ()
-writeEventInfoBuf _ = todoWrite "writeEventInfo"
+writeEventInfoBuf buf eid e = queueBuf buf (eid, e) insertEventInfoRowStmt
 
 -- ---------------------------------------------------------------------------
 -- * Dedup-backed
 -- ---------------------------------------------------------------------------
 
 writeDrepHashConn :: Conn.Connection -> DrepHashId -> DrepHash -> IO ()
-writeDrepHashConn _ = todoWrite "writeDrepHash"
+writeDrepHashConn conn did d = runConn conn (did, d) insertDrepHashRowStmt
 
 writeDrepHashBuf :: WriteBuffer -> DrepHashId -> DrepHash -> IO ()
-writeDrepHashBuf _ = todoWrite "writeDrepHash"
+writeDrepHashBuf buf did d = queueBuf buf (did, d) insertDrepHashRowStmt
 
-writeCommitteeHashConn :: Conn.Connection -> CommitteeHashId -> CommitteeHash -> IO ()
-writeCommitteeHashConn _ = todoWrite "writeCommitteeHash"
+writeCommitteeHashConn
+  :: Conn.Connection -> CommitteeHashId -> CommitteeHash -> IO ()
+writeCommitteeHashConn conn cid c = runConn conn (cid, c) insertCommitteeHashRowStmt
 
 writeCommitteeHashBuf :: WriteBuffer -> CommitteeHashId -> CommitteeHash -> IO ()
-writeCommitteeHashBuf _ = todoWrite "writeCommitteeHash"
+writeCommitteeHashBuf buf cid c = queueBuf buf (cid, c) insertCommitteeHashRowStmt
 
-writeVotingAnchorConn :: Conn.Connection -> VotingAnchorId -> VotingAnchor -> IO ()
-writeVotingAnchorConn _ = todoWrite "writeVotingAnchor"
+writeVotingAnchorConn
+  :: Conn.Connection -> VotingAnchorId -> VotingAnchor -> IO ()
+writeVotingAnchorConn conn vid v = runConn conn (vid, v) insertVotingAnchorRowStmt
 
 writeVotingAnchorBuf :: WriteBuffer -> VotingAnchorId -> VotingAnchor -> IO ()
-writeVotingAnchorBuf _ = todoWrite "writeVotingAnchor"
+writeVotingAnchorBuf buf vid v = queueBuf buf (vid, v) insertVotingAnchorRowStmt
 
 -- ---------------------------------------------------------------------------
 -- * IDENTITY leaves
 -- ---------------------------------------------------------------------------
 
 writeDrepRegistrationConn :: Conn.Connection -> DrepRegistration -> IO ()
-writeDrepRegistrationConn _ = todoWriteLeaf "writeDrepRegistration"
+writeDrepRegistrationConn conn dr = runConn conn dr insertDrepRegistrationRowStmt
 
 writeDrepRegistrationBuf :: WriteBuffer -> DrepRegistration -> IO ()
-writeDrepRegistrationBuf _ = todoWriteLeaf "writeDrepRegistration"
+writeDrepRegistrationBuf buf dr = queueBuf buf dr insertDrepRegistrationRowStmt
 
 writeDrepDistrConn :: Conn.Connection -> DrepDistr -> IO ()
-writeDrepDistrConn _ = todoWriteLeaf "writeDrepDistr"
+writeDrepDistrConn conn dd = runConn conn dd insertDrepDistrRowStmt
 
 writeDrepDistrBuf :: WriteBuffer -> DrepDistr -> IO ()
-writeDrepDistrBuf _ = todoWriteLeaf "writeDrepDistr"
+writeDrepDistrBuf buf dd = queueBuf buf dd insertDrepDistrRowStmt
 
 writeDelegationVoteConn :: Conn.Connection -> DelegationVote -> IO ()
-writeDelegationVoteConn _ = todoWriteLeaf "writeDelegationVote"
+writeDelegationVoteConn conn dv = runConn conn dv insertDelegationVoteRowStmt
 
 writeDelegationVoteBuf :: WriteBuffer -> DelegationVote -> IO ()
-writeDelegationVoteBuf _ = todoWriteLeaf "writeDelegationVote"
+writeDelegationVoteBuf buf dv = queueBuf buf dv insertDelegationVoteRowStmt
 
 writeVotingProcedureConn :: Conn.Connection -> VotingProcedure -> IO ()
-writeVotingProcedureConn _ = todoWriteLeaf "writeVotingProcedure"
+writeVotingProcedureConn conn vp = runConn conn vp insertVotingProcedureRowStmt
 
 writeVotingProcedureBuf :: WriteBuffer -> VotingProcedure -> IO ()
-writeVotingProcedureBuf _ = todoWriteLeaf "writeVotingProcedure"
+writeVotingProcedureBuf buf vp = queueBuf buf vp insertVotingProcedureRowStmt
 
 writeTreasuryWithdrawalConn :: Conn.Connection -> TreasuryWithdrawal -> IO ()
-writeTreasuryWithdrawalConn _ = todoWriteLeaf "writeTreasuryWithdrawal"
+writeTreasuryWithdrawalConn conn tw =
+  runConn conn tw insertTreasuryWithdrawalRowStmt
 
 writeTreasuryWithdrawalBuf :: WriteBuffer -> TreasuryWithdrawal -> IO ()
-writeTreasuryWithdrawalBuf _ = todoWriteLeaf "writeTreasuryWithdrawal"
+writeTreasuryWithdrawalBuf buf tw =
+  queueBuf buf tw insertTreasuryWithdrawalRowStmt
 
 writeCommitteeMemberConn :: Conn.Connection -> CommitteeMember -> IO ()
-writeCommitteeMemberConn _ = todoWriteLeaf "writeCommitteeMember"
+writeCommitteeMemberConn conn cm =
+  runConn conn cm insertCommitteeMemberRowStmt
 
 writeCommitteeMemberBuf :: WriteBuffer -> CommitteeMember -> IO ()
-writeCommitteeMemberBuf _ = todoWriteLeaf "writeCommitteeMember"
+writeCommitteeMemberBuf buf cm =
+  queueBuf buf cm insertCommitteeMemberRowStmt
 
-writeCommitteeRegistrationConn :: Conn.Connection -> CommitteeRegistration -> IO ()
-writeCommitteeRegistrationConn _ = todoWriteLeaf "writeCommitteeRegistration"
+writeCommitteeRegistrationConn
+  :: Conn.Connection -> CommitteeRegistration -> IO ()
+writeCommitteeRegistrationConn conn cr =
+  runConn conn cr insertCommitteeRegistrationRowStmt
 
 writeCommitteeRegistrationBuf :: WriteBuffer -> CommitteeRegistration -> IO ()
-writeCommitteeRegistrationBuf _ = todoWriteLeaf "writeCommitteeRegistration"
+writeCommitteeRegistrationBuf buf cr =
+  queueBuf buf cr insertCommitteeRegistrationRowStmt
 
-writeCommitteeDeRegistrationConn :: Conn.Connection -> CommitteeDeRegistration -> IO ()
-writeCommitteeDeRegistrationConn _ = todoWriteLeaf "writeCommitteeDeRegistration"
+writeCommitteeDeRegistrationConn
+  :: Conn.Connection -> CommitteeDeRegistration -> IO ()
+writeCommitteeDeRegistrationConn conn cdr =
+  runConn conn cdr insertCommitteeDeRegistrationRowStmt
 
-writeCommitteeDeRegistrationBuf :: WriteBuffer -> CommitteeDeRegistration -> IO ()
-writeCommitteeDeRegistrationBuf _ = todoWriteLeaf "writeCommitteeDeRegistration"
+writeCommitteeDeRegistrationBuf
+  :: WriteBuffer -> CommitteeDeRegistration -> IO ()
+writeCommitteeDeRegistrationBuf buf cdr =
+  queueBuf buf cdr insertCommitteeDeRegistrationRowStmt

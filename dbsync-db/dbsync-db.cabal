@@ -71,21 +71,35 @@ library
     DbSync.Db.Statement.CollateralTxIn
     DbSync.Db.Statement.Common
     DbSync.Db.Statement.CollateralTxOut
+    DbSync.Db.Statement.Committee
+    DbSync.Db.Statement.CommitteeDeRegistration
+    DbSync.Db.Statement.CommitteeHash
+    DbSync.Db.Statement.CommitteeMember
+    DbSync.Db.Statement.CommitteeRegistration
     DbSync.Db.Statement.ConsumedBy
+    DbSync.Db.Statement.Constitution
     DbSync.Db.Statement.CostModel
     DbSync.Db.Statement.Datum
     DbSync.Db.Statement.Delegation
+    DbSync.Db.Statement.DelegationVote
+    DbSync.Db.Statement.DrepDistr
+    DbSync.Db.Statement.DrepHash
+    DbSync.Db.Statement.DrepRegistration
     DbSync.Db.Statement.EpochFinalized
     DbSync.Db.Statement.EpochParam
     DbSync.Db.Statement.EpochParamPending
     DbSync.Db.Statement.EpochState
+    DbSync.Db.Statement.EpochSyncStats
+    DbSync.Db.Statement.EventInfo
     DbSync.Db.Statement.ExtraKeyWitness
+    DbSync.Db.Statement.GovActionProposal
     DbSync.Db.Statement.IdAllocator
     DbSync.Db.Statement.Indexes
     DbSync.Db.Statement.Loader
     DbSync.Db.Statement.MaTxMint
     DbSync.Db.Statement.MaTxOut
     DbSync.Db.Statement.MultiAsset
+    DbSync.Db.Statement.ParamProposal
     DbSync.Db.Statement.PoolHash
     DbSync.Db.Statement.PoolMetadataRef
     DbSync.Db.Statement.PoolOwner
@@ -106,12 +120,15 @@ library
     DbSync.Db.Statement.StakeRegistration
     DbSync.Db.Statement.SyncState
     DbSync.Db.Statement.Transaction
+    DbSync.Db.Statement.TreasuryWithdrawal
     DbSync.Db.Statement.Tuning
     DbSync.Db.Statement.Tx
     DbSync.Db.Statement.TxCbor
     DbSync.Db.Statement.TxIn
     DbSync.Db.Statement.TxMetadata
     DbSync.Db.Statement.TxOut
+    DbSync.Db.Statement.VotingAnchor
+    DbSync.Db.Statement.VotingProcedure
     DbSync.Db.Statement.Withdrawal
     DbSync.Db.Loader.Encoder
     DbSync.Util.Bech32

@@ -85,6 +85,10 @@ module DbSync.Db.Types
   , maybeDoubleAsTextEncoder
   , maybeDoubleAsTextDecoder
 
+    -- * Double-as-numeric hasql codecs (PostgreSQL @numeric@ column type)
+  , doubleAsNumericEncoder
+  , doubleAsNumericDecoder
+
     -- * Hasql encoders \/ decoders for enum types
   , scriptPurposeEncoder
   , scriptPurposeDecoder
@@ -517,6 +521,14 @@ maybeDoubleAsTextEncoder = E.param (E.nullable doubleAsTextEncoder)
 
 maybeDoubleAsTextDecoder :: D.Row (Maybe Double)
 maybeDoubleAsTextDecoder = D.column (D.nullable doubleAsTextDecoder)
+
+-- | 'Double' encoder against a @numeric@ column.
+doubleAsNumericEncoder :: E.Value Double
+doubleAsNumericEncoder = Sci.fromFloatDigits >$< E.numeric
+
+-- | 'Double' decoder against a @numeric@ column.
+doubleAsNumericDecoder :: D.Value Double
+doubleAsNumericDecoder = Sci.toRealFloat <$> D.numeric
 
 -- ---------------------------------------------------------------------------
 -- * Hasql encoders / decoders for enum types

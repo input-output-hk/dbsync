@@ -38,6 +38,7 @@ import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
 import Ouroboros.Network.Block (pattern BlockPoint)
 
 import DbSync.AppM (FollowM, runAppM)
+import DbSync.Db.Schema.EpochSyncStats (EpochSyncStats (..))
 import DbSync.Parser.Dispatch (parseBlock)
 import DbSync.Parser.Types (CardanoPoint, GenericBlock (..))
 import DbSync.Phase.Type (SyncPhase (..), renderPhase)
@@ -45,9 +46,15 @@ import DbSync.Db.Run (useConn)
 import DbSync.Db.Statement.SyncState (writeSyncStateSlotStmt)
 import DbSync.Db.Statement.Transaction (beginSql, commitSql, rollbackSql)
 
-import DbSync.App.Env (CoreEnv (..), FollowEnv (..))
+import DbSync.App.Config.Types
+  ( SyncConfig (..)
+  , SyncOption (..)
+  , SyncOptions (..)
+  )
+import DbSync.App.Env (CoreEnv (..), FollowEnv (..), HasConfig (..))
 import DbSync.Extractor (ExtractorDef (..))
 import DbSync.Extractor.EpochBoundary (runEpochBoundary)
+import DbSync.Extractor.Governance (runGovernanceBoundary)
 import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.ChainSync.Msg (ChainSyncMsg (..))
 import DbSync.Phase.Following.IdAllocator (allocateAllIds)
@@ -58,8 +65,9 @@ import DbSync.Phase.Following.WriteBuffer (drain, newWriteBuffer)
 import DbSync.Phase.Following.Writer (mkBufferedWriter)
 import DbSync.Phase.Ingest.Boundary (readBoundaryApplyResult)
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
+import DbSync.SyncState.Row (HasControlConnection)
 import DbSync.Worker.Ledger.Types (HasLedgerEnv (..))
-import DbSync.Writer (HasWriter)
+import DbSync.Writer (HasWriter (..), Writer (..))
 import DbSync.Phase.Current
   ( CurrentPhase
   , readCurrentPhase
@@ -96,8 +104,9 @@ idleHeartbeatMicros :: Int
 idleHeartbeatMicros = 30_000_000
 
 -- | State carried across forward blocks. Drives the windowed log
--- cadence in 'FollowingVolatileTail', the per-block delta in
--- 'FollowingChainTip', and the "N ago" suffix on the idle heartbeat.
+-- cadence, the per-block delta at tip, the idle-heartbeat
+-- "N ago" suffix, and the per-epoch counters consumed by the
+-- boundary @epoch_sync_stats@ write.
 data FollowProgress = FollowProgress
   { fpWindowStart      :: !UTCTime
     -- ^ When the current 'logEveryNBlocks' window opened.
@@ -106,10 +115,13 @@ data FollowProgress = FollowProgress
     -- ^ 'Nothing' before the first block lands.
   , fpLastBlockAt      :: !(Maybe UTCTime)
     -- ^ When the most recent block finished 'processForward'.
-    -- Drives the per-block delta and the idle-heartbeat "N ago" suffix.
   , fpLastSlot         :: !(Maybe Word64)
-    -- ^ Slot of the most recent applied block, surfaced in the idle
-    -- heartbeat so the chain pointer is visible even between blocks.
+    -- ^ Slot of the most recent applied block.
+  , fpEpochStart       :: !UTCTime
+    -- ^ Wall-clock at which the current epoch's first Follow-observed
+    -- block landed.
+  , fpEpochBlocks      :: !Word64
+    -- ^ Forward blocks observed in the current epoch.
   }
 
 -- | Drain the chainsync queue forever.
@@ -136,6 +148,8 @@ run = do
     , fpLastEpoch        = Nothing
     , fpLastBlockAt      = Nothing
     , fpLastSlot         = Nothing
+    , fpEpochStart       = startedAt
+    , fpEpochBlocks      = 0
     }
   -- Seed the replay-progress state machine. Inert ('NoReplay')
   -- when there's no replay window, primed ('ReplayPending') when
@@ -211,15 +225,17 @@ processForward
   -> FollowM ()
 processForward progressRef replayRef cardanoBlock = do
   env@FollowEnv
-    { feWatchdog
+    { feCore
+    , feWatchdog
     , feStateQueryVar
     , feHasqlConnection
     , feHasLedgerEnv
     , feReplayBootSlot
     , feReplayStartSlot
     } <- ask
-  let slot   = blockSlot cardanoBlock
-      tracer = getTracer env
+  let slot     = blockSlot cardanoBlock
+      tracer   = getTracer env
+      phaseRef = ceCurrentPhase feCore
   liftIO $ do
     setConsumerNote feWatchdog "follow: processForward"
     bumpConsumer feWatchdog slot
@@ -236,6 +252,7 @@ processForward progressRef replayRef cardanoBlock = do
     _ -> do
       liftIO $ void $ atomically $ observeBlockSTM feStateQueryVar cardanoBlock
       sd <- getSlotDetails slot
+      now <- liftIO getCurrentTime
       let !genBlock = parseBlock sd cardanoBlock
           !curEpoch = unEpochNo (blkEpochNo genBlock)
           !counts   = countAssignableIds genBlock
@@ -243,8 +260,9 @@ processForward progressRef replayRef cardanoBlock = do
                       , unBlockNo (blkBlockNo genBlock)
                       , blkHash   genBlock
                       )
-      prevEpoch <- liftIO $ fpLastEpoch <$> readIORef progressRef
-      let boundaryCrossed = case prevEpoch of
+      snap <- liftIO $ readIORef progressRef
+      let prevEpoch = fpLastEpoch snap
+          boundaryCrossed = case prevEpoch of
             Just prev -> prev /= curEpoch
             Nothing   -> False
       liftIO $ do
@@ -254,28 +272,48 @@ processForward progressRef replayRef cardanoBlock = do
         let writer      = mkBufferedWriter buf
             bufferedEnv = env { feResolver = resolver, feWriter = writer }
         runAppM bufferedEnv (processBlock genBlock)
-        when boundaryCrossed $
-          runAppM bufferedEnv (runFollowBoundary feHasLedgerEnv)
+        case (boundaryCrossed, prevEpoch) of
+          (True, Just prev) -> do
+            phase <- readCurrentPhase phaseRef
+            runAppM bufferedEnv $
+              writeFollowEpochSyncStats phase snap prev now
+            runAppM bufferedEnv (runFollowBoundary feHasLedgerEnv)
+          _ -> pure ()
         writes <- drain buf
         let flushAndAdvance =
               writes *> void (Pipeline.statement triple writeSyncStateSlotStmt)
         runFollowBlockTx feHasqlConnection feWatchdog flushAndAdvance
       maybeFlipToTip (blkSlotNo genBlock)
-      maybeLogProgress progressRef genBlock
+      maybeLogProgress progressRef now genBlock
 
--- | Drain the ledger worker's next boundary 'ApplyResult' and run the
--- 'EpochBoundary' extractor against it. No-op when the ledger feature
--- is disabled or no block has yet been extracted.
+-- | Drain the ledger worker's next boundary 'ApplyResult' and run
+-- the governance and epoch-boundary extractors against it. No-op
+-- when the ledger feature is disabled or no block has yet been
+-- extracted.
+--
+-- Governance runs first when enabled: it publishes the enacted
+-- @(committee, no_confidence, constitution)@ id triple onto the
+-- resolver's scratchpad so 'runEpochBoundary' picks it up when it
+-- constructs the next @epoch_state@ row.
 runFollowBoundary
-  :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
+  :: ( HasResolver env
+     , HasWriter env
+     , HasConfig env
+     , HasControlConnection env
+     , MonadReader env m
+     , MonadIO m
+     )
   => HasLedgerEnv -> m ()
 runFollowBoundary = \case
   LedgerDisabled _   -> pure ()
   LedgerEnabled lenv -> do
-    applyResult <- liftIO $ readBoundaryApplyResult lenv
-    resolver    <- asks getResolver
-    mBlockId    <- liftIO $ lookupLastBlockId resolver
-    for_ mBlockId $ runEpochBoundary applyResult
+    applyResult  <- liftIO $ readBoundaryApplyResult lenv
+    resolver     <- asks getResolver
+    mBlockId     <- liftIO $ lookupLastBlockId resolver
+    governanceOn <- asks (prEnabled . pcGovernance . scOptions . getConfig)
+    for_ mBlockId $ \blockId -> do
+      when governanceOn $ runGovernanceBoundary applyResult blockId
+      runEpochBoundary applyResult blockId
 
 -- | Step the replay-progress state machine for this block and emit
 -- any indicated trace. A no-op outside the replay window (the
@@ -349,6 +387,39 @@ maybeFlipToTip appliedSlot = do
               setCurrentPhase phaseRef FollowingChainTip
         _ -> pure ()
 
+-- | Write the @epoch_sync_stats@ row for the just-finished epoch.
+-- Block count and elapsed window come from the pre-block
+-- 'FollowProgress' snapshot.
+writeFollowEpochSyncStats
+  :: ( HasResolver env
+     , HasWriter env
+     , MonadReader env m
+     , MonadIO m
+     )
+  => SyncPhase
+  -> FollowProgress
+  -> Word64        -- ^ just-completed epoch number
+  -> UTCTime       -- ^ wall-clock when the crossing block landed
+  -> m ()
+writeFollowEpochSyncStats phase snap prev now = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
+  let blockCount   = fpEpochBlocks snap
+      elapsedSec   = realToFrac (diffUTCTime now (fpEpochStart snap)) :: Double
+      blocksPerSec
+        | elapsedSec > 0 = fromIntegral blockCount / elapsedSec
+        | otherwise      = 0
+  liftIO $ do
+    essId <- assignEpochSyncStatsId resolver
+    writeEpochSyncStats writer essId EpochSyncStats
+      { epochSyncStatsEpochNo         = prev
+      , epochSyncStatsBlocksProcessed = blockCount
+      , epochSyncStatsBlocksPerSec    = blocksPerSec
+      , epochSyncStatsElapsedSec      = elapsedSec
+      , epochSyncStatsSyncedAt        = now
+      , epochSyncStatsPhase           = renderPhase phase
+      }
+
 -- | Update the progress counter for this block, then emit either:
 --
 --   * one Info line per applied block when in 'FollowingChainTip' —
@@ -357,13 +428,15 @@ maybeFlipToTip appliedSlot = do
 --   * the windowed summary when 'logEveryNBlocks' blocks have been
 --     applied or a new epoch has crossed (other phases). Per-block
 --     spam isn't useful while still catching up.
-maybeLogProgress :: IORef FollowProgress -> GenericBlock -> FollowM ()
-maybeLogProgress progressRef gb = do
+--
+-- Also rolls the per-epoch counters forward (reset at each boundary
+-- crossing) for the next @epoch_sync_stats@ row.
+maybeLogProgress :: IORef FollowProgress -> UTCTime -> GenericBlock -> FollowM ()
+maybeLogProgress progressRef now gb = do
   FollowEnv{feCore, feBlockQueue} <- ask
   let tracer   = ceTracer    feCore
       phaseRef = ceCurrentPhase feCore
   liftIO $ do
-    now <- getCurrentTime
     phase <- readCurrentPhase phaseRef
     let !curSlot  = unSlotNo  (blkSlotNo  gb)
         !curEpoch = unEpochNo (blkEpochNo gb)
@@ -384,6 +457,8 @@ maybeLogProgress progressRef gb = do
                 ) { fpLastEpoch   = Just curEpoch
                   , fpLastBlockAt = Just now
                   , fpLastSlot    = Just curSlot
+                  , fpEpochStart  = if epochCrossed then now else fpEpochStart p
+                  , fpEpochBlocks = if epochCrossed then 1 else fpEpochBlocks p + 1
                   }
           !info = (fpWindowStart p, window')
       in (p', ( if shouldLogWindowed then Just info else Nothing

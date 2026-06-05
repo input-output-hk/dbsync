@@ -21,19 +21,33 @@ module DbSync.Db.Schema.EpochSyncStats
     -- * COPY encoding
   , encodeEpochSyncStatsCopy
   , encodeEpochSyncTimeCopy
+
+    -- * Hasql encoders \/ decoders
+  , epochSyncStatsEncoder
+  , epochSyncStatsDecoder
+  , entityEpochSyncStatsDecoder
   ) where
 
 import Cardano.Prelude
 
 import Data.ByteString.Builder (Builder, byteString)
 import qualified Data.ByteString.Char8 as BS8
+import Data.Functor.Contravariant ((>$<))
 import qualified Data.Text.Encoding as TE
 import Data.Time.Clock (UTCTime)
+import Data.Time.LocalTime (localTimeToUTC, utc, utcToLocalTime)
+import qualified Hasql.Decoders as D
+import qualified Hasql.Encoders as E
 
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Types
-import DbSync.Db.Types (SyncState, bSyncState)
+import DbSync.Db.Types
+  ( SyncState
+  , bSyncState
+  , doubleAsNumericDecoder
+  , doubleAsNumericEncoder
+  )
 import DbSync.Db.Loader.Encoder (buildCopyRow, bInt64, bUTCTime, bWord64)
 
 -- ---------------------------------------------------------------------------
@@ -144,8 +158,42 @@ encodeEpochSyncTimeCopy (EpochSyncTimeId estid) est =
     ]
 
 -- ---------------------------------------------------------------------------
+-- * Hasql encoders / decoders
+-- ---------------------------------------------------------------------------
+
+epochSyncStatsEncoder :: E.Params EpochSyncStats
+epochSyncStatsEncoder = mconcat
+  [ epochSyncStatsEpochNo         >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+  , epochSyncStatsBlocksProcessed >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+  , epochSyncStatsBlocksPerSec    >$< E.param (E.nonNullable doubleAsNumericEncoder)
+  , epochSyncStatsElapsedSec      >$< E.param (E.nonNullable doubleAsNumericEncoder)
+  , epochSyncStatsSyncedAt        >$< E.param (E.nonNullable utcTimeAsTimestampEncoder)
+  , epochSyncStatsPhase           >$< E.param (E.nonNullable E.text)
+  ]
+
+epochSyncStatsDecoder :: D.Row EpochSyncStats
+epochSyncStatsDecoder = EpochSyncStats
+  <$> (fromIntegral <$> D.column (D.nonNullable D.int8))
+  <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
+  <*> D.column (D.nonNullable doubleAsNumericDecoder)
+  <*> D.column (D.nonNullable doubleAsNumericDecoder)
+  <*> D.column (D.nonNullable utcTimeAsTimestampDecoder)
+  <*> D.column (D.nonNullable D.text)
+
+entityEpochSyncStatsDecoder :: D.Row (EpochSyncStatsId, EpochSyncStats)
+entityEpochSyncStatsDecoder = (,)
+  <$> idDecoder EpochSyncStatsId
+  <*> epochSyncStatsDecoder
+
+-- ---------------------------------------------------------------------------
 -- * Internal helpers
 -- ---------------------------------------------------------------------------
 
 bDouble :: Double -> Builder
 bDouble = byteString . BS8.pack . show
+
+utcTimeAsTimestampEncoder :: E.Value UTCTime
+utcTimeAsTimestampEncoder = utcToLocalTime utc >$< E.timestamp
+
+utcTimeAsTimestampDecoder :: D.Value UTCTime
+utcTimeAsTimestampDecoder = localTimeToUTC utc <$> D.timestamp

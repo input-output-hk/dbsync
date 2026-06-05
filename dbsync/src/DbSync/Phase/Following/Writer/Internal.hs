@@ -12,8 +12,6 @@
 module DbSync.Phase.Following.Writer.Internal
   ( runConn
   , queueBuf
-  , todoWrite
-  , todoWriteLeaf
   ) where
 
 import Cardano.Prelude
@@ -35,14 +33,3 @@ runConn conn p stmt = useConn "Phase.Following.Writer" conn (Sess.statement p st
 -- | Append an insert statement to the per-block pipeline buffer.
 queueBuf :: WriteBuffer -> a -> Stmt.Statement a () -> IO ()
 queueBuf buf p stmt = append buf (Pipeline.statement p stmt)
-
--- | Panicking stub used by writer records whose Follow-phase insert
--- plumbing is not yet wired. Construction succeeds; calling the
--- field panics with the writer's name.
-todoWrite :: Text -> a -> b -> IO ()
-todoWrite name _ _ = pure $ panic $ "Phase.Following.Writer." <> name <> " not yet implemented"
-
--- | Stub variant for leaf-table writers — the @id@ comes from
--- PostgreSQL so the writer field takes just the typed row.
-todoWriteLeaf :: Text -> a -> IO ()
-todoWriteLeaf name _ = pure $ panic $ "Phase.Following.Writer." <> name <> " not yet implemented"

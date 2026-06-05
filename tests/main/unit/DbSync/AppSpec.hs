@@ -61,6 +61,7 @@ optionsWith enabled = SyncOptions
   , pcCbor            = mk "cbor"
   , pcEpochSyncStats  = mk "epoch_sync_stats"
   , pcEpochBoundary   = mk "epoch_boundary"
+  , pcPoolStats       = mk "pool_stats"
   , pcEpoch           = mk "epoch"
   , pcCurrentState    = mk "current_state"
   }
@@ -96,12 +97,13 @@ spec = describe "DbSync.App" $ do
       logRef <- newIORef []
       let tracer = mkTestTracer logRef
       env <- buildCoreEnv tracer syncCfg nodeCfg Mainnet
-      -- full-config.json enables 10 explicitly (core, utxo, multi_asset,
+      -- full-config.json enables 11 explicitly (core, utxo, multi_asset,
       -- metadata, stake_delegation, pool, scripts_datums, governance,
-      -- epoch_sync_stats, epoch_boundary). 'epoch' defaults to true so
-      -- the resolved list has 11 entries; cbor and current_state stay off.
+      -- epoch_sync_stats, epoch_boundary, pool_stats). 'epoch' defaults to
+      -- true so the resolved list has 12 entries; cbor and current_state
+      -- stay off.
       let projCount = length (ceExtractors env)
-      projCount `shouldBe` 11
+      projCount `shouldBe` 12
 
     it "uses real coreExtractor (not a stub) for 'core'" $ do
       (syncCfg, nodeCfg) <- loadTestConfigs

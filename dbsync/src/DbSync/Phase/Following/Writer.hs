@@ -41,6 +41,7 @@ import qualified DbSync.Phase.Following.Writer.Governance as Governance
 import qualified DbSync.Phase.Following.Writer.Metadata as Metadata
 import qualified DbSync.Phase.Following.Writer.MultiAsset as MultiAsset
 import qualified DbSync.Phase.Following.Writer.Pool as Pool
+import qualified DbSync.Phase.Following.Writer.PoolStats as PoolStats
 import qualified DbSync.Phase.Following.Writer.ScriptsDatums as ScriptsDatums
 import qualified DbSync.Phase.Following.Writer.StakeDelegation as Stake
 import qualified DbSync.Phase.Following.Writer.UTxO as UTxO
@@ -88,6 +89,9 @@ mkWriter conn = Writer
   , writePoolOwner       = Pool.writePoolOwnerConn conn
   , writePoolRetire      = Pool.writePoolRetireConn conn
   , writePoolRelay       = Pool.writePoolRelayConn conn
+
+    -- PoolStats
+  , writePoolStat        = PoolStats.writePoolStatConn conn
 
     -- CBOR
   , writeTxCbor = Cbor.writeTxCborConn conn
@@ -179,6 +183,9 @@ mkBufferedWriter buf = Writer
   , writePoolOwner       = Pool.writePoolOwnerBuf buf
   , writePoolRetire      = Pool.writePoolRetireBuf buf
   , writePoolRelay       = Pool.writePoolRelayBuf buf
+
+    -- PoolStats
+  , writePoolStat        = PoolStats.writePoolStatBuf buf
 
     -- CBOR
   , writeTxCbor = Cbor.writeTxCborBuf buf

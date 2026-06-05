@@ -55,6 +55,7 @@ import DbSync.App.Env (CoreEnv (..), FollowEnv (..), HasConfig (..))
 import DbSync.Extractor (ExtractorDef (..))
 import DbSync.Extractor.EpochBoundary (runEpochBoundary)
 import DbSync.Extractor.Governance (runGovernanceBoundary)
+import DbSync.Extractor.PoolStats (runPoolStatsBoundary)
 import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.ChainSync.Msg (ChainSyncMsg (..))
 import DbSync.Phase.Following.IdAllocator (allocateAllIds)
@@ -311,9 +312,11 @@ runFollowBoundary = \case
     resolver     <- asks getResolver
     mBlockId     <- liftIO $ lookupLastBlockId resolver
     governanceOn <- asks (prEnabled . pcGovernance . scOptions . getConfig)
+    poolStatsOn  <- asks (prEnabled . pcPoolStats  . scOptions . getConfig)
     for_ mBlockId $ \blockId -> do
       when governanceOn $ runGovernanceBoundary applyResult blockId
       runEpochBoundary applyResult blockId
+      when poolStatsOn  $ runPoolStatsBoundary  applyResult blockId
 
 -- | Step the replay-progress state machine for this block and emit
 -- any indicated trace. A no-op outside the replay window (the

@@ -96,6 +96,7 @@ library
     DbSync.Extractor.MultiAsset
     DbSync.Extractor.Pipeline
     DbSync.Extractor.Pool
+    DbSync.Extractor.PoolStats
     DbSync.Extractor.ScriptsDatums
     DbSync.Extractor.SharedDedup
     DbSync.Extractor.StakeDelegation
@@ -147,6 +148,7 @@ library
     DbSync.Phase.Ingest.Writer.Metadata
     DbSync.Phase.Ingest.Writer.MultiAsset
     DbSync.Phase.Ingest.Writer.Pool
+    DbSync.Phase.Ingest.Writer.PoolStats
     DbSync.Phase.Ingest.Writer.ScriptsDatums
     DbSync.Phase.Ingest.Writer.StakeDelegation
     DbSync.Phase.Ingest.Writer.UTxO
@@ -188,6 +190,7 @@ library
     DbSync.Phase.Following.Writer.Metadata
     DbSync.Phase.Following.Writer.MultiAsset
     DbSync.Phase.Following.Writer.Pool
+    DbSync.Phase.Following.Writer.PoolStats
     DbSync.Phase.Following.Writer.ScriptsDatums
     DbSync.Phase.Following.Writer.StakeDelegation
     DbSync.Phase.Following.Writer.UTxO

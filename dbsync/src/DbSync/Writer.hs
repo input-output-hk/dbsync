@@ -55,7 +55,7 @@ import DbSync.Db.Schema.Governance
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Metadata (TxMetadata)
 import DbSync.Db.Schema.MultiAsset (MultiAsset, MaTxMint, MaTxOut)
-import DbSync.Db.Schema.Pool (PoolHash, PoolUpdate, PoolMetadataRef, PoolOwner, PoolRetire, PoolRelay)
+import DbSync.Db.Schema.Pool (PoolHash, PoolStat, PoolUpdate, PoolMetadataRef, PoolOwner, PoolRetire, PoolRelay)
 import DbSync.Db.Schema.ScriptsDatums
   ( Datum, ExtraKeyWitness, Redeemer, RedeemerData, Script )
 import DbSync.Db.Schema.StakeDelegation (StakeAddress, StakeRegistration, StakeDeregistration, Delegation, Withdrawal)
@@ -114,6 +114,7 @@ data Writer m = Writer
   , writePoolOwner       :: !(PoolOwner -> m ())
   , writePoolRetire      :: !(PoolRetire -> m ())
   , writePoolRelay       :: !(PoolRelay -> m ())
+  , writePoolStat        :: !(PoolStat -> m ())
 
     -- ---------------------------------------------------------------
     -- CBOR tables

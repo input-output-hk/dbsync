@@ -100,6 +100,7 @@ spec = describe "DbSync.App.Config.Types" $ do
           prEnabled (pcCbor (scOptions cfg))            `shouldBe` False
           prEnabled (pcEpochSyncStats (scOptions cfg))  `shouldBe` False
           prEnabled (pcEpochBoundary (scOptions cfg))   `shouldBe` False
+          prEnabled (pcPoolStats (scOptions cfg))       `shouldBe` False
           -- 'epoch' is the sole opt-out: defaults to true when the
           -- profile omits the key.
           prEnabled (pcEpoch (scOptions cfg))           `shouldBe` True

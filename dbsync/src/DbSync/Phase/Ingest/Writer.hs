@@ -54,6 +54,7 @@ import DbSync.Phase.Ingest.Writer.Pool
   , writePoolRetireCopy
   , writePoolUpdateCopy
   )
+import DbSync.Phase.Ingest.Writer.PoolStats (writePoolStatCopy)
 import DbSync.Phase.Ingest.Writer.ScriptsDatums
   ( writeDatumCopy
   , writeExtraKeyWitnessCopy
@@ -124,6 +125,9 @@ mkWriter ls = Writer
   , writePoolOwner       = writePoolOwnerCopy ls
   , writePoolRetire      = writePoolRetireCopy ls
   , writePoolRelay       = writePoolRelayCopy ls
+
+    -- PoolStats
+  , writePoolStat        = writePoolStatCopy ls
 
     -- CBOR
   , writeTxCbor = writeTxCborCopy ls

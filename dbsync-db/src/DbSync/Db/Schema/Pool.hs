@@ -361,7 +361,7 @@ poolStatTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
-  , tdIdentityColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys = []
   }
 
@@ -466,11 +466,10 @@ encodePoolRelayCopy pr =
     , bInt64 . fromIntegral <$> poolRelayPort pr
     ]
 
-encodePoolStatCopy :: PoolStatId -> PoolStat -> ByteString
-encodePoolStatCopy (PoolStatId psid) ps =
+encodePoolStatCopy :: PoolStat -> ByteString
+encodePoolStatCopy ps =
   buildCopyRow
-    [ Just $ bInt64 psid
-    , Just $ bInt64 (getPoolHashId $ poolStatPoolHashId ps)
+    [ Just $ bInt64 (getPoolHashId $ poolStatPoolHashId ps)
     , Just $ bWord64 (poolStatEpochNo ps)
     , Just $ bWord64 (unDbWord64 $ poolStatNumberOfBlocks ps)
     , Just $ bWord64 (unDbWord64 $ poolStatNumberOfDelegators ps)

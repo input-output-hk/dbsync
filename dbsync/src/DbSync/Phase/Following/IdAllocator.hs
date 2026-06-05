@@ -31,11 +31,21 @@ import qualified Hasql.Session as Sess
 import DbSync.Db.Run (useConn)
 import DbSync.Db.Schema.Ids
   ( CollateralTxOutId (..)
+  , CommitteeId (..)
+  , ConstitutionId (..)
+  , GovActionProposalId (..)
+  , ParamProposalId (..)
   , PoolMetadataRefId (..)
   , PoolUpdateId (..)
   , RedeemerId (..)
   , TxId (..)
   , TxOutId (..)
+  )
+import DbSync.Db.Schema.Governance
+  ( committeeTableDef
+  , constitutionTableDef
+  , govActionProposalTableDef
+  , paramProposalTableDef
   )
 import DbSync.Db.Schema.ScriptsDatums (redeemerTableDef)
 import DbSync.Db.Schema.Types (TableDef)
@@ -52,12 +62,16 @@ import DbSync.Phase.Following.IdCounts (IdCounts (..))
 -- 'allocateAllIds' and drained exactly once by the extractor pass;
 -- 'popHead' panics on empty so a miscounted block fails loudly.
 data PreAllocatedIds = PreAllocatedIds
-  { paiTxIds              :: !(IORef [TxId])
-  , paiTxOutIds           :: !(IORef [TxOutId])
-  , paiCollateralTxOutIds :: !(IORef [CollateralTxOutId])
-  , paiPoolUpdateIds      :: !(IORef [PoolUpdateId])
-  , paiPoolMetadataRefIds :: !(IORef [PoolMetadataRefId])
-  , paiRedeemerIds        :: !(IORef [RedeemerId])
+  { paiTxIds                :: !(IORef [TxId])
+  , paiTxOutIds             :: !(IORef [TxOutId])
+  , paiCollateralTxOutIds   :: !(IORef [CollateralTxOutId])
+  , paiPoolUpdateIds        :: !(IORef [PoolUpdateId])
+  , paiPoolMetadataRefIds   :: !(IORef [PoolMetadataRefId])
+  , paiRedeemerIds          :: !(IORef [RedeemerId])
+  , paiGovActionProposalIds :: !(IORef [GovActionProposalId])
+  , paiParamProposalIds     :: !(IORef [ParamProposalId])
+  , paiCommitteeIds         :: !(IORef [CommitteeId])
+  , paiConstitutionIds      :: !(IORef [ConstitutionId])
   }
 
 -- | Pop the next ID from a per-sequence queue. Panics if the
@@ -82,12 +96,16 @@ allocateAllIds :: Conn.Connection -> IdCounts -> IO PreAllocatedIds
 allocateAllIds conn counts = do
   let pipeline =
         AllocatedIdsRaw
-          <$> allocFor txTableDef              (icTxIds counts)              TxId
-          <*> allocFor txOutTableDef           (icTxOutIds counts)           TxOutId
-          <*> allocFor collateralTxOutTableDef (icCollateralTxOutIds counts) CollateralTxOutId
-          <*> allocFor poolUpdateTableDef      (icPoolUpdateIds counts)      PoolUpdateId
-          <*> allocFor poolMetadataRefTableDef (icPoolMetadataRefIds counts) PoolMetadataRefId
-          <*> allocFor redeemerTableDef        (icRedeemerIds counts)        RedeemerId
+          <$> allocFor txTableDef                (icTxIds counts)                TxId
+          <*> allocFor txOutTableDef             (icTxOutIds counts)             TxOutId
+          <*> allocFor collateralTxOutTableDef   (icCollateralTxOutIds counts)   CollateralTxOutId
+          <*> allocFor poolUpdateTableDef        (icPoolUpdateIds counts)        PoolUpdateId
+          <*> allocFor poolMetadataRefTableDef   (icPoolMetadataRefIds counts)   PoolMetadataRefId
+          <*> allocFor redeemerTableDef          (icRedeemerIds counts)          RedeemerId
+          <*> allocFor govActionProposalTableDef (icGovActionProposalIds counts) GovActionProposalId
+          <*> allocFor paramProposalTableDef     (icParamProposalIds counts)     ParamProposalId
+          <*> allocFor committeeTableDef         (icCommitteeIds counts)         CommitteeId
+          <*> allocFor constitutionTableDef      (icConstitutionIds counts)      ConstitutionId
 
   raw <- useConn "Phase.Following.IdAllocator" conn (Sess.pipeline pipeline)
   wrapInRefs raw
@@ -96,12 +114,16 @@ allocateAllIds conn counts = do
 -- pipeline. Converted into the 'IORef'-of-queue shape by
 -- 'wrapInRefs' so the extractor can pop in-place.
 data AllocatedIdsRaw = AllocatedIdsRaw
-  { rTxIds              :: ![TxId]
-  , rTxOutIds           :: ![TxOutId]
-  , rCollateralTxOutIds :: ![CollateralTxOutId]
-  , rPoolUpdateIds      :: ![PoolUpdateId]
-  , rPoolMetadataRefIds :: ![PoolMetadataRefId]
-  , rRedeemerIds        :: ![RedeemerId]
+  { rTxIds                :: ![TxId]
+  , rTxOutIds             :: ![TxOutId]
+  , rCollateralTxOutIds   :: ![CollateralTxOutId]
+  , rPoolUpdateIds        :: ![PoolUpdateId]
+  , rPoolMetadataRefIds   :: ![PoolMetadataRefId]
+  , rRedeemerIds          :: ![RedeemerId]
+  , rGovActionProposalIds :: ![GovActionProposalId]
+  , rParamProposalIds     :: ![ParamProposalId]
+  , rCommitteeIds         :: ![CommitteeId]
+  , rConstitutionIds      :: ![ConstitutionId]
   }
 
 wrapInRefs :: AllocatedIdsRaw -> IO PreAllocatedIds
@@ -113,6 +135,10 @@ wrapInRefs r =
     <*> newIORef (rPoolUpdateIds r)
     <*> newIORef (rPoolMetadataRefIds r)
     <*> newIORef (rRedeemerIds r)
+    <*> newIORef (rGovActionProposalIds r)
+    <*> newIORef (rParamProposalIds r)
+    <*> newIORef (rCommitteeIds r)
+    <*> newIORef (rConstitutionIds r)
 
 -- | Issue one bulk @nextval@ call for the given table's sequence.
 --

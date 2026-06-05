@@ -88,8 +88,8 @@ mkFollowResolver conn = do
     , assignPoolUpdateId      = Pool.assignPoolUpdateIdConn      conn
     , assignPoolMetadataRefId = Pool.assignPoolMetadataRefIdConn conn
 
-      -- EpochSyncStats (stub)
-    , assignEpochSyncStatsId = Epoch.assignEpochSyncStatsIdStub
+      -- EpochSyncStats
+    , assignEpochSyncStatsId = Epoch.assignEpochSyncStatsIdConn conn
 
       -- EpochBoundary
     , resolveCostModel   = EpochBoundary.resolveCostModelConn conn
@@ -100,17 +100,17 @@ mkFollowResolver conn = do
     , resolveRedeemerData     = ScriptsDatums.resolveRedeemerDataConn  conn
     , assignRedeemerId        = ScriptsDatums.assignRedeemerIdConn     conn
 
-      -- Governance (per-block stubs + IORef scratchpads)
-    , resolveDrepHash             = Governance.resolveDrepHashStub
-    , resolveCommitteeHash        = Governance.resolveCommitteeHashStub
-    , resolveVotingAnchor         = Governance.resolveVotingAnchorStub
-    , assignGovActionProposalId   = Governance.assignGovActionProposalIdStub
-    , assignParamProposalId       = Governance.assignParamProposalIdStub
-    , assignCommitteeId           = Governance.assignCommitteeIdStub
-    , assignConstitutionId        = Governance.assignConstitutionIdStub
-    , assignEventInfoId           = Governance.assignEventInfoIdStub
-    , lookupGovActionProposalId   = Governance.lookupGovActionProposalIdRef gov
-    , recordGovActionProposalId   = Governance.recordGovActionProposalIdRef gov
+      -- Governance
+    , resolveDrepHash             = Governance.resolveDrepHashConn        conn
+    , resolveCommitteeHash        = Governance.resolveCommitteeHashConn   conn
+    , resolveVotingAnchor         = Governance.resolveVotingAnchorConn    conn
+    , assignGovActionProposalId   = Governance.assignGovActionProposalIdConn conn
+    , assignParamProposalId       = Governance.assignParamProposalIdConn  conn
+    , assignCommitteeId           = Governance.assignCommitteeIdConn      conn
+    , assignConstitutionId        = Governance.assignConstitutionIdConn   conn
+    , assignEventInfoId           = Governance.assignEventInfoIdConn      conn
+    , lookupGovActionProposalId   = Governance.lookupGovActionProposalIdConn conn
+    , recordGovActionProposalId   = Governance.recordGovActionProposalIdConn
     , readEnactedEpochStateIds    = Governance.readEnactedEpochStateIdsRef  gov
     , writeEnactedEpochStateIds   = Governance.writeEnactedEpochStateIdsRef gov
     , readGovExpiresAfter         = Governance.readGovExpiresAfterRef       gov
@@ -174,8 +174,8 @@ mkBufferedFollowResolver conn preAlloc buf = do
     , assignPoolUpdateId      = Pool.assignPoolUpdateIdBuf      preAlloc
     , assignPoolMetadataRefId = Pool.assignPoolMetadataRefIdBuf preAlloc
 
-      -- EpochSyncStats (stub)
-    , assignEpochSyncStatsId = Epoch.assignEpochSyncStatsIdStub
+      -- EpochSyncStats
+    , assignEpochSyncStatsId = Epoch.assignEpochSyncStatsIdBuf conn
 
       -- EpochBoundary
     , resolveCostModel   = EpochBoundary.resolveCostModelBuf conn cache
@@ -186,17 +186,17 @@ mkBufferedFollowResolver conn preAlloc buf = do
     , resolveRedeemerData     = ScriptsDatums.resolveRedeemerDataBuf  conn cache
     , assignRedeemerId        = ScriptsDatums.assignRedeemerIdBuf     preAlloc
 
-      -- Governance (per-block stubs + IORef scratchpads)
-    , resolveDrepHash             = Governance.resolveDrepHashStub
-    , resolveCommitteeHash        = Governance.resolveCommitteeHashStub
-    , resolveVotingAnchor         = Governance.resolveVotingAnchorStub
-    , assignGovActionProposalId   = Governance.assignGovActionProposalIdStub
-    , assignParamProposalId       = Governance.assignParamProposalIdStub
-    , assignCommitteeId           = Governance.assignCommitteeIdStub
-    , assignConstitutionId        = Governance.assignConstitutionIdStub
-    , assignEventInfoId           = Governance.assignEventInfoIdStub
-    , lookupGovActionProposalId   = Governance.lookupGovActionProposalIdRef gov
-    , recordGovActionProposalId   = Governance.recordGovActionProposalIdRef gov
+      -- Governance
+    , resolveDrepHash             = Governance.resolveDrepHashBuf      conn cache
+    , resolveCommitteeHash        = Governance.resolveCommitteeHashBuf conn cache
+    , resolveVotingAnchor         = Governance.resolveVotingAnchorBuf  conn cache
+    , assignGovActionProposalId   = Governance.assignGovActionProposalIdBuf preAlloc
+    , assignParamProposalId       = Governance.assignParamProposalIdBuf     preAlloc
+    , assignCommitteeId           = Governance.assignCommitteeIdBuf         preAlloc
+    , assignConstitutionId        = Governance.assignConstitutionIdBuf      preAlloc
+    , assignEventInfoId           = Governance.assignEventInfoIdBuf         conn
+    , lookupGovActionProposalId   = Governance.lookupGovActionProposalIdBuf conn cache
+    , recordGovActionProposalId   = Governance.recordGovActionProposalIdBuf cache
     , readEnactedEpochStateIds    = Governance.readEnactedEpochStateIdsRef  gov
     , writeEnactedEpochStateIds   = Governance.writeEnactedEpochStateIdsRef gov
     , readGovExpiresAfter         = Governance.readGovExpiresAfterRef       gov

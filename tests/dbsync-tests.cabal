@@ -160,6 +160,8 @@ test-suite dbsync-test
     DbSync.Phase.Following.RunSpec
     DbSync.Phase.FollowAtTipSpec
     DbSync.Phase.FollowEpochBoundarySpec
+    DbSync.Phase.FollowEpochSyncStatsSpec
+    DbSync.Phase.FollowGovernanceSpec
     DbSync.Phase.FollowScriptsDatumsSpec
     DbSync.Phase.FollowPerfRealisticSpec
     DbSync.Phase.FollowPerfSpec

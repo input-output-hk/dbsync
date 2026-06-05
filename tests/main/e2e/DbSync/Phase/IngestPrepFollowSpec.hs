@@ -71,7 +71,6 @@ spec = describe "IngestChainHistory \x2192 PreparingForVolatileTail \x2192 Follo
         -- 150 blocks puts us well past slot 500.
         _ <- forgeAndPushBlocks mn 150
 
-        -- Swap to 'verboseTracer Info' (or Debug) here when diagnosing.
         tracer <- quietTracer
         withAppSession tracer defaultTestProfile mn ledgerDir $ \_ -> do
           waitForSyncComplete 60

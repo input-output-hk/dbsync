@@ -21,8 +21,8 @@ module DbSync.Worker.Ledger.Rewards
     -- * Reward values
   , Reward (..)
   , Rewards (..)
-  , RewardRest (..)
-  , RewardRests (..)
+  , PotReward (..)
+  , PotRewards (..)
 
     -- * Helpers
   , rewardsCount
@@ -43,7 +43,7 @@ import DbSync.Worker.Ledger.Keys (PoolKeyHash, StakeCred)
 -- ---------------------------------------------------------------------------
 
 -- | The origin of a reward entry, carried by every 'Reward' and
--- 'RewardRest' value and ultimately written to the @reward@ table.
+-- 'PotReward' value and ultimately written to the @reward@ table.
 --
 -- The DB enum encoding uses the @leader@ \/ @member@ \/ ... labels
 -- derived from each constructor.
@@ -80,21 +80,21 @@ newtype Rewards = Rewards
   }
   deriving stock (Eq, Show)
 
--- | A \"reward rest\" payment — reserves \/ treasury \/ MIR
--- distributions. Carries a 'Coin' (raw ledger value) rather than the
--- 'Word64' used by 'Reward'.
-data RewardRest = RewardRest
-  { irSource :: !RewardSource
-  , irAmount :: !Coin
+-- | A pot-sourced payment — reserves \/ treasury \/ refund. Carries
+-- a 'Coin' (raw ledger value) rather than the 'Word64' used by
+-- 'Reward'.
+data PotReward = PotReward
+  { prSource :: !RewardSource
+  , prAmount :: !Coin
   }
   deriving stock (Eq, Ord, Show)
 
--- | Companion to 'Rewards' for the instantaneous-reward flow.
+-- | Companion to 'Rewards' for the pot-payment flow.
 --
--- The inner set carries 'Reward' values (not 'RewardRest'): the
+-- The inner set carries 'Reward' values (not 'PotReward'): the
 -- boundary converts before collecting, so the shapes match.
-newtype RewardRests = RewardRests
-  { unIRewards :: Map StakeCred (Set Reward)
+newtype PotRewards = PotRewards
+  { unPotRewards :: Map StakeCred (Set Reward)
   }
   deriving stock (Eq, Show)
 

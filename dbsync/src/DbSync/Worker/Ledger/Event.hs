@@ -109,7 +109,7 @@ data RewardsCapture
 -- code that only cares about \"lagging vs following\" can
 -- pattern-match on 'IngestChainHistory' / 'FollowingChainTip'.
 data LedgerEvent
-  = LedgerMirDist             !(Map StakeCred (Set Generic.RewardRest))
+  = LedgerMirDist             !(Map StakeCred (Set Generic.PotReward))
   | LedgerPoolReap            !EpochNo !Generic.Rewards
   | LedgerIncrementalRewards  !EpochNo !Generic.Rewards
   | LedgerDeltaRewards        !EpochNo !Generic.Rewards
@@ -352,36 +352,36 @@ convertPoolDepositRefunds rwds =
         , Generic.rewardAmount = unCompactCoin coin
         }
 
--- | Convert reserves \/ treasury MIR payouts into our 'RewardRest'
+-- | Convert reserves \/ treasury MIR payouts into our 'PotReward'
 -- shape, keyed by stake credential.
 convertMirRewards
   :: Map StakeCred Coin
   -> Map StakeCred Coin
-  -> Map StakeCred (Set Generic.RewardRest)
+  -> Map StakeCred (Set Generic.PotReward)
 convertMirRewards resPay trePay =
   Map.unionWith Set.union (convertResPay resPay) (convertTrePay trePay)
   where
-    convertResPay :: Map StakeCred Coin -> Map StakeCred (Set Generic.RewardRest)
+    convertResPay :: Map StakeCred Coin -> Map StakeCred (Set Generic.PotReward)
     convertResPay = Map.map (mkPayment RwdReserves)
 
-    convertTrePay :: Map StakeCred Coin -> Map StakeCred (Set Generic.RewardRest)
+    convertTrePay :: Map StakeCred Coin -> Map StakeCred (Set Generic.PotReward)
     convertTrePay = Map.map (mkPayment RwdTreasury)
 
-    mkPayment :: RewardSource -> Coin -> Set Generic.RewardRest
+    mkPayment :: RewardSource -> Coin -> Set Generic.PotReward
     mkPayment src coin =
       Set.singleton $
-        Generic.RewardRest
-          { Generic.irSource = src
-          , Generic.irAmount = coin
+        Generic.PotReward
+          { Generic.prSource = src
+          , Generic.prAmount = coin
           }
 
 -- | Tag a treasury payout amount with the treasury reward source.
 -- Used by the gov-action refund path.
-mkTreasuryReward :: Coin -> Generic.RewardRest
+mkTreasuryReward :: Coin -> Generic.PotReward
 mkTreasuryReward c =
-  Generic.RewardRest
-    { Generic.irSource = RwdTreasury
-    , Generic.irAmount = c
+  Generic.PotReward
+    { Generic.prSource = RwdTreasury
+    , Generic.prAmount = c
     }
 
 -- | Convert a pool-rewards map (keyed by stake cred) into our

@@ -49,6 +49,7 @@ import DbSync.Extractor.Metadata (metadataExtractor)
 import DbSync.Extractor.MultiAsset (multiAssetExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Extractor.Pool (poolExtractor)
+import DbSync.Extractor.PoolStats (poolStatsExtractor)
 import DbSync.Extractor.Cbor (cborExtractor)
 import DbSync.Extractor.Epoch (epochExtractor)
 import DbSync.Extractor.EpochBoundary (epochBoundaryExtractor)
@@ -118,6 +119,7 @@ buildExtractors pc = do
     resolveExtractor "cbor"             = cborExtractor
     resolveExtractor "epoch_sync_stats" = epochSyncStatsExtractor
     resolveExtractor "epoch_boundary"   = epochBoundaryExtractor
+    resolveExtractor "pool_stats"       = poolStatsExtractor
     resolveExtractor "epoch"            = epochExtractor
     resolveExtractor "scripts_datums"   = scriptsDatumsExtractor
     resolveExtractor "governance"       = governanceExtractor
@@ -137,6 +139,7 @@ buildExtractors pc = do
       , ("cbor",             prEnabled (pcCbor pc))
       , ("epoch_sync_stats", prEnabled (pcEpochSyncStats pc))
       , ("epoch_boundary",   prEnabled (pcEpochBoundary pc))
+      , ("pool_stats",       prEnabled (pcPoolStats pc))
       , ("epoch",            prEnabled (pcEpoch pc))
       , ("current_state",    prEnabled (pcCurrentState pc))
       ]

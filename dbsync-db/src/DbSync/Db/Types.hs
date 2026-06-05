@@ -218,7 +218,7 @@ data ScriptType
   deriving stock (Bounded, Enum, Eq, Ord, Read, Show)
 
 -- | Where a reward originated. Stored in @reward.type@ /
--- @reward_rest.type@.
+-- @pot_reward.type@.
 data RewardSource
   = RwdLeader
   | RwdMember

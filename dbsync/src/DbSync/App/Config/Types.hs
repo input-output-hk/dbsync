@@ -282,6 +282,7 @@ data SyncOptions = SyncOptions
   , pcCbor            :: !SyncOption
   , pcEpochSyncStats  :: !SyncOption
   , pcEpochBoundary   :: !SyncOption
+  , pcPoolStats       :: !SyncOption
   , pcEpoch           :: !SyncOption
   , pcCurrentState    :: !SyncOption
   }
@@ -300,6 +301,7 @@ instance FromJSON SyncOptions where
       <*> o .:? "cbor"             .!= disabled
       <*> o .:? "epoch_sync_stats" .!= disabled
       <*> o .:? "epoch_boundary"   .!= disabled
+      <*> o .:? "pool_stats"       .!= disabled
       <*> o .:? "epoch"            .!= epochDefault
       <*> o .:? "current_state"    .!= disabled
     where
@@ -323,6 +325,7 @@ defaultSyncOptions = SyncOptions
   , pcCbor            = SyncOption False
   , pcEpochSyncStats  = SyncOption False
   , pcEpochBoundary   = SyncOption False
+  , pcPoolStats       = SyncOption False
   , pcEpoch           = SyncOption True
   , pcCurrentState    = SyncOption False
   }

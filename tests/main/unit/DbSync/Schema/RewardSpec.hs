@@ -2,12 +2,12 @@
 
 -- | Tests for the StakeDelegation-ledger half of
 -- 'DbSync.Db.Schema.StakeDelegation' — the four ledger-derived
--- tables: @reward@, @reward_rest@, @epoch_stake@,
+-- tables: @reward@, @pot_reward@, @epoch_stake@,
 -- @epoch_stake_progress@.
 --
 -- The headline assertion is that 'generateCreateTable' emits a valid
 -- @BIGINT GENERATED ALWAYS AS (expr) STORED@ DDL clause for
--- @reward.earned_epoch@ and @reward_rest.earned_epoch@: the
+-- @reward.earned_epoch@ and @pot_reward.earned_epoch@: the
 -- underlying SQL type comes through, the generation expression is
 -- enclosed in parentheses and ends with @STORED@, and there is no
 -- trailing @NOT NULL@ or @DEFAULT@ that would conflict with the
@@ -30,22 +30,22 @@ import DbSync.Db.Schema.Ids
   ( EpochStakeId (..)
   , EpochStakeProgressId (..)
   , PoolHashId (..)
+  , PotRewardId (..)
   , RewardId (..)
-  , RewardRestId (..)
   , StakeAddressId (..)
   )
 import DbSync.Db.Schema.StakeDelegation
   ( EpochStake (..)
   , EpochStakeProgress (..)
+  , PotReward (..)
   , Reward (..)
-  , RewardRest (..)
   , encodeEpochStakeCopy
   , encodeEpochStakeProgressCopy
+  , encodePotRewardCopy
   , encodeRewardCopy
-  , encodeRewardRestCopy
   , epochStakeProgressTableDef
   , epochStakeTableDef
-  , rewardRestTableDef
+  , potRewardTableDef
   , rewardTableDef
   )
 import DbSync.Db.Schema.Types
@@ -61,7 +61,7 @@ import DbSync.Db.Types (DbLovelace (..), RewardSource (..))
 spec :: Spec
 spec = do
   rewardTableDefSpec
-  rewardRestTableDefSpec
+  potRewardTableDefSpec
   epochStakeTableDefSpec
   epochStakeProgressTableDefSpec
   generatedColumnDdlSpec
@@ -98,18 +98,18 @@ rewardTableDefSpec = describe "rewardTableDef" $ do
     expr `shouldSatisfy` T.isInfixOf "spendable_epoch"
     expr `shouldSatisfy` T.isInfixOf "type='refund'"
 
-rewardRestTableDefSpec :: Spec
-rewardRestTableDefSpec = describe "rewardRestTableDef" $ do
-  it "is named reward_rest with 6 columns in golden order" $ do
-    tdName rewardRestTableDef `shouldBe` "reward_rest"
-    map cdName (tdColumns rewardRestTableDef) `shouldBe`
+potRewardTableDefSpec :: Spec
+potRewardTableDefSpec = describe "potRewardTableDef" $ do
+  it "is named pot_reward with 6 columns in golden order" $ do
+    tdName potRewardTableDef `shouldBe` "pot_reward"
+    map cdName (tdColumns potRewardTableDef) `shouldBe`
       ["id", "addr_id", "type", "amount", "spendable_epoch", "earned_epoch"]
 
   it "has no pool_id (separates it from reward)" $
-    all (\c -> cdName c /= "pool_id") (tdColumns rewardRestTableDef) `shouldBe` True
+    all (\c -> cdName c /= "pool_id") (tdColumns potRewardTableDef) `shouldBe` True
 
   it "lists earned_epoch as the sole generated column" $
-    map fst (tdGeneratedColumns rewardRestTableDef) `shouldBe` ["earned_epoch"]
+    map fst (tdGeneratedColumns potRewardTableDef) `shouldBe` ["earned_epoch"]
 
 epochStakeTableDefSpec :: Spec
 epochStakeTableDefSpec = describe "epochStakeTableDef" $ do
@@ -170,15 +170,15 @@ generatedColumnDdlSpec = describe "generateCreateTable for tables with generated
     it "does not emit a DEFAULT clause on the generated column" $
       earnedLine `shouldSatisfy` (not . T.isInfixOf "DEFAULT")
 
-  describe "reward_rest.earned_epoch" $ do
-    let ddl = generateCreateTable rewardRestTableDef
+  describe "pot_reward.earned_epoch" $ do
+    let ddl = generateCreateTable potRewardTableDef
         earnedLine = earnedEpochLine ddl
 
     it "emits BIGINT GENERATED ALWAYS AS (...) STORED" $ do
       earnedLine `shouldSatisfy` T.isInfixOf "\"earned_epoch\" BIGINT GENERATED ALWAYS AS ("
       earnedLine `shouldSatisfy` T.isInfixOf ") STORED"
 
-    it "uses the simpler reward_rest expression (no refund branch)" $ do
+    it "uses the simpler pot_reward expression (no refund branch)" $ do
       earnedLine `shouldSatisfy` T.isInfixOf "spendable_epoch-1"
       earnedLine `shouldSatisfy` (not . T.isInfixOf "type='refund'")
 
@@ -218,8 +218,8 @@ copyEncoderSpec = describe "COPY encoders for generated-column tables" $ do
     fields !! 4 `shouldBe` "210"
     fields !! 5 `shouldBe` "99"
 
-  it "encodeRewardRestCopy emits 5 fields (earned_epoch omitted)" $ do
-    let row = encodeRewardRestCopy (RewardRestId 1) sampleRewardRest
+  it "encodePotRewardCopy emits 5 fields (earned_epoch omitted)" $ do
+    let row = encodePotRewardCopy (PotRewardId 1) samplePotReward
         tabs = BS.count (fromIntegral (fromEnum '\t')) row
     tabs `shouldBe` 4    -- 5 fields → 4 separators
 
@@ -257,13 +257,13 @@ sampleReward = Reward
   , rewardEarnedEpoch    = 208     -- ignored by the encoder; PG computes it
   }
 
-sampleRewardRest :: RewardRest
-sampleRewardRest = RewardRest
-  { rewardRestAddrId         = StakeAddressId 7
-  , rewardRestType           = RwdReserves
-  , rewardRestAmount         = DbLovelace 1000000
-  , rewardRestSpendableEpoch = 210
-  , rewardRestEarnedEpoch    = 209  -- ignored by the encoder
+samplePotReward :: PotReward
+samplePotReward = PotReward
+  { potRewardAddrId         = StakeAddressId 7
+  , potRewardType           = RwdReserves
+  , potRewardAmount         = DbLovelace 1000000
+  , potRewardSpendableEpoch = 210
+  , potRewardEarnedEpoch    = 209  -- ignored by the encoder
   }
 
 sampleEpochStake :: EpochStake

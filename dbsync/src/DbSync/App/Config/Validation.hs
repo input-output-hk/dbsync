@@ -27,6 +27,7 @@ validateConfig cfg =
   where
     errors = concat
       [ checkEpochBoundaryRequiresLedger cfg
+      , checkPoolStatsRequiresLedger cfg
       , checkCurrentStateRequiresLedger cfg
       , checkMultiAssetRequiresUtxo cfg
       , checkPoolRequiresStakeDelegation cfg
@@ -45,6 +46,21 @@ checkEpochBoundaryRequiresLedger cfg
           "epoch_boundary extractor requires ledger.enabled = true. \
           \epoch_boundary produces rewards, epoch_stake, and ada_pots which \
           \are computed from the ledger state."
+      ]
+  | otherwise = []
+  where
+    extractors = scOptions cfg
+    ledger = scLedger cfg
+
+-- | pool_stats sources its rows from the worker's per-epoch pool
+-- distribution. If ledger is disabled, pool_stats must also be.
+checkPoolStatsRequiresLedger :: SyncConfig -> [ConfigError]
+checkPoolStatsRequiresLedger cfg
+  | prEnabled (pcPoolStats extractors) && not (lcEnabled ledger) =
+      [ ConfigValidationError
+          "pool_stats extractor requires ledger.enabled = true. \
+          \pool_stat rows are derived from the per-epoch pool \
+          \distribution carried on the worker's ApplyResult."
       ]
   | otherwise = []
   where

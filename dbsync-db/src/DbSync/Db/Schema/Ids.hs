@@ -48,7 +48,7 @@ module DbSync.Db.Schema.Ids
   , DelegationId (..)
   , WithdrawalId (..)
   , RewardId (..)
-  , RewardRestId (..)
+  , PotRewardId (..)
   , EpochStakeId (..)
   , EpochStakeProgressId (..)
 
@@ -258,8 +258,8 @@ newtype WithdrawalId = WithdrawalId { getWithdrawalId :: Int64 }
 newtype RewardId = RewardId { getRewardId :: Int64 }
   deriving stock (Eq, Ord, Show)
 
--- | Primary key for the @reward_rest@ table.
-newtype RewardRestId = RewardRestId { getRewardRestId :: Int64 }
+-- | Primary key for the @pot_reward@ table.
+newtype PotRewardId = PotRewardId { getPotRewardId :: Int64 }
   deriving stock (Eq, Ord, Show)
 
 -- | Primary key for the @epoch_stake@ table.

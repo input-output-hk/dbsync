@@ -1,8 +1,11 @@
 -- | hasql writers for tables owned by the @stake_delegation@ extractor.
 --
 -- The three pot-rebalancing tables (@pot_transfer@, @treasury@,
--- @reserve@) have no Follow-phase insert wiring yet; their writers
--- panic via 'todoWriteLeaf' if invoked.
+-- @reserve@) only receive rows from MIR certificates, which are
+-- Shelley→Babbage only. Follow runs at chain tip where the active
+-- era is Conway+, so these writers are unreachable in production.
+-- They are wired symmetrically with the Ingest path anyway, so a
+-- future deeper-rollforward scenario remains correct.
 module DbSync.Phase.Following.Writer.StakeDelegation
   ( writeStakeAddressConn
   , writeStakeAddressBuf
@@ -36,12 +39,15 @@ import DbSync.Db.Schema.StakeDelegation
   , Withdrawal
   )
 import DbSync.Db.Statement.Delegation (insertDelegationRowStmt)
+import DbSync.Db.Statement.PotTransfer (insertPotTransferRowStmt)
+import DbSync.Db.Statement.Reserve (insertReserveRowStmt)
 import DbSync.Db.Statement.StakeAddress (insertStakeAddressRowStmt)
 import DbSync.Db.Statement.StakeDeregistration (insertStakeDeregistrationRowStmt)
 import DbSync.Db.Statement.StakeRegistration (insertStakeRegistrationRowStmt)
+import DbSync.Db.Statement.Treasury (insertTreasuryRowStmt)
 import DbSync.Db.Statement.Withdrawal (insertWithdrawalRowStmt)
 import DbSync.Phase.Following.WriteBuffer (WriteBuffer)
-import DbSync.Phase.Following.Writer.Internal (queueBuf, runConn, todoWriteLeaf)
+import DbSync.Phase.Following.Writer.Internal (queueBuf, runConn)
 
 writeStakeAddressConn :: Conn.Connection -> StakeAddressId -> StakeAddress -> IO ()
 writeStakeAddressConn conn sid sa = runConn conn (sid, sa) insertStakeAddressRowStmt
@@ -73,23 +79,20 @@ writeWithdrawalConn conn w = runConn conn w insertWithdrawalRowStmt
 writeWithdrawalBuf :: WriteBuffer -> Withdrawal -> IO ()
 writeWithdrawalBuf buf w = queueBuf buf w insertWithdrawalRowStmt
 
--- Follow-phase insert plumbing for the pot-rebalancing tables is
--- not yet wired; the writers panic if invoked.
-
 writePotTransferConn :: Conn.Connection -> PotTransfer -> IO ()
-writePotTransferConn _ = todoWriteLeaf "writePotTransfer"
+writePotTransferConn conn pt = runConn conn pt insertPotTransferRowStmt
 
 writePotTransferBuf :: WriteBuffer -> PotTransfer -> IO ()
-writePotTransferBuf _ = todoWriteLeaf "writePotTransfer"
+writePotTransferBuf buf pt = queueBuf buf pt insertPotTransferRowStmt
 
 writeTreasuryConn :: Conn.Connection -> Treasury -> IO ()
-writeTreasuryConn _ = todoWriteLeaf "writeTreasury"
+writeTreasuryConn conn t = runConn conn t insertTreasuryRowStmt
 
 writeTreasuryBuf :: WriteBuffer -> Treasury -> IO ()
-writeTreasuryBuf _ = todoWriteLeaf "writeTreasury"
+writeTreasuryBuf buf t = queueBuf buf t insertTreasuryRowStmt
 
 writeReserveConn :: Conn.Connection -> Reserve -> IO ()
-writeReserveConn _ = todoWriteLeaf "writeReserve"
+writeReserveConn conn r = runConn conn r insertReserveRowStmt
 
 writeReserveBuf :: WriteBuffer -> Reserve -> IO ()
-writeReserveBuf _ = todoWriteLeaf "writeReserve"
+writeReserveBuf buf r = queueBuf buf r insertReserveRowStmt

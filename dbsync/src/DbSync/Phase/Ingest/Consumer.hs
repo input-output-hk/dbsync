@@ -63,6 +63,7 @@ import DbSync.Db.Schema.Ids (BlockId (..))
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Extractor.EpochBoundary (runEpochBoundary)
 import DbSync.Extractor.Governance (runGovernanceBoundary)
+import DbSync.Extractor.PoolStats (runPoolStatsBoundary)
 import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.Parser.Dispatch (parseBlock)
 import DbSync.Parser.Types (GenericBlock (..))
@@ -363,6 +364,7 @@ runBoundaryExtractor watchdog hasLedger extractStRef = case hasLedger of
     applyResult  <- liftIO $ readBoundaryApplyResult lenv
     mLastBlockId <- liftIO $ esLastBlockId <$> readIORef extractStRef
     governanceOn <- asks (prEnabled . pcGovernance . scOptions . getConfig)
+    poolStatsOn  <- asks (prEnabled . pcPoolStats  . scOptions . getConfig)
     for_ mLastBlockId $ \lastBid -> do
       -- Governance runs first when enabled: it refreshes the
       -- enacted-state ids and apGovExpiresAfter on ExtractState that
@@ -373,6 +375,9 @@ runBoundaryExtractor watchdog hasLedger extractStRef = case hasLedger of
         runGovernanceBoundary applyResult (BlockId lastBid)
       liftIO $ setConsumerNote watchdog "consumer: runEpochBoundary"
       runEpochBoundary applyResult (BlockId lastBid)
+      when poolStatsOn $ do
+        liftIO $ setConsumerNote watchdog "consumer: runPoolStatsBoundary"
+        runPoolStatsBoundary applyResult (BlockId lastBid)
 
 -- ---------------------------------------------------------------------------
 -- * Queue utilities

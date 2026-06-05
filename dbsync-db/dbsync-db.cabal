@@ -105,10 +105,13 @@ library
     DbSync.Db.Statement.PoolOwner
     DbSync.Db.Statement.PoolRelay
     DbSync.Db.Statement.PoolRetire
+    DbSync.Db.Statement.PoolStat
     DbSync.Db.Statement.PoolUpdate
+    DbSync.Db.Statement.PotTransfer
     DbSync.Db.Statement.Redeemer
     DbSync.Db.Statement.RedeemerData
     DbSync.Db.Statement.ReferenceTxIn
+    DbSync.Db.Statement.Reserve
     DbSync.Db.Statement.Resolve
     DbSync.Db.Statement.Resume
     DbSync.Db.Statement.Rollback
@@ -120,6 +123,7 @@ library
     DbSync.Db.Statement.StakeRegistration
     DbSync.Db.Statement.SyncState
     DbSync.Db.Statement.Transaction
+    DbSync.Db.Statement.Treasury
     DbSync.Db.Statement.TreasuryWithdrawal
     DbSync.Db.Statement.Tuning
     DbSync.Db.Statement.Tx

@@ -23,7 +23,8 @@
     "scripts_datums": true,
     "governance": true,
     "epoch_sync_stats": true,
-    "epoch_boundary": true
+    "epoch_boundary": true,
+    "pool_stats": true
   },
   "metrics": {
     "prometheus_port": 8080

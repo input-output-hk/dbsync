@@ -61,7 +61,7 @@ import DbSync.Db.Schema.Ids
   )
 import DbSync.Db.Schema.Metadata (TxMetadata)
 import DbSync.Db.Schema.MultiAsset (MaTxMint)
-import DbSync.Db.Schema.Pool (PoolHash, PoolUpdate)
+import DbSync.Db.Schema.Pool (PoolHash, PoolStat, PoolUpdate)
 import DbSync.Db.Schema.ScriptsDatums
   ( Datum, ExtraKeyWitness, Redeemer, RedeemerData, Script )
 import DbSync.Db.Schema.StakeDelegation (StakeAddress, StakeRegistration)
@@ -89,6 +89,7 @@ data TestWriterState = TestWriterState
   , twStakeRegistrations :: ![StakeRegistration]
   , twPoolHashes        :: ![(PoolHashId, PoolHash)]
   , twPoolUpdates       :: ![(PoolUpdateId, PoolUpdate)]
+  , twPoolStats         :: ![PoolStat]
   , twTxMetadata        :: ![TxMetadata]
   , twMaTxMints         :: ![MaTxMint]
   , twPotTransfers      :: ![PotTransfer]
@@ -140,6 +141,7 @@ emptyTestWriterState = TestWriterState
   , twStakeRegistrations = []
   , twPoolHashes        = []
   , twPoolUpdates       = []
+  , twPoolStats         = []
   , twTxMetadata        = []
   , twMaTxMints         = []
   , twPotTransfers     = []
@@ -245,6 +247,9 @@ mkTestWriter ref = Writer
   , writePoolOwner       = \_ -> pure ()
   , writePoolRetire      = \_ -> pure ()
   , writePoolRelay       = \_ -> pure ()
+  , writePoolStat        = \ps ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twPoolStats = twPoolStats s ++ [ps] }, ())
 
     -- CBOR (no-op)
   , writeTxCbor = \_ -> pure ()

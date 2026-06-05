@@ -3,8 +3,7 @@
 -- The per-extractor files expose pairs of @Conn@-flavour and
 -- @Buf@-flavour functions; the helpers here factor out the bits both
 -- flavours share (statement execution, the SELECT-on-key /
--- allocate-on-miss dance, the per-block dedup cache, and the
--- not-yet-implemented stubs).
+-- allocate-on-miss dance, and the per-block dedup cache).
 module DbSync.Phase.Following.Resolver.Internal
   ( -- * Statement execution
     runStmt
@@ -17,9 +16,6 @@ module DbSync.Phase.Following.Resolver.Internal
     -- * Dedup helpers
   , resolveDedupSimple
   , resolveDedupWith
-
-    -- * Stubs
-  , todoResolve
   ) where
 
 import Cardano.Prelude
@@ -148,13 +144,3 @@ resolveDedupWith conn cacheKey selectKey mapRef queryStmt nextStmt = do
           i <- runStmt conn () nextStmt
           cacheInsert mapRef cacheKey i
           pure (i, True)
-
--- ---------------------------------------------------------------------------
--- * Stubs
--- ---------------------------------------------------------------------------
-
--- | Panicking stub used by resolver records whose Follow-phase
--- plumbing is not yet wired. Construction succeeds; calling the
--- field panics with the resolver's name.
-todoResolve :: Text -> IO a
-todoResolve name = pure $ panic $ "Phase.Following.Resolver." <> name <> " not yet implemented"

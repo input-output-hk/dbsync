@@ -9,7 +9,7 @@
 --     @stake_registration@, @stake_deregistration@, @delegation@,
 --     @withdrawal@.
 --   * @stake_delegation_ledger@ (ledger-derived): @reward@,
---     @reward_rest@, @epoch_stake@, @epoch_stake_progress@.
+--     @pot_reward@, @epoch_stake@, @epoch_stake_progress@.
 --
 -- Schema modules group by domain; extractor ownership picks tables
 -- via 'DbSync.Extractor.pdTables'.
@@ -21,7 +21,7 @@ module DbSync.Db.Schema.StakeDelegation
   , Delegation (..)
   , Withdrawal (..)
   , Reward (..)
-  , RewardRest (..)
+  , PotReward (..)
   , EpochStake (..)
   , EpochStakeProgress (..)
 
@@ -32,7 +32,7 @@ module DbSync.Db.Schema.StakeDelegation
   , delegationTableDef
   , withdrawalTableDef
   , rewardTableDef
-  , rewardRestTableDef
+  , potRewardTableDef
   , epochStakeTableDef
   , epochStakeProgressTableDef
 
@@ -43,7 +43,7 @@ module DbSync.Db.Schema.StakeDelegation
   , encodeDelegationCopy
   , encodeWithdrawalCopy
   , encodeRewardCopy
-  , encodeRewardRestCopy
+  , encodePotRewardCopy
   , encodeEpochStakeCopy
   , encodeEpochStakeProgressCopy
 
@@ -66,9 +66,9 @@ module DbSync.Db.Schema.StakeDelegation
   , rewardEncoder
   , rewardDecoder
   , entityRewardDecoder
-  , rewardRestEncoder
-  , rewardRestDecoder
-  , entityRewardRestDecoder
+  , potRewardEncoder
+  , potRewardDecoder
+  , entityPotRewardDecoder
   , epochStakeEncoder
   , epochStakeDecoder
   , entityEpochStakeDecoder
@@ -117,7 +117,7 @@ type instance Key StakeDeregistration = StakeDeregistrationId
 type instance Key Delegation = DelegationId
 type instance Key Withdrawal = WithdrawalId
 type instance Key Reward = RewardId
-type instance Key RewardRest = RewardRestId
+type instance Key PotReward = PotRewardId
 type instance Key EpochStake = EpochStakeId
 type instance Key EpochStakeProgress = EpochStakeProgressId
 
@@ -191,15 +191,17 @@ data Reward = Reward
   }
   deriving stock (Eq, Show)
 
--- | The @reward_rest@ table. Holds reserves\/treasury\/refund
--- rewards that aren't tied to a delegation pool. Same generated
--- @earned_epoch@ pattern as 'Reward'.
-data RewardRest = RewardRest
-  { rewardRestAddrId         :: !StakeAddressId
-  , rewardRestType           :: !RewardSource
-  , rewardRestAmount         :: !DbLovelace
-  , rewardRestSpendableEpoch :: !Word64
-  , rewardRestEarnedEpoch    :: !Word64
+-- | The @pot_reward@ table. Holds rewards paid out from a protocol
+-- pot (reserves \/ treasury): MIR distributions (Shelley→Babbage),
+-- gov-action deposit refunds, and treasury withdrawal payouts
+-- (Conway+). Distinct from 'Reward' which is for pool-block-production
+-- rewards. Same generated @earned_epoch@ pattern as 'Reward'.
+data PotReward = PotReward
+  { potRewardAddrId         :: !StakeAddressId
+  , potRewardType           :: !RewardSource
+  , potRewardAmount         :: !DbLovelace
+  , potRewardSpendableEpoch :: !Word64
+  , potRewardEarnedEpoch    :: !Word64
   }
   deriving stock (Eq, Show)
 
@@ -376,11 +378,11 @@ rewardTableDef = TableDef
   , tdForeignKeys = []
   }
 
--- | @reward_rest.earned_epoch@ is one epoch behind
+-- | @pot_reward.earned_epoch@ is one epoch behind
 -- @spendable_epoch@ (with a @0@ floor for epoch 0).
-rewardRestTableDef :: TableDef
-rewardRestTableDef = TableDef
-  { tdName    = "reward_rest"
+potRewardTableDef :: TableDef
+potRewardTableDef = TableDef
+  { tdName    = "pot_reward"
   , tdColumns =
       [ ColumnDef "id"              PgBigInt  False
       , ColumnDef "addr_id"         PgBigInt  False
@@ -515,16 +517,16 @@ encodeRewardCopy (RewardId rid) r =
     , Just $ bInt64 (getPoolHashId $ rewardPoolId r)
     ]
 
--- | COPY row for @reward_rest@. Same generated-column treatment as
+-- | COPY row for @pot_reward@. Same generated-column treatment as
 -- 'encodeRewardCopy'.
-encodeRewardRestCopy :: RewardRestId -> RewardRest -> ByteString
-encodeRewardRestCopy (RewardRestId rid) rr =
+encodePotRewardCopy :: PotRewardId -> PotReward -> ByteString
+encodePotRewardCopy (PotRewardId rid) pr =
   buildCopyRow
     [ Just $ bInt64 rid
-    , Just $ bInt64 (getStakeAddressId $ rewardRestAddrId rr)
-    , Just $ bRewardSource (rewardRestType rr)
-    , Just $ bWord64 (unDbLovelace $ rewardRestAmount rr)
-    , Just $ bWord64 (rewardRestSpendableEpoch rr)
+    , Just $ bInt64 (getStakeAddressId $ potRewardAddrId pr)
+    , Just $ bRewardSource (potRewardType pr)
+    , Just $ bWord64 (unDbLovelace $ potRewardAmount pr)
+    , Just $ bWord64 (potRewardSpendableEpoch pr)
     ]
 
 encodeEpochStakeCopy :: EpochStakeId -> EpochStake -> ByteString
@@ -703,28 +705,28 @@ entityRewardDecoder = (,)
   <$> idDecoder RewardId
   <*> rewardDecoder
 
--- RewardRest ---------------------------------------------------------------
+-- PotReward ----------------------------------------------------------------
 
-rewardRestEncoder :: E.Params RewardRest
-rewardRestEncoder = mconcat
-  [ rewardRestAddrId         >$< idEncoder getStakeAddressId
-  , rewardRestType           >$< E.param (E.nonNullable rewardSourceEncoder)
-  , rewardRestAmount         >$< E.param (E.nonNullable dbLovelaceValueEncoder)
-  , rewardRestSpendableEpoch >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+potRewardEncoder :: E.Params PotReward
+potRewardEncoder = mconcat
+  [ potRewardAddrId         >$< idEncoder getStakeAddressId
+  , potRewardType           >$< E.param (E.nonNullable rewardSourceEncoder)
+  , potRewardAmount         >$< E.param (E.nonNullable dbLovelaceValueEncoder)
+  , potRewardSpendableEpoch >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
   ]
 
-rewardRestDecoder :: D.Row RewardRest
-rewardRestDecoder = RewardRest
+potRewardDecoder :: D.Row PotReward
+potRewardDecoder = PotReward
   <$> idDecoder StakeAddressId
   <*> D.column (D.nonNullable rewardSourceDecoder)
   <*> D.column (D.nonNullable dbLovelaceValueDecoder)
   <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
   <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
 
-entityRewardRestDecoder :: D.Row (RewardRestId, RewardRest)
-entityRewardRestDecoder = (,)
-  <$> idDecoder RewardRestId
-  <*> rewardRestDecoder
+entityPotRewardDecoder :: D.Row (PotRewardId, PotReward)
+entityPotRewardDecoder = (,)
+  <$> idDecoder PotRewardId
+  <*> potRewardDecoder
 
 -- EpochStake ---------------------------------------------------------------
 

@@ -28,7 +28,7 @@ module DbSync.Phase.Following.Resolver
 
 import Cardano.Prelude
 
-import Data.IORef (newIORef)
+import Data.IORef (newIORef, readIORef)
 
 import qualified Hasql.Connection as Conn
 
@@ -56,12 +56,14 @@ import DbSync.Resolver (IdResolver (..))
 mkFollowResolver :: Conn.Connection -> IO (IdResolver IO)
 mkFollowResolver conn = do
   lastBlock <- newIORef Nothing
+  gov       <- Governance.newGovScratchpad
   pure IdResolver
     { -- Core
       assignBlockId     = Core.assignBlockIdFollow    conn lastBlock
     , assignTxId        = Core.assignTxIdConn         conn
     , resolveSlotLeader = Core.resolveSlotLeaderConn  conn
     , resolvePrevBlock  = Core.resolvePrevBlockFollow lastBlock
+    , lookupLastBlockId = readIORef                    lastBlock
 
       -- UTxO
     , recordTxOutAddress           = UTxO.recordTxOutAddressFollow
@@ -89,8 +91,8 @@ mkFollowResolver conn = do
       -- EpochSyncStats (stub)
     , assignEpochSyncStatsId = Epoch.assignEpochSyncStatsIdStub
 
-      -- EpochBoundary (stubs)
-    , resolveCostModel   = EpochBoundary.resolveCostModelStub
+      -- EpochBoundary
+    , resolveCostModel   = EpochBoundary.resolveCostModelConn conn
 
       -- ScriptsDatums (stubs)
     , resolveDatum            = ScriptsDatums.resolveDatumStub
@@ -98,7 +100,7 @@ mkFollowResolver conn = do
     , resolveRedeemerData     = ScriptsDatums.resolveRedeemerDataStub
     , assignRedeemerId        = ScriptsDatums.assignRedeemerIdStub
 
-      -- Governance (stubs)
+      -- Governance (per-block stubs + IORef scratchpads)
     , resolveDrepHash             = Governance.resolveDrepHashStub
     , resolveCommitteeHash        = Governance.resolveCommitteeHashStub
     , resolveVotingAnchor         = Governance.resolveVotingAnchorStub
@@ -107,12 +109,12 @@ mkFollowResolver conn = do
     , assignCommitteeId           = Governance.assignCommitteeIdStub
     , assignConstitutionId        = Governance.assignConstitutionIdStub
     , assignEventInfoId           = Governance.assignEventInfoIdStub
-    , lookupGovActionProposalId   = Governance.lookupGovActionProposalIdStub
-    , recordGovActionProposalId   = Governance.recordGovActionProposalIdStub
-    , readEnactedEpochStateIds    = Governance.readEnactedEpochStateIdsStub
-    , writeEnactedEpochStateIds   = Governance.writeEnactedEpochStateIdsStub
-    , readGovExpiresAfter         = Governance.readGovExpiresAfterStub
-    , writeGovExpiresAfter        = Governance.writeGovExpiresAfterStub
+    , lookupGovActionProposalId   = Governance.lookupGovActionProposalIdRef gov
+    , recordGovActionProposalId   = Governance.recordGovActionProposalIdRef gov
+    , readEnactedEpochStateIds    = Governance.readEnactedEpochStateIdsRef  gov
+    , writeEnactedEpochStateIds   = Governance.writeEnactedEpochStateIdsRef gov
+    , readGovExpiresAfter         = Governance.readGovExpiresAfterRef       gov
+    , writeGovExpiresAfter        = Governance.writeGovExpiresAfterRef      gov
     }
 
 -- ---------------------------------------------------------------------------
@@ -139,6 +141,7 @@ mkBufferedFollowResolver
 mkBufferedFollowResolver conn preAlloc buf = do
   lastBlock <- newIORef Nothing
   cache     <- newBlockDedupCache
+  gov       <- Governance.newGovScratchpad
   pure IdResolver
     { -- Core (block ID stays synchronous because resolvePrevBlock needs
       -- the materialised value)
@@ -146,6 +149,7 @@ mkBufferedFollowResolver conn preAlloc buf = do
     , assignTxId        = Core.assignTxIdBuf          preAlloc
     , resolveSlotLeader = Core.resolveSlotLeaderBuf   conn cache
     , resolvePrevBlock  = Core.resolvePrevBlockFollow lastBlock
+    , lookupLastBlockId = readIORef                    lastBlock
 
       -- UTxO
     , recordTxOutAddress           = UTxO.recordTxOutAddressFollow
@@ -173,8 +177,8 @@ mkBufferedFollowResolver conn preAlloc buf = do
       -- EpochSyncStats (stub)
     , assignEpochSyncStatsId = Epoch.assignEpochSyncStatsIdStub
 
-      -- EpochBoundary (stubs)
-    , resolveCostModel   = EpochBoundary.resolveCostModelStub
+      -- EpochBoundary
+    , resolveCostModel   = EpochBoundary.resolveCostModelBuf conn cache
 
       -- ScriptsDatums (stubs)
     , resolveDatum            = ScriptsDatums.resolveDatumStub
@@ -182,7 +186,7 @@ mkBufferedFollowResolver conn preAlloc buf = do
     , resolveRedeemerData     = ScriptsDatums.resolveRedeemerDataStub
     , assignRedeemerId        = ScriptsDatums.assignRedeemerIdStub
 
-      -- Governance (stubs)
+      -- Governance (per-block stubs + IORef scratchpads)
     , resolveDrepHash             = Governance.resolveDrepHashStub
     , resolveCommitteeHash        = Governance.resolveCommitteeHashStub
     , resolveVotingAnchor         = Governance.resolveVotingAnchorStub
@@ -191,10 +195,10 @@ mkBufferedFollowResolver conn preAlloc buf = do
     , assignCommitteeId           = Governance.assignCommitteeIdStub
     , assignConstitutionId        = Governance.assignConstitutionIdStub
     , assignEventInfoId           = Governance.assignEventInfoIdStub
-    , lookupGovActionProposalId   = Governance.lookupGovActionProposalIdStub
-    , recordGovActionProposalId   = Governance.recordGovActionProposalIdStub
-    , readEnactedEpochStateIds    = Governance.readEnactedEpochStateIdsStub
-    , writeEnactedEpochStateIds   = Governance.writeEnactedEpochStateIdsStub
-    , readGovExpiresAfter         = Governance.readGovExpiresAfterStub
-    , writeGovExpiresAfter        = Governance.writeGovExpiresAfterStub
+    , lookupGovActionProposalId   = Governance.lookupGovActionProposalIdRef gov
+    , recordGovActionProposalId   = Governance.recordGovActionProposalIdRef gov
+    , readEnactedEpochStateIds    = Governance.readEnactedEpochStateIdsRef  gov
+    , writeEnactedEpochStateIds   = Governance.writeEnactedEpochStateIdsRef gov
+    , readGovExpiresAfter         = Governance.readGovExpiresAfterRef       gov
+    , writeGovExpiresAfter        = Governance.writeGovExpiresAfterRef      gov
     }

@@ -226,10 +226,13 @@ data LedgerEnv = LedgerEnv
     -- registry does NOT close it on scope exit — we have to call
     -- this explicitly.
   , leLatestApplyResult    :: !(StrictTVar IO (Strict.Maybe ApplyResult))
-    -- ^ The most recent 'ApplyResult' produced by the
-    -- 'LedgerWorker'. The consumer reads this at epoch boundaries
-    -- (Phase 7) to drive the EpochBoundary extractor; the worker
-    -- writes it on every successful 'applyBlock'.
+    -- ^ Latest 'ApplyResult' produced by the worker. Overwritten on
+    -- every applied block; used as a slot-reached barrier by
+    -- 'waitForApplyResultAt' and by Follow's per-block reads.
+  , leBoundaryApplyResults :: !(TBQueue ApplyResult)
+    -- ^ FIFO of boundary 'ApplyResult' values (those with
+    -- @apNewEpoch = Just@). Drained one per boundary by the
+    -- consumer; the worker enqueues independently of 'apply' rate.
   , leDepositAccumulator   :: !EpochParamsRef
     -- ^ Per-epoch protocol-param deposit values (stake_key /
     -- pool). The worker writes to this on every applied non-replay

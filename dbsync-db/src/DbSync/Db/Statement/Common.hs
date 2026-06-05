@@ -8,6 +8,10 @@ module DbSync.Db.Statement.Common
   ( -- * ID allocation
     nextIdStmt
 
+    -- * SQL builders
+  , insertRowSql
+  , insertableColumns
+
     -- * Lookups
   , LookupColumn (..)
   , queryIdByColumnStmt
@@ -25,27 +29,59 @@ module DbSync.Db.Statement.Common
 import Cardano.Prelude
 
 import Data.Functor.Contravariant ((>$<))
+import qualified Data.Text as T
 import qualified Hasql.Decoders as D
 import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
 import DbSync.Db.Schema.Ids (idDecoder)
-import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Schema.Types (ColumnDef (..), TableDef (..))
 
 -- ---------------------------------------------------------------------------
 -- * ID allocation
 -- ---------------------------------------------------------------------------
 
 -- | @SELECT nextval(\'\<table\>_id_seq\')@ returning a typed id.
---
--- Replaces the per-module @nextXxxIdStmt@ pattern that hand-wrote
--- the same 4-line body 25+ times.
 nextIdStmt :: TableDef -> (Int64 -> a) -> Stmt.Statement () a
 nextIdStmt td ctor =
   Stmt.preparable
     ("SELECT nextval('" <> tdName td <> "_id_seq')")
     E.noParams
     (D.singleRow (idDecoder ctor))
+
+-- ---------------------------------------------------------------------------
+-- * SQL builders
+-- ---------------------------------------------------------------------------
+
+-- | Columns appearing in an @INSERT@ for the table. Drops any
+-- IDENTITY-allocated columns (PostgreSQL fills them from the backing
+-- sequence) and any generated columns (PostgreSQL computes them).
+insertableColumns :: TableDef -> [ColumnDef]
+insertableColumns td =
+  [ c | c <- tdColumns td
+      , cdName c `notElem` generated
+      , cdName c `notElem` identCols
+  ]
+  where
+    generated = map fst (tdGeneratedColumns td)
+    identCols = tdIdentityColumns td
+
+-- | @INSERT INTO \<table\> (col1, col2, …) VALUES ($1, $2, …, $N)@,
+-- with the column list and placeholder count both derived from
+-- 'insertableColumns'. The caller's hasql encoder must produce
+-- values in the same order as the columns appear in 'tdColumns'
+-- (minus any skipped IDENTITY \/ generated entries).
+insertRowSql :: TableDef -> Text
+insertRowSql td =
+  T.concat
+    [ "INSERT INTO ", tdName td
+    , " (", T.intercalate ", " cols, ")"
+    , " VALUES (", T.intercalate ", " placeholders, ")"
+    ]
+  where
+    cols         = map cdName (insertableColumns td)
+    placeholders =
+      [ "$" <> T.pack (show n) | n <- [1 .. length cols] ]
 
 -- ---------------------------------------------------------------------------
 -- * Lookups

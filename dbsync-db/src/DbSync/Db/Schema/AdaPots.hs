@@ -23,14 +23,27 @@ module DbSync.Db.Schema.AdaPots
 
     -- * COPY encoding
   , encodeAdaPotsCopy
+
+    -- * Hasql encoders \/ decoders
+  , adaPotsEncoder
+  , adaPotsDecoder
+  , entityAdaPotsDecoder
   ) where
 
 import Cardano.Prelude
 
+import Data.Functor.Contravariant ((>$<))
+import qualified Hasql.Decoders as D
+import qualified Hasql.Encoders as E
+
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Types
-import DbSync.Db.Types (DbLovelace (..))
+import DbSync.Db.Types
+  ( DbLovelace (..)
+  , dbLovelaceValueDecoder
+  , dbLovelaceValueEncoder
+  )
 import DbSync.Db.Loader.Encoder (buildCopyRow, bInt64, bWord64)
 
 -- ---------------------------------------------------------------------------
@@ -128,3 +141,43 @@ encodeAdaPotsCopy pots =
     , Just $ bWord64 (unDbLovelace $ adaPotsDepositsDrep pots)
     , Just $ bWord64 (unDbLovelace $ adaPotsDepositsProposal pots)
     ]
+
+-- ---------------------------------------------------------------------------
+-- * Hasql encoders / decoders
+-- ---------------------------------------------------------------------------
+
+-- | Parameter order matches the INSERT column list in
+-- 'DbSync.Db.Statement.AdaPots.insertAdaPotsRowStmt'.
+adaPotsEncoder :: E.Params AdaPots
+adaPotsEncoder = mconcat
+  [ adaPotsSlotNo           >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+  , adaPotsEpochNo          >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
+  , adaPotsTreasury         >$< E.param (E.nonNullable dbLovelaceValueEncoder)
+  , adaPotsReserves         >$< E.param (E.nonNullable dbLovelaceValueEncoder)
+  , adaPotsRewards          >$< E.param (E.nonNullable dbLovelaceValueEncoder)
+  , adaPotsUtxo             >$< E.param (E.nonNullable dbLovelaceValueEncoder)
+  , adaPotsDepositsStake    >$< E.param (E.nonNullable dbLovelaceValueEncoder)
+  , adaPotsFees             >$< E.param (E.nonNullable dbLovelaceValueEncoder)
+  , adaPotsBlockId          >$< idEncoder getBlockId
+  , adaPotsDepositsDrep     >$< E.param (E.nonNullable dbLovelaceValueEncoder)
+  , adaPotsDepositsProposal >$< E.param (E.nonNullable dbLovelaceValueEncoder)
+  ]
+
+adaPotsDecoder :: D.Row AdaPots
+adaPotsDecoder = AdaPots
+  <$> (fromIntegral <$> D.column (D.nonNullable D.int8))
+  <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
+  <*> D.column (D.nonNullable dbLovelaceValueDecoder)
+  <*> D.column (D.nonNullable dbLovelaceValueDecoder)
+  <*> D.column (D.nonNullable dbLovelaceValueDecoder)
+  <*> D.column (D.nonNullable dbLovelaceValueDecoder)
+  <*> D.column (D.nonNullable dbLovelaceValueDecoder)
+  <*> D.column (D.nonNullable dbLovelaceValueDecoder)
+  <*> idDecoder BlockId
+  <*> D.column (D.nonNullable dbLovelaceValueDecoder)
+  <*> D.column (D.nonNullable dbLovelaceValueDecoder)
+
+entityAdaPotsDecoder :: D.Row (AdaPotsId, AdaPots)
+entityAdaPotsDecoder = (,)
+  <$> idDecoder AdaPotsId
+  <*> adaPotsDecoder

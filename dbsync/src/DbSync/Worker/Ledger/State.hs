@@ -101,7 +101,7 @@ import Control.Concurrent.Class.MonadSTM.Strict
   , writeTVar
   )
 import qualified Control.Concurrent.Class.MonadSTM.Strict as STM
-import Control.Concurrent.STM.TBQueue (newTBQueueIO)
+import Control.Concurrent.STM.TBQueue (newTBQueueIO, writeTBQueue)
 import qualified Data.ByteString.Short as SBS
 import qualified Data.Map.Strict as Map
 import qualified Data.Sequence.Strict as StrictSeq
@@ -316,6 +316,7 @@ mkHasLedgerEnv
     interpreterVar  <- newTVarIO Strict.Nothing
     stateVar        <- newTVarIO Strict.Nothing
     latestApplyVar  <- newTVarIO Strict.Nothing
+    boundaryQueue   <- newTBQueueIO boundaryQueueBound
     ledgerQueue     <- newTBQueueIO ledgerQueueBound
     depositAccumRef <- newEpochParamsRef
     epochReady      <- newEmptyTMVarIO
@@ -414,6 +415,7 @@ mkHasLedgerEnv
           , leLoadSnapshot         = loadSnap
           , leClose                = closeBackend
           , leLatestApplyResult    = latestApplyVar
+          , leBoundaryApplyResults = boundaryQueue
           , leDepositAccumulator   = depositAccumRef
           , leControlConnection    = ctrlConn
           , leCurrentPhase         = phaseRef
@@ -428,6 +430,13 @@ mkHasLedgerEnv
     -- a little slack so a mid-write snapshot doesn't block the worker.
     snapshotQueueBound :: Natural
     snapshotQueueBound = 4
+
+    -- One slot per epoch we might queue while the consumer catches up
+    -- to a boundary; deeper than 'ledgerQueueBound / epochLength'
+    -- isn't reachable since the receiver-to-worker queue itself caps
+    -- look-ahead at 100 blocks.
+    boundaryQueueBound :: Natural
+    boundaryQueueBound = 16
 
 -- | Seed the in-memory 'LedgerDB' buffer with the genesis state on
 -- a fresh boot. The resume path uses 'initLedgerDbFromSnapshot'
@@ -609,8 +618,11 @@ applyBlock blk slotDetails = do
               , apGovActionState  = getGovState finalState
               , apDepositsMap     = DepositsMap deposits
               }
-      liftIO $ atomically $
+      liftIO $ atomically $ do
         writeTVar (leLatestApplyResult env) (Strict.Just appResult)
+        case apNewEpoch appResult of
+          Strict.Just _  -> writeTBQueue (leBoundaryApplyResults env) appResult
+          Strict.Nothing -> pure ()
       pure (oldRef, appResult, pruned)
 
 -- | 'applyBlock' plus the snapshot-cadence decision and pruning of

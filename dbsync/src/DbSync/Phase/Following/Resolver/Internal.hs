@@ -33,6 +33,7 @@ import qualified Hasql.Statement as Stmt
 import DbSync.Db.Run (useConn)
 import DbSync.Db.Schema.Ids
   ( AddressId
+  , CostModelId
   , MultiAssetId
   , PoolHashId
   , SlotLeaderId
@@ -64,11 +65,13 @@ data BlockDedupCache = BlockDedupCache
   , bdcStakeAddress :: !(IORef (Map ByteString StakeAddressId))
   , bdcMultiAsset   :: !(IORef (Map (ByteString, ByteString) MultiAssetId))
   , bdcAddress      :: !(IORef (Map ByteString AddressId))
+  , bdcCostModel    :: !(IORef (Map ByteString CostModelId))
   }
 
 newBlockDedupCache :: IO BlockDedupCache
 newBlockDedupCache = BlockDedupCache
   <$> newIORef Map.empty
+  <*> newIORef Map.empty
   <*> newIORef Map.empty
   <*> newIORef Map.empty
   <*> newIORef Map.empty

@@ -24,6 +24,7 @@ module DbSync.Phase.Ingest.Boundary
 
     -- * LedgerWorker coordination
   , waitForApplyResultAt
+  , readBoundaryApplyResult
   , flushPendingDeposits
 
     -- * Helpers
@@ -43,6 +44,7 @@ import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 
 import qualified Control.Concurrent.Class.MonadSTM.Strict as Strict
 import Control.Concurrent.STM (readTVarIO)
+import Control.Concurrent.STM.TBQueue (readTBQueue)
 import Control.Tracer (traceWith)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import qualified Data.Strict.Maybe as SMaybe
@@ -312,9 +314,10 @@ handleEpochBoundary cls prev slot = do
 -- * LedgerWorker coordination
 -- ---------------------------------------------------------------------------
 
--- | Block until 'LedgerWorker' has produced an 'ApplyResult' at or
--- past @targetSlot@. Used at boundaries to fetch the worker's
--- 'apNewEpoch' payload via STM retry — no polling.
+-- | Block until 'LedgerWorker' has produced any 'ApplyResult' at or
+-- past @targetSlot@. Used as a slot-reached barrier; callers that
+-- need the boundary's 'ApplyResult' itself use
+-- 'readBoundaryApplyResult'.
 waitForApplyResultAt :: LedgerEnv -> SlotNo -> IO ApplyResult
 waitForApplyResultAt lenv targetSlot = Strict.atomically $ do
   mAR <- Strict.readTVar (leLatestApplyResult lenv)
@@ -322,6 +325,14 @@ waitForApplyResultAt lenv targetSlot = Strict.atomically $ do
     SMaybe.Just ar
       | sdSlotNo (apSlotDetails ar) >= targetSlot -> pure ar
     _ -> retry
+
+-- | Take the next boundary 'ApplyResult' from the worker's FIFO,
+-- blocking until one is available. Each call consumes exactly one
+-- boundary; pair every consumer-side boundary detection with one
+-- 'readBoundaryApplyResult'.
+readBoundaryApplyResult :: LedgerEnv -> IO ApplyResult
+readBoundaryApplyResult lenv =
+  Strict.atomically (readTBQueue (leBoundaryApplyResults lenv))
 
 -- | Wait for the worker to catch up to @slot@, drain every
 -- accumulated deposit-param entry at or before @prev@, and flush

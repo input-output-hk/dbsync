@@ -45,27 +45,64 @@ import qualified Cardano.Ledger.Core as Core
 
 -- Era-specific modules for things not in the re-export bundle
 import qualified Cardano.Ledger.Address as Ledger
+import qualified Cardano.Ledger.Allegra.Scripts as Allegra
+import qualified Cardano.Ledger.Allegra.TxAuxData as Allegra
 import qualified Cardano.Ledger.Alonzo.Scripts as Alonzo
 import qualified Cardano.Ledger.Alonzo.Tx as Alonzo
 import qualified Cardano.Ledger.Alonzo.TxOut as Alonzo
+import qualified Cardano.Ledger.Alonzo.TxAuxData as Alonzo
 import qualified Cardano.Ledger.Alonzo.TxWits as Alonzo
-import Cardano.Ledger.BaseTypes (Anchor (..), TxIx (..), strictMaybeToMaybe, unboundRational, portToWord16, dnsToText, urlToText)
+import Cardano.Ledger.BaseTypes (Anchor (..), StrictMaybe, TxIx (..), strictMaybeToMaybe, unboundRational, portToWord16, dnsToText, urlToText)
+import qualified Cardano.Ledger.BaseTypes as Ledger
 import qualified Cardano.Ledger.Babbage.TxOut as Babbage
 import Cardano.Ledger.Coin (Coin (..), DeltaCoin (..))
-import Cardano.Ledger.Conway.TxBody (ctbTreasuryDonation)
+import Cardano.Ledger.Conway.Governance
+  ( Constitution (..)
+  , GovAction (..)
+  , GovActionId (..)
+  , GovActionIx (..)
+  , GovPurposeId (..)
+  , ProposalProcedure (..)
+  , Vote (..)
+  , Voter (..)
+  , VotingProcedure (..)
+  , VotingProcedures (..)
+  , constitutionAnchor
+  , constitutionGuardrailsScriptHashL
+  )
+import Cardano.Ledger.Conway.Scripts (ConwayPlutusPurpose (..))
+import Cardano.Ledger.Conway.Scripts (PlutusScript (ConwayPlutusV1, ConwayPlutusV2, ConwayPlutusV3))
+import Cardano.Ledger.Babbage.Scripts (PlutusScript (BabbagePlutusV1, BabbagePlutusV2))
+import Cardano.Ledger.Conway.TxBody
+  ( ctbProposalProcedures
+  , ctbTreasuryDonation
+  , ctbVotingProcedures
+  )
 import Cardano.Ledger.Conway.TxCert
 import qualified Cardano.Ledger.Credential as Ledger
 import qualified Cardano.Ledger.DRep as Ledger
+import Cardano.Ledger.Dijkstra.Scripts (DijkstraPlutusPurpose (..))
+import Cardano.Ledger.Dijkstra.Scripts (PlutusScript (DijkstraPlutusV1, DijkstraPlutusV2, DijkstraPlutusV3, DijkstraPlutusV4))
 import Cardano.Ledger.Dijkstra.TxBody (dtbTreasuryDonation)
 import Cardano.Ledger.Dijkstra.TxCert (DijkstraDelegCert (..), DijkstraTxCert (..))
 import qualified Cardano.Ledger.Keys as Ledger
 import Cardano.Ledger.Mary.Value (MaryValue (..), MultiAsset (..), PolicyID (..), AssetName (..))
 import qualified Cardano.Ledger.Plutus.Data as Plutus
+import qualified Cardano.Ledger.Plutus.ExUnits as Plutus
+import qualified Cardano.Ledger.Shelley.PParams as Shelley
 import Cardano.Ledger.Shelley.TxCert
+import qualified Cardano.Ledger.Shelley.Scripts as Shelley
 import qualified Cardano.Ledger.Shelley.TxBody as Shelley
 import qualified Cardano.Ledger.State as PoolP
 import qualified Cardano.Ledger.TxIn as Ledger
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
+
+import qualified Data.Set as Set
+
+import qualified DbSync.Parser.Script as Script
+import qualified DbSync.Parser.ScriptData as ScriptData
+import qualified DbSync.Db.Types as Db
+import DbSync.Db.Types (ScriptPurpose (..), ScriptType (..))
 
 import qualified Data.Map.Strict as Map
 
@@ -77,8 +114,12 @@ import qualified Data.ByteString.Short as SBS
 import qualified Data.Text.Encoding as Text
 import Lens.Micro ((^.))
 
+import qualified Data.Aeson as Aeson
+import qualified Data.ByteString.Lazy as LBS
+
 import qualified DbSync.Parser.Metadata as Metadata
-import DbSync.Util (coinToWord64)
+import qualified DbSync.Parser.ParamProposal as PP
+import DbSync.Util (coinToWord64, rewardAddrCred)
 import DbSync.Util.Bech32 (serialiseShelleyAddrToBech32)
 
 import Ouroboros.Consensus.Cardano.Block
@@ -97,6 +138,9 @@ import DbSync.Parser.Types
   , GenericTxOut (..)
   , GenericTxCertificate (..)
   , GenericTxWithdrawal (..)
+  , GenericTxScript (..)
+  , GenericTxDatum (..)
+  , GenericTxRedeemer (..)
   , CertAction (..)
   , DRepIdent (..)
   , AnchorData (..)
@@ -104,6 +148,11 @@ import DbSync.Parser.Types
   , MirPot (..)
   , PoolRegistrationData (..)
   , PoolRelayData (..)
+  , GenericGovAction (..)
+  , GenericGovActionProposal (..)
+  , GenericVoter (..)
+  , GenericVotingProcedure (..)
+  , GovActionRef (..)
   )
 
 -- ---------------------------------------------------------------------------
@@ -563,6 +612,271 @@ addrToText addr@Ledger.Addr{} =
   serialiseShelleyAddrToBech32 (Ledger.serialiseAddr addr)
 
 -- ---------------------------------------------------------------------------
+-- * Scripts, datums, redeemers
+-- ---------------------------------------------------------------------------
+
+scriptHashBytes :: Core.ScriptHash -> ByteString
+scriptHashBytes (Core.ScriptHash h) = Crypto.hashToBytes h
+
+dataHashBytes :: Core.SafeHash Core.EraIndependentData -> ByteString
+dataHashBytes = Crypto.hashToBytes . extractHash
+
+-- | Extract the Shelley-era native scripts (witness set only;
+-- Shelley aux data carries no scripts).
+shelleyScripts
+  :: Core.Tx Core.TopTx ShelleyEra -> [GenericTxScript]
+shelleyScripts tx =
+  map fromMultiSig $ Map.toList (tx ^. Core.witsTxL . Core.scriptTxWitsL)
+  where
+    fromMultiSig :: (Core.ScriptHash, Shelley.MultiSig ShelleyEra) -> GenericTxScript
+    fromMultiSig (h, sc) = GenericTxScript
+      { gtsHash           = scriptHashBytes h
+      , gtsType           = MultiSig
+      , gtsJson           = Just (Script.multiSigToJson sc)
+      , gtsBytes          = Nothing
+      , gtsSerialisedSize = Nothing
+      }
+
+-- | Extract Allegra/Mary-era timelock scripts from witness set and
+-- aux data.
+timelockScripts
+  :: forall era.
+     ( Allegra.AllegraEraScript era
+     , Core.EraTx era
+     , Core.NativeScript era ~ Allegra.Timelock era
+     , Core.Script era ~ Allegra.Timelock era
+     , Core.TxAuxData era ~ Allegra.AllegraTxAuxData era
+     )
+  => Core.Tx Core.TopTx era
+  -> [GenericTxScript]
+timelockScripts tx =
+  map fromTimelock $
+    Map.toList (tx ^. Core.witsTxL . Core.scriptTxWitsL)
+      <> auxScripts (tx ^. Core.auxDataTxL)
+  where
+    fromTimelock :: (Core.ScriptHash, Allegra.Timelock era) -> GenericTxScript
+    fromTimelock (h, sc) = GenericTxScript
+      { gtsHash           = scriptHashBytes h
+      , gtsType           = Timelock
+      , gtsJson           = Just (Script.timelockToJson sc)
+      , gtsBytes          = Nothing
+      , gtsSerialisedSize = Nothing
+      }
+
+    auxScripts :: StrictMaybe (Allegra.AllegraTxAuxData era)
+               -> [(Core.ScriptHash, Allegra.Timelock era)]
+    auxScripts =
+      maybe [] indexed . strictMaybeToMaybe
+      where
+        indexed (Allegra.AllegraTxAuxData _ scrs) =
+          [ (Core.hashScript @era s, s) | s <- toList scrs ]
+
+-- | Extract scripts (native and Plutus) from the witness set and
+-- auxiliary data. The caller supplies the Plutus-version mapping
+-- so the same body works for Alonzo, Babbage, and Conway.
+alonzoEraScripts
+  :: forall era.
+     ( Alonzo.AlonzoEraScript era
+     , Core.EraTx era
+     , Core.NativeScript era ~ Allegra.Timelock era
+     , Core.Script era ~ Alonzo.AlonzoScript era
+     , Core.TxAuxData era ~ Alonzo.AlonzoTxAuxData era
+     )
+  => (Alonzo.PlutusScript era -> ScriptType)
+  -> Core.Tx Core.TopTx era
+  -> [GenericTxScript]
+alonzoEraScripts mkPlutusType tx =
+  map fromScript $
+    Map.toList (tx ^. Core.witsTxL . Core.scriptTxWitsL)
+      <> auxScripts (tx ^. Core.auxDataTxL)
+  where
+    fromScript :: (Core.ScriptHash, Alonzo.AlonzoScript era) -> GenericTxScript
+    fromScript (h, sc) = case sc of
+      Alonzo.NativeScript ns -> GenericTxScript
+        { gtsHash           = scriptHashBytes h
+        , gtsType           = Timelock
+        , gtsJson           = Just (Script.timelockToJson ns)
+        , gtsBytes          = Nothing
+        , gtsSerialisedSize = Nothing
+        }
+      Alonzo.PlutusScript ps -> GenericTxScript
+        { gtsHash           = scriptHashBytes h
+        , gtsType           = mkPlutusType ps
+        , gtsJson           = Nothing
+        , gtsBytes          = Just (Core.originalBytes sc)
+        , gtsSerialisedSize = Just (plutusBinarySize ps)
+        }
+
+    auxScripts :: StrictMaybe (Alonzo.AlonzoTxAuxData era)
+               -> [(Core.ScriptHash, Alonzo.AlonzoScript era)]
+    auxScripts = maybe [] indexed . strictMaybeToMaybe
+      where
+        indexed auxData =
+          [ (Core.hashScript @era s, s)
+          | s <- toList (Alonzo.getAlonzoTxAuxDataScripts auxData)
+          ]
+
+    plutusBinarySize :: Alonzo.PlutusScript era -> Word64
+    plutusBinarySize ps =
+      fromIntegral
+        . SBS.length
+        $ Alonzo.unPlutusBinary (Alonzo.plutusScriptBinary ps)
+
+-- | Dijkstra has its own native script that does not have a JSON
+-- encoder; the row stores CBOR bytes instead.
+dijkstraEraScripts
+  :: forall era.
+     ( Alonzo.AlonzoEraScript era
+     , Core.EraTx era
+     , Core.Script era ~ Alonzo.AlonzoScript era
+     , Core.TxAuxData era ~ Alonzo.AlonzoTxAuxData era
+     )
+  => (Alonzo.PlutusScript era -> ScriptType)
+  -> Core.Tx Core.TopTx era
+  -> [GenericTxScript]
+dijkstraEraScripts mkPlutusType tx =
+  map fromScript $
+    Map.toList (tx ^. Core.witsTxL . Core.scriptTxWitsL)
+      <> auxScripts (tx ^. Core.auxDataTxL)
+  where
+    fromScript :: (Core.ScriptHash, Alonzo.AlonzoScript era) -> GenericTxScript
+    fromScript (h, sc) = case sc of
+      Alonzo.NativeScript {} -> GenericTxScript
+        { gtsHash           = scriptHashBytes h
+        , gtsType           = Timelock
+        , gtsJson           = Nothing
+        , gtsBytes          = Just (Core.originalBytes sc)
+        , gtsSerialisedSize = Nothing
+        }
+      Alonzo.PlutusScript ps -> GenericTxScript
+        { gtsHash           = scriptHashBytes h
+        , gtsType           = mkPlutusType ps
+        , gtsJson           = Nothing
+        , gtsBytes          = Just (Core.originalBytes sc)
+        , gtsSerialisedSize = Just
+            (fromIntegral . SBS.length $
+              Alonzo.unPlutusBinary (Alonzo.plutusScriptBinary ps))
+        }
+
+    auxScripts :: StrictMaybe (Alonzo.AlonzoTxAuxData era)
+               -> [(Core.ScriptHash, Alonzo.AlonzoScript era)]
+    auxScripts = maybe [] indexed . strictMaybeToMaybe
+      where
+        indexed auxData =
+          [ (Core.hashScript @era s, s)
+          | s <- toList (Alonzo.getAlonzoTxAuxDataScripts auxData)
+          ]
+
+-- | Map an era's Plutus script constructor to its 'ScriptType'.
+-- Each era exposes only the Plutus versions it supports.
+alonzoPlutusType :: Alonzo.PlutusScript AlonzoEra -> ScriptType
+alonzoPlutusType _ = PlutusV1
+
+babbagePlutusType :: Alonzo.PlutusScript BabbageEra -> ScriptType
+babbagePlutusType = \case
+  BabbagePlutusV1 _ -> PlutusV1
+  BabbagePlutusV2 _ -> PlutusV2
+
+conwayPlutusType :: Alonzo.PlutusScript ConwayEra -> ScriptType
+conwayPlutusType = \case
+  ConwayPlutusV1 _ -> PlutusV1
+  ConwayPlutusV2 _ -> PlutusV2
+  ConwayPlutusV3 _ -> PlutusV3
+
+dijkstraPlutusType :: Alonzo.PlutusScript DijkstraEra -> ScriptType
+dijkstraPlutusType = \case
+  DijkstraPlutusV1 _ -> PlutusV1
+  DijkstraPlutusV2 _ -> PlutusV2
+  DijkstraPlutusV3 _ -> PlutusV3
+  DijkstraPlutusV4 _ -> PlutusV4
+
+-- | Extract Plutus datum witnesses (Alonzo+).
+witnessDatums
+  :: forall era l.
+     ( Alonzo.AlonzoEraScript era
+     , Core.EraTx era
+     , Core.TxWits era ~ Alonzo.AlonzoTxWits era
+     )
+  => Core.Tx l era
+  -> [GenericTxDatum]
+witnessDatums tx =
+  map mkDatum . Map.toList . Alonzo.unTxDats . Alonzo.txdats $ tx ^. Core.witsTxL
+  where
+    mkDatum :: (Core.SafeHash Core.EraIndependentData, Plutus.Data era) -> GenericTxDatum
+    mkDatum (h, d) = GenericTxDatum
+      { gtdHash  = dataHashBytes h
+      , gtdBytes = Core.originalBytes d
+      , gtdValue = Just (ScriptData.plutusDataToJson d)
+      }
+
+-- | Extract Plutus redeemer witnesses (Alonzo+).
+--
+-- The per-era purpose projection returns @(tag, index)@ so the
+-- enum and the index come from the same constructor match.
+witnessRedeemers
+  :: forall era l.
+     ( Alonzo.AlonzoEraTxWits era
+     , Core.EraTx era
+     , Core.TxWits era ~ Alonzo.AlonzoTxWits era
+     )
+  => (Alonzo.PlutusPurpose Alonzo.AsIx era -> (ScriptPurpose, Word32))
+  -> Core.Tx l era
+  -> [GenericTxRedeemer]
+witnessRedeemers project tx =
+  map mkRedeemer . Map.toList . Alonzo.unRedeemers $
+    tx ^. (Core.witsTxL . Alonzo.rdmrsTxWitsL)
+  where
+    mkRedeemer (purpose, (d, exUnits)) =
+      let (tag, idx) = project purpose
+      in GenericTxRedeemer
+        { gtrUnitMem    = fromIntegral (Plutus.exUnitsMem exUnits)
+        , gtrUnitSteps  = fromIntegral (Plutus.exUnitsSteps exUnits)
+        , gtrPurpose    = tag
+        , gtrIndex      = fromIntegral idx
+        , gtrScriptHash = Nothing
+        , gtrDataHash   = dataHashBytes (Alonzo.hashData d)
+        , gtrDataBytes  = Core.originalBytes d
+        , gtrDataValue  = Just (ScriptData.plutusDataToJson d)
+        }
+
+alonzoPurpose :: Alonzo.AlonzoPlutusPurpose Alonzo.AsIx era -> (ScriptPurpose, Word32)
+alonzoPurpose = \case
+  Alonzo.AlonzoSpending idx   -> (Spend, Alonzo.unAsIx idx)
+  Alonzo.AlonzoMinting idx    -> (Mint,  Alonzo.unAsIx idx)
+  Alonzo.AlonzoCertifying idx -> (Cert,  Alonzo.unAsIx idx)
+  Alonzo.AlonzoRewarding idx  -> (Rewrd, Alonzo.unAsIx idx)
+
+conwayPurpose :: ConwayPlutusPurpose Alonzo.AsIx era -> (ScriptPurpose, Word32)
+conwayPurpose = \case
+  ConwaySpending idx    -> (Spend,   Alonzo.unAsIx idx)
+  ConwayMinting idx     -> (Mint,    Alonzo.unAsIx idx)
+  ConwayCertifying idx  -> (Cert,    Alonzo.unAsIx idx)
+  ConwayRewarding idx   -> (Rewrd,   Alonzo.unAsIx idx)
+  ConwayVoting idx      -> (Vote,    Alonzo.unAsIx idx)
+  ConwayProposing idx   -> (Propose, Alonzo.unAsIx idx)
+
+dijkstraPurpose :: DijkstraPlutusPurpose Alonzo.AsIx era -> (ScriptPurpose, Word32)
+dijkstraPurpose = \case
+  DijkstraSpending idx    -> (Spend,   Alonzo.unAsIx idx)
+  DijkstraMinting idx     -> (Mint,    Alonzo.unAsIx idx)
+  DijkstraCertifying idx  -> (Cert,    Alonzo.unAsIx idx)
+  DijkstraRewarding idx   -> (Rewrd,   Alonzo.unAsIx idx)
+  DijkstraVoting idx      -> (Vote,    Alonzo.unAsIx idx)
+  DijkstraProposing idx   -> (Propose, Alonzo.unAsIx idx)
+  DijkstraGuarding idx    -> (Propose, Alonzo.unAsIx idx)
+
+-- | Required-signer key hashes from the tx body. The ledger
+-- constrains 'reqSignerHashesTxBodyL' to Alonzo..Conway; Dijkstra
+-- has no equivalent yet so 'fromDijkstraTx' emits @[]@ directly.
+extraKeyHashes
+  :: (Core.AlonzoEraTxBody era, Core.AtMostEra "Conway" era)
+  => Core.TxBody l era -> [ByteString]
+extraKeyHashes txBody =
+  map keyHashToBytes
+    . Set.toList
+    $ txBody ^. Core.reqSignerHashesTxBodyL
+
+-- ---------------------------------------------------------------------------
 -- * Shelley era
 -- ---------------------------------------------------------------------------
 
@@ -592,6 +906,18 @@ fromShelleyTx (blkIndex, tx) =
     , txMetadata         = Metadata.getMetadata <$> getTxAuxData tx
     , txMint             = []
     , txCborRaw          = Just (getTxCborBytes tx)
+      -- Only MultiSig witness scripts; Plutus datums, redeemers,
+      -- and required-signer sets are not part of the Shelley era.
+    , txScripts           = shelleyScripts tx
+    , txDatums            = []
+    , txRedeemers         = []
+    , txExtraKeyWitnesses = []
+      -- Shelley genesis-key parameter proposals from the Update field.
+      -- Conway+ has no Update field; this stays empty there.
+    , txParamProposal     = mkParamProposalsUpdate PP.shelleyParamProposal txBody
+    , txProposals         = []  -- pre-Conway
+    , txVotingProcedures  = []  -- pre-Conway
+    , txVotingAnchors     = []  -- pre-Conway
     }
 
 -- ---------------------------------------------------------------------------
@@ -625,6 +951,16 @@ fromAllegraTx (blkIndex, tx) =
     , txMetadata         = Metadata.getMetadata <$> getTxAuxData tx
     , txMint             = []
     , txCborRaw          = Just (getTxCborBytes tx)
+      -- Timelock scripts from witness set and auxiliary data; no
+      -- Plutus support.
+    , txScripts           = timelockScripts tx
+    , txDatums            = []
+    , txRedeemers         = []
+    , txExtraKeyWitnesses = []
+    , txParamProposal     = mkParamProposalsUpdate PP.shelleyParamProposal txBody
+    , txProposals         = []  -- pre-Conway
+    , txVotingProcedures  = []  -- pre-Conway
+    , txVotingAnchors     = []  -- pre-Conway
     }
 
 -- ---------------------------------------------------------------------------
@@ -658,6 +994,15 @@ fromMaryTx (blkIndex, tx) =
     , txMetadata         = Metadata.getMetadata <$> getTxAuxData tx
     , txMint             = getMint txBody
     , txCborRaw          = Just (getTxCborBytes tx)
+      -- Same Timelock witness shape as Allegra; no Plutus support.
+    , txScripts           = timelockScripts tx
+    , txDatums            = []
+    , txRedeemers         = []
+    , txExtraKeyWitnesses = []
+    , txParamProposal     = mkParamProposalsUpdate PP.shelleyParamProposal txBody
+    , txProposals         = []  -- pre-Conway
+    , txVotingProcedures  = []  -- pre-Conway
+    , txVotingAnchors     = []  -- pre-Conway
     }
 
 -- ---------------------------------------------------------------------------
@@ -698,6 +1043,16 @@ fromAlonzoTx (blkIndex, tx) =
     , txMetadata         = Metadata.getMetadata <$> getTxAuxData tx
     , txMint             = getMint txBody
     , txCborRaw          = Just (getTxCborBytes tx)
+      -- Plutus V1 scripts plus datum and redeemer witnesses;
+      -- required-signer set from the tx body.
+    , txScripts           = alonzoEraScripts alonzoPlutusType tx
+    , txDatums            = witnessDatums tx
+    , txRedeemers         = witnessRedeemers alonzoPurpose tx
+    , txExtraKeyWitnesses = extraKeyHashes txBody
+    , txParamProposal     = mkParamProposalsUpdate PP.alonzoParamProposal txBody
+    , txProposals         = []  -- pre-Conway
+    , txVotingProcedures  = []  -- pre-Conway
+    , txVotingAnchors     = []  -- pre-Conway
     }
 
 -- ---------------------------------------------------------------------------
@@ -734,6 +1089,16 @@ fromBabbageTx (blkIndex, tx) =
     , txMetadata         = Metadata.getMetadata <$> getTxAuxData tx
     , txMint             = getMint txBody
     , txCborRaw          = Just (getTxCborBytes tx)
+      -- Plutus V1/V2 scripts; redeemer purpose set is the Alonzo
+      -- four (spend, mint, cert, reward).
+    , txScripts           = alonzoEraScripts babbagePlutusType tx
+    , txDatums            = witnessDatums tx
+    , txRedeemers         = witnessRedeemers alonzoPurpose tx
+    , txExtraKeyWitnesses = extraKeyHashes txBody
+    , txParamProposal     = mkParamProposalsUpdate PP.babbageParamProposal txBody
+    , txProposals         = []  -- pre-Conway
+    , txVotingProcedures  = []  -- pre-Conway
+    , txVotingAnchors     = []  -- pre-Conway
     }
 
 -- ---------------------------------------------------------------------------
@@ -771,6 +1136,21 @@ fromConwayTx (blkIndex, tx) =
     , txMetadata         = Metadata.getMetadata <$> getTxAuxData tx
     , txMint             = getMint txBody
     , txCborRaw          = Just (getTxCborBytes tx)
+      -- Plutus V1/V2/V3 scripts; redeemer purpose set gains
+      -- 'Vote' and 'Propose'.
+    , txScripts           = alonzoEraScripts conwayPlutusType tx
+    , txDatums            = witnessDatums tx
+    , txRedeemers         = witnessRedeemers conwayPurpose tx
+    , txExtraKeyWitnesses = extraKeyHashes txBody
+      -- Conway abandoned genesis-key parameter updates; parameter
+      -- changes ride 'GovParameterChange' inside 'txProposals'.
+    , txParamProposal     = []
+    , txProposals         = conwayProposals txBody
+    , txVotingProcedures  = conwayVotingProcedures txBody
+    , txVotingAnchors     = collectVotingAnchors
+                              (mkTxCertificatesShelleyEra conwayCertToAction txBody)
+                              (conwayProposals txBody)
+                              (conwayVotingProcedures txBody)
     }
 -- ---------------------------------------------------------------------------
 -- * Dijkstra era (Conway extension)
@@ -807,4 +1187,185 @@ fromDijkstraTx (blkIndex, tx) =
     , txMetadata         = Metadata.getMetadata <$> getTxAuxData tx
     , txMint             = getMint txBody
     , txCborRaw          = Just (getTxCborBytes tx)
+      -- Dijkstra native scripts have no JSON renderer; the row
+      -- stores CBOR bytes. Required-signer extraction is a
+      -- placeholder pending the Dijkstra body wiring.
+    , txScripts           = dijkstraEraScripts dijkstraPlutusType tx
+    , txDatums            = witnessDatums tx
+    , txRedeemers         = witnessRedeemers dijkstraPurpose tx
+    , txExtraKeyWitnesses = []  -- TODO(Dijkstra)
+    , txParamProposal     = []
+    , txProposals         = []  -- TODO(Dijkstra): dtbProposalProcedures lens not yet wired
+    , txVotingProcedures  = []  -- TODO(Dijkstra): dtbVotingProcedures lens not yet wired
+    , txVotingAnchors     = []  -- TODO(Dijkstra)
     }
+
+-- ---------------------------------------------------------------------------
+-- * Governance extraction (Conway+)
+-- ---------------------------------------------------------------------------
+
+-- | Build the list of 'GenericParamProposal' rows from a Shelley-Babbage
+-- tx body's 'Shelley.updateTxBodyL' lens, using the supplied per-era
+-- converter. Conway+ has no 'updateTxBodyL' so the field stays @[]@ for
+-- those eras.
+mkParamProposalsUpdate
+  :: Shelley.ShelleyEraTxBody era
+  => (EpochNo -> Shelley.ProposedPPUpdates era -> [PP.GenericParamProposal])
+  -> Core.TxBody Core.TopTx era
+  -> [PP.GenericParamProposal]
+mkParamProposalsUpdate convert txBody =
+  case strictMaybeToMaybe (txBody ^. Shelley.updateTxBodyL) of
+    Nothing -> []
+    Just (Shelley.Update pp epoch) -> convert epoch pp
+
+-- | Extract the proposals from a Conway-era tx body. Dijkstra mirrors
+-- this shape once the @DijkstraTxBody@ proposal lens lands; for now
+-- 'fromDijkstraTx' emits @[]@ directly.
+conwayProposals
+  :: Core.TxBody Core.TopTx ConwayEra
+  -> [GenericGovActionProposal]
+conwayProposals txBody =
+  zipWith mkProposal [0 ..] (toList (ctbProposalProcedures txBody))
+  where
+    mkProposal :: Word64 -> ProposalProcedure ConwayEra -> GenericGovActionProposal
+    mkProposal idx pp = GenericGovActionProposal
+      { ggapTxIndex         = idx
+      , ggapReturnAddrCred  =
+          rewardAddrCred (Ledger.serialiseAccountAddress (pProcReturnAddr pp))
+      , ggapDeposit         = coinToWord64 (pProcDeposit pp)
+      , ggapAnchor          = anchorData (pProcAnchor pp)
+      , ggapAction          = convertGovAction (pProcGovAction pp)
+      , ggapDescriptionJson =
+          Text.decodeUtf8 . LBS.toStrict . Aeson.encode $ pProcGovAction pp
+      }
+
+-- | Project a Conway-era 'GovAction' into our 'GenericGovAction' ADT.
+-- Conway's @ParameterChange@ embeds a 'PParamsUpdate ConwayEra' that
+-- we flatten via 'PP.convertConwayParamProposal'.
+convertGovAction :: GovAction ConwayEra -> GenericGovAction
+convertGovAction = \case
+  ParameterChange prev pparams scriptH ->
+    GovParameterChange
+      (govPurposeRef <$> strictMaybeToMaybe prev)
+      (PP.convertConwayParamProposal pparams)
+      (scriptHashBytes <$> strictMaybeToMaybe scriptH)
+  HardForkInitiation prev pv ->
+    GovHardForkInit
+      (govPurposeRef <$> strictMaybeToMaybe prev)
+      (fromIntegral @Word64 (Ledger.getVersion (Ledger.pvMajor pv)))
+      (fromIntegral (Ledger.pvMinor pv))
+  TreasuryWithdrawals mp guardrail ->
+    GovTreasuryWithdraw
+      [ (rewardAddrCred (Ledger.serialiseAccountAddress acct), coinToWord64 coin)
+      | (acct, coin) <- Map.toList mp
+      ]
+      (scriptHashBytes <$> strictMaybeToMaybe guardrail)
+  NoConfidence prev ->
+    GovNoConfidence (govPurposeRef <$> strictMaybeToMaybe prev)
+  UpdateCommittee prev remove add quorum ->
+    GovUpdateCommittee
+      (govPurposeRef <$> strictMaybeToMaybe prev)
+      (Set.map credToBytes remove)
+      [ (credToBytes cred, unEpochNo expiry)
+      | (cred, expiry) <- Map.toList add
+      ]
+      (fromIntegral (numerator (Ledger.unboundRational quorum)))
+      (fromIntegral (denominator (Ledger.unboundRational quorum)))
+  NewConstitution prev constitution ->
+    GovNewConstitution
+      (govPurposeRef <$> strictMaybeToMaybe prev)
+      (anchorData (constitutionAnchor constitution))
+      (scriptHashBytes <$> strictMaybeToMaybe
+        (constitution ^. constitutionGuardrailsScriptHashL))
+  InfoAction -> GovInfoAction
+
+-- | Unwrap a 'GovPurposeId' to our 'GovActionRef'.
+govPurposeRef :: GovPurposeId p -> GovActionRef
+govPurposeRef (GovPurposeId gaid) = govActionRef gaid
+
+-- | Project a 'GovActionId' (the ledger's @(tx-id, index)@ pair) into our
+-- 'GovActionRef'.
+govActionRef :: GovActionId -> GovActionRef
+govActionRef (GovActionId (Ledger.TxId txid) (GovActionIx ix)) =
+  GovActionRef
+    { garTxHash = Crypto.hashToBytes (extractHash txid)
+    , garIndex  = fromIntegral ix
+    }
+
+-- | Extract the votes from a Conway-era tx body. The voter-by-voter
+-- map is flattened into one 'GenericVotingProcedure' per
+-- @(voter, gov-action)@ pair, with 'gvpTxIndex' counting from zero
+-- within each voter's slice.
+--
+-- Dijkstra mirrors this shape once the @DijkstraTxBody@ voting lens
+-- lands; for now 'fromDijkstraTx' emits @[]@ directly.
+conwayVotingProcedures
+  :: Core.TxBody Core.TopTx ConwayEra
+  -> [GenericVotingProcedure]
+conwayVotingProcedures txBody =
+  [ mkVote idx voter gaId vp
+  | (voter, actions) <- Map.toList (unVotingProcedures (ctbVotingProcedures txBody))
+  , (idx, (gaId, vp)) <- zip [0 ..] (Map.toList actions)
+  ]
+  where
+    mkVote
+      :: Word16
+      -> Voter
+      -> GovActionId
+      -> VotingProcedure ConwayEra
+      -> GenericVotingProcedure
+    mkVote idx voter gaId vp =
+      GenericVotingProcedure
+        { gvpTxIndex     = idx
+        , gvpVoter       = convertVoter voter
+        , gvpGovActionId = govActionRef gaId
+        , gvpVote        = convertVote (vProcVote vp)
+        , gvpAnchor      = anchorData <$> strictMaybeToMaybe (vProcAnchor vp)
+        }
+
+-- | Project a ledger 'Voter' into our 'GenericVoter' ADT. The
+-- committee arm carries the @has_script@ flag so the dedup pass
+-- writes a single @committee_hash@ row per @(raw, has_script)@.
+convertVoter :: Voter -> GenericVoter
+convertVoter = \case
+  DRepVoter cred       -> VoterDRep (credToDRep cred)
+  StakePoolVoter pkh   -> VoterStakePool (keyHashToBytes pkh)
+  CommitteeVoter cred  -> VoterCommittee (credToBytes cred) (credHasScript cred)
+  where
+    credToDRep :: Ledger.Credential r -> DRepIdent
+    credToDRep = DRepCred . credToBytes
+
+    credHasScript :: Ledger.Credential r -> Bool
+    credHasScript = \case
+      Ledger.KeyHashObj    {} -> False
+      Ledger.ScriptHashObj {} -> True
+
+-- | Project the ledger's three-valued 'Vote' into our enum.
+convertVote :: Vote -> Db.Vote
+convertVote = \case
+  VoteYes -> Db.VoteYes
+  VoteNo  -> Db.VoteNo
+  Abstain -> Db.VoteAbstain
+
+-- | Flatten the anchors referenced by certs, proposals, and votes
+-- into a single list. Order matters only insofar as the dedup pass
+-- collapses identical @(url, data_hash, type)@ triples downstream;
+-- callers in the governance extractor walk the typed lists to
+-- assign the correct 'AnchorType'.
+collectVotingAnchors
+  :: [GenericTxCertificate]
+  -> [GenericGovActionProposal]
+  -> [GenericVotingProcedure]
+  -> [AnchorData]
+collectVotingAnchors certs props votes =
+       [ a | cert <- certs, a <- certAnchors (txCertAction cert) ]
+    <> [ ggapAnchor p | p <- props ]
+    <> [ a | p <- props, GovNewConstitution _ a _ <- [ggapAction p] ]
+    <> catMaybes [ gvpAnchor v | v <- votes ]
+  where
+    certAnchors :: CertAction -> [AnchorData]
+    certAnchors = \case
+      CertDRepRegistration _ _ (Just a) -> [a]
+      CertDRepUpdate       _   (Just a) -> [a]
+      CertCommitteeResign  _   (Just a) -> [a]
+      _                                 -> []

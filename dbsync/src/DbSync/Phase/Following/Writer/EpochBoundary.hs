@@ -18,27 +18,27 @@ import qualified Hasql.Connection as Conn
 
 import DbSync.Db.Schema.AdaPots (AdaPots)
 import DbSync.Db.Schema.EpochBoundary (CostModel, EpochParam, EpochState)
-import DbSync.Db.Schema.Ids (AdaPotsId, CostModelId, EpochParamId, EpochStateId)
+import DbSync.Db.Schema.Ids (CostModelId)
 import DbSync.Phase.Following.WriteBuffer (WriteBuffer)
-import DbSync.Phase.Following.Writer.Internal (todoWrite)
+import DbSync.Phase.Following.Writer.Internal (todoWrite, todoWriteLeaf)
 
-writeAdaPotsConn :: Conn.Connection -> AdaPotsId -> AdaPots -> IO ()
-writeAdaPotsConn _ = todoWrite "writeAdaPots"
+writeAdaPotsConn :: Conn.Connection -> AdaPots -> IO ()
+writeAdaPotsConn _ = todoWriteLeaf "writeAdaPots"
 
-writeAdaPotsBuf :: WriteBuffer -> AdaPotsId -> AdaPots -> IO ()
-writeAdaPotsBuf _ = todoWrite "writeAdaPots"
+writeAdaPotsBuf :: WriteBuffer -> AdaPots -> IO ()
+writeAdaPotsBuf _ = todoWriteLeaf "writeAdaPots"
 
-writeEpochParamConn :: Conn.Connection -> EpochParamId -> EpochParam -> IO ()
-writeEpochParamConn _ = todoWrite "writeEpochParam"
+writeEpochParamConn :: Conn.Connection -> EpochParam -> IO ()
+writeEpochParamConn _ = todoWriteLeaf "writeEpochParam"
 
-writeEpochParamBuf :: WriteBuffer -> EpochParamId -> EpochParam -> IO ()
-writeEpochParamBuf _ = todoWrite "writeEpochParam"
+writeEpochParamBuf :: WriteBuffer -> EpochParam -> IO ()
+writeEpochParamBuf _ = todoWriteLeaf "writeEpochParam"
 
-writeEpochStateConn :: Conn.Connection -> EpochStateId -> EpochState -> IO ()
-writeEpochStateConn _ = todoWrite "writeEpochState"
+writeEpochStateConn :: Conn.Connection -> EpochState -> IO ()
+writeEpochStateConn _ = todoWriteLeaf "writeEpochState"
 
-writeEpochStateBuf :: WriteBuffer -> EpochStateId -> EpochState -> IO ()
-writeEpochStateBuf _ = todoWrite "writeEpochState"
+writeEpochStateBuf :: WriteBuffer -> EpochState -> IO ()
+writeEpochStateBuf _ = todoWriteLeaf "writeEpochState"
 
 writeCostModelConn :: Conn.Connection -> CostModelId -> CostModel -> IO ()
 writeCostModelConn _ = todoWrite "writeCostModel"

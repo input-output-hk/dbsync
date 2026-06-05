@@ -23,7 +23,6 @@ import Test.Hspec (Spec, describe, it, shouldBe)
 
 import DbSync.Db.Schema.Ids
   ( DatumId (..)
-  , ExtraKeyWitnessId (..)
   , RedeemerDataId (..)
   , RedeemerId (..)
   , ScriptId (..)
@@ -85,8 +84,8 @@ spec = do
       fields !! 3 `shouldBe` "{\"k\":1}"
 
   describe "scriptTableDef" $ do
-    it "uses the scripttype enum for the type column" $
-      cdType (tdColumns scriptTableDef !! 3) `shouldBe` PgEnum "scripttype"
+    it "stores the script type as text" $
+      cdType (tdColumns scriptTableDef !! 3) `shouldBe` PgText
 
     it "is unique on hash and has 7 columns total" $ do
       tdUniqueConstraints scriptTableDef `shouldBe` [pure "hash"]
@@ -119,8 +118,8 @@ spec = do
       fields !! 6 `shouldBe` "\\N"
 
   describe "redeemerTableDef" $ do
-    it "uses scriptpurposetype for purpose and has 9 columns" $ do
-      cdType (tdColumns redeemerTableDef !! 5) `shouldBe` PgEnum "scriptpurposetype"
+    it "stores the script purpose as text and has 9 columns" $ do
+      cdType (tdColumns redeemerTableDef !! 5) `shouldBe` PgText
       length (tdColumns redeemerTableDef) `shouldBe` 9
 
     it "has no unique constraints (a tx can carry many redeemers)" $
@@ -172,24 +171,24 @@ spec = do
       tabs `shouldBe` 4
 
   describe "extraKeyWitnessTableDef" $ do
-    it "is the trivial hash + tx_id table" $ do
+    it "is the trivial hash + tx_id table with an identity id" $ do
       tdName extraKeyWitnessTableDef `shouldBe` "extra_key_witness"
       map cdName (tdColumns extraKeyWitnessTableDef) `shouldBe`
         ["id", "hash", "tx_id"]
       tdUniqueConstraints extraKeyWitnessTableDef `shouldBe` []
+      tdIdentityColumns extraKeyWitnessTableDef `shouldBe` ["id"]
 
   describe "encodeExtraKeyWitnessCopy" $ do
-    it "produces 3 fields with the id, hex hash, and tx_id" $ do
-      let row = encodeExtraKeyWitnessCopy (ExtraKeyWitnessId 7)
+    it "produces 2 fields with the hex hash and tx_id (id is server-assigned)" $ do
+      let row = encodeExtraKeyWitnessCopy
                   ExtraKeyWitness
                     { extraKeyWitnessHash = BS.pack [0xab, 0xcd]
                     , extraKeyWitnessTxId = TxId 42
                     }
           fields = BS8.split '\t' (BS8.init row)
-      length fields `shouldBe` 3
-      fields !! 0 `shouldBe` "7"
-      fields !! 1 `shouldBe` "\\\\xabcd"
-      fields !! 2 `shouldBe` "42"
+      length fields `shouldBe` 2
+      fields !! 0 `shouldBe` "\\\\xabcd"
+      fields !! 1 `shouldBe` "42"
 
 -- ---------------------------------------------------------------------------
 -- Fixtures

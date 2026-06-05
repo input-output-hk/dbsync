@@ -19,32 +19,51 @@ import DbSync.Db.Schema.Address (Address)
 import DbSync.Db.Schema.Core (Block, SlotLeader, Tx)
 import DbSync.Db.Schema.EpochBoundary
   ( CostModel, EpochParam, EpochState, PotTransfer, Reserve, Treasury )
+import DbSync.Db.Schema.Governance
+  ( Committee
+  , CommitteeDeRegistration
+  , CommitteeHash
+  , CommitteeMember
+  , CommitteeRegistration
+  , Constitution
+  , DelegationVote
+  , DrepDistr
+  , DrepHash
+  , DrepRegistration
+  , GovActionProposal
+  , ParamProposal
+  , TreasuryWithdrawal
+  , VotingAnchor
+  , VotingProcedure
+  )
 import DbSync.Db.Schema.Ids
   ( AddressId
   , BlockId
-  , CollateralTxInId
   , CollateralTxOutId
+  , CommitteeHashId
+  , CommitteeId
+  , ConstitutionId
   , CostModelId
-  , EpochParamId
-  , EpochStateId
-  , MaTxMintId
+  , DatumId
+  , DrepHashId
+  , GovActionProposalId
+  , ParamProposalId
   , PoolHashId
   , PoolUpdateId
-  , PotTransferId
-  , ReferenceTxInId
-  , ReserveId
+  , RedeemerDataId
+  , RedeemerId
+  , ScriptId
   , SlotLeaderId
   , StakeAddressId
-  , StakeRegistrationId
-  , TreasuryId
   , TxId
-  , TxInId
-  , TxMetadataId
   , TxOutId
+  , VotingAnchorId
   )
 import DbSync.Db.Schema.Metadata (TxMetadata)
 import DbSync.Db.Schema.MultiAsset (MaTxMint)
 import DbSync.Db.Schema.Pool (PoolHash, PoolUpdate)
+import DbSync.Db.Schema.ScriptsDatums
+  ( Datum, ExtraKeyWitness, Redeemer, RedeemerData, Script )
 import DbSync.Db.Schema.StakeDelegation (StakeAddress, StakeRegistration)
 import DbSync.Db.Schema.UTxO (CollateralTxIn, CollateralTxOut, ReferenceTxIn, TxIn, TxOut)
 import DbSync.Writer (Writer (..))
@@ -53,29 +72,54 @@ import DbSync.Writer (Writer (..))
 -- * Types
 -- ---------------------------------------------------------------------------
 
--- | Accumulated state from a test writer.
+-- | Accumulated state from a test writer. Leaf-table fields drop the
+-- @XId@ from the tuple — PostgreSQL allocates the id at insert time
+-- so the in-memory test buffer never sees one.
 data TestWriterState = TestWriterState
   { twBlocks            :: ![(BlockId, Block)]
   , twTxs               :: ![(TxId, Tx)]
   , twSlotLeaders       :: ![(SlotLeaderId, SlotLeader)]
   , twAddresses         :: ![(AddressId, Address)]
   , twTxOuts            :: ![(TxOutId, TxOut)]
-  , twTxIns             :: ![(TxInId, TxIn)]
-  , twCollateralTxIns   :: ![(CollateralTxInId, CollateralTxIn)]
+  , twTxIns             :: ![TxIn]
+  , twCollateralTxIns   :: ![CollateralTxIn]
   , twCollateralTxOuts  :: ![(CollateralTxOutId, CollateralTxOut)]
-  , twReferenceTxIns    :: ![(ReferenceTxInId, ReferenceTxIn)]
+  , twReferenceTxIns    :: ![ReferenceTxIn]
   , twStakeAddresses    :: ![(StakeAddressId, StakeAddress)]
-  , twStakeRegistrations :: ![(StakeRegistrationId, StakeRegistration)]
+  , twStakeRegistrations :: ![StakeRegistration]
   , twPoolHashes        :: ![(PoolHashId, PoolHash)]
   , twPoolUpdates       :: ![(PoolUpdateId, PoolUpdate)]
-  , twTxMetadata        :: ![(TxMetadataId, TxMetadata)]
-  , twMaTxMints         :: ![(MaTxMintId, MaTxMint)]
-  , twPotTransfers      :: ![(PotTransferId, PotTransfer)]
-  , twTreasuries        :: ![(TreasuryId, Treasury)]
-  , twReserves          :: ![(ReserveId, Reserve)]
-  , twEpochParams       :: ![(EpochParamId, EpochParam)]
-  , twEpochStates       :: ![(EpochStateId, EpochState)]
+  , twTxMetadata        :: ![TxMetadata]
+  , twMaTxMints         :: ![MaTxMint]
+  , twPotTransfers      :: ![PotTransfer]
+  , twTreasuries        :: ![Treasury]
+  , twReserves          :: ![Reserve]
+  , twEpochParams       :: ![EpochParam]
+  , twEpochStates       :: ![EpochState]
   , twCostModels        :: ![(CostModelId, CostModel)]
+  , twDatums            :: ![(DatumId, Datum)]
+  , twScripts           :: ![(ScriptId, Script)]
+  , twRedeemers         :: ![(RedeemerId, Redeemer)]
+  , twRedeemerData      :: ![(RedeemerDataId, RedeemerData)]
+  , twExtraKeyWitnesses :: ![ExtraKeyWitness]
+
+    -- Governance
+  , twGovActionProposals       :: ![(GovActionProposalId, GovActionProposal)]
+  , twParamProposals           :: ![(ParamProposalId, ParamProposal)]
+  , twCommittees               :: ![(CommitteeId, Committee)]
+  , twConstitutions            :: ![(ConstitutionId, Constitution)]
+  , twDrepHashes               :: ![(DrepHashId, DrepHash)]
+  , twCommitteeHashes          :: ![(CommitteeHashId, CommitteeHash)]
+  , twVotingAnchors            :: ![(VotingAnchorId, VotingAnchor)]
+  , twDrepRegistrations        :: ![DrepRegistration]
+  , twDelegationVotes          :: ![DelegationVote]
+  , twVotingProcedures         :: ![VotingProcedure]
+  , twTreasuryWithdrawals      :: ![TreasuryWithdrawal]
+  , twCommitteeMembers         :: ![CommitteeMember]
+  , twCommitteeRegistrations   :: ![CommitteeRegistration]
+  , twCommitteeDeRegistrations :: ![CommitteeDeRegistration]
+  , twDrepDistrs               :: ![DrepDistr]
+
   , twCommits           :: !Int
   }
   deriving stock (Show)
@@ -104,6 +148,26 @@ emptyTestWriterState = TestWriterState
   , twEpochParams      = []
   , twEpochStates      = []
   , twCostModels       = []
+  , twDatums           = []
+  , twScripts          = []
+  , twRedeemers        = []
+  , twRedeemerData     = []
+  , twExtraKeyWitnesses = []
+  , twGovActionProposals       = []
+  , twParamProposals           = []
+  , twCommittees               = []
+  , twConstitutions            = []
+  , twDrepHashes               = []
+  , twCommitteeHashes          = []
+  , twVotingAnchors            = []
+  , twDrepRegistrations        = []
+  , twDelegationVotes          = []
+  , twVotingProcedures         = []
+  , twTreasuryWithdrawals      = []
+  , twCommitteeMembers         = []
+  , twCommitteeRegistrations   = []
+  , twCommitteeDeRegistrations = []
+  , twDrepDistrs               = []
   , twCommits           = 0
   }
 
@@ -134,41 +198,41 @@ mkTestWriter ref = Writer
   , writeTxOut = \oid txOut ->
       atomicModifyIORef' ref $ \s ->
         (s { twTxOuts = twTxOuts s ++ [(oid, txOut)] }, ())
-  , writeTxIn = \iid ti ->
+  , writeTxIn = \ti ->
       atomicModifyIORef' ref $ \s ->
-        (s { twTxIns = twTxIns s ++ [(iid, ti)] }, ())
-  , writeCollateralTxIn = \iid ci ->
+        (s { twTxIns = twTxIns s ++ [ti] }, ())
+  , writeCollateralTxIn = \ci ->
       atomicModifyIORef' ref $ \s ->
-        (s { twCollateralTxIns = twCollateralTxIns s ++ [(iid, ci)] }, ())
+        (s { twCollateralTxIns = twCollateralTxIns s ++ [ci] }, ())
   , writeCollateralTxOut = \oid co ->
       atomicModifyIORef' ref $ \s ->
         (s { twCollateralTxOuts = twCollateralTxOuts s ++ [(oid, co)] }, ())
-  , writeReferenceTxIn = \iid ri ->
+  , writeReferenceTxIn = \ri ->
       atomicModifyIORef' ref $ \s ->
-        (s { twReferenceTxIns = twReferenceTxIns s ++ [(iid, ri)] }, ())
+        (s { twReferenceTxIns = twReferenceTxIns s ++ [ri] }, ())
 
     -- Metadata
-  , writeTxMetadata = \mid md ->
+  , writeTxMetadata = \md ->
       atomicModifyIORef' ref $ \s ->
-        (s { twTxMetadata = twTxMetadata s ++ [(mid, md)] }, ())
+        (s { twTxMetadata = twTxMetadata s ++ [md] }, ())
 
     -- MultiAsset
   , writeMultiAsset = \_ _ -> pure ()
-  , writeMaTxMint = \mid m ->
+  , writeMaTxMint = \m ->
       atomicModifyIORef' ref $ \s ->
-        (s { twMaTxMints = twMaTxMints s ++ [(mid, m)] }, ())
-  , writeMaTxOut = \_ _ -> pure ()
+        (s { twMaTxMints = twMaTxMints s ++ [m] }, ())
+  , writeMaTxOut = \_ -> pure ()
 
     -- StakeDelegation
   , writeStakeAddress = \said sa ->
       atomicModifyIORef' ref $ \s ->
         (s { twStakeAddresses = twStakeAddresses s ++ [(said, sa)] }, ())
-  , writeStakeRegistration   = \srid sr ->
+  , writeStakeRegistration   = \sr ->
       atomicModifyIORef' ref $ \s ->
-        (s { twStakeRegistrations = twStakeRegistrations s ++ [(srid, sr)] }, ())
-  , writeStakeDeregistration = \_ _ -> pure ()
-  , writeDelegation          = \_ _ -> pure ()
-  , writeWithdrawal          = \_ _ -> pure ()
+        (s { twStakeRegistrations = twStakeRegistrations s ++ [sr] }, ())
+  , writeStakeDeregistration = \_ -> pure ()
+  , writeDelegation          = \_ -> pure ()
+  , writeWithdrawal          = \_ -> pure ()
 
     -- Pool
   , writePoolHash = \phid ph ->
@@ -178,36 +242,102 @@ mkTestWriter ref = Writer
       atomicModifyIORef' ref $ \s ->
         (s { twPoolUpdates = twPoolUpdates s ++ [(puid, pu)] }, ())
   , writePoolMetadataRef = \_ _ -> pure ()
-  , writePoolOwner       = \_ _ -> pure ()
-  , writePoolRetire      = \_ _ -> pure ()
-  , writePoolRelay       = \_ _ -> pure ()
+  , writePoolOwner       = \_ -> pure ()
+  , writePoolRetire      = \_ -> pure ()
+  , writePoolRelay       = \_ -> pure ()
 
     -- CBOR (no-op)
-  , writeTxCbor = \_ _ -> pure ()
+  , writeTxCbor = \_ -> pure ()
 
     -- EpochSyncStats (no-op)
   , writeEpochSyncStats = \_ _ -> pure ()
 
     -- EpochBoundary
-  , writeAdaPots     = \_ _ -> pure ()
-  , writeEpochParam  = \epid ep ->
+  , writeAdaPots     = \_ -> pure ()
+  , writeEpochParam  = \ep ->
       atomicModifyIORef' ref $ \s ->
-        (s { twEpochParams = twEpochParams s ++ [(epid, ep)] }, ())
-  , writeEpochState  = \esid es ->
+        (s { twEpochParams = twEpochParams s ++ [ep] }, ())
+  , writeEpochState  = \es ->
       atomicModifyIORef' ref $ \s ->
-        (s { twEpochStates = twEpochStates s ++ [(esid, es)] }, ())
+        (s { twEpochStates = twEpochStates s ++ [es] }, ())
   , writeCostModel   = \cmid cm ->
       atomicModifyIORef' ref $ \s ->
         (s { twCostModels = twCostModels s ++ [(cmid, cm)] }, ())
-  , writePotTransfer = \ptid pt ->
+  , writePotTransfer = \pt ->
       atomicModifyIORef' ref $ \s ->
-        (s { twPotTransfers = twPotTransfers s ++ [(ptid, pt)] }, ())
-  , writeTreasury    = \tid t ->
+        (s { twPotTransfers = twPotTransfers s ++ [pt] }, ())
+  , writeTreasury    = \t ->
       atomicModifyIORef' ref $ \s ->
-        (s { twTreasuries = twTreasuries s ++ [(tid, t)] }, ())
-  , writeReserve     = \rid r ->
+        (s { twTreasuries = twTreasuries s ++ [t] }, ())
+  , writeReserve     = \r ->
       atomicModifyIORef' ref $ \s ->
-        (s { twReserves = twReserves s ++ [(rid, r)] }, ())
+        (s { twReserves = twReserves s ++ [r] }, ())
+
+    -- ScriptsDatums
+  , writeDatum           = \did d ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twDatums = twDatums s ++ [(did, d)] }, ())
+  , writeScript          = \sid sc ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twScripts = twScripts s ++ [(sid, sc)] }, ())
+  , writeRedeemer        = \rid r ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twRedeemers = twRedeemers s ++ [(rid, r)] }, ())
+  , writeRedeemerData    = \rdid rd ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twRedeemerData = twRedeemerData s ++ [(rdid, rd)] }, ())
+  , writeExtraKeyWitness = \ek ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twExtraKeyWitnesses = twExtraKeyWitnesses s ++ [ek] }, ())
+
+    -- Governance — see 'TestWriterState' for the captured fields;
+    -- only the slice-2-relevant tables are stored, the rest are no-ops.
+  , writeGovActionProposal       = \gid g ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twGovActionProposals = twGovActionProposals s ++ [(gid, g)] }, ())
+  , writeParamProposal           = \pid p ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twParamProposals = twParamProposals s ++ [(pid, p)] }, ())
+  , writeCommittee               = \cid c ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twCommittees = twCommittees s ++ [(cid, c)] }, ())
+  , writeConstitution            = \cid c ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twConstitutions = twConstitutions s ++ [(cid, c)] }, ())
+  , writeEventInfo               = \_ _ -> pure ()
+  , writeDrepHash                = \did d ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twDrepHashes = twDrepHashes s ++ [(did, d)] }, ())
+  , writeCommitteeHash           = \cid c ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twCommitteeHashes = twCommitteeHashes s ++ [(cid, c)] }, ())
+  , writeVotingAnchor            = \vid v ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twVotingAnchors = twVotingAnchors s ++ [(vid, v)] }, ())
+  , writeDrepRegistration        = \dr ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twDrepRegistrations = twDrepRegistrations s ++ [dr] }, ())
+  , writeDrepDistr               = \dd ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twDrepDistrs = twDrepDistrs s ++ [dd] }, ())
+  , writeDelegationVote          = \dv ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twDelegationVotes = twDelegationVotes s ++ [dv] }, ())
+  , writeVotingProcedure         = \vp ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twVotingProcedures = twVotingProcedures s ++ [vp] }, ())
+  , writeTreasuryWithdrawal      = \tw ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twTreasuryWithdrawals = twTreasuryWithdrawals s ++ [tw] }, ())
+  , writeCommitteeMember         = \cm ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twCommitteeMembers = twCommitteeMembers s ++ [cm] }, ())
+  , writeCommitteeRegistration   = \cr ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twCommitteeRegistrations = twCommitteeRegistrations s ++ [cr] }, ())
+  , writeCommitteeDeRegistration = \cdr ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twCommitteeDeRegistrations = twCommitteeDeRegistrations s ++ [cdr] }, ())
 
     -- Transaction control
   , commit =

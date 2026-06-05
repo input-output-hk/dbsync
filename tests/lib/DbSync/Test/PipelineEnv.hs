@@ -28,6 +28,7 @@ import DbSync.Extractor
 import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Phase.Current (HasCurrentPhase (..))
 import DbSync.Resolver (HasResolver (..), IdResolver)
+import DbSync.SyncState.Row (HasControlConnection (..))
 import DbSync.Writer (HasWriter (..), Writer)
 
 -- | The env shape every spec passes to 'processBlock'.
@@ -62,6 +63,13 @@ instance HasLedgerData TestPipelineEnv where
 
 instance HasCurrentPhase TestPipelineEnv where
   getCurrentPhase = pure . tpeSyncPhase
+
+-- | Panicking instance: the unit tests that consume 'TestPipelineEnv'
+-- never reach code paths that pull the control connection. Specs
+-- exercising governance enactments must use a real env.
+instance HasControlConnection TestPipelineEnv where
+  getControlConnection _ =
+    panic "TestPipelineEnv: no control connection wired"
 
 -- | Build an env on mainnet with empty ledger data and Ingest phase.
 mkTestPipelineEnv

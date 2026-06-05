@@ -44,6 +44,7 @@ plainTable = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns  = []
+  , tdIdentityColumns = []
   , tdForeignKeys       = []
   }
 

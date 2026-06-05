@@ -138,6 +138,18 @@ fromByronTx _parentBlk blockIndex txAux =
     , txMetadata         = Nothing
     , txMint             = []
     , txCborRaw          = Nothing  -- Byron: serialisation format differs, skip
+      -- Byron has no native scripts, no Plutus, and no
+      -- required-signer set.
+    , txScripts           = []
+    , txDatums            = []
+    , txRedeemers         = []
+    , txExtraKeyWitnesses = []
+      -- Byron has no governance machinery: no parameter proposals,
+      -- no votes, no anchors.
+    , txParamProposal     = []
+    , txProposals         = []
+    , txVotingProcedures  = []
+    , txVotingAnchors     = []
     }
 
 fromByronTxIn :: Byron.TxIn -> GenericTxIn

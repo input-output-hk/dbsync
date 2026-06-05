@@ -36,6 +36,7 @@ import qualified DbSync.Extractor.CoreSpec as ExtractorCoreSpec
 import qualified DbSync.Extractor.EpochBoundarySpec as ExtractorEpochBoundarySpec
 import qualified DbSync.Extractor.EpochSpec as ExtractorEpochSpec
 import qualified DbSync.Extractor.PoolSpec as ExtractorPoolSpec
+import qualified DbSync.Extractor.ScriptsDatumsSpec as ExtractorScriptsDatumsSpec
 import qualified DbSync.Extractor.StakeDelegationSpec as ExtractorStakeDelegationSpec
 import qualified DbSync.Extractor.UTxOSpec as ExtractorUTxOSpec
 import qualified DbSync.Phase.Ingest.ConsumerSpec as IngestConsumerSpec
@@ -132,6 +133,7 @@ main = hspec $ do
     ExtractorEpochBoundarySpec.spec
     ExtractorEpochSpec.spec
     ExtractorPoolSpec.spec
+    ExtractorScriptsDatumsSpec.spec
     ExtractorStakeDelegationSpec.spec
     ExtractorUTxOSpec.spec
     IngestConsumerSpec.spec

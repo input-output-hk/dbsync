@@ -38,6 +38,17 @@ module DbSync.SyncState.Row
 
     -- * Resume-time cache populate
   , populateCostModelCache
+  , populateGovActionProposalCache
+
+    -- * Governance enactment lookups
+  , queryCommitteeByProposal
+  , queryConstitutionByProposal
+
+    -- * Governance status-column updates
+  , markGovActionRatified
+  , markGovActionEnacted
+  , markGovActionDropped
+  , markGovActionExpired
   ) where
 
 import Cardano.Prelude
@@ -56,8 +67,18 @@ import DbSync.Db.Schema.SyncState (SyncStateRow (..))
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Statement.Resume
   ( selectBlockHashAtSlotStmt
+  , selectCommitteeByProposalStmt
+  , selectCommitteeHashDedupStmt
+  , selectConstitutionByProposalStmt
   , selectDedupSingleStmt
+  , selectDrepHashDedupStmt
+  , selectGovActionProposalCacheStmt
   , selectMultiAssetDedupStmt
+  , selectVotingAnchorDedupStmt
+  , updateGovActionDroppedStmt
+  , updateGovActionEnactedStmt
+  , updateGovActionExpiredStmt
+  , updateGovActionRatifiedStmt
   )
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Timing (fmtCount, fmtDuration)
@@ -80,7 +101,12 @@ import DbSync.Phase.Ingest.DedupStore
   , newStores
   )
 import DbSync.Phase.Ingest.LsmSession (LsmSession)
-import DbSync.Util.DedupHash (hashDedupKey)
+import DbSync.Util.DedupHash
+  ( committeeHashDedupKey
+  , drepHashDedupKey
+  , encodeVotingAnchorKey
+  , hashDedupKey
+  )
 
 -- ---------------------------------------------------------------------------
 -- * Connection lifecycle
@@ -204,6 +230,52 @@ fetchBlockHashAtSlot
 fetchBlockHashAtSlot slot =
   runCtrlStmt "fetchBlockHashAtSlot" slot selectBlockHashAtSlotStmt
 
+-- | @committee.id@ that originated from the given proposal id, or
+-- the genesis row when the input is 'Nothing'.
+queryCommitteeByProposal
+  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  => Maybe Int64
+  -> m (Maybe Int64)
+queryCommitteeByProposal mProposalId =
+  runCtrlStmt "queryCommitteeByProposal" mProposalId selectCommitteeByProposalStmt
+
+-- | @constitution.id@ that originated from the given proposal id, or
+-- the genesis row when the input is 'Nothing'.
+queryConstitutionByProposal
+  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  => Maybe Int64
+  -> m (Maybe Int64)
+queryConstitutionByProposal mProposalId =
+  runCtrlStmt "queryConstitutionByProposal" mProposalId selectConstitutionByProposalStmt
+
+-- | Set @gov_action_proposal.ratified_epoch@ on the given row.
+markGovActionRatified
+  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  => Int64 -> Word64 -> m ()
+markGovActionRatified gid epoch =
+  runCtrlStmt "markGovActionRatified" (gid, epoch) updateGovActionRatifiedStmt
+
+-- | Set @gov_action_proposal.enacted_epoch@ on the given row.
+markGovActionEnacted
+  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  => Int64 -> Word64 -> m ()
+markGovActionEnacted gid epoch =
+  runCtrlStmt "markGovActionEnacted" (gid, epoch) updateGovActionEnactedStmt
+
+-- | Set @gov_action_proposal.dropped_epoch@ on the given row.
+markGovActionDropped
+  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  => Int64 -> Word64 -> m ()
+markGovActionDropped gid epoch =
+  runCtrlStmt "markGovActionDropped" (gid, epoch) updateGovActionDroppedStmt
+
+-- | Set @gov_action_proposal.expired_epoch@ on the given row.
+markGovActionExpired
+  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  => Int64 -> Word64 -> m ()
+markGovActionExpired gid epoch =
+  runCtrlStmt "markGovActionExpired" (gid, epoch) updateGovActionExpiredStmt
+
 -- ---------------------------------------------------------------------------
 -- * Dedup-store rebuild
 -- ---------------------------------------------------------------------------
@@ -245,6 +317,18 @@ rebuildDedupMaps tableDefs lsmSession = do
     populateSingle "pool_hash" "hash_raw" (dstPoolHash stores)
   whenPresent "multi_asset" $
     populateMultiAsset (dstMultiAsset stores)
+  whenPresent "script" $
+    populateSingle "script" "hash" (dstScriptHash stores)
+  whenPresent "datum" $
+    populateSingle "datum" "hash" (dstDatum stores)
+  whenPresent "redeemer_data" $
+    populateSingle "redeemer_data" "hash" (dstRedeemerData stores)
+  whenPresent "drep_hash" $
+    populateDrepHash (dstDrepHash stores)
+  whenPresent "committee_hash" $
+    populateCommitteeHash (dstCommitteeHash stores)
+  whenPresent "voting_anchor" $
+    populateVotingAnchor (dstVotingAnchor stores)
   pure stores
 
 populateSingle
@@ -277,6 +361,56 @@ populateMultiAsset store =
               selectMultiAssetDedupStmt
     liftIO $ forM_ rows $ \(rowId, policy, name) ->
       insertExisting (hashDedupKey (policy <> name)) rowId store
+    pure (fromIntegral (length rows))
+
+populateDrepHash
+  :: ( HasCallStack
+     , HasTracer env
+     , HasControlConnection env
+     , MonadReader env m
+     , MonadIO m
+     )
+  => DedupStore -> m ()
+populateDrepHash store =
+  timedRebuild "drep_hash" $ do
+    rows <- runCtrlStmt "rebuildDedupMaps[drep_hash]" ()
+              selectDrepHashDedupStmt
+    liftIO $ forM_ rows $ \(rowId, mRaw, view, _hasScript) ->
+      insertExisting (SBS.toShort (drepHashDedupKey mRaw view)) rowId store
+    pure (fromIntegral (length rows))
+
+populateCommitteeHash
+  :: ( HasCallStack
+     , HasTracer env
+     , HasControlConnection env
+     , MonadReader env m
+     , MonadIO m
+     )
+  => DedupStore -> m ()
+populateCommitteeHash store =
+  timedRebuild "committee_hash" $ do
+    rows <- runCtrlStmt "rebuildDedupMaps[committee_hash]" ()
+              selectCommitteeHashDedupStmt
+    liftIO $ forM_ rows $ \(rowId, raw, hasScript) ->
+      insertExisting (SBS.toShort (committeeHashDedupKey raw hasScript)) rowId store
+    pure (fromIntegral (length rows))
+
+populateVotingAnchor
+  :: ( HasCallStack
+     , HasTracer env
+     , HasControlConnection env
+     , MonadReader env m
+     , MonadIO m
+     )
+  => DedupStore -> m ()
+populateVotingAnchor store =
+  timedRebuild "voting_anchor" $ do
+    rows <- runCtrlStmt "rebuildDedupMaps[voting_anchor]" ()
+              selectVotingAnchorDedupStmt
+    liftIO $ forM_ rows $ \(rowId, url, dataHash, anchorType) ->
+      insertExisting
+        (SBS.toShort (encodeVotingAnchorKey url dataHash anchorType))
+        rowId store
     pure (fromIntegral (length rows))
 
 -- ---------------------------------------------------------------------------
@@ -312,6 +446,37 @@ populateCostModelCache tableDefs
       let !cache = Map.fromList [(hash, rowId) | (rowId, hash) <- rows]
       liftIO $ traceWith tracer $ LogMsg Info "DedupRebuild" (
           "cost_model: " <> fmtCount (fromIntegral (Map.size cache) :: Int64)
+            <> " rows in "
+            <> fmtDuration (realToFrac (diffUTCTime end start))
+        ) Nothing
+      pure cache
+
+-- | Seed @(tx_hash, proposal_index) -> gov_action_proposal.id@ from PG
+-- so vote rows landing in resumed blocks can resolve their proposal
+-- targets without a SELECT round-trip.
+populateGovActionProposalCache
+  :: ( HasCallStack
+     , HasTracer env
+     , HasControlConnection env
+     , MonadReader env m
+     , MonadIO m
+     )
+  => [TableDef]
+  -> m (Map (ByteString, Word64) Int64)
+populateGovActionProposalCache tableDefs
+  | "gov_action_proposal" `notElem` map tdName tableDefs = pure Map.empty
+  | otherwise = do
+      tracer <- asks getTracer
+      liftIO $ traceWith tracer $ LogMsg Info "DedupRebuild"
+        "gov_action_proposal cache: loading" Nothing
+      start <- liftIO getCurrentTime
+      rows  <- runCtrlStmt "populateGovActionProposalCache" ()
+                 selectGovActionProposalCacheStmt
+      end   <- liftIO getCurrentTime
+      let !cache = Map.fromList [((h, ix), rid) | (h, ix, rid) <- rows]
+      liftIO $ traceWith tracer $ LogMsg Info "DedupRebuild" (
+          "gov_action_proposal cache: "
+            <> fmtCount (fromIntegral (Map.size cache) :: Int64)
             <> " rows in "
             <> fmtDuration (realToFrac (diffUTCTime end start))
         ) Nothing

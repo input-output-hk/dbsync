@@ -106,6 +106,7 @@ multiAssetTableDef = TableDef
     -- index every resolve sequential-scans the whole table.
   , tdUniqueConstraints = ["policy" :| ["name"]]
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
@@ -124,6 +125,7 @@ maTxMintTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys =
       [ ForeignKey "tx_id" "tx" "id"
       ]
@@ -144,6 +146,7 @@ maTxOutTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys =
       [ ForeignKey "tx_out_id" "tx_out" "id"
       ]
@@ -162,20 +165,18 @@ encodeMultiAssetCopy (MultiAssetId mid) ma =
     , Just $ bText (multiAssetFingerprint ma)
     ]
 
-encodeMaTxMintCopy :: MaTxMintId -> MaTxMint -> ByteString
-encodeMaTxMintCopy (MaTxMintId mid) m =
+encodeMaTxMintCopy :: MaTxMint -> ByteString
+encodeMaTxMintCopy m =
   buildCopyRow
-    [ Just $ bInt64 mid
-    , Just $ bInteger (maTxMintQuantity m)
+    [ Just $ bInteger (maTxMintQuantity m)
     , Just $ bInt64 (getTxId $ maTxMintTxId m)
     , Just $ bInt64 (getMultiAssetId $ maTxMintIdent m)
     ]
 
-encodeMaTxOutCopy :: MaTxOutId -> MaTxOut -> ByteString
-encodeMaTxOutCopy (MaTxOutId mid) m =
+encodeMaTxOutCopy :: MaTxOut -> ByteString
+encodeMaTxOutCopy m =
   buildCopyRow
-    [ Just $ bInt64 mid
-    , Just $ bWord64 (unDbWord64 $ maTxOutQuantity m)
+    [ Just $ bWord64 (unDbWord64 $ maTxOutQuantity m)
     , Just $ bInt64 (getTxOutId $ maTxOutTxOutId m)
     , Just $ bInt64 (getMultiAssetId $ maTxOutIdent m)
     ]

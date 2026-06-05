@@ -21,10 +21,7 @@ import qualified Hasql.Connection as Conn
 import DbSync.Db.Schema.Address (Address)
 import DbSync.Db.Schema.Ids
   ( AddressId
-  , CollateralTxInId
   , CollateralTxOutId
-  , ReferenceTxInId
-  , TxInId
   , TxOutId
   )
 import DbSync.Db.Schema.UTxO
@@ -55,17 +52,17 @@ writeTxOutConn conn oid txo = runConn conn (oid, txo) insertTxOutRowStmt
 writeTxOutBuf :: WriteBuffer -> TxOutId -> TxOut -> IO ()
 writeTxOutBuf buf oid txo = queueBuf buf (oid, txo) insertTxOutRowStmt
 
-writeTxInConn :: Conn.Connection -> TxInId -> TxIn -> IO ()
-writeTxInConn conn iid ti = runConn conn (iid, ti) insertTxInRowStmt
+writeTxInConn :: Conn.Connection -> TxIn -> IO ()
+writeTxInConn conn ti = runConn conn ti insertTxInRowStmt
 
-writeTxInBuf :: WriteBuffer -> TxInId -> TxIn -> IO ()
-writeTxInBuf buf iid ti = queueBuf buf (iid, ti) insertTxInRowStmt
+writeTxInBuf :: WriteBuffer -> TxIn -> IO ()
+writeTxInBuf buf ti = queueBuf buf ti insertTxInRowStmt
 
-writeCollateralTxInConn :: Conn.Connection -> CollateralTxInId -> CollateralTxIn -> IO ()
-writeCollateralTxInConn conn iid ci = runConn conn (iid, ci) insertCollateralTxInRowStmt
+writeCollateralTxInConn :: Conn.Connection -> CollateralTxIn -> IO ()
+writeCollateralTxInConn conn ci = runConn conn ci insertCollateralTxInRowStmt
 
-writeCollateralTxInBuf :: WriteBuffer -> CollateralTxInId -> CollateralTxIn -> IO ()
-writeCollateralTxInBuf buf iid ci = queueBuf buf (iid, ci) insertCollateralTxInRowStmt
+writeCollateralTxInBuf :: WriteBuffer -> CollateralTxIn -> IO ()
+writeCollateralTxInBuf buf ci = queueBuf buf ci insertCollateralTxInRowStmt
 
 writeCollateralTxOutConn :: Conn.Connection -> CollateralTxOutId -> CollateralTxOut -> IO ()
 writeCollateralTxOutConn conn oid co = runConn conn (oid, co) insertCollateralTxOutRowStmt
@@ -73,8 +70,8 @@ writeCollateralTxOutConn conn oid co = runConn conn (oid, co) insertCollateralTx
 writeCollateralTxOutBuf :: WriteBuffer -> CollateralTxOutId -> CollateralTxOut -> IO ()
 writeCollateralTxOutBuf buf oid co = queueBuf buf (oid, co) insertCollateralTxOutRowStmt
 
-writeReferenceTxInConn :: Conn.Connection -> ReferenceTxInId -> ReferenceTxIn -> IO ()
-writeReferenceTxInConn conn iid ri = runConn conn (iid, ri) insertReferenceTxInRowStmt
+writeReferenceTxInConn :: Conn.Connection -> ReferenceTxIn -> IO ()
+writeReferenceTxInConn conn ri = runConn conn ri insertReferenceTxInRowStmt
 
-writeReferenceTxInBuf :: WriteBuffer -> ReferenceTxInId -> ReferenceTxIn -> IO ()
-writeReferenceTxInBuf buf iid ri = queueBuf buf (iid, ri) insertReferenceTxInRowStmt
+writeReferenceTxInBuf :: WriteBuffer -> ReferenceTxIn -> IO ()
+writeReferenceTxInBuf buf ri = queueBuf buf ri insertReferenceTxInRowStmt

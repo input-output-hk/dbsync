@@ -85,20 +85,18 @@ processUTxO ctx = do
             liftIO $ recordTxOutAddress resolver outId raw addr
 
         forM_ (txInputs gtx) $ \gin -> do
-          inId <- liftIO $ assignTxInId resolver
           mProducer <- liftIO $ resolveInputUtxo resolver
             (txInHash gin) (txInIndex gin)
-          liftIO $ writeTxIn writer inId
+          liftIO $ writeTxIn writer
             (mkTxIn txId gin (producerTxIdFrom mProducer))
           for_ mProducer $ \(_, producerOutId, _) -> do
             liftIO $ recordConsumed resolver producerOutId txId
             liftIO $ deleteCachedUtxo resolver (txInHash gin) (txInIndex gin)
 
         forM_ (txReferenceInputs gtx) $ \gin -> do
-          inId <- liftIO $ assignReferenceTxInId resolver
           mProducer <- liftIO $ resolveInputUtxo resolver
             (txInHash gin) (txInIndex gin)
-          liftIO $ writeReferenceTxIn writer inId
+          liftIO $ writeReferenceTxIn writer
             (mkReferenceTxIn txId gin (producerTxIdFrom mProducer))
       else
         -- Phase-2 failure: the chain only records the collateral
@@ -119,10 +117,9 @@ processUTxO ctx = do
     -- as a script-witness commitment, failed txs record them as the
     -- inputs that were actually consumed.
     forM_ (txCollateralInputs gtx) $ \gin -> do
-      inId <- liftIO $ assignCollateralTxInId resolver
       mProducer <- liftIO $ resolveInputUtxo resolver
         (txInHash gin) (txInIndex gin)
-      liftIO $ writeCollateralTxIn writer inId
+      liftIO $ writeCollateralTxIn writer
         (mkCollateralTxIn txId gin (producerTxIdFrom mProducer))
       -- Phase-2 failure consumes the collateral on chain.
       unless (G.txValidContract gtx) $

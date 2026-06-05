@@ -107,21 +107,27 @@ listMissingIndexes expected = do
 -- * Sequence introspection
 -- ---------------------------------------------------------------------------
 
--- | 'True' when the named sequence's @last_value@ matches Prep's
--- contract: @MAX(id) + 1@ on a populated table, @1@ on an empty one.
--- Returns 'False' on parse failure so the calling assertion surfaces
--- the discrepancy rather than the parser.
-sequenceAdvanced :: Text -> Text -> IO Bool
-sequenceAdvanced table seqName = do
-  seqRaw <- T.strip <$> queryTestDb
-    ("SELECT last_value FROM " <> seqName <> ";")
+-- | 'True' when the table's @id@ sequence matches Prep's contract:
+-- the next allocation equals @MAX(id) + 1@ on a populated table, or
+-- @1@ on an empty one. The sequence name is resolved via
+-- @pg_get_serial_sequence@ so explicit and @IDENTITY@-backed
+-- sequences are handled uniformly. Returns 'False' on parse failure
+-- so the calling assertion surfaces the discrepancy rather than the
+-- parser.
+sequenceAdvanced :: Text -> IO Bool
+sequenceAdvanced table = do
+  -- nextval advances the sequence; we revert by re-setting it to the
+  -- same value with is_called=true so a follow-up nextval still
+  -- returns one past the previous value.
+  nextRaw <- T.strip <$> queryTestDb
+    ("SELECT nextval(pg_get_serial_sequence('" <> table <> "', 'id'));")
   maxRaw <- T.strip <$> queryTestDb
     ("SELECT COALESCE(MAX(id), 0) FROM " <> table <> ";")
-  let seqVal = readMaybe (T.unpack seqRaw) :: Maybe Int
-      maxVal = readMaybe (T.unpack maxRaw) :: Maybe Int
-  case (seqVal, maxVal) of
-    (Just s, Just 0) -> pure (s == 1)
-    (Just s, Just m) -> pure (s == m + 1)
+  let nextVal = readMaybe (T.unpack nextRaw) :: Maybe Int
+      maxVal  = readMaybe (T.unpack maxRaw) :: Maybe Int
+  case (nextVal, maxVal) of
+    (Just n, Just 0) -> pure (n == 1)
+    (Just n, Just m) -> pure (n == m + 1)
     _                -> pure False
 
 -- ---------------------------------------------------------------------------

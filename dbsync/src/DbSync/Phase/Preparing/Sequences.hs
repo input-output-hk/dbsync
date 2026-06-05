@@ -19,9 +19,13 @@ import DbSync.Db.Schema.Types (TableDef (..), TableMode (..))
 import DbSync.Db.Statement.Sequences (resetSequenceStmt)
 import DbSync.Db.Transaction (HasHasqlConnection (..))
 
--- | Run @setval@ on every @<table>_id_seq@ owned by an UNLOGGED
--- table. Tables that were already LOGGED at schema creation (e.g.
--- @dbsync_sync_state@) manage their own IDs and are skipped.
+-- | Run @setval@ on every UNLOGGED table's @id@ sequence so that
+-- 'FollowingChainTip' allocates ids past the rows Ingest already
+-- loaded. Tables that were already LOGGED at schema creation (e.g.
+-- @dbsync_sync_state@) manage their own ids and are skipped.
+-- 'DbSync.Db.Statement.Sequences.resetSequenceSql' resolves the
+-- sequence via @pg_get_serial_sequence@, so explicit and
+-- IDENTITY-backed sequences are handled uniformly.
 resetSequences
   :: (HasHasqlConnection env, MonadReader env m, MonadIO m)
   => [TableDef] -> m ()

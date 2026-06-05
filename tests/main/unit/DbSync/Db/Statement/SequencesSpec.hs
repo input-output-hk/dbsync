@@ -16,11 +16,11 @@ spec :: Spec
 spec = describe "DbSync.Db.Statement.Sequences" $ do
 
   describe "resetSequenceSql" $ do
-    it "names the sequence as <table>_id_seq" $
+    it "resolves the sequence via pg_get_serial_sequence" $
       resetSequenceSql (tdName blockTableDef) `shouldBe`
         expectedSql blockTableDef
 
-    it "quotes the table name as a SQL identifier" $
+    it "quotes the table name as a SQL identifier in the FROM clause" $
       resetSequenceSql (tdName txOutTableDef) `shouldBe`
         expectedSql txOutTableDef
 
@@ -32,5 +32,5 @@ spec = describe "DbSync.Db.Statement.Sequences" $ do
         expectedSql txTableDef
   where
     expectedSql td =
-      "SELECT setval( '" <> tdName td <> "_id_seq', "
+      "SELECT setval( pg_get_serial_sequence('" <> tdName td <> "', 'id'), "
         <> "COALESCE((SELECT MAX(id) FROM \"" <> tdName td <> "\"), 0) + 1, false)"

@@ -18,13 +18,13 @@ import Data.IORef (IORef)
 
 import DbSync.Extractor (ExtractState)
 import DbSync.Phase.Ingest.DedupStore (DedupStores)
-import qualified DbSync.Phase.Ingest.Resolver.Cbor as Cbor
 import qualified DbSync.Phase.Ingest.Resolver.Core as Core
 import qualified DbSync.Phase.Ingest.Resolver.Epoch as Epoch
 import qualified DbSync.Phase.Ingest.Resolver.EpochBoundary as EpochBoundary
-import qualified DbSync.Phase.Ingest.Resolver.Metadata as Metadata
+import qualified DbSync.Phase.Ingest.Resolver.Governance as Governance
 import qualified DbSync.Phase.Ingest.Resolver.MultiAsset as MultiAsset
 import qualified DbSync.Phase.Ingest.Resolver.Pool as Pool
+import qualified DbSync.Phase.Ingest.Resolver.ScriptsDatums as ScriptsDatums
 import qualified DbSync.Phase.Ingest.Resolver.StakeDelegation as Stake
 import qualified DbSync.Phase.Ingest.Resolver.UTxO as UTxO
 import DbSync.Phase.Ingest.UtxoStore (UtxoStore)
@@ -65,51 +65,49 @@ mkIngestResolver extractStateRef dedupStores addrBufRef utxoStore mConsumedByBuf
   , recordTxOutAddress           = UTxO.recordTxOutAddressIngest           addrBufRef
   , recordCollateralTxOutAddress = UTxO.recordCollateralTxOutAddressIngest addrBufRef
   , resolveAddressId             = UTxO.resolveAddressIdIngest
-  , assignTxInId                 = UTxO.assignTxInIdIngest                 extractStateRef
-  , assignCollateralTxInId       = UTxO.assignCollateralTxInIdIngest       extractStateRef
   , assignCollateralTxOutId      = UTxO.assignCollateralTxOutIdIngest      extractStateRef
-  , assignReferenceTxInId        = UTxO.assignReferenceTxInIdIngest        extractStateRef
   , resolveInputValues           = UTxO.resolveInputValuesIngest           utxoStore
   , resolveInputUtxo             = UTxO.resolveInputUtxoIngest             utxoStore
   , recordTxOutputs              = UTxO.recordTxOutputsIngest              utxoStore
   , recordConsumed               = UTxO.recordConsumedIngest               mConsumedByBuf
   , deleteCachedUtxo             = UTxO.deleteCachedUtxoIngest             utxoStore
 
-    -- Metadata
-  , assignTxMetadataId = Metadata.assignTxMetadataIdIngest extractStateRef
-
     -- MultiAsset
   , resolveMultiAsset = MultiAsset.resolveMultiAssetIngest dedupStores
-  , assignMaTxMintId  = MultiAsset.assignMaTxMintIdIngest  extractStateRef
-  , assignMaTxOutId   = MultiAsset.assignMaTxOutIdIngest   extractStateRef
 
     -- StakeDelegation (incl. pot rebalancing)
   , resolveStakeAddress         = Stake.resolveStakeAddressIngest         dedupStores
-  , assignStakeRegistrationId   = Stake.assignStakeRegistrationIdIngest   extractStateRef
-  , assignStakeDeregistrationId = Stake.assignStakeDeregistrationIdIngest extractStateRef
-  , assignDelegationId          = Stake.assignDelegationIdIngest          extractStateRef
-  , assignWithdrawalId          = Stake.assignWithdrawalIdIngest          extractStateRef
-  , assignPotTransferId         = Stake.assignPotTransferIdIngest         extractStateRef
-  , assignTreasuryId            = Stake.assignTreasuryIdIngest            extractStateRef
-  , assignReserveId             = Stake.assignReserveIdIngest             extractStateRef
 
     -- Pool
   , resolvePoolHash         = Pool.resolvePoolHashIngest         dedupStores
   , assignPoolUpdateId      = Pool.assignPoolUpdateIdIngest      extractStateRef
   , assignPoolMetadataRefId = Pool.assignPoolMetadataRefIdIngest extractStateRef
-  , assignPoolOwnerId       = Pool.assignPoolOwnerIdIngest       extractStateRef
-  , assignPoolRetireId      = Pool.assignPoolRetireIdIngest      extractStateRef
-  , assignPoolRelayId       = Pool.assignPoolRelayIdIngest       extractStateRef
-
-    -- CBOR
-  , assignTxCborId = Cbor.assignTxCborIdIngest extractStateRef
 
     -- EpochSyncStats
   , assignEpochSyncStatsId = Epoch.assignEpochSyncStatsIdIngest extractStateRef
 
     -- EpochBoundary
-  , assignAdaPotsId    = EpochBoundary.assignAdaPotsIdIngest    extractStateRef
-  , assignEpochParamId = EpochBoundary.assignEpochParamIdIngest extractStateRef
-  , assignEpochStateId = EpochBoundary.assignEpochStateIdIngest extractStateRef
   , resolveCostModel   = EpochBoundary.resolveCostModelIngest   extractStateRef
+
+    -- ScriptsDatums
+  , resolveDatum            = ScriptsDatums.resolveDatumIngest            dedupStores
+  , resolveScript           = ScriptsDatums.resolveScriptIngest           dedupStores
+  , resolveRedeemerData     = ScriptsDatums.resolveRedeemerDataIngest     dedupStores
+  , assignRedeemerId        = ScriptsDatums.assignRedeemerIdIngest        extractStateRef
+
+    -- Governance
+  , resolveDrepHash             = Governance.resolveDrepHashIngest             dedupStores
+  , resolveCommitteeHash        = Governance.resolveCommitteeHashIngest        dedupStores
+  , resolveVotingAnchor         = Governance.resolveVotingAnchorIngest         dedupStores
+  , assignGovActionProposalId   = Governance.assignGovActionProposalIdIngest   extractStateRef
+  , assignParamProposalId       = Governance.assignParamProposalIdIngest       extractStateRef
+  , assignCommitteeId           = Governance.assignCommitteeIdIngest           extractStateRef
+  , assignConstitutionId        = Governance.assignConstitutionIdIngest        extractStateRef
+  , assignEventInfoId           = Governance.assignEventInfoIdIngest           extractStateRef
+  , lookupGovActionProposalId   = Governance.lookupGovActionProposalIdIngest   extractStateRef
+  , recordGovActionProposalId   = Governance.recordGovActionProposalIdIngest   extractStateRef
+  , readEnactedEpochStateIds    = Governance.readEnactedEpochStateIdsIngest    extractStateRef
+  , writeEnactedEpochStateIds   = Governance.writeEnactedEpochStateIdsIngest   extractStateRef
+  , readGovExpiresAfter         = Governance.readGovExpiresAfterIngest         extractStateRef
+  , writeGovExpiresAfter        = Governance.writeGovExpiresAfterIngest        extractStateRef
   }

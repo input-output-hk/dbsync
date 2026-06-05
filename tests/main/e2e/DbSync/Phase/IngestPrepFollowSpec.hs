@@ -119,8 +119,8 @@ spec = describe "IngestChainHistory \x2192 PreparingForVolatileTail \x2192 Follo
 
           -- Every LOGGED table with a PK has its id sequence advanced
           -- to MAX(id) + 1 (or 1 on an empty table).
-          forM_ pkSequenceTables $ \(table, seqName) -> do
-            ok <- sequenceAdvanced table seqName
+          forM_ pkSequenceTables $ \table -> do
+            ok <- sequenceAdvanced table
             ok `shouldBe` True
 
           -- sync_state has been populated and never sits ahead of the
@@ -172,18 +172,15 @@ spec = describe "IngestChainHistory \x2192 PreparingForVolatileTail \x2192 Follo
           followLastSlot  `shouldBe` followMaxSlot
           followLastBlock `shouldBe` followMaxBlock
 
--- | Tables whose PK gets an @<table>_id_seq@ attached during Prep's
--- LOGGED flip, paired with the sequence name. Narrow on purpose: the
--- assertion checks both that the sequence advanced on populated
--- tables and that it sits at 1 on empty ones, so the list is limited
--- to tables the Conway test chain reliably populates.
-pkSequenceTables :: [(Text, Text)]
-pkSequenceTables = map withSeq
+-- | Tables whose PK has a sequence attached during Prep. Narrow on
+-- purpose: the assertion checks both that the sequence advanced on
+-- populated tables and that it sits at 1 on empty ones, so the list
+-- is limited to tables the Conway test chain reliably populates.
+pkSequenceTables :: [Text]
+pkSequenceTables = map tdName
   [ blockTableDef
   , txTableDef
   , txOutTableDef
   , txInTableDef
   , slotLeaderTableDef
   ]
-  where
-    withSeq td = (tdName td, tdName td <> "_id_seq")

@@ -24,11 +24,17 @@ import Data.ByteString.Short (ShortByteString)
 import DbSync.Db.Schema.Address (Address)
 import DbSync.Db.Schema.Core (SlotLeader)
 import DbSync.Db.Schema.EpochBoundary (CostModel)
+import DbSync.Db.Schema.Governance
+  ( CommitteeHash
+  , DrepHash
+  , VotingAnchor
+  )
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.MultiAsset (MultiAsset)
 import DbSync.Db.Schema.Pool (PoolHash)
+import DbSync.Db.Schema.ScriptsDatums (Datum, RedeemerData, Script)
 import DbSync.Db.Schema.StakeDelegation (StakeAddress)
-import DbSync.Db.Types (DbLovelace)
+import DbSync.Db.Types (AnchorType, DbLovelace)
 import DbSync.Phase.Ingest.UtxoStore (UtxoTxEntry)
 
 -- ---------------------------------------------------------------------------
@@ -79,22 +85,7 @@ data IdResolver m = IdResolver
     -- INSERT-then-UPDATE. Panics in Ingest.
   , resolveAddressId :: !(ByteString -> Address -> m AddressId)
 
-    -- | Assign the next tx_in ID.
-  , assignTxInId           :: !(m TxInId)
-
-    -- | Assign the next collateral_tx_in ID.
-  , assignCollateralTxInId :: !(m CollateralTxInId)
   , assignCollateralTxOutId :: !(m CollateralTxOutId)
-
-    -- | Assign the next reference_tx_in ID.
-  , assignReferenceTxInId  :: !(m ReferenceTxInId)
-
-    -- ---------------------------------------------------------------
-    -- Metadata extractor IDs
-    -- ---------------------------------------------------------------
-
-    -- | Assign the next tx_metadata ID.
-  , assignTxMetadataId :: !(m TxMetadataId)
 
     -- ---------------------------------------------------------------
     -- MultiAsset extractor IDs
@@ -106,12 +97,6 @@ data IdResolver m = IdResolver
     -- Returns @(MultiAssetId, isNew)@.
   , resolveMultiAsset :: !(ShortByteString -> MultiAsset -> m (MultiAssetId, Bool))
 
-    -- | Assign the next ma_tx_mint ID.
-  , assignMaTxMintId :: !(m MaTxMintId)
-
-    -- | Assign the next ma_tx_out ID.
-  , assignMaTxOutId  :: !(m MaTxOutId)
-
     -- ---------------------------------------------------------------
     -- StakeDelegation extractor IDs
     -- ---------------------------------------------------------------
@@ -119,18 +104,6 @@ data IdResolver m = IdResolver
     -- | Resolve a stake address by its credential hash.
     -- Returns @(StakeAddressId, isNew)@.
   , resolveStakeAddress :: !(ByteString -> StakeAddress -> m (StakeAddressId, Bool))
-
-    -- | Assign the next stake_registration ID.
-  , assignStakeRegistrationId :: !(m StakeRegistrationId)
-
-    -- | Assign the next stake_deregistration ID.
-  , assignStakeDeregistrationId :: !(m StakeDeregistrationId)
-
-    -- | Assign the next delegation ID.
-  , assignDelegationId :: !(m DelegationId)
-
-    -- | Assign the next withdrawal ID.
-  , assignWithdrawalId :: !(m WithdrawalId)
 
     -- ---------------------------------------------------------------
     -- Pool extractor IDs
@@ -146,22 +119,6 @@ data IdResolver m = IdResolver
     -- | Assign the next pool_metadata_ref ID.
   , assignPoolMetadataRefId :: !(m PoolMetadataRefId)
 
-    -- | Assign the next pool_owner ID.
-  , assignPoolOwnerId :: !(m PoolOwnerId)
-
-    -- | Assign the next pool_retire ID.
-  , assignPoolRetireId :: !(m PoolRetireId)
-
-    -- | Assign the next pool_relay ID.
-  , assignPoolRelayId :: !(m PoolRelayId)
-
-    -- ---------------------------------------------------------------
-    -- CBOR extractor IDs
-    -- ---------------------------------------------------------------
-
-    -- | Assign the next tx_cbor ID.
-  , assignTxCborId :: !(m TxCborId)
-
     -- ---------------------------------------------------------------
     -- EpochSyncStats IDs
     -- ---------------------------------------------------------------
@@ -173,28 +130,98 @@ data IdResolver m = IdResolver
     -- EpochBoundary IDs
     -- ---------------------------------------------------------------
 
-    -- | Assign the next ada_pots ID.
-  , assignAdaPotsId :: !(m AdaPotsId)
-
-    -- | Assign the next epoch_param ID.
-  , assignEpochParamId :: !(m EpochParamId)
-
-    -- | Assign the next epoch_state ID.
-  , assignEpochStateId :: !(m EpochStateId)
-
     -- | Resolve a cost_model by its 32-byte canonical hash.
     -- Returns @(CostModelId, isNew)@; the caller writes the
     -- 'CostModel' row when @isNew = True@.
   , resolveCostModel :: !(ByteString -> CostModel -> m (CostModelId, Bool))
 
-    -- | Assign the next pot_transfer ID.
-  , assignPotTransferId :: !(m PotTransferId)
+    -- ---------------------------------------------------------------
+    -- ScriptsDatums extractor IDs
+    -- ---------------------------------------------------------------
 
-    -- | Assign the next treasury ID.
-  , assignTreasuryId :: !(m TreasuryId)
+    -- | Resolve a datum by its 32-byte hash. Returns @(DatumId, isNew)@.
+  , resolveDatum :: !(ByteString -> Datum -> m (DatumId, Bool))
 
-    -- | Assign the next reserve ID.
-  , assignReserveId :: !(m ReserveId)
+    -- | Resolve a script by its hash. Returns @(ScriptId, isNew)@.
+  , resolveScript :: !(ByteString -> Script -> m (ScriptId, Bool))
+
+    -- | Resolve a redeemer_data by its 32-byte hash.
+    -- Returns @(RedeemerDataId, isNew)@.
+  , resolveRedeemerData :: !(ByteString -> RedeemerData -> m (RedeemerDataId, Bool))
+
+    -- | Assign the next redeemer ID.
+  , assignRedeemerId :: !(m RedeemerId)
+
+    -- ---------------------------------------------------------------
+    -- Governance extractor IDs
+    -- ---------------------------------------------------------------
+
+    -- | Resolve a DRep credential. The 'ByteString' is the 28-byte
+    -- credential hash for concrete DReps; the abstract
+    -- @always_abstain@ / @always_no_confidence@ DReps share a
+    -- distinct sentinel (the Bech32 @view@ string encoded as bytes)
+    -- so the dedup key is total.
+  , resolveDrepHash :: !(ByteString -> DrepHash -> m (DrepHashId, Bool))
+
+    -- | Resolve a committee-hash credential by @(raw, has_script)@.
+    -- The pair is encoded as @raw <> [has_script_byte]@ so the
+    -- key is a single 'ByteString'.
+  , resolveCommitteeHash :: !(ByteString -> CommitteeHash -> m (CommitteeHashId, Bool))
+
+    -- | Resolve a voting anchor by the @(url, data_hash, type)@
+    -- natural key. The key is encoded by the caller; the resolver
+    -- only sees a single 'ByteString'.
+  , resolveVotingAnchor :: !(ByteString -> AnchorType -> VotingAnchor -> m (VotingAnchorId, Bool))
+
+    -- | Assign the next gov_action_proposal ID.
+  , assignGovActionProposalId :: !(m GovActionProposalId)
+
+    -- | Assign the next param_proposal ID.
+  , assignParamProposalId :: !(m ParamProposalId)
+
+    -- | Assign the next committee ID.
+  , assignCommitteeId :: !(m CommitteeId)
+
+    -- | Assign the next constitution ID.
+  , assignConstitutionId :: !(m ConstitutionId)
+
+    -- | Assign the next event_info ID.
+  , assignEventInfoId :: !(m EventInfoId)
+
+    -- | Look up an existing @gov_action_proposal.id@ by the proposing
+    -- tx hash + proposal index. 'Nothing' for cross-block references
+    -- that have not been seen yet (or have rolled back). Reads from
+    -- the in-process cache in Ingest; SELECTs from PG in Follow.
+  , lookupGovActionProposalId
+      :: !(ByteString -> Word64 -> m (Maybe GovActionProposalId))
+
+    -- | Stash a freshly written @gov_action_proposal.id@ in the
+    -- cache so later blocks' votes can resolve it without a SELECT.
+    -- No-op in Follow (cache lives in PG via @SELECT@).
+  , recordGovActionProposalId
+      :: !(ByteString -> Word64 -> GovActionProposalId -> m ())
+
+    -- | Snapshot the @(committee_id, no_confidence_id, constitution_id)@
+    -- triple representing the currently enacted gov state. EpochBoundary
+    -- reads this when building the next @epoch_state@ row.
+  , readEnactedEpochStateIds
+      :: !(m (Maybe Int64, Maybe Int64, Maybe Int64))
+
+    -- | Replace the snapshot read by 'readEnactedEpochStateIds'.
+    -- Called by the governance boundary handler after detecting an
+    -- enactment.
+  , writeEnactedEpochStateIds
+      :: !((Maybe Int64, Maybe Int64, Maybe Int64) -> m ())
+
+    -- | Latest @apGovExpiresAfter@ (gov-action lifetime, epochs)
+    -- reported by the ledger worker. 'Nothing' pre-Conway. Read by
+    -- the per-block proposal pass to compute
+    -- @gov_action_proposal.expiration@.
+  , readGovExpiresAfter :: !(m (Maybe Word64))
+
+    -- | Stash the latest @apGovExpiresAfter@. Called by the
+    -- governance boundary handler.
+  , writeGovExpiresAfter :: !(Maybe Word64 -> m ())
 
     -- ---------------------------------------------------------------
     -- Inline value resolution (Follow path)

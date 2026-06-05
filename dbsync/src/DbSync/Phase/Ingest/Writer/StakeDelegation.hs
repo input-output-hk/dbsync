@@ -30,16 +30,7 @@ import DbSync.Db.Schema.EpochBoundary
   , reserveTableDef
   , treasuryTableDef
   )
-import DbSync.Db.Schema.Ids
-  ( DelegationId
-  , PotTransferId
-  , ReserveId
-  , StakeAddressId
-  , StakeDeregistrationId
-  , StakeRegistrationId
-  , TreasuryId
-  , WithdrawalId
-  )
+import DbSync.Db.Schema.Ids (StakeAddressId)
 import DbSync.Db.Schema.StakeDelegation
   ( Delegation
   , StakeAddress
@@ -62,23 +53,23 @@ import DbSync.Db.Schema.Types (TableDef (..))
 writeStakeAddressCopy :: LoaderStream -> StakeAddressId -> StakeAddress -> IO ()
 writeStakeAddressCopy ls sid sa = lsWriteRow ls (tdName stakeAddressTableDef) (encodeStakeAddressCopy sid sa)
 
-writeStakeRegistrationCopy :: LoaderStream -> StakeRegistrationId -> StakeRegistration -> IO ()
-writeStakeRegistrationCopy ls sid sr = lsWriteRow ls (tdName stakeRegistrationTableDef) (encodeStakeRegistrationCopy sid sr)
+writeStakeRegistrationCopy :: LoaderStream -> StakeRegistration -> IO ()
+writeStakeRegistrationCopy ls sr = lsWriteRow ls (tdName stakeRegistrationTableDef) (encodeStakeRegistrationCopy sr)
 
-writeStakeDeregistrationCopy :: LoaderStream -> StakeDeregistrationId -> StakeDeregistration -> IO ()
-writeStakeDeregistrationCopy ls sid sd = lsWriteRow ls (tdName stakeDeregistrationTableDef) (encodeStakeDeregistrationCopy sid sd)
+writeStakeDeregistrationCopy :: LoaderStream -> StakeDeregistration -> IO ()
+writeStakeDeregistrationCopy ls sd = lsWriteRow ls (tdName stakeDeregistrationTableDef) (encodeStakeDeregistrationCopy sd)
 
-writeDelegationCopy :: LoaderStream -> DelegationId -> Delegation -> IO ()
-writeDelegationCopy ls did d = lsWriteRow ls (tdName delegationTableDef) (encodeDelegationCopy did d)
+writeDelegationCopy :: LoaderStream -> Delegation -> IO ()
+writeDelegationCopy ls d = lsWriteRow ls (tdName delegationTableDef) (encodeDelegationCopy d)
 
-writeWithdrawalCopy :: LoaderStream -> WithdrawalId -> Withdrawal -> IO ()
-writeWithdrawalCopy ls wid w = lsWriteRow ls (tdName withdrawalTableDef) (encodeWithdrawalCopy wid w)
+writeWithdrawalCopy :: LoaderStream -> Withdrawal -> IO ()
+writeWithdrawalCopy ls w = lsWriteRow ls (tdName withdrawalTableDef) (encodeWithdrawalCopy w)
 
-writePotTransferCopy :: LoaderStream -> PotTransferId -> PotTransfer -> IO ()
-writePotTransferCopy ls ptid pt = lsWriteRow ls (tdName potTransferTableDef) (encodePotTransferCopy ptid pt)
+writePotTransferCopy :: LoaderStream -> PotTransfer -> IO ()
+writePotTransferCopy ls pt = lsWriteRow ls (tdName potTransferTableDef) (encodePotTransferCopy pt)
 
-writeTreasuryCopy :: LoaderStream -> TreasuryId -> Treasury -> IO ()
-writeTreasuryCopy ls tid t = lsWriteRow ls (tdName treasuryTableDef) (encodeTreasuryCopy tid t)
+writeTreasuryCopy :: LoaderStream -> Treasury -> IO ()
+writeTreasuryCopy ls t = lsWriteRow ls (tdName treasuryTableDef) (encodeTreasuryCopy t)
 
-writeReserveCopy :: LoaderStream -> ReserveId -> Reserve -> IO ()
-writeReserveCopy ls rid r = lsWriteRow ls (tdName reserveTableDef) (encodeReserveCopy rid r)
+writeReserveCopy :: LoaderStream -> Reserve -> IO ()
+writeReserveCopy ls r = lsWriteRow ls (tdName reserveTableDef) (encodeReserveCopy r)

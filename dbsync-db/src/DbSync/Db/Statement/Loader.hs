@@ -42,14 +42,20 @@ copyFromStdinSql tableName colList =
 -- | Comma-separated, double-quoted column list ready to drop into
 -- the @COPY@ command — e.g. @"id", "hash", "epoch_no"@.
 --
--- Excludes any columns listed in 'tdGeneratedColumns' so PostgreSQL
--- evaluates their @GENERATED ALWAYS AS@ expressions on insert
--- instead of expecting the loader to supply them.
+-- Excludes any columns listed in 'tdGeneratedColumns' (PostgreSQL
+-- evaluates their @GENERATED ALWAYS AS@ expressions on insert) and
+-- any columns in 'tdIdentityColumns' (PostgreSQL allocates from the
+-- backing sequence). The loader's per-table COPY row encoders must
+-- omit the corresponding fields.
 copyableColumnList :: TableDef -> ByteString
 copyableColumnList td =
   BS.intercalate ", " $
     map (TE.encodeUtf8 . quote . cdName) ingestable
   where
-    generated  = map fst (tdGeneratedColumns td)
-    ingestable = filter (\c -> cdName c `notElem` generated) (tdColumns td)
+    generated    = map fst (tdGeneratedColumns td)
+    identityCols = tdIdentityColumns td
+    ingestable   =
+      filter
+        (\c -> cdName c `notElem` generated && cdName c `notElem` identityCols)
+        (tdColumns td)
     quote name = "\"" <> name <> "\""

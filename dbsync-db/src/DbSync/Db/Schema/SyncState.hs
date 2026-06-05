@@ -39,54 +39,35 @@ import Data.Functor.Contravariant ((>$<))
 import qualified Hasql.Decoders as D
 import qualified Hasql.Encoders as E
 
-import DbSync.Db.Schema.AdaPots (adaPotsTableDef)
 import DbSync.Db.Schema.Address (addressTableDef)
-import DbSync.Db.Schema.CBOR (txCborTableDef)
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
-import DbSync.Db.Schema.EpochBoundary
-  ( costModelTableDef
-  , epochParamTableDef
-  , epochStateTableDef
-  , potTransferTableDef
-  , reserveTableDef
-  , treasuryTableDef
-  )
+import DbSync.Db.Schema.EpochBoundary (costModelTableDef)
 import DbSync.Db.Schema.EpochSyncStats (epochSyncStatsTableDef)
-import DbSync.Db.Schema.Metadata (txMetadataTableDef)
-import DbSync.Db.Schema.MultiAsset
-  ( maTxMintTableDef
-  , maTxOutTableDef
-  , multiAssetTableDef
+import DbSync.Db.Schema.Governance
+  ( committeeTableDef
+  , constitutionTableDef
+  , eventInfoTableDef
+  , govActionProposalTableDef
+  , paramProposalTableDef
   )
+import DbSync.Db.Schema.MultiAsset (multiAssetTableDef)
 import DbSync.Db.Schema.Pool
   ( poolHashTableDef
   , poolMetadataRefTableDef
-  , poolOwnerTableDef
-  , poolRelayTableDef
-  , poolRetireTableDef
   , poolUpdateTableDef
   )
-import DbSync.Db.Schema.ScriptsDatums (scriptTableDef)
-import DbSync.Db.Schema.StakeDelegation
-  ( delegationTableDef
-  , stakeAddressTableDef
-  , stakeDeregistrationTableDef
-  , stakeRegistrationTableDef
-  , withdrawalTableDef
+import DbSync.Db.Schema.ScriptsDatums
+  ( redeemerTableDef
+  , scriptTableDef
   )
+import DbSync.Db.Schema.StakeDelegation (stakeAddressTableDef)
 import DbSync.Db.Schema.Types
   ( ColumnDef (..)
   , PgType (..)
   , TableDef (..)
   , TableMode (..)
   )
-import DbSync.Db.Schema.UTxO
-  ( collateralTxInTableDef
-  , collateralTxOutTableDef
-  , referenceTxInTableDef
-  , txInTableDef
-  , txOutTableDef
-  )
+import DbSync.Db.Schema.UTxO (collateralTxOutTableDef, txOutTableDef)
 
 -- ---------------------------------------------------------------------------
 -- * Row type
@@ -105,37 +86,23 @@ data SyncStateRow = SyncStateRow
   , ssrBlockIdCounter                :: !Int64
   , ssrTxIdCounter                   :: !Int64
   , ssrTxOutIdCounter                :: !Int64
-  , ssrTxInIdCounter                 :: !Int64
-  , ssrCollateralTxInIdCounter       :: !Int64
-  , ssrReferenceTxInIdCounter        :: !Int64
-  , ssrTxMetadataIdCounter           :: !Int64
-  , ssrMaTxMintIdCounter             :: !Int64
-  , ssrMaTxOutIdCounter              :: !Int64
   , ssrSlotLeaderIdCounter           :: !Int64
   , ssrAddressIdCounter              :: !Int64
   , ssrStakeAddressIdCounter         :: !Int64
   , ssrPoolHashIdCounter             :: !Int64
   , ssrMultiAssetIdCounter           :: !Int64
   , ssrScriptIdCounter               :: !Int64
-  , ssrStakeRegistrationIdCounter    :: !Int64
-  , ssrStakeDeregistrationIdCounter  :: !Int64
-  , ssrDelegationIdCounter           :: !Int64
-  , ssrWithdrawalIdCounter           :: !Int64
   , ssrPoolUpdateIdCounter           :: !Int64
   , ssrPoolMetadataRefIdCounter      :: !Int64
-  , ssrPoolOwnerIdCounter            :: !Int64
-  , ssrPoolRetireIdCounter           :: !Int64
-  , ssrPoolRelayIdCounter            :: !Int64
-  , ssrTxCborIdCounter               :: !Int64
-  , ssrEpochSyncStatsIdCounter       :: !Int64
-  , ssrAdaPotsIdCounter              :: !Int64
-  , ssrCollateralTxOutIdCounter      :: !Int64
-  , ssrEpochParamIdCounter           :: !Int64
-  , ssrEpochStateIdCounter           :: !Int64
   , ssrCostModelIdCounter            :: !Int64
-  , ssrPotTransferIdCounter          :: !Int64
-  , ssrTreasuryIdCounter             :: !Int64
-  , ssrReserveIdCounter              :: !Int64
+  , ssrRedeemerIdCounter             :: !Int64
+  , ssrCollateralTxOutIdCounter      :: !Int64
+  , ssrEpochSyncStatsIdCounter       :: !Int64
+  , ssrGovActionProposalIdCounter    :: !Int64
+  , ssrParamProposalIdCounter        :: !Int64
+  , ssrCommitteeIdCounter            :: !Int64
+  , ssrConstitutionIdCounter         :: !Int64
+  , ssrEventInfoIdCounter            :: !Int64
   , ssrSchemaVersionApplied          :: !Int
   , ssrLedgerEnabled                 :: !Bool
   , ssrSyncComplete                  :: !Bool
@@ -188,6 +155,7 @@ syncStateTableDef = TableDef
         : map (\c -> (c, "1")) syncStateCounterColumns
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
   where
@@ -231,37 +199,23 @@ idCounterByTable =
   [ (tdName blockTableDef,                ssrBlockIdCounter)
   , (tdName txTableDef,                   ssrTxIdCounter)
   , (tdName txOutTableDef,                ssrTxOutIdCounter)
-  , (tdName txInTableDef,                 ssrTxInIdCounter)
-  , (tdName collateralTxInTableDef,       ssrCollateralTxInIdCounter)
-  , (tdName referenceTxInTableDef,        ssrReferenceTxInIdCounter)
-  , (tdName txMetadataTableDef,           ssrTxMetadataIdCounter)
-  , (tdName maTxMintTableDef,             ssrMaTxMintIdCounter)
-  , (tdName maTxOutTableDef,              ssrMaTxOutIdCounter)
   , (tdName slotLeaderTableDef,           ssrSlotLeaderIdCounter)
   , (tdName addressTableDef,              ssrAddressIdCounter)
   , (tdName stakeAddressTableDef,         ssrStakeAddressIdCounter)
   , (tdName poolHashTableDef,             ssrPoolHashIdCounter)
   , (tdName multiAssetTableDef,           ssrMultiAssetIdCounter)
   , (tdName scriptTableDef,               ssrScriptIdCounter)
-  , (tdName stakeRegistrationTableDef,    ssrStakeRegistrationIdCounter)
-  , (tdName stakeDeregistrationTableDef,  ssrStakeDeregistrationIdCounter)
-  , (tdName delegationTableDef,           ssrDelegationIdCounter)
-  , (tdName withdrawalTableDef,           ssrWithdrawalIdCounter)
   , (tdName poolUpdateTableDef,           ssrPoolUpdateIdCounter)
   , (tdName poolMetadataRefTableDef,      ssrPoolMetadataRefIdCounter)
-  , (tdName poolOwnerTableDef,            ssrPoolOwnerIdCounter)
-  , (tdName poolRetireTableDef,           ssrPoolRetireIdCounter)
-  , (tdName poolRelayTableDef,            ssrPoolRelayIdCounter)
-  , (tdName txCborTableDef,               ssrTxCborIdCounter)
-  , (tdName epochSyncStatsTableDef,       ssrEpochSyncStatsIdCounter)
-  , (tdName adaPotsTableDef,              ssrAdaPotsIdCounter)
-  , (tdName collateralTxOutTableDef,      ssrCollateralTxOutIdCounter)
-  , (tdName epochParamTableDef,           ssrEpochParamIdCounter)
-  , (tdName epochStateTableDef,           ssrEpochStateIdCounter)
   , (tdName costModelTableDef,            ssrCostModelIdCounter)
-  , (tdName potTransferTableDef,          ssrPotTransferIdCounter)
-  , (tdName treasuryTableDef,             ssrTreasuryIdCounter)
-  , (tdName reserveTableDef,              ssrReserveIdCounter)
+  , (tdName redeemerTableDef,             ssrRedeemerIdCounter)
+  , (tdName collateralTxOutTableDef,      ssrCollateralTxOutIdCounter)
+  , (tdName epochSyncStatsTableDef,       ssrEpochSyncStatsIdCounter)
+  , (tdName govActionProposalTableDef,    ssrGovActionProposalIdCounter)
+  , (tdName paramProposalTableDef,        ssrParamProposalIdCounter)
+  , (tdName committeeTableDef,            ssrCommitteeIdCounter)
+  , (tdName constitutionTableDef,         ssrConstitutionIdCounter)
+  , (tdName eventInfoTableDef,            ssrEventInfoIdCounter)
   ]
 
 -- ---------------------------------------------------------------------------
@@ -279,37 +233,23 @@ syncStateRowEncoder =
   <> (ssrBlockIdCounter                            >$< E.param (E.nonNullable E.int8))
   <> (ssrTxIdCounter                               >$< E.param (E.nonNullable E.int8))
   <> (ssrTxOutIdCounter                            >$< E.param (E.nonNullable E.int8))
-  <> (ssrTxInIdCounter                             >$< E.param (E.nonNullable E.int8))
-  <> (ssrCollateralTxInIdCounter                   >$< E.param (E.nonNullable E.int8))
-  <> (ssrReferenceTxInIdCounter                    >$< E.param (E.nonNullable E.int8))
-  <> (ssrTxMetadataIdCounter                       >$< E.param (E.nonNullable E.int8))
-  <> (ssrMaTxMintIdCounter                         >$< E.param (E.nonNullable E.int8))
-  <> (ssrMaTxOutIdCounter                          >$< E.param (E.nonNullable E.int8))
   <> (ssrSlotLeaderIdCounter                       >$< E.param (E.nonNullable E.int8))
   <> (ssrAddressIdCounter                          >$< E.param (E.nonNullable E.int8))
   <> (ssrStakeAddressIdCounter                     >$< E.param (E.nonNullable E.int8))
   <> (ssrPoolHashIdCounter                         >$< E.param (E.nonNullable E.int8))
   <> (ssrMultiAssetIdCounter                       >$< E.param (E.nonNullable E.int8))
   <> (ssrScriptIdCounter                           >$< E.param (E.nonNullable E.int8))
-  <> (ssrStakeRegistrationIdCounter                >$< E.param (E.nonNullable E.int8))
-  <> (ssrStakeDeregistrationIdCounter              >$< E.param (E.nonNullable E.int8))
-  <> (ssrDelegationIdCounter                       >$< E.param (E.nonNullable E.int8))
-  <> (ssrWithdrawalIdCounter                       >$< E.param (E.nonNullable E.int8))
   <> (ssrPoolUpdateIdCounter                       >$< E.param (E.nonNullable E.int8))
   <> (ssrPoolMetadataRefIdCounter                  >$< E.param (E.nonNullable E.int8))
-  <> (ssrPoolOwnerIdCounter                        >$< E.param (E.nonNullable E.int8))
-  <> (ssrPoolRetireIdCounter                       >$< E.param (E.nonNullable E.int8))
-  <> (ssrPoolRelayIdCounter                        >$< E.param (E.nonNullable E.int8))
-  <> (ssrTxCborIdCounter                           >$< E.param (E.nonNullable E.int8))
-  <> (ssrEpochSyncStatsIdCounter                   >$< E.param (E.nonNullable E.int8))
-  <> (ssrAdaPotsIdCounter                          >$< E.param (E.nonNullable E.int8))
-  <> (ssrCollateralTxOutIdCounter                  >$< E.param (E.nonNullable E.int8))
-  <> (ssrEpochParamIdCounter                       >$< E.param (E.nonNullable E.int8))
-  <> (ssrEpochStateIdCounter                       >$< E.param (E.nonNullable E.int8))
   <> (ssrCostModelIdCounter                        >$< E.param (E.nonNullable E.int8))
-  <> (ssrPotTransferIdCounter                      >$< E.param (E.nonNullable E.int8))
-  <> (ssrTreasuryIdCounter                         >$< E.param (E.nonNullable E.int8))
-  <> (ssrReserveIdCounter                          >$< E.param (E.nonNullable E.int8))
+  <> (ssrRedeemerIdCounter                         >$< E.param (E.nonNullable E.int8))
+  <> (ssrCollateralTxOutIdCounter                  >$< E.param (E.nonNullable E.int8))
+  <> (ssrEpochSyncStatsIdCounter                   >$< E.param (E.nonNullable E.int8))
+  <> (ssrGovActionProposalIdCounter                >$< E.param (E.nonNullable E.int8))
+  <> (ssrParamProposalIdCounter                    >$< E.param (E.nonNullable E.int8))
+  <> (ssrCommitteeIdCounter                        >$< E.param (E.nonNullable E.int8))
+  <> (ssrConstitutionIdCounter                     >$< E.param (E.nonNullable E.int8))
+  <> (ssrEventInfoIdCounter                        >$< E.param (E.nonNullable E.int8))
   <> (fromIntegral . ssrSchemaVersionApplied       >$< E.param (E.nonNullable E.int4))
   <> (ssrLedgerEnabled                             >$< E.param (E.nonNullable E.bool))
 
@@ -332,37 +272,23 @@ syncStateRowDecoder =
         <*> D.column (D.nonNullable D.int8)                        -- block_id_counter
         <*> D.column (D.nonNullable D.int8)                        -- tx_id_counter
         <*> D.column (D.nonNullable D.int8)                        -- tx_out_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- tx_in_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- collateral_tx_in_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- reference_tx_in_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- tx_metadata_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- ma_tx_mint_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- ma_tx_out_id_counter
         <*> D.column (D.nonNullable D.int8)                        -- slot_leader_id_counter
         <*> D.column (D.nonNullable D.int8)                        -- address_id_counter
         <*> D.column (D.nonNullable D.int8)                        -- stake_address_id_counter
         <*> D.column (D.nonNullable D.int8)                        -- pool_hash_id_counter
         <*> D.column (D.nonNullable D.int8)                        -- multi_asset_id_counter
         <*> D.column (D.nonNullable D.int8)                        -- script_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- stake_registration_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- stake_deregistration_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- delegation_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- withdrawal_id_counter
         <*> D.column (D.nonNullable D.int8)                        -- pool_update_id_counter
         <*> D.column (D.nonNullable D.int8)                        -- pool_metadata_ref_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- pool_owner_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- pool_retire_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- pool_relay_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- tx_cbor_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- epoch_sync_stats_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- ada_pots_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- collateral_tx_out_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- epoch_param_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- epoch_state_id_counter
         <*> D.column (D.nonNullable D.int8)                        -- cost_model_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- pot_transfer_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- treasury_id_counter
-        <*> D.column (D.nonNullable D.int8)                        -- reserve_id_counter
+        <*> D.column (D.nonNullable D.int8)                        -- redeemer_id_counter
+        <*> D.column (D.nonNullable D.int8)                        -- collateral_tx_out_id_counter
+        <*> D.column (D.nonNullable D.int8)                        -- epoch_sync_stats_id_counter
+        <*> D.column (D.nonNullable D.int8)                        -- gov_action_proposal_id_counter
+        <*> D.column (D.nonNullable D.int8)                        -- param_proposal_id_counter
+        <*> D.column (D.nonNullable D.int8)                        -- committee_id_counter
+        <*> D.column (D.nonNullable D.int8)                        -- constitution_id_counter
+        <*> D.column (D.nonNullable D.int8)                        -- event_info_id_counter
         <*> (fromIntegral <$> D.column (D.nonNullable D.int4))     -- schema_version_applied
         <*> D.column (D.nonNullable D.bool)                        -- ledger_enabled
         <*> D.column (D.nonNullable D.bool)                        -- sync_complete

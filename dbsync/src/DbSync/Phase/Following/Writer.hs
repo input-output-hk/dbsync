@@ -37,9 +37,11 @@ import qualified DbSync.Phase.Following.Writer.Cbor as Cbor
 import qualified DbSync.Phase.Following.Writer.Core as Core
 import qualified DbSync.Phase.Following.Writer.Epoch as Epoch
 import qualified DbSync.Phase.Following.Writer.EpochBoundary as EpochBoundary
+import qualified DbSync.Phase.Following.Writer.Governance as Governance
 import qualified DbSync.Phase.Following.Writer.Metadata as Metadata
 import qualified DbSync.Phase.Following.Writer.MultiAsset as MultiAsset
 import qualified DbSync.Phase.Following.Writer.Pool as Pool
+import qualified DbSync.Phase.Following.Writer.ScriptsDatums as ScriptsDatums
 import qualified DbSync.Phase.Following.Writer.StakeDelegation as Stake
 import qualified DbSync.Phase.Following.Writer.UTxO as UTxO
 import DbSync.Writer (Writer (..))
@@ -98,6 +100,31 @@ mkWriter conn = Writer
   , writeEpochParam = EpochBoundary.writeEpochParamConn conn
   , writeEpochState = EpochBoundary.writeEpochStateConn conn
   , writeCostModel  = EpochBoundary.writeCostModelConn conn
+
+    -- ScriptsDatums
+  , writeDatum           = ScriptsDatums.writeDatumConn conn
+  , writeScript          = ScriptsDatums.writeScriptConn conn
+  , writeRedeemer        = ScriptsDatums.writeRedeemerConn conn
+  , writeRedeemerData    = ScriptsDatums.writeRedeemerDataConn conn
+  , writeExtraKeyWitness = ScriptsDatums.writeExtraKeyWitnessConn conn
+
+    -- Governance
+  , writeGovActionProposal       = Governance.writeGovActionProposalConn conn
+  , writeParamProposal           = Governance.writeParamProposalConn conn
+  , writeCommittee               = Governance.writeCommitteeConn conn
+  , writeConstitution            = Governance.writeConstitutionConn conn
+  , writeEventInfo               = Governance.writeEventInfoConn conn
+  , writeDrepHash                = Governance.writeDrepHashConn conn
+  , writeCommitteeHash           = Governance.writeCommitteeHashConn conn
+  , writeVotingAnchor            = Governance.writeVotingAnchorConn conn
+  , writeDrepRegistration        = Governance.writeDrepRegistrationConn conn
+  , writeDrepDistr               = Governance.writeDrepDistrConn conn
+  , writeDelegationVote          = Governance.writeDelegationVoteConn conn
+  , writeVotingProcedure         = Governance.writeVotingProcedureConn conn
+  , writeTreasuryWithdrawal      = Governance.writeTreasuryWithdrawalConn conn
+  , writeCommitteeMember         = Governance.writeCommitteeMemberConn conn
+  , writeCommitteeRegistration   = Governance.writeCommitteeRegistrationConn conn
+  , writeCommitteeDeRegistration = Governance.writeCommitteeDeRegistrationConn conn
 
     -- No-op: the per-block transaction envelope is owned by
     -- 'DbSync.Phase.Following.Run', not the Writer.
@@ -164,6 +191,31 @@ mkBufferedWriter buf = Writer
   , writeEpochParam = EpochBoundary.writeEpochParamBuf buf
   , writeEpochState = EpochBoundary.writeEpochStateBuf buf
   , writeCostModel  = EpochBoundary.writeCostModelBuf buf
+
+    -- ScriptsDatums
+  , writeDatum           = ScriptsDatums.writeDatumBuf buf
+  , writeScript          = ScriptsDatums.writeScriptBuf buf
+  , writeRedeemer        = ScriptsDatums.writeRedeemerBuf buf
+  , writeRedeemerData    = ScriptsDatums.writeRedeemerDataBuf buf
+  , writeExtraKeyWitness = ScriptsDatums.writeExtraKeyWitnessBuf buf
+
+    -- Governance
+  , writeGovActionProposal       = Governance.writeGovActionProposalBuf buf
+  , writeParamProposal           = Governance.writeParamProposalBuf buf
+  , writeCommittee               = Governance.writeCommitteeBuf buf
+  , writeConstitution            = Governance.writeConstitutionBuf buf
+  , writeEventInfo               = Governance.writeEventInfoBuf buf
+  , writeDrepHash                = Governance.writeDrepHashBuf buf
+  , writeCommitteeHash           = Governance.writeCommitteeHashBuf buf
+  , writeVotingAnchor            = Governance.writeVotingAnchorBuf buf
+  , writeDrepRegistration        = Governance.writeDrepRegistrationBuf buf
+  , writeDrepDistr               = Governance.writeDrepDistrBuf buf
+  , writeDelegationVote          = Governance.writeDelegationVoteBuf buf
+  , writeVotingProcedure         = Governance.writeVotingProcedureBuf buf
+  , writeTreasuryWithdrawal      = Governance.writeTreasuryWithdrawalBuf buf
+  , writeCommitteeMember         = Governance.writeCommitteeMemberBuf buf
+  , writeCommitteeRegistration   = Governance.writeCommitteeRegistrationBuf buf
+  , writeCommitteeDeRegistration = Governance.writeCommitteeDeRegistrationBuf buf
 
   , commit = pure ()
   }

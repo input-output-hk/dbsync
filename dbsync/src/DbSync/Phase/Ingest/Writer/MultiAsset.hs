@@ -8,7 +8,7 @@ module DbSync.Phase.Ingest.Writer.MultiAsset
 import Cardano.Prelude
 
 import DbSync.Db.Loader (LoaderStream (..))
-import DbSync.Db.Schema.Ids (MaTxMintId, MaTxOutId, MultiAssetId)
+import DbSync.Db.Schema.Ids (MultiAssetId)
 import DbSync.Db.Schema.MultiAsset
   ( MaTxMint
   , MaTxOut
@@ -25,8 +25,8 @@ import DbSync.Db.Schema.Types (TableDef (..))
 writeMultiAssetCopy :: LoaderStream -> MultiAssetId -> MultiAsset -> IO ()
 writeMultiAssetCopy ls mid ma = lsWriteRow ls (tdName multiAssetTableDef) (encodeMultiAssetCopy mid ma)
 
-writeMaTxMintCopy :: LoaderStream -> MaTxMintId -> MaTxMint -> IO ()
-writeMaTxMintCopy ls mid m = lsWriteRow ls (tdName maTxMintTableDef) (encodeMaTxMintCopy mid m)
+writeMaTxMintCopy :: LoaderStream -> MaTxMint -> IO ()
+writeMaTxMintCopy ls m = lsWriteRow ls (tdName maTxMintTableDef) (encodeMaTxMintCopy m)
 
-writeMaTxOutCopy :: LoaderStream -> MaTxOutId -> MaTxOut -> IO ()
-writeMaTxOutCopy ls mid m = lsWriteRow ls (tdName maTxOutTableDef) (encodeMaTxOutCopy mid m)
+writeMaTxOutCopy :: LoaderStream -> MaTxOut -> IO ()
+writeMaTxOutCopy ls m = lsWriteRow ls (tdName maTxOutTableDef) (encodeMaTxOutCopy m)

@@ -46,7 +46,7 @@ import DbSync.Extractor
   , blockStakeKeyDeposit
   )
 import DbSync.Extractor.SharedDedup (resolveAndWritePoolHash, resolveAndWriteStakeAddress)
-import DbSync.Resolver (HasResolver (..), IdResolver (..))
+import DbSync.Resolver (HasResolver (..))
 import DbSync.Util (coinToDbLovelace, rewardAddrCred)
 import DbSync.Writer (HasWriter (..), Writer (..))
 
@@ -77,8 +77,7 @@ stakeDelegationExtractor = ExtractorDef
 
 processStakeDelegation :: ProcessBlockFn
 processStakeDelegation ctx = do
-  resolver <- asks getResolver
-  writer   <- asks getWriter
+  writer <- asks getWriter
   let gb       = bcGenBlock ctx
       epochNo  = unEpochNo (blkEpochNo gb)
       slotNo   = unSlotNo (blkSlotNo gb)
@@ -97,88 +96,74 @@ processStakeDelegation ctx = do
         -- Stake registration (Shelley-Babbage + Conway)
         CertStakeRegistration credHash mDeposit -> do
           saId <- resolveAndWriteStakeAddress credHash
-          srId <- liftIO $ assignStakeRegistrationId resolver
-          let sr = StakeRegistration
-                { stakeRegistrationAddrId    = saId
-                , stakeRegistrationCertIndex = certIdx
-                , stakeRegistrationEpochNo   = epochNo
-                , stakeRegistrationTxId      = txId
-                , stakeRegistrationDeposit   = stakeDeposit mDeposit
-                }
-          liftIO $ writeStakeRegistration writer srId sr
+          liftIO $ writeStakeRegistration writer StakeRegistration
+            { stakeRegistrationAddrId    = saId
+            , stakeRegistrationCertIndex = certIdx
+            , stakeRegistrationEpochNo   = epochNo
+            , stakeRegistrationTxId      = txId
+            , stakeRegistrationDeposit   = stakeDeposit mDeposit
+            }
 
         -- Stake deregistration
         CertStakeDeregistration credHash -> do
           saId <- resolveAndWriteStakeAddress credHash
-          sdId <- liftIO $ assignStakeDeregistrationId resolver
-          let sd = StakeDeregistration
-                { stakeDeregistrationAddrId     = saId
-                , stakeDeregistrationCertIndex  = certIdx
-                , stakeDeregistrationEpochNo    = epochNo
-                , stakeDeregistrationTxId       = txId
-                , stakeDeregistrationRedeemerId = Nothing
-                }
-          liftIO $ writeStakeDeregistration writer sdId sd
+          liftIO $ writeStakeDeregistration writer StakeDeregistration
+            { stakeDeregistrationAddrId     = saId
+            , stakeDeregistrationCertIndex  = certIdx
+            , stakeDeregistrationEpochNo    = epochNo
+            , stakeDeregistrationTxId       = txId
+            , stakeDeregistrationRedeemerId = Nothing
+            }
 
         -- Delegation
         CertDelegation credHash poolKeyHash -> do
           saId <- resolveAndWriteStakeAddress credHash
           (phId, _) <- resolveAndWritePoolHash poolKeyHash
-          dId  <- liftIO $ assignDelegationId resolver
-          let d = Delegation
-                { delegationAddrId        = saId
-                , delegationCertIndex     = certIdx
-                , delegationPoolHashId    = phId
-                , delegationActiveEpochNo = epochNo + 2
-                , delegationTxId          = txId
-                , delegationSlotNo        = slotNo
-                , delegationRedeemerId    = Nothing
-                }
-          liftIO $ writeDelegation writer dId d
+          liftIO $ writeDelegation writer Delegation
+            { delegationAddrId        = saId
+            , delegationCertIndex     = certIdx
+            , delegationPoolHashId    = phId
+            , delegationActiveEpochNo = epochNo + 2
+            , delegationTxId          = txId
+            , delegationSlotNo        = slotNo
+            , delegationRedeemerId    = Nothing
+            }
 
         -- Conway combined: register + delegate
         CertConwayRegDeleg credHash poolKeyHash mDeposit -> do
           saId <- resolveAndWriteStakeAddress credHash
           (phId, _) <- resolveAndWritePoolHash poolKeyHash
-          -- Write registration
-          srId <- liftIO $ assignStakeRegistrationId resolver
-          let sr = StakeRegistration
-                { stakeRegistrationAddrId    = saId
-                , stakeRegistrationCertIndex = certIdx
-                , stakeRegistrationEpochNo   = epochNo
-                , stakeRegistrationTxId      = txId
-                , stakeRegistrationDeposit   = stakeDeposit mDeposit
-                }
-          liftIO $ writeStakeRegistration writer srId sr
-          -- Write delegation
-          dId <- liftIO $ assignDelegationId resolver
-          let d = Delegation
-                { delegationAddrId        = saId
-                , delegationCertIndex     = certIdx
-                , delegationPoolHashId    = phId
-                , delegationActiveEpochNo = epochNo + 2
-                , delegationTxId          = txId
-                , delegationSlotNo        = slotNo
-                , delegationRedeemerId    = Nothing
-                }
-          liftIO $ writeDelegation writer dId d
+          liftIO $ writeStakeRegistration writer StakeRegistration
+            { stakeRegistrationAddrId    = saId
+            , stakeRegistrationCertIndex = certIdx
+            , stakeRegistrationEpochNo   = epochNo
+            , stakeRegistrationTxId      = txId
+            , stakeRegistrationDeposit   = stakeDeposit mDeposit
+            }
+          liftIO $ writeDelegation writer Delegation
+            { delegationAddrId        = saId
+            , delegationCertIndex     = certIdx
+            , delegationPoolHashId    = phId
+            , delegationActiveEpochNo = epochNo + 2
+            , delegationTxId          = txId
+            , delegationSlotNo        = slotNo
+            , delegationRedeemerId    = Nothing
+            }
 
         -- Combined stake-pool + DRep delegation; the DRep half is
         -- consumed by the governance extractor.
         CertConwayDelegStakeVote credHash poolKeyHash _drep -> do
           saId <- resolveAndWriteStakeAddress credHash
           (phId, _) <- resolveAndWritePoolHash poolKeyHash
-          dId  <- liftIO $ assignDelegationId resolver
-          let d = Delegation
-                { delegationAddrId        = saId
-                , delegationCertIndex     = certIdx
-                , delegationPoolHashId    = phId
-                , delegationActiveEpochNo = epochNo + 2
-                , delegationTxId          = txId
-                , delegationSlotNo        = slotNo
-                , delegationRedeemerId    = Nothing
-                }
-          liftIO $ writeDelegation writer dId d
+          liftIO $ writeDelegation writer Delegation
+            { delegationAddrId        = saId
+            , delegationCertIndex     = certIdx
+            , delegationPoolHashId    = phId
+            , delegationActiveEpochNo = epochNo + 2
+            , delegationTxId          = txId
+            , delegationSlotNo        = slotNo
+            , delegationRedeemerId    = Nothing
+            }
 
         -- Move-Instantaneous-Reward cert (Shelley-Babbage only).
         CertMir pot action ->
@@ -191,14 +176,12 @@ processStakeDelegation ctx = do
     forM_ (txWithdrawals gtx) $ \w -> do
       let credHash = rewardAddrCred (txwRewardAddress w)
       saId <- resolveAndWriteStakeAddress credHash
-      wId  <- liftIO $ assignWithdrawalId resolver
-      let wd = Withdrawal
-            { withdrawalAddrId     = saId
-            , withdrawalTxId       = txId
-            , withdrawalAmount     = DbLovelace (txwAmount w)
-            , withdrawalRedeemerId = Nothing
-            }
-      liftIO $ writeWithdrawal writer wId wd
+      liftIO $ writeWithdrawal writer Withdrawal
+        { withdrawalAddrId     = saId
+        , withdrawalTxId       = txId
+        , withdrawalAmount     = DbLovelace (txwAmount w)
+        , withdrawalRedeemerId = Nothing
+        }
   where
     -- Conway+ certs carry the deposit inline; Shelley-Babbage rely
     -- on the worker's protocol-param value when the ledger is on.
@@ -240,22 +223,19 @@ writeMirRecipient
      )
   => TxId -> Word16 -> MirPot -> (ByteString, Integer) -> m ()
 writeMirRecipient txId certIdx pot (credHash, dcoin) = do
-  resolver <- asks getResolver
-  writer   <- asks getWriter
-  saId     <- resolveAndWriteStakeAddress credHash
+  writer <- asks getWriter
+  saId   <- resolveAndWriteStakeAddress credHash
   let amount = toDbInt65 (fromInteger dcoin)
   case pot of
-    MirReserves -> do
-      rid <- liftIO (assignReserveId resolver)
-      liftIO $ writeReserve writer rid Reserve
+    MirReserves ->
+      liftIO $ writeReserve writer Reserve
         { reserveAddrId    = saId
         , reserveCertIndex = certIdx
         , reserveAmount    = amount
         , reserveTxId      = txId
         }
-    MirTreasury -> do
-      tid <- liftIO (assignTreasuryId resolver)
-      liftIO $ writeTreasury writer tid Treasury
+    MirTreasury ->
+      liftIO $ writeTreasury writer Treasury
         { treasuryAddrId    = saId
         , treasuryCertIndex = certIdx
         , treasuryAmount    = amount
@@ -266,21 +246,18 @@ writeMirRecipient txId certIdx pot (credHash, dcoin) = do
 -- credits the /other/ pot. Treasury and reserves deltas are
 -- mirror-image signed values.
 writePotTransferRow
-  :: ( HasResolver env
-     , HasWriter env
+  :: ( HasWriter env
      , MonadReader env m
      , MonadIO m
      )
   => TxId -> Word16 -> MirPot -> Integer -> m ()
 writePotTransferRow txId certIdx pot xfer = do
-  resolver <- asks getResolver
-  writer   <- asks getWriter
-  ptid <- liftIO (assignPotTransferId resolver)
+  writer <- asks getWriter
   let signed = fromInteger xfer :: Int64
       (toTreasury, toReserves) = case pot of
         MirReserves -> (signed, negate signed)
         MirTreasury -> (negate signed, signed)
-  liftIO $ writePotTransfer writer ptid PotTransfer
+  liftIO $ writePotTransfer writer PotTransfer
     { potTransferTxId      = txId
     , potTransferCertIndex = certIdx
     , potTransferTreasury  = toDbInt65 toTreasury

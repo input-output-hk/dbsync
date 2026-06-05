@@ -102,6 +102,7 @@ adaPotsTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys = []
   }
 
@@ -112,11 +113,10 @@ adaPotsTableDef = TableDef
 -- | Encode an 'AdaPots' record as a single COPY text row.
 --
 -- Field order must match 'adaPotsTableDef' exactly.
-encodeAdaPotsCopy :: AdaPotsId -> AdaPots -> ByteString
-encodeAdaPotsCopy (AdaPotsId apid) pots =
+encodeAdaPotsCopy :: AdaPots -> ByteString
+encodeAdaPotsCopy pots =
   buildCopyRow
-    [ Just $ bInt64 apid
-    , Just $ bWord64 (adaPotsSlotNo pots)
+    [ Just $ bWord64 (adaPotsSlotNo pots)
     , Just $ bWord64 (adaPotsEpochNo pots)
     , Just $ bWord64 (unDbLovelace $ adaPotsTreasury pots)
     , Just $ bWord64 (unDbLovelace $ adaPotsReserves pots)

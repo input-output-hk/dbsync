@@ -35,8 +35,8 @@ import Test.Hspec (Spec, describe, expectationFailure, it, shouldBe)
 import qualified DbSync.Worker.Ledger.EpochUpdate as Generic
 import qualified DbSync.Worker.Ledger.ProtoParams as Proto
 import qualified DbSync.Worker.Ledger.StakeDist as Generic
-import DbSync.Db.Schema.AdaPots (AdaPots, adaPotsTableDef)
-import DbSync.Db.Schema.Ids (AdaPotsId (..), BlockId (..))
+import DbSync.Db.Schema.AdaPots (adaPotsTableDef)
+import DbSync.Db.Schema.Ids (BlockId (..))
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Extractor (ExtractorDef (..), freshExtractState)
 import DbSync.Extractor.EpochBoundary (epochBoundaryExtractor, runEpochBoundary)
@@ -227,15 +227,10 @@ mkCountingResolver _ =
 -- attempted to write a row.
 countingAdaPotsWriter :: IORef Int -> Writer IO -> Writer IO
 countingAdaPotsWriter ref inner = inner
-  { writeAdaPots = \apId pots -> do
+  { writeAdaPots = \pots -> do
       atomicModifyIORef' ref $ \n -> (n + 1, ())
-      writeAdaPots inner apId pots
+      writeAdaPots inner pots
   }
-
--- 'AdaPotsId' usage to silence -Wunused-imports. The type appears
--- only in the test-double signature above.
-_unused :: AdaPotsId -> AdaPots -> ()
-_unused _ _ = ()
 
 -- ---------------------------------------------------------------------------
 -- Real-resolver harness for the boundary-write tests

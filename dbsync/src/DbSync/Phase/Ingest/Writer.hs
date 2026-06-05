@@ -22,6 +22,24 @@ import DbSync.Phase.Ingest.Writer.EpochBoundary
   , writeEpochParamCopy
   , writeEpochStateCopy
   )
+import DbSync.Phase.Ingest.Writer.Governance
+  ( writeCommitteeCopy
+  , writeCommitteeDeRegistrationCopy
+  , writeCommitteeHashCopy
+  , writeCommitteeMemberCopy
+  , writeCommitteeRegistrationCopy
+  , writeConstitutionCopy
+  , writeDelegationVoteCopy
+  , writeDrepDistrCopy
+  , writeDrepHashCopy
+  , writeDrepRegistrationCopy
+  , writeEventInfoCopy
+  , writeGovActionProposalCopy
+  , writeParamProposalCopy
+  , writeTreasuryWithdrawalCopy
+  , writeVotingAnchorCopy
+  , writeVotingProcedureCopy
+  )
 import DbSync.Phase.Ingest.Writer.Metadata (writeTxMetadataCopy)
 import DbSync.Phase.Ingest.Writer.MultiAsset
   ( writeMaTxMintCopy
@@ -35,6 +53,13 @@ import DbSync.Phase.Ingest.Writer.Pool
   , writePoolRelayCopy
   , writePoolRetireCopy
   , writePoolUpdateCopy
+  )
+import DbSync.Phase.Ingest.Writer.ScriptsDatums
+  ( writeDatumCopy
+  , writeExtraKeyWitnessCopy
+  , writeRedeemerCopy
+  , writeRedeemerDataCopy
+  , writeScriptCopy
   )
 import DbSync.Phase.Ingest.Writer.StakeDelegation
   ( writeDelegationCopy
@@ -111,6 +136,35 @@ mkWriter ls = Writer
   , writeEpochParam  = writeEpochParamCopy ls
   , writeEpochState  = writeEpochStateCopy ls
   , writeCostModel   = writeCostModelCopy ls
+
+    -- ScriptsDatums
+  , writeDatum           = writeDatumCopy ls
+  , writeScript          = writeScriptCopy ls
+  , writeRedeemer        = writeRedeemerCopy ls
+  , writeRedeemerData    = writeRedeemerDataCopy ls
+  , writeExtraKeyWitness = writeExtraKeyWitnessCopy ls
+
+    -- Governance — FK-referenced
+  , writeGovActionProposal      = writeGovActionProposalCopy ls
+  , writeParamProposal          = writeParamProposalCopy ls
+  , writeCommittee              = writeCommitteeCopy ls
+  , writeConstitution           = writeConstitutionCopy ls
+  , writeEventInfo              = writeEventInfoCopy ls
+
+    -- Governance — dedup-backed
+  , writeDrepHash               = writeDrepHashCopy ls
+  , writeCommitteeHash          = writeCommitteeHashCopy ls
+  , writeVotingAnchor           = writeVotingAnchorCopy ls
+
+    -- Governance — IDENTITY leaves
+  , writeDrepRegistration       = writeDrepRegistrationCopy ls
+  , writeDrepDistr              = writeDrepDistrCopy ls
+  , writeDelegationVote         = writeDelegationVoteCopy ls
+  , writeVotingProcedure        = writeVotingProcedureCopy ls
+  , writeTreasuryWithdrawal     = writeTreasuryWithdrawalCopy ls
+  , writeCommitteeMember        = writeCommitteeMemberCopy ls
+  , writeCommitteeRegistration  = writeCommitteeRegistrationCopy ls
+  , writeCommitteeDeRegistration = writeCommitteeDeRegistrationCopy ls
 
     -- Transaction control
   , commit = lsCommit ls

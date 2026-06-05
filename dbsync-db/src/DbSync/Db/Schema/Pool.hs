@@ -222,6 +222,7 @@ poolHashTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
@@ -248,6 +249,7 @@ poolUpdateTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys =
       [ ForeignKey "registered_tx_id" "tx" "id"
       ]
@@ -269,6 +271,7 @@ poolMetadataRefTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys =
       [ ForeignKey "registered_tx_id" "tx" "id"
       ]
@@ -288,6 +291,7 @@ poolOwnerTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys =
       [ ForeignKey "pool_update_id" "pool_update" "id"
       ]
@@ -309,6 +313,7 @@ poolRetireTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys =
       [ ForeignKey "announced_tx_id" "tx" "id"
       ]
@@ -332,6 +337,7 @@ poolRelayTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys =
       [ ForeignKey "update_id" "pool_update" "id"
       ]
@@ -355,6 +361,7 @@ poolStatTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
@@ -371,6 +378,7 @@ delistedPoolTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = [pure "hash_raw"]
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
@@ -388,6 +396,7 @@ reservedPoolTickerTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = [pure "name"]
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
@@ -430,29 +439,26 @@ encodePoolMetadataRefCopy (PoolMetadataRefId pmid) pm =
     , Just $ bInt64 (getTxId $ poolMetadataRefRegisteredTxId pm)
     ]
 
-encodePoolOwnerCopy :: PoolOwnerId -> PoolOwner -> ByteString
-encodePoolOwnerCopy (PoolOwnerId poid) po =
+encodePoolOwnerCopy :: PoolOwner -> ByteString
+encodePoolOwnerCopy po =
   buildCopyRow
-    [ Just $ bInt64 poid
-    , Just $ bInt64 (getStakeAddressId $ poolOwnerAddrId po)
+    [ Just $ bInt64 (getStakeAddressId $ poolOwnerAddrId po)
     , Just $ bInt64 (getPoolUpdateId $ poolOwnerPoolUpdateId po)
     ]
 
-encodePoolRetireCopy :: PoolRetireId -> PoolRetire -> ByteString
-encodePoolRetireCopy (PoolRetireId prid) pr =
+encodePoolRetireCopy :: PoolRetire -> ByteString
+encodePoolRetireCopy pr =
   buildCopyRow
-    [ Just $ bInt64 prid
-    , Just $ bInt64 (getPoolHashId $ poolRetireHashId pr)
+    [ Just $ bInt64 (getPoolHashId $ poolRetireHashId pr)
     , Just $ bInt64 (fromIntegral $ poolRetireCertIndex pr)
     , Just $ bInt64 (getTxId $ poolRetireAnnouncedTxId pr)
     , Just $ bWord64 (poolRetireRetiringEpoch pr)
     ]
 
-encodePoolRelayCopy :: PoolRelayId -> PoolRelay -> ByteString
-encodePoolRelayCopy (PoolRelayId prid) pr =
+encodePoolRelayCopy :: PoolRelay -> ByteString
+encodePoolRelayCopy pr =
   buildCopyRow
-    [ Just $ bInt64 prid
-    , Just $ bInt64 (getPoolUpdateId $ poolRelayUpdateId pr)
+    [ Just $ bInt64 (getPoolUpdateId $ poolRelayUpdateId pr)
     , bText <$> poolRelayIpv4 pr
     , bText <$> poolRelayIpv6 pr
     , bText <$> poolRelayDnsName pr

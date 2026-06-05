@@ -143,7 +143,7 @@ openLsmSession tracer parentDir = do
       `onException` BlockApi.close hasBlockIO
 
   closedRef <- newIORef False
-  let closer = do
+  let closer = mask_ $ do
         alreadyClosed <- atomicModifyIORef' closedRef (\c -> (True, c))
         unless alreadyClosed $ do
           LSMTree.closeSession session

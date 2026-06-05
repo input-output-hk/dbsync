@@ -72,6 +72,11 @@ data EpochSyncTime = EpochSyncTime
 -- * Table definitions
 -- ---------------------------------------------------------------------------
 
+-- | Counter-managed (not @IDENTITY@) because the @UNIQUE (epoch_no)@
+-- constraint is enforced on an on-chain natural key. A mid-Ingest
+-- crash can leave a row past the @sync_state@ snapshot; the resume
+-- cleanup needs the per-table counter pass to delete it before the
+-- next boundary's COPY re-emits the same @epoch_no@.
 epochSyncStatsTableDef :: TableDef
 epochSyncStatsTableDef = TableDef
   { tdName    = "epoch_sync_stats"
@@ -90,6 +95,7 @@ epochSyncStatsTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = [pure "epoch_no"]
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
@@ -97,10 +103,10 @@ epochSyncTimeTableDef :: TableDef
 epochSyncTimeTableDef = TableDef
   { tdName    = "epoch_sync_time"
   , tdColumns =
-      [ ColumnDef "id"      PgBigInt              False
-      , ColumnDef "no"      PgBigInt              False
-      , ColumnDef "seconds" PgBigInt              False
-      , ColumnDef "state"   (PgEnum "syncstatetype") False
+      [ ColumnDef "id"      PgBigInt False
+      , ColumnDef "no"      PgBigInt False
+      , ColumnDef "seconds" PgBigInt False
+      , ColumnDef "state"   PgText   False
       ]
   , tdMode    = TableUnlogged
   , tdPrimaryKey     = Nothing
@@ -108,6 +114,7 @@ epochSyncTimeTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = [pure "no"]
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 

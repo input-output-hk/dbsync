@@ -5,15 +5,10 @@
 -- Holds the optional collateral-return output of a Babbage+ phase-2
 -- failed transaction.
 module DbSync.Db.Statement.CollateralTxOut
-  ( -- * Inserts
-    insertCollateralTxOutRowStmt
-
-    -- * Updates
+  ( insertCollateralTxOutRowStmt
+  , nextCollateralTxOutIdStmt
   , updateCollateralTxOutAddressIdStmt
   , bulkUpdateCollateralTxOutAddressIdsStmt
-
-    -- * ID allocation
-  , nextCollateralTxOutIdStmt
   ) where
 
 import Cardano.Prelude
@@ -44,10 +39,13 @@ insertCollateralTxOutRowStmt =
            <> (snd >$< collateralTxOutEncoder)
     sql = T.concat
       [ "INSERT INTO ", table
-      , " ( id, tx_id, index, address_id, stake_address_id, value"
+      , " (id, tx_id, index, address_id, stake_address_id, value"
       , " , data_hash, multi_assets_descr, inline_datum_id, reference_script_id)"
       , " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
       ]
+
+nextCollateralTxOutIdStmt :: Stmt.Statement () CollateralTxOutId
+nextCollateralTxOutIdStmt = nextIdStmt collateralTxOutTableDef CollateralTxOutId
 
 -- | Fill in @collateral_tx_out.address_id@ for an existing row.
 updateCollateralTxOutAddressIdStmt :: Stmt.Statement (AddressId, CollateralTxOutId) ()
@@ -73,5 +71,4 @@ bulkUpdateCollateralTxOutAddressIdsStmt =
       , " WHERE ", table, ".id = u.out_id"
       ]
 
-nextCollateralTxOutIdStmt :: Stmt.Statement () CollateralTxOutId
-nextCollateralTxOutIdStmt = nextIdStmt collateralTxOutTableDef CollateralTxOutId
+

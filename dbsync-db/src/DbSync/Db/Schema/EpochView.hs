@@ -115,6 +115,7 @@ epochFinalizedTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = [pure "no"]
   , tdGeneratedColumns  = []
+  , tdIdentityColumns = []
   , tdForeignKeys       = []
   }
 

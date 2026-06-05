@@ -13,6 +13,7 @@ module DbSync.Phase.Following.Writer.Internal
   ( runConn
   , queueBuf
   , todoWrite
+  , todoWriteLeaf
   ) where
 
 import Cardano.Prelude
@@ -40,3 +41,8 @@ queueBuf buf p stmt = append buf (Pipeline.statement p stmt)
 -- field panics with the writer's name.
 todoWrite :: Text -> a -> b -> IO ()
 todoWrite name _ _ = pure $ panic $ "Phase.Following.Writer." <> name <> " not yet implemented"
+
+-- | Stub variant for leaf-table writers — the @id@ comes from
+-- PostgreSQL so the writer field takes just the typed row.
+todoWriteLeaf :: Text -> a -> IO ()
+todoWriteLeaf name _ = pure $ panic $ "Phase.Following.Writer." <> name <> " not yet implemented"

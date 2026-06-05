@@ -14,4 +14,5 @@ import DbSync.Phase.Ingest.Resolver.Internal (allocateNextId)
 
 assignEpochSyncStatsIdIngest :: IORef ExtractState -> IO EpochSyncStatsId
 assignEpochSyncStatsIdIngest extractStateRef =
-  allocateNextId extractStateRef icEpochSyncStatsId (\cs c -> cs { icEpochSyncStatsId = c }) EpochSyncStatsId
+  allocateNextId extractStateRef icEpochSyncStatsId
+    (\cs c -> cs { icEpochSyncStatsId = c }) EpochSyncStatsId

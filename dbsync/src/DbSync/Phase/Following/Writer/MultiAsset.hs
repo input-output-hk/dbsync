@@ -12,7 +12,7 @@ import Cardano.Prelude
 
 import qualified Hasql.Connection as Conn
 
-import DbSync.Db.Schema.Ids (MaTxMintId, MaTxOutId, MultiAssetId)
+import DbSync.Db.Schema.Ids (MultiAssetId)
 import DbSync.Db.Schema.MultiAsset (MaTxMint, MaTxOut, MultiAsset)
 import DbSync.Db.Statement.MaTxMint (insertMaTxMintRowStmt)
 import DbSync.Db.Statement.MaTxOut (insertMaTxOutRowStmt)
@@ -26,14 +26,14 @@ writeMultiAssetConn conn mid ma = runConn conn (mid, ma) insertMultiAssetRowStmt
 writeMultiAssetBuf :: WriteBuffer -> MultiAssetId -> MultiAsset -> IO ()
 writeMultiAssetBuf buf mid ma = queueBuf buf (mid, ma) insertMultiAssetRowStmt
 
-writeMaTxMintConn :: Conn.Connection -> MaTxMintId -> MaTxMint -> IO ()
-writeMaTxMintConn conn mid m = runConn conn (mid, m) insertMaTxMintRowStmt
+writeMaTxMintConn :: Conn.Connection -> MaTxMint -> IO ()
+writeMaTxMintConn conn m = runConn conn m insertMaTxMintRowStmt
 
-writeMaTxMintBuf :: WriteBuffer -> MaTxMintId -> MaTxMint -> IO ()
-writeMaTxMintBuf buf mid m = queueBuf buf (mid, m) insertMaTxMintRowStmt
+writeMaTxMintBuf :: WriteBuffer -> MaTxMint -> IO ()
+writeMaTxMintBuf buf m = queueBuf buf m insertMaTxMintRowStmt
 
-writeMaTxOutConn :: Conn.Connection -> MaTxOutId -> MaTxOut -> IO ()
-writeMaTxOutConn conn mid m = runConn conn (mid, m) insertMaTxOutRowStmt
+writeMaTxOutConn :: Conn.Connection -> MaTxOut -> IO ()
+writeMaTxOutConn conn m = runConn conn m insertMaTxOutRowStmt
 
-writeMaTxOutBuf :: WriteBuffer -> MaTxOutId -> MaTxOut -> IO ()
-writeMaTxOutBuf buf mid m = queueBuf buf (mid, m) insertMaTxOutRowStmt
+writeMaTxOutBuf :: WriteBuffer -> MaTxOut -> IO ()
+writeMaTxOutBuf buf m = queueBuf buf m insertMaTxOutRowStmt

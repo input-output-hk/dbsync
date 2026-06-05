@@ -473,6 +473,14 @@ sampleTx tag value = GenericTx
   , txMetadata         = Nothing
   , txMint             = []
   , txCborRaw          = Nothing
+  , txScripts          = []
+  , txDatums           = []
+  , txRedeemers        = []
+  , txExtraKeyWitnesses = []
+  , txParamProposal    = []
+  , txProposals        = []
+  , txVotingProcedures = []
+  , txVotingAnchors    = []
   }
 
 sampleOut :: Word64 -> GenericTxOut

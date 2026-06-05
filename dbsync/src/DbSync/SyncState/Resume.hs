@@ -23,14 +23,12 @@
 --
 -- == Progress logging
 --
--- Each DELETE emits one log line on completion if it actually
--- removed rows; the line carries every previously-completed table
--- as @name [✓]@ separated by @" - "@, with the most recent table's
--- row count and duration in parens at the end. A 5-second
--- heartbeat fires while any single DELETE is in flight, so the
--- long ones (typically @tx_out@ and @ma_tx_out@) still report
--- liveness. Zero-row tables are skipped from the tally so a
--- 'FollowRestart' cleanup stays quiet.
+-- Each DELETE that actually removed rows emits one log line on
+-- completion: @name [✓] (rows, dur)@. Zero-row tables stay silent
+-- so a 'FollowRestart' cleanup (where almost every DELETE is a
+-- no-op) doesn't spam the log. A 5-second heartbeat fires while
+-- any single DELETE is in flight so the long ones (typically
+-- @tx_out@ and @ma_tx_out@) still report liveness.
 module DbSync.SyncState.Resume
   ( CleanupMode (..)
   , deleteRowsPastSlot
@@ -41,7 +39,7 @@ import Cardano.Prelude
 import Control.Tracer (traceWith)
 import Data.List (lookup)
 import qualified Data.Text as T
-import Data.Time.Clock (NominalDiffTime, diffUTCTime, getCurrentTime)
+import Data.Time.Clock (diffUTCTime, getCurrentTime)
 import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 import qualified Hasql.Statement as Stmt
@@ -106,41 +104,34 @@ deleteRowsPastSlot mode tableDefs row =
 
       -- By-block-id tables join through @block.slot_no@, so they
       -- must run before @block@ itself is trimmed.
-      (acc1, tally1) <-
-        foldM (runByParam tracer slotNo deleteByBlockSlotStmt) (0, []) byBlockId
-      (acc2, tally2) <-
-        foldM (runByParam tracer slotNo deleteBySlotStmt) (acc1, tally1) bySlot
-      (acc3, tally3) <- case mode of
-        IngestResume ->
-          foldM (runByCounter tracer row) (acc2, tally2) byIdCounter
-        FollowRestart ->
-          pure (acc2, tally2)
+      acc1 <- foldM (runByParam tracer slotNo deleteByBlockSlotStmt) 0 byBlockId
+      acc2 <- foldM (runByParam tracer slotNo deleteBySlotStmt) acc1 bySlot
+      acc3 <- case mode of
+        IngestResume  -> foldM (runByCounter tracer row) acc2 byIdCounter
+        FollowRestart -> pure acc2
 
       endWall <- liftIO getCurrentTime
       let totalDur = fmtDuration (realToFrac (diffUTCTime endWall startWall))
       emit tracer $
-        if null tally3
+        if acc3 == 0
           then "complete in " <> totalDur <> " (no rows to clean)"
           else "complete in " <> totalDur <> " (" <> fmtCount acc3 <> " rows)"
       pure acc3
 
 -- ---------------------------------------------------------------------------
--- Tally bookkeeping
+-- Per-table step
 -- ---------------------------------------------------------------------------
-
--- | One entry in the running tally: table name, row count, duration.
-type TallyEntry = (Text, Int64, NominalDiffTime)
 
 runByParam
   :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
   => AppTracer
   -> Word64
   -> (Text -> Stmt.Statement Word64 Int64)
-  -> (Int64, [TallyEntry])
+  -> Int64
   -> TableDef
-  -> m (Int64, [TallyEntry])
+  -> m Int64
 runByParam tracer slotNo mkStmt acc td =
-  stepTally tracer td
+  stepTable tracer td
     (runDelete tracer slotNo (mkStmt (tdName td)) (tdName td))
     acc
 
@@ -148,58 +139,40 @@ runByCounter
   :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
   => AppTracer
   -> SyncStateRow
-  -> (Int64, [TallyEntry])
+  -> Int64
   -> (TableDef, SyncStateRow -> Int64)
-  -> m (Int64, [TallyEntry])
+  -> m Int64
 runByCounter tracer rowSnapshot acc (td, counter) =
-  stepTally tracer td
+  stepTable tracer td
     (runDelete tracer (counter rowSnapshot) (deleteByIdCounterStmt (tdName td)) (tdName td))
     acc
 
--- | Run one table's DELETE, time it, and conditionally append to the
--- tally + emit a fresh log line carrying the running list. Zero-row
--- deletes are silent so 'FollowRestart' (where almost every table is
--- 0 rows) doesn't spam the log.
-stepTally
+-- | Run one table's DELETE, time it, and emit @name [✓] (rows, dur)@
+-- if it removed anything. Zero-row deletes are silent.
+stepTable
   :: MonadIO m
   => AppTracer
   -> TableDef
   -> m Int64
-  -> (Int64, [TallyEntry])
-  -> m (Int64, [TallyEntry])
-stepTally tracer td action (acc, tally) = do
+  -> Int64
+  -> m Int64
+stepTable tracer td action acc = do
   start <- liftIO getCurrentTime
   rows  <- action
   end   <- liftIO getCurrentTime
-  let dur = diffUTCTime end start
-  if rows > 0
-    then do
-      let !entry = (tdName td, rows, dur)
-          tally' = tally ++ [entry]
-      emit tracer (renderTally tally' entry)
-      pure (acc + rows, tally')
-    else
-      pure (acc + rows, tally)
+  when (rows > 0) $
+    emit tracer $
+      tdName td
+        <> " [✓] ("
+        <> fmtCountCompact rows
+        <> ", "
+        <> fmtDuration (realToFrac (diffUTCTime end start))
+        <> ")"
+  pure (acc + rows)
 
--- | Render @"name [✓] - name [✓] - name [✓] (rows, dur)"@. The
--- caller passes the most recently completed entry explicitly so the
--- renderer never has to call partial 'last' on the list; the same
--- entry is also the final element of @entries@.
-renderTally :: [TallyEntry] -> TallyEntry -> Text
-renderTally entries (_, lastRows, lastDur) =
-  let names  = map (\(n, _, _) -> n <> " [✓]") entries
-      joined = T.intercalate " - " names
-  in joined
-       <> " ("
-       <> fmtCountCompact lastRows
-       <> ", "
-       <> fmtDuration (realToFrac lastDur)
-       <> ")"
-
--- | Compact integer rendering for the tally line — @1234@ → @1.2K@,
--- @6_500_000@ → @6.5M@. Distinct from 'fmtCount' (which produces
--- @6,500,000@) because the tally line stays dense across many
--- tables.
+-- | Compact integer rendering for the per-table line — @1234@ →
+-- @1.2K@, @6_500_000@ → @6.5M@. Distinct from 'fmtCount' (which
+-- produces @6,500,000@).
 fmtCountCompact :: Int64 -> Text
 fmtCountCompact n
   | n < 1_000          = T.pack (show n)

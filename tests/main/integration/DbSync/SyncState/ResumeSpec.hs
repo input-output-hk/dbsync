@@ -38,15 +38,10 @@ import DbSync.SyncState.Row
   , writeSyncState
   )
 import DbSync.Db.Loader (LoaderStream (..), closeLoaderStream, mkLoaderStream)
-import DbSync.Phase.Type (SyncPhase (..), renderPhase)
+
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
-import DbSync.Db.Schema.EpochSyncStats
-  ( EpochSyncStats (..)
-  , encodeEpochSyncStatsCopy
-  , epochSyncStatsTableDef
-  )
-import DbSync.Db.Schema.Ids (EpochSyncStatsId (..))
 import DbSync.Db.Schema.Init (dropSchema, initSchema)
+import DbSync.Db.Schema.Pool (poolHashTableDef)
 import DbSync.Db.Schema.SyncState (syncStateTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Phase.Ingest.DedupStore (DedupStores (..), lookupOrInsert, sizeApprox)
@@ -72,11 +67,11 @@ coreTables =
   [ blockTableDef
   , txTableDef
   , slotLeaderTableDef
-  , epochSyncStatsTableDef
+  , poolHashTableDef
   ]
 
 coreVersions :: [(Text, Int)]
-coreVersions = [("core", 1), ("epoch_sync_stats", 1)]
+coreVersions = [("core", 1), ("pool", 1)]
 
 coreTableNames :: [Text]
 coreTableNames = map tdName coreTables
@@ -88,7 +83,7 @@ sampleTime = UTCTime (fromGregorian 2024 1 15) (secondsToDiffTime 43200)
 -- with the @slot_leader_id_counter@ set to @nextSlotLeaderId@.
 --
 -- Every other counter defaults to 'safeCounter' — a value safely
--- past any id 'populateChain' or 'populateEpochSyncStats' allocates,
+-- past any id 'populateChain' or 'populatePoolHash' allocates,
 -- so the counter pass of the cleanup is a no-op unless an
 -- individual test overrides specific fields.
 rowAtBoundary :: Word64 -> Int64 -> SyncStateRow
@@ -100,37 +95,23 @@ rowAtBoundary boundarySlot nextSlotLeaderId = SyncStateRow
   , ssrBlockIdCounter                = safeCounter
   , ssrTxIdCounter                   = safeCounter
   , ssrTxOutIdCounter                = safeCounter
-  , ssrTxInIdCounter                 = safeCounter
-  , ssrCollateralTxInIdCounter       = safeCounter
-  , ssrReferenceTxInIdCounter        = safeCounter
-  , ssrTxMetadataIdCounter           = safeCounter
-  , ssrMaTxMintIdCounter             = safeCounter
-  , ssrMaTxOutIdCounter              = safeCounter
   , ssrSlotLeaderIdCounter           = nextSlotLeaderId
   , ssrAddressIdCounter              = safeCounter
   , ssrStakeAddressIdCounter         = safeCounter
   , ssrPoolHashIdCounter             = safeCounter
   , ssrMultiAssetIdCounter           = safeCounter
   , ssrScriptIdCounter               = safeCounter
-  , ssrStakeRegistrationIdCounter    = safeCounter
-  , ssrStakeDeregistrationIdCounter  = safeCounter
-  , ssrDelegationIdCounter           = safeCounter
-  , ssrWithdrawalIdCounter           = safeCounter
   , ssrPoolUpdateIdCounter           = safeCounter
   , ssrPoolMetadataRefIdCounter      = safeCounter
-  , ssrPoolOwnerIdCounter            = safeCounter
-  , ssrPoolRetireIdCounter           = safeCounter
-  , ssrPoolRelayIdCounter            = safeCounter
-  , ssrTxCborIdCounter               = safeCounter
-  , ssrEpochSyncStatsIdCounter       = safeCounter
-  , ssrAdaPotsIdCounter              = safeCounter
-  , ssrCollateralTxOutIdCounter      = safeCounter
-  , ssrEpochParamIdCounter           = safeCounter
-  , ssrEpochStateIdCounter           = safeCounter
   , ssrCostModelIdCounter            = safeCounter
-  , ssrPotTransferIdCounter          = safeCounter
-  , ssrTreasuryIdCounter             = safeCounter
-  , ssrReserveIdCounter              = safeCounter
+  , ssrRedeemerIdCounter             = safeCounter
+  , ssrCollateralTxOutIdCounter      = safeCounter
+  , ssrEpochSyncStatsIdCounter       = safeCounter
+  , ssrGovActionProposalIdCounter            = safeCounter
+  , ssrParamProposalIdCounter            = safeCounter
+  , ssrCommitteeIdCounter            = safeCounter
+  , ssrConstitutionIdCounter            = safeCounter
+  , ssrEventInfoIdCounter            = safeCounter
   , ssrSchemaVersionApplied          = 1
   , ssrLedgerEnabled                 = False
   , ssrSyncComplete                  = False
@@ -193,24 +174,19 @@ populateChain bs n = do
         , Just $ bWord64 0                                           -- treasury_donation
         ]
 
--- | Push synthetic @epoch_sync_stats@ rows @[1..n]@. Stands in for
--- the Skip-with-counter case: the table has neither @slot_no@ nor
+-- | Push synthetic @pool_hash@ rows @[1..n]@. Stands in for the
+-- Skip-with-counter case: the table has neither @slot_no@ nor
 -- @block_id@, so the resume cleanup has to lean on the counter
 -- pass to prune lagging rows.
-populateEpochSyncStats :: LoaderStream -> Int64 -> IO ()
-populateEpochSyncStats bs n =
+populatePoolHash :: LoaderStream -> Int64 -> IO ()
+populatePoolHash bs n =
   forM_ [1 .. n] $ \i ->
-    lsWriteRow bs (tdName epochSyncStatsTableDef) $
-      encodeEpochSyncStatsCopy
-        (EpochSyncStatsId i)
-        EpochSyncStats
-          { epochSyncStatsEpochNo         = fromIntegral (i - 1)
-          , epochSyncStatsBlocksProcessed = 100
-          , epochSyncStatsBlocksPerSec    = 500.0
-          , epochSyncStatsElapsedSec      = 0.2
-          , epochSyncStatsSyncedAt        = sampleTime
-          , epochSyncStatsPhase           = renderPhase IngestChainHistory
-          }
+    lsWriteRow bs (tdName poolHashTableDef) $
+      buildCopyRow
+        [ Just $ bInt64 i
+        , Just $ bHex  (BS.replicate 28 (fromIntegral (0xd0 + i)))
+        , Just $ bText ("pool-" <> T.pack (show i))
+        ]
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -319,29 +295,28 @@ ingestResumeSpec = describe "IngestResume" $ do
         remaining `shouldBe` "1\n2\n3"
 
     it "deletes Skip-with-counter rows past the recorded counter" $ do
-      -- @epoch_sync_stats@ has no @slot_no@ or @block_id@, so the
-      -- only mechanism that can prune lagging rows is the counter
-      -- pass. Pre-fix this was a no-op; the row past the recorded
-      -- counter survived boot and the next boundary's COPY collided
-      -- on it.
+      -- @pool_hash@ has no @slot_no@ or @block_id@, so the only
+      -- mechanism that can prune lagging rows is the counter pass.
+      -- Without it the row past the recorded counter survives boot
+      -- and the next boundary's COPY collides on it.
       withControlConnection $ \ctrl -> do
         runAppM ctrl (seedSyncState 1 False)
         bs <- mkLoaderStream testConnBs coreTables
         populateChain bs 5
-        populateEpochSyncStats bs 5
+        populatePoolHash bs 5
         lsCommit bs
         closeLoaderStream bs
 
         -- Counter at 3 means "next id is 3"; ids 3, 4, 5 are past
         -- the committed point.
         let row = (rowAtBoundary 1000 6)
-                    { ssrEpochSyncStatsIdCounter = 3 }
+                    { ssrPoolHashIdCounter = 3 }
         runAppM ctrl (writeSyncState row)
         _ <- runAppM (TracerWithControl mkNullTracer ctrl) (deleteRowsPastSlot IngestResume coreTables row)
 
-        countRows epochSyncStatsTableDef >>= (`shouldBe` 2)
+        countRows poolHashTableDef >>= (`shouldBe` 2)
         remaining <- T.strip <$> queryTestDb
-          ("SELECT id FROM " <> tdName epochSyncStatsTableDef <> " ORDER BY id;")
+          ("SELECT id FROM " <> tdName poolHashTableDef <> " ORDER BY id;")
         remaining `shouldBe` "1\n2"
 
     it "runs the counter pass alongside the slot pass (belt-and-braces)" $ do
@@ -354,22 +329,22 @@ ingestResumeSpec = describe "IngestResume" $ do
         runAppM ctrl (seedSyncState 1 False)
         bs <- mkLoaderStream testConnBs coreTables
         populateChain bs 5
-        populateEpochSyncStats bs 5
+        populatePoolHash bs 5
         lsCommit bs
         closeLoaderStream bs
 
         -- last_committed_slot=300 keeps blocks 1..3; the slot_leader
         -- counter at 2 separately wipes ids 2..5 of slot_leader; the
-        -- epoch_sync_stats counter at 4 wipes ids 4..5 there.
+        -- pool_hash counter at 4 wipes ids 4..5 there.
         let row = (rowAtBoundary 300 2)
-                    { ssrEpochSyncStatsIdCounter = 4 }
+                    { ssrPoolHashIdCounter = 4 }
         runAppM ctrl (writeSyncState row)
         _ <- runAppM (TracerWithControl mkNullTracer ctrl) (deleteRowsPastSlot IngestResume coreTables row)
 
-        countRows blockTableDef          >>= (`shouldBe` 3)
-        countRows txTableDef             >>= (`shouldBe` 3)
-        countRows slotLeaderTableDef     >>= (`shouldBe` 1)
-        countRows epochSyncStatsTableDef >>= (`shouldBe` 3)
+        countRows blockTableDef      >>= (`shouldBe` 3)
+        countRows txTableDef         >>= (`shouldBe` 3)
+        countRows slotLeaderTableDef >>= (`shouldBe` 1)
+        countRows poolHashTableDef   >>= (`shouldBe` 3)
 
     it "leaves everything alone when no rows are past the boundary" $ do
       withControlConnection $ \ctrl -> do
@@ -396,7 +371,7 @@ followRestartSpec = describe "FollowRestart" $ do
         runAppM ctrl (seedSyncState 1 False)
         bs <- mkLoaderStream testConnBs coreTables
         populateChain bs 5
-        populateEpochSyncStats bs 5
+        populatePoolHash bs 5
         lsCommit bs
         closeLoaderStream bs
 
@@ -407,16 +382,16 @@ followRestartSpec = describe "FollowRestart" $ do
         -- @writeSyncStateSlotStmt@ doesn't touch them.
         let row = (rowAtBoundary 9_999 1)
                     { ssrLastCommittedBlockNo = Just 5
-                    , ssrEpochSyncStatsIdCounter = 1
+                    , ssrPoolHashIdCounter    = 1
                     }
         runAppM ctrl (writeSyncState row)
         deleted <- runAppM (TracerWithControl mkNullTracer ctrl) (deleteRowsPastSlot FollowRestart coreTables row)
         deleted `shouldBe` 0
 
-        countRows slotLeaderTableDef     >>= (`shouldBe` 5)
-        countRows blockTableDef          >>= (`shouldBe` 5)
-        countRows txTableDef             >>= (`shouldBe` 5)
-        countRows epochSyncStatsTableDef >>= (`shouldBe` 5)
+        countRows slotLeaderTableDef >>= (`shouldBe` 5)
+        countRows blockTableDef      >>= (`shouldBe` 5)
+        countRows txTableDef         >>= (`shouldBe` 5)
+        countRows poolHashTableDef   >>= (`shouldBe` 5)
 
     it "still trims fact-table rows past last_committed_slot" $ do
       withControlConnection $ \ctrl -> do

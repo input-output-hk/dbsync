@@ -79,19 +79,13 @@ import DbSync.Db.Schema.Ids
   ( BlockId (..)
   , CommitteeHashId (..)
   , ConstitutionId (..)
-  , DelegationVoteId (..)
-  , DrepDistrId (..)
   , DrepHashId (..)
-  , DrepRegistrationId (..)
   , EventInfoId (..)
   , GovActionProposalId (..)
   , ParamProposalId (..)
   , StakeAddressId (..)
-  , TreasuryWithdrawalId (..)
   , TxId (..)
   , VotingAnchorId (..)
-  , VotingProcedureId (..)
-  , CommitteeRegistrationId (..)
   )
 import DbSync.Db.Schema.Types
   ( ColumnDef (..)
@@ -175,11 +169,13 @@ drepRegistrationSpec = describe "drepRegistrationTableDef" $ do
 
   describe "encodeDrepRegistrationCopy" $
     it "writes optional deposit and voting_anchor_id as \\N when absent" $ do
-      let row = encodeDrepRegistrationCopy (DrepRegistrationId 1)
+      let row = encodeDrepRegistrationCopy
                   (DrepRegistration (TxId 7) 0 Nothing (DrepHashId 9) Nothing)
           fields = BS8.split '\t' (BS8.init row)
-      fields !! 3 `shouldBe` "\\N"
-      fields !! 5 `shouldBe` "\\N"
+      -- id is IDENTITY-managed; the COPY row omits it. Indexes here run
+      -- 0..4 across tx_id, cert_index, deposit, drep_hash_id, voting_anchor_id.
+      fields !! 2 `shouldBe` "\\N"
+      fields !! 4 `shouldBe` "\\N"
 
 -- ---------------------------------------------------------------------------
 -- DrepDistr
@@ -196,12 +192,12 @@ drepDistrSpec = describe "drepDistrTableDef" $ do
     cdNullable (tdColumns drepDistrTableDef !! 4) `shouldBe` True
 
   describe "encodeDrepDistrCopy" $
-    it "produces 5 fields with active_until \\N when absent" $ do
-      let row = encodeDrepDistrCopy (DrepDistrId 1)
+    it "produces 4 fields with active_until \\N when absent" $ do
+      let row = encodeDrepDistrCopy
                   (DrepDistr (DrepHashId 7) 1000000 210 Nothing)
           fields = BS8.split '\t' (BS8.init row)
-      length fields `shouldBe` 5
-      fields !! 4 `shouldBe` "\\N"
+      length fields `shouldBe` 4
+      fields !! 3 `shouldBe` "\\N"
 
 -- ---------------------------------------------------------------------------
 -- DelegationVote
@@ -216,11 +212,11 @@ delegationVoteSpec = describe "delegationVoteTableDef" $ do
 
   describe "encodeDelegationVoteCopy" $
     it "encodes redeemer_id as \\N when absent" $ do
-      let row = encodeDelegationVoteCopy (DelegationVoteId 1)
+      let row = encodeDelegationVoteCopy
                   (DelegationVote (StakeAddressId 1) 0 (DrepHashId 2)
                                   (TxId 3) Nothing)
           fields = BS8.split '\t' (BS8.init row)
-      fields !! 5 `shouldBe` "\\N"
+      fields !! 4 `shouldBe` "\\N"
 
 -- ---------------------------------------------------------------------------
 -- GovActionProposal
@@ -288,16 +284,20 @@ votingProcedureSpec = describe "votingProcedureTableDef" $ do
       cdNullable (tdColumns votingProcedureTableDef !! i) `shouldBe` True
 
   describe "encodeVotingProcedureCopy" $ do
+    -- id is IDENTITY-managed; the COPY row omits it. Indexes here run
+    -- 0..9 across tx_id, index, gov_action_proposal_id, voter_role,
+    -- drep_voter, pool_voter, vote, voting_anchor_id, committee_voter,
+    -- invalid.
     it "encodes every Vote constructor as the matching PG string" $
       forM_
         [ (VoteYes,     "Yes")
         , (VoteNo,      "No")
         , (VoteAbstain, "Abstain")
         ] $ \(v, expected) -> do
-          let row = encodeVotingProcedureCopy (VotingProcedureId 1)
+          let row = encodeVotingProcedureCopy
                       sampleVote { votingProcedureVote = v }
               fields = BS8.split '\t' (BS8.init row)
-          fields !! 7 `shouldBe` expected
+          fields !! 6 `shouldBe` expected
 
     it "encodes every VoterRole constructor as the matching PG string" $
       forM_
@@ -305,17 +305,17 @@ votingProcedureSpec = describe "votingProcedureTableDef" $ do
         , (DRep,                    "DRep")
         , (SPO,                     "SPO")
         ] $ \(r, expected) -> do
-          let row = encodeVotingProcedureCopy (VotingProcedureId 1)
+          let row = encodeVotingProcedureCopy
                       sampleVote { votingProcedureVoterRole = r }
               fields = BS8.split '\t' (BS8.init row)
-          fields !! 4 `shouldBe` expected
+          fields !! 3 `shouldBe` expected
 
     it "DRep voter sets drep_voter and leaves pool/committee NULL" $ do
-      let row = encodeVotingProcedureCopy (VotingProcedureId 1) sampleVote
+      let row = encodeVotingProcedureCopy sampleVote
           fields = BS8.split '\t' (BS8.init row)
-      fields !! 5  `shouldBe` "9"     -- drep_voter
-      fields !! 6  `shouldBe` "\\N"   -- pool_voter
-      fields !! 9  `shouldBe` "\\N"   -- committee_voter
+      fields !! 4 `shouldBe` "9"     -- drep_voter
+      fields !! 5 `shouldBe` "\\N"   -- pool_voter
+      fields !! 8 `shouldBe` "\\N"   -- committee_voter
 
 -- ---------------------------------------------------------------------------
 -- VotingAnchor
@@ -406,12 +406,13 @@ committeeRegistrationSpec = describe "committeeRegistrationTableDef" $ do
 
   describe "encodeCommitteeRegistrationCopy" $
     it "writes both key columns as decimal ints" $ do
-      let row = encodeCommitteeRegistrationCopy (CommitteeRegistrationId 1)
+      let row = encodeCommitteeRegistrationCopy
                   (CommitteeRegistration (TxId 1) 0 (CommitteeHashId 7)
                                          (CommitteeHashId 8))
           fields = BS8.split '\t' (BS8.init row)
-      fields !! 3 `shouldBe` "7"
-      fields !! 4 `shouldBe` "8"
+      -- id is IDENTITY-managed; cold_key_id and hot_key_id sit at 2 and 3.
+      fields !! 2 `shouldBe` "7"
+      fields !! 3 `shouldBe` "8"
 
 committeeDeRegistrationSpec :: Spec
 committeeDeRegistrationSpec = describe "committeeDeRegistrationTableDef" $
@@ -491,12 +492,13 @@ treasuryWithdrawalSpec = describe "treasuryWithdrawalTableDef" $ do
 
   describe "encodeTreasuryWithdrawalCopy" $
     it "writes amount as decimal" $ do
-      let row = encodeTreasuryWithdrawalCopy (TreasuryWithdrawalId 1)
+      let row = encodeTreasuryWithdrawalCopy
                   (TreasuryWithdrawal (GovActionProposalId 5)
                                       (StakeAddressId 7)
                                       (DbLovelace 1234567890))
           fields = BS8.split '\t' (BS8.init row)
-      fields !! 3 `shouldBe` "1234567890"
+      -- id is IDENTITY-managed; amount is the 3rd remaining column.
+      fields !! 2 `shouldBe` "1234567890"
 
 -- ---------------------------------------------------------------------------
 -- EventInfo

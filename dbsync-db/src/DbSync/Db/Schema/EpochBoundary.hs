@@ -304,6 +304,7 @@ epochParamTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = ["epoch_no" :| ["block_id"]]
   , tdGeneratedColumns  = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys =
       [ ForeignKey "block_id" "block" "id"
       ]
@@ -328,6 +329,7 @@ epochStateTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns  = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys       = []
   }
 
@@ -347,6 +349,7 @@ costModelTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = [pure "hash"]
   , tdGeneratedColumns  = []
+  , tdIdentityColumns = []
   , tdForeignKeys       = []
   }
 
@@ -367,6 +370,7 @@ potTransferTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = ["tx_id" :| ["cert_index"]]
   , tdGeneratedColumns  = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys =
       [ ForeignKey "tx_id" "tx" "id"
       ]
@@ -389,6 +393,7 @@ treasuryTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = ["addr_id" :| ["tx_id"]]
   , tdGeneratedColumns  = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys =
       [ ForeignKey "tx_id" "tx" "id"
       ]
@@ -411,6 +416,7 @@ reserveTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = ["addr_id" :| ["tx_id"]]
   , tdGeneratedColumns  = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys =
       [ ForeignKey "tx_id" "tx" "id"
       ]
@@ -420,11 +426,10 @@ reserveTableDef = TableDef
 -- * COPY encoding
 -- ---------------------------------------------------------------------------
 
-encodeEpochParamCopy :: EpochParamId -> EpochParam -> ByteString
-encodeEpochParamCopy (EpochParamId epid) ep =
+encodeEpochParamCopy :: EpochParam -> ByteString
+encodeEpochParamCopy ep =
   buildCopyRow
-    [ Just $ bInt64 epid
-    , Just $ bWord64 (epochParamEpochNo ep)
+    [ Just $ bWord64 (epochParamEpochNo ep)
     , Just $ bWord64 (epochParamMinFeeA ep)
     , Just $ bWord64 (epochParamMinFeeB ep)
     , Just $ bWord64 (epochParamMaxBlockSize ep)
@@ -480,11 +485,10 @@ encodeEpochParamCopy (EpochParamId epid) ep =
     , bDouble <$> epochParamMinFeeRefScriptCostPerByte ep
     ]
 
-encodeEpochStateCopy :: EpochStateId -> EpochState -> ByteString
-encodeEpochStateCopy (EpochStateId esid) es =
+encodeEpochStateCopy :: EpochState -> ByteString
+encodeEpochStateCopy es =
   buildCopyRow
-    [ Just $ bInt64 esid
-    , bInt64 . getCommitteeId          <$> epochStateCommitteeId es
+    [ bInt64 . getCommitteeId          <$> epochStateCommitteeId es
     , bInt64 . getGovActionProposalId  <$> epochStateNoConfidenceId es
     , bInt64 . getConstitutionId       <$> epochStateConstitutionId es
     , Just $ bWord64 (epochStateEpochNo es)
@@ -498,31 +502,28 @@ encodeCostModelCopy (CostModelId cmid) cm =
     , Just $ bHex  (costModelHash cm)
     ]
 
-encodePotTransferCopy :: PotTransferId -> PotTransfer -> ByteString
-encodePotTransferCopy (PotTransferId ptid) pt =
+encodePotTransferCopy :: PotTransfer -> ByteString
+encodePotTransferCopy pt =
   buildCopyRow
-    [ Just $ bInt64 ptid
-    , Just $ bInt64 (fromIntegral $ potTransferCertIndex pt)
+    [ Just $ bInt64 (fromIntegral $ potTransferCertIndex pt)
     , Just $ bInt65 (potTransferTreasury pt)
     , Just $ bInt65 (potTransferReserves pt)
     , Just $ bInt64 (getTxId $ potTransferTxId pt)
     ]
 
-encodeTreasuryCopy :: TreasuryId -> Treasury -> ByteString
-encodeTreasuryCopy (TreasuryId tid) t =
+encodeTreasuryCopy :: Treasury -> ByteString
+encodeTreasuryCopy t =
   buildCopyRow
-    [ Just $ bInt64 tid
-    , Just $ bInt64 (getStakeAddressId $ treasuryAddrId t)
+    [ Just $ bInt64 (getStakeAddressId $ treasuryAddrId t)
     , Just $ bInt64 (fromIntegral $ treasuryCertIndex t)
     , Just $ bInt65 (treasuryAmount t)
     , Just $ bInt64 (getTxId $ treasuryTxId t)
     ]
 
-encodeReserveCopy :: ReserveId -> Reserve -> ByteString
-encodeReserveCopy (ReserveId rid) r =
+encodeReserveCopy :: Reserve -> ByteString
+encodeReserveCopy r =
   buildCopyRow
-    [ Just $ bInt64 rid
-    , Just $ bInt64 (getStakeAddressId $ reserveAddrId r)
+    [ Just $ bInt64 (getStakeAddressId $ reserveAddrId r)
     , Just $ bInt64 (fromIntegral $ reserveCertIndex r)
     , Just $ bInt65 (reserveAmount r)
     , Just $ bInt64 (getTxId $ reserveTxId r)

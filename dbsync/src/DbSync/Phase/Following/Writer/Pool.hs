@@ -21,9 +21,6 @@ import qualified Hasql.Connection as Conn
 import DbSync.Db.Schema.Ids
   ( PoolHashId
   , PoolMetadataRefId
-  , PoolOwnerId
-  , PoolRelayId
-  , PoolRetireId
   , PoolUpdateId
   )
 import DbSync.Db.Schema.Pool
@@ -61,20 +58,20 @@ writePoolMetadataRefConn conn pid pm = runConn conn (pid, pm) insertPoolMetadata
 writePoolMetadataRefBuf :: WriteBuffer -> PoolMetadataRefId -> PoolMetadataRef -> IO ()
 writePoolMetadataRefBuf buf pid pm = queueBuf buf (pid, pm) insertPoolMetadataRefRowStmt
 
-writePoolOwnerConn :: Conn.Connection -> PoolOwnerId -> PoolOwner -> IO ()
-writePoolOwnerConn conn pid po = runConn conn (pid, po) insertPoolOwnerRowStmt
+writePoolOwnerConn :: Conn.Connection -> PoolOwner -> IO ()
+writePoolOwnerConn conn po = runConn conn po insertPoolOwnerRowStmt
 
-writePoolOwnerBuf :: WriteBuffer -> PoolOwnerId -> PoolOwner -> IO ()
-writePoolOwnerBuf buf pid po = queueBuf buf (pid, po) insertPoolOwnerRowStmt
+writePoolOwnerBuf :: WriteBuffer -> PoolOwner -> IO ()
+writePoolOwnerBuf buf po = queueBuf buf po insertPoolOwnerRowStmt
 
-writePoolRetireConn :: Conn.Connection -> PoolRetireId -> PoolRetire -> IO ()
-writePoolRetireConn conn pid pr = runConn conn (pid, pr) insertPoolRetireRowStmt
+writePoolRetireConn :: Conn.Connection -> PoolRetire -> IO ()
+writePoolRetireConn conn pr = runConn conn pr insertPoolRetireRowStmt
 
-writePoolRetireBuf :: WriteBuffer -> PoolRetireId -> PoolRetire -> IO ()
-writePoolRetireBuf buf pid pr = queueBuf buf (pid, pr) insertPoolRetireRowStmt
+writePoolRetireBuf :: WriteBuffer -> PoolRetire -> IO ()
+writePoolRetireBuf buf pr = queueBuf buf pr insertPoolRetireRowStmt
 
-writePoolRelayConn :: Conn.Connection -> PoolRelayId -> PoolRelay -> IO ()
-writePoolRelayConn conn pid pr = runConn conn (pid, pr) insertPoolRelayRowStmt
+writePoolRelayConn :: Conn.Connection -> PoolRelay -> IO ()
+writePoolRelayConn conn pr = runConn conn pr insertPoolRelayRowStmt
 
-writePoolRelayBuf :: WriteBuffer -> PoolRelayId -> PoolRelay -> IO ()
-writePoolRelayBuf buf pid pr = queueBuf buf (pid, pr) insertPoolRelayRowStmt
+writePoolRelayBuf :: WriteBuffer -> PoolRelay -> IO ()
+writePoolRelayBuf buf pr = queueBuf buf pr insertPoolRelayRowStmt

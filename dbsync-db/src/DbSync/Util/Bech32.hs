@@ -13,6 +13,7 @@ module DbSync.Util.Bech32
     -- * Fixed-HRP encoders
   , serialiseVrfVkToBech32
   , serialisePoolKeyHashToBech32
+  , serialiseDrepToBech32
 
     -- * Address encoders
   , serialiseShelleyAddrToBech32
@@ -58,6 +59,11 @@ serialiseVrfVkToBech32 = serialiseToBech32 "vrf_vk"
 -- | Stake-pool key hash (28 bytes) — HRP @pool@. Yields @pool1…@.
 serialisePoolKeyHashToBech32 :: ByteString -> Text
 serialisePoolKeyHashToBech32 = serialiseToBech32 "pool"
+
+-- | DRep credential hash (28 bytes) — HRP @drep@. Used as the
+-- @view@ string on @drep_hash@ rows.
+serialiseDrepToBech32 :: ByteString -> Text
+serialiseDrepToBech32 = serialiseToBech32 "drep"
 
 -- ---------------------------------------------------------------------------
 -- * Address encoders

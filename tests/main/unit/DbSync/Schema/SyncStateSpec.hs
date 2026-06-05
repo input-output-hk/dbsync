@@ -86,8 +86,8 @@ spec = describe "DbSync.Db.Schema.SyncState" $ do
     it "matches the table's column order" $
       syncStateColumns `shouldBe` map cdName (tdColumns syncStateTableDef)
 
-    it "contains 44 columns (id + 3 last_committed + last_snapshot_slot + 34 counters + 4 metadata + pending_rollback_slot)" $
-      length syncStateColumns `shouldBe` 44
+    it "lists id + 3 last_committed_* + last_snapshot_slot + counters + 4 metadata + pending_rollback_slot" $
+      length syncStateColumns `shouldBe` 1 + 3 + 1 + length syncStateCounterColumns + 4 + 1
 
     it "starts with id" $
       head syncStateColumns `shouldBe` Just "id"
@@ -96,8 +96,8 @@ spec = describe "DbSync.Db.Schema.SyncState" $ do
       last syncStateColumns `shouldBe` "updated_at"
 
   describe "syncStateCounterColumns" $ do
-    it "lists 34 counters — one per current IdCounters field" $
-      length syncStateCounterColumns `shouldBe` 34
+    it "lists one counter per IdCounters field" $
+      length syncStateCounterColumns `shouldBe` 20
 
     it "is a subset of syncStateColumns" $
       all (`elem` syncStateColumns) syncStateCounterColumns `shouldBe` True
@@ -172,37 +172,23 @@ goldenDdl = T.unlines
   , "  \"block_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"tx_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"tx_out_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"tx_in_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"collateral_tx_in_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"reference_tx_in_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"tx_metadata_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"ma_tx_mint_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"ma_tx_out_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"slot_leader_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"address_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"stake_address_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"pool_hash_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"multi_asset_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"script_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"stake_registration_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"stake_deregistration_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"delegation_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"withdrawal_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"pool_update_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"pool_metadata_ref_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"pool_owner_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"pool_retire_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"pool_relay_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"tx_cbor_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"epoch_sync_stats_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"ada_pots_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"collateral_tx_out_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"epoch_param_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"epoch_state_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"cost_model_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"pot_transfer_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"treasury_id_counter\" BIGINT NOT NULL DEFAULT 1,"
-  , "  \"reserve_id_counter\" BIGINT NOT NULL DEFAULT 1,"
+  , "  \"redeemer_id_counter\" BIGINT NOT NULL DEFAULT 1,"
+  , "  \"collateral_tx_out_id_counter\" BIGINT NOT NULL DEFAULT 1,"
+  , "  \"epoch_sync_stats_id_counter\" BIGINT NOT NULL DEFAULT 1,"
+  , "  \"gov_action_proposal_id_counter\" BIGINT NOT NULL DEFAULT 1,"
+  , "  \"param_proposal_id_counter\" BIGINT NOT NULL DEFAULT 1,"
+  , "  \"committee_id_counter\" BIGINT NOT NULL DEFAULT 1,"
+  , "  \"constitution_id_counter\" BIGINT NOT NULL DEFAULT 1,"
+  , "  \"event_info_id_counter\" BIGINT NOT NULL DEFAULT 1,"
   , "  \"schema_version_applied\" INTEGER NOT NULL,"
   , "  \"ledger_enabled\" BOOLEAN NOT NULL,"
   , "  \"sync_complete\" BOOLEAN NOT NULL DEFAULT false,"

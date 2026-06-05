@@ -111,6 +111,7 @@ import DbSync.SyncState.Row
   , fetchBlockHashAtSlot
   , openControlConnection
   , populateCostModelCache
+  , populateGovActionProposalCache
   , readPendingRollbackSlot
   , rebuildDedupMaps
   )
@@ -630,15 +631,18 @@ resolveResumeBoot
         "Cleaned up " <> show deleted
           <> " rows past last_committed_slot from a prior crash"
     logInfoIO tracer "Boot" "Rebuilding dedup stores from PG…"
-    stores  <- runAppM envCtrl (rebuildDedupMaps tableDefs lsmSession)
-    cmCache <- runAppM envCtrl (populateCostModelCache tableDefs)
+    stores   <- runAppM envCtrl (rebuildDedupMaps tableDefs lsmSession)
+    cmCache  <- runAppM envCtrl (populateCostModelCache tableDefs)
+    gapCache <- runAppM envCtrl (populateGovActionProposalCache tableDefs)
 
     (replayBoundary, replayStart) <-
       resolveResumeReplay tracer topLevelCfg stateQueryVar hasLedgerEnv row rc
 
     intersection <- resolveIntersection tracer consumerCtrlConn rc
     let resumeState = (mkResumeExtractState row)
-          { esCostModelCache = cmCache }
+          { esCostModelCache         = cmCache
+          , esGovActionProposalCache = gapCache
+          }
     pure IngestBootState
       { ibsInitialExtractState = resumeState
       , ibsDedupStores         = stores

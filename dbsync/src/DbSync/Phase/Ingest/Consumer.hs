@@ -62,6 +62,7 @@ import DbSync.ChainSync.Msg (ChainSyncMsg (..))
 import DbSync.Db.Schema.Ids (BlockId (..))
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Extractor.EpochBoundary (runEpochBoundary)
+import DbSync.Extractor.Governance (runGovernanceBoundary)
 import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.Parser.Dispatch (parseBlock)
 import DbSync.Parser.Types (GenericBlock (..))
@@ -96,7 +97,12 @@ import DbSync.Trace.Timing (fmtCount, fmtF2)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 import DbSync.Trace.Watchdog (Watchdog, bumpConsumer, setConsumerNote)
 import DbSync.Db.Loader (LoaderStream (..))
-import DbSync.App.Config.Types (LedgerConfig (..), SyncConfig (..))
+import DbSync.App.Config.Types
+  ( LedgerConfig (..)
+  , SyncConfig (..)
+  , SyncOption (..)
+  , SyncOptions (..)
+  )
 import DbSync.App.Env (HasConfig (..))
 import DbSync.Worker.Ledger.Types (HasLedgerEnv (..))
 import DbSync.Worker.TxOut.AddressBuffer (emptyEpochAddressBuffer)
@@ -336,6 +342,14 @@ logObservation tracer = \case
 -- | Wait for the ledger worker's apply-result at the boundary slot,
 -- then run the 'EpochBoundary' extractor against it. No-op when the
 -- ledger feature is disabled or no block has yet been extracted.
+--
+-- 'runGovernanceBoundary' is only invoked when the @governance@
+-- extractor is enabled — its writes target tables owned by that
+-- extractor (committee, constitution, drep_distr, gov_action_proposal
+-- status columns), which don't exist when governance is off. The
+-- resolver's enacted-id snapshot then stays at its default
+-- @(Nothing, Nothing, Nothing)@ and 'runEpochBoundary' writes NULLs
+-- into @epoch_state@'s three governance FK columns.
 runBoundaryExtractor
   :: Watchdog
   -> HasLedgerEnv
@@ -348,7 +362,15 @@ runBoundaryExtractor watchdog hasLedger extractStRef slot = case hasLedger of
     liftIO $ setConsumerNote watchdog "consumer: waitForApplyResultAt (boundary)"
     applyResult  <- liftIO $ waitForApplyResultAt lenv slot
     mLastBlockId <- liftIO $ esLastBlockId <$> readIORef extractStRef
+    governanceOn <- asks (prEnabled . pcGovernance . scOptions . getConfig)
     for_ mLastBlockId $ \lastBid -> do
+      -- Governance runs first when enabled: it refreshes the
+      -- enacted-state ids and apGovExpiresAfter on ExtractState that
+      -- EpochBoundary then reads when it constructs the epoch_state
+      -- row.
+      when governanceOn $ do
+        liftIO $ setConsumerNote watchdog "consumer: runGovernanceBoundary"
+        runGovernanceBoundary applyResult (BlockId lastBid)
       liftIO $ setConsumerNote watchdog "consumer: runEpochBoundary"
       runEpochBoundary applyResult (BlockId lastBid)
 

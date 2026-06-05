@@ -223,6 +223,7 @@ blockTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
@@ -254,6 +255,7 @@ txTableDef = TableDef
     -- use a lookup instead of seq-scanning the whole tx heap.
   , tdUniqueConstraints = [pure "hash"]
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys =
       [ ForeignKey "block_id" "block" "id"
       ]
@@ -275,6 +277,7 @@ slotLeaderTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
@@ -294,6 +297,7 @@ metaTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = [pure "start_time"]
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
@@ -312,6 +316,7 @@ reverseIndexTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 

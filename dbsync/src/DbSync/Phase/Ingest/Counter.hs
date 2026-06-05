@@ -32,40 +32,26 @@ data IdCounter = IdCounter
 -- | All ID counters used during 'IngestChainHistory'.
 -- Each counter tracks the next ID for its table/entity.
 data IdCounters = IdCounters
-  { icBlockId            :: !IdCounter
-  , icTxId               :: !IdCounter
-  , icTxOutId            :: !IdCounter
-  , icTxInId             :: !IdCounter
-  , icCollateralTxInId   :: !IdCounter
-  , icReferenceTxInId    :: !IdCounter
-  , icTxMetadataId       :: !IdCounter
-  , icMaTxMintId         :: !IdCounter
-  , icMaTxOutId          :: !IdCounter
-  , icSlotLeaderId       :: !IdCounter
-  , icAddressId          :: !IdCounter
-  , icStakeAddressId     :: !IdCounter
-  , icPoolHashId         :: !IdCounter
-  , icMultiAssetId       :: !IdCounter
-  , icScriptId              :: !IdCounter
-  , icStakeRegistrationId   :: !IdCounter
-  , icStakeDeregistrationId :: !IdCounter
-  , icDelegationId          :: !IdCounter
-  , icWithdrawalId          :: !IdCounter
-  , icPoolUpdateId          :: !IdCounter
-  , icPoolMetadataRefId     :: !IdCounter
-  , icPoolOwnerId           :: !IdCounter
-  , icPoolRetireId          :: !IdCounter
-  , icPoolRelayId           :: !IdCounter
-  , icTxCborId              :: !IdCounter
-  , icEpochSyncStatsId      :: !IdCounter
-  , icAdaPotsId             :: !IdCounter
-  , icCollateralTxOutId     :: !IdCounter
-  , icEpochParamId          :: !IdCounter
-  , icEpochStateId          :: !IdCounter
-  , icCostModelId           :: !IdCounter
-  , icPotTransferId         :: !IdCounter
-  , icTreasuryId            :: !IdCounter
-  , icReserveId             :: !IdCounter
+  { icBlockId                 :: !IdCounter
+  , icTxId                    :: !IdCounter
+  , icTxOutId                 :: !IdCounter
+  , icSlotLeaderId            :: !IdCounter
+  , icAddressId               :: !IdCounter
+  , icStakeAddressId          :: !IdCounter
+  , icPoolHashId              :: !IdCounter
+  , icMultiAssetId            :: !IdCounter
+  , icScriptId                :: !IdCounter
+  , icPoolUpdateId            :: !IdCounter
+  , icPoolMetadataRefId       :: !IdCounter
+  , icCostModelId             :: !IdCounter
+  , icRedeemerId              :: !IdCounter
+  , icCollateralTxOutId       :: !IdCounter
+  , icEpochSyncStatsId        :: !IdCounter
+  , icGovActionProposalId     :: !IdCounter
+  , icParamProposalId         :: !IdCounter
+  , icCommitteeId             :: !IdCounter
+  , icConstitutionId          :: !IdCounter
+  , icEventInfoId             :: !IdCounter
   }
   deriving stock (Eq, Show)
 
@@ -79,40 +65,26 @@ mkIdCounter = IdCounter
 -- the fixture used by tests that don't resume from a checkpoint.
 freshIdCounters :: IdCounters
 freshIdCounters = IdCounters
-  { icBlockId               = mkIdCounter 1
-  , icTxId                  = mkIdCounter 1
-  , icTxOutId               = mkIdCounter 1
-  , icTxInId                = mkIdCounter 1
-  , icCollateralTxInId      = mkIdCounter 1
-  , icReferenceTxInId       = mkIdCounter 1
-  , icTxMetadataId          = mkIdCounter 1
-  , icMaTxMintId            = mkIdCounter 1
-  , icMaTxOutId             = mkIdCounter 1
-  , icSlotLeaderId          = mkIdCounter 1
-  , icAddressId             = mkIdCounter 1
-  , icStakeAddressId        = mkIdCounter 1
-  , icPoolHashId            = mkIdCounter 1
-  , icMultiAssetId          = mkIdCounter 1
-  , icScriptId              = mkIdCounter 1
-  , icStakeRegistrationId   = mkIdCounter 1
-  , icStakeDeregistrationId = mkIdCounter 1
-  , icDelegationId          = mkIdCounter 1
-  , icWithdrawalId          = mkIdCounter 1
-  , icPoolUpdateId          = mkIdCounter 1
-  , icPoolMetadataRefId     = mkIdCounter 1
-  , icPoolOwnerId           = mkIdCounter 1
-  , icPoolRetireId          = mkIdCounter 1
-  , icPoolRelayId           = mkIdCounter 1
-  , icTxCborId              = mkIdCounter 1
-  , icEpochSyncStatsId      = mkIdCounter 1
-  , icAdaPotsId             = mkIdCounter 1
-  , icCollateralTxOutId     = mkIdCounter 1
-  , icEpochParamId          = mkIdCounter 1
-  , icEpochStateId          = mkIdCounter 1
-  , icCostModelId           = mkIdCounter 1
-  , icPotTransferId         = mkIdCounter 1
-  , icTreasuryId            = mkIdCounter 1
-  , icReserveId             = mkIdCounter 1
+  { icBlockId                 = mkIdCounter 1
+  , icTxId                    = mkIdCounter 1
+  , icTxOutId                 = mkIdCounter 1
+  , icSlotLeaderId            = mkIdCounter 1
+  , icAddressId               = mkIdCounter 1
+  , icStakeAddressId          = mkIdCounter 1
+  , icPoolHashId              = mkIdCounter 1
+  , icMultiAssetId            = mkIdCounter 1
+  , icScriptId                = mkIdCounter 1
+  , icPoolUpdateId            = mkIdCounter 1
+  , icPoolMetadataRefId       = mkIdCounter 1
+  , icCostModelId             = mkIdCounter 1
+  , icRedeemerId              = mkIdCounter 1
+  , icCollateralTxOutId       = mkIdCounter 1
+  , icEpochSyncStatsId        = mkIdCounter 1
+  , icGovActionProposalId     = mkIdCounter 1
+  , icParamProposalId         = mkIdCounter 1
+  , icCommitteeId             = mkIdCounter 1
+  , icConstitutionId          = mkIdCounter 1
+  , icEventInfoId             = mkIdCounter 1
   }
 
 -- * Operations

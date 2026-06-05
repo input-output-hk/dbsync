@@ -247,35 +247,43 @@ runApp tracer args = do
       Left bootErr -> abortBoot tracer bootErr
       Right d      -> pure d
 
-  -- 10. Open the shared LSM session. 'BootFresh' / 'BootResume'
-  -- materialise the dedup stores on top of it; 'BootFollowRestart'
-  -- releases it immediately.
-  lsmSession <- openLsmSession (lsmSessionTracerFromApp tracer) ledgerStateDir
+  -- 10. Open the shared LSM session and guarantee its release.
+  -- The bracket covers the boot dispatch and the Ingest pipeline
+  -- so a cancellation between 'openLsmSession' and the pipeline's
+  -- own 'finally' still releases the on-disk lock. The closer is
+  -- idempotent, so a later 'closeAndDeleteLsmSession' inside
+  -- 'runPrep' is harmless.
+  bracket
+    (openLsmSession (lsmSessionTracerFromApp tracer) ledgerStateDir)
+    (\sess ->
+       closeLsmSession sess `catch` \(e :: SomeException) ->
+         logErrorIO tracer "App" $
+           "Error closing ingest LSM session in runApp bracket: " <> show e)
+    $ \lsmSession -> do
+      -- 11. Dispatch on the boot decision. 'BootFollowRestart' runs to
+      -- completion inline; the other two return the state for
+      -- 'runIngestThenFollow' below.
+      mIngestState <-
+        case bootDecision of
+          BootFresh ->
+            Just <$> resolveFreshBoot tracer hasLedgerEnv lsmSession
+          BootResume rc ->
+            Just <$> resolveResumeBoot
+              tracer topLevelCfg
+              stateQueryVar hasLedgerEnv consumerCtrlConn tableDefs lsmSession rc
+          BootFollowRestart frc -> do
+            runBootFollowRestart
+              tracer hasqlSettings coreEnv topLevelCfg networkMagic
+              socketPath systemStart stateQueryVar hasLedgerEnv consumerCtrlConn
+              lsmSession frc mShutdown
+            pure Nothing
 
-  -- 11. Dispatch on the boot decision. 'BootFollowRestart' runs to
-  -- completion inline; the other two return the state for
-  -- 'runIngestThenFollow' below.
-  mIngestState <-
-    case bootDecision of
-      BootFresh ->
-        Just <$> resolveFreshBoot tracer hasLedgerEnv lsmSession
-      BootResume rc ->
-        Just <$> resolveResumeBoot
-          tracer topLevelCfg
-          stateQueryVar hasLedgerEnv consumerCtrlConn tableDefs lsmSession rc
-      BootFollowRestart frc -> do
-        runBootFollowRestart
-          tracer hasqlSettings coreEnv topLevelCfg networkMagic
-          socketPath systemStart stateQueryVar hasLedgerEnv consumerCtrlConn
-          lsmSession frc mShutdown
-        pure Nothing
-
-  -- 12. Ingest → Prep → Follow. No-op on 'BootFollowRestart' ('Nothing').
-  for_ mIngestState $
-    runIngestThenFollow
-      tracer hasqlSettings connStr coreEnv validProfile
-      topLevelCfg networkMagic socketPath systemStart stateQueryVar
-      hasLedgerEnv consumerCtrlConn lsmSession tableDefs mShutdown
+      -- 12. Ingest → Prep → Follow. No-op on 'BootFollowRestart' ('Nothing').
+      for_ mIngestState $
+        runIngestThenFollow
+          tracer hasqlSettings connStr coreEnv validProfile
+          topLevelCfg networkMagic socketPath systemStart stateQueryVar
+          hasLedgerEnv consumerCtrlConn lsmSession tableDefs mShutdown
 
 -- ---------------------------------------------------------------------------
 -- * Setup steps (in execution order)

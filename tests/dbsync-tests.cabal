@@ -133,8 +133,10 @@ test-suite dbsync-test
     DbSync.Extractor.CoreSpec
     DbSync.Extractor.EpochBoundarySpec
     DbSync.Extractor.EpochSpec
+    DbSync.Extractor.GovernanceSpec
     DbSync.Extractor.PipelineSpec
     DbSync.Extractor.PoolSpec
+    DbSync.Extractor.ScriptsDatumsSpec
     DbSync.Extractor.StakeDelegationSpec
     DbSync.Extractor.UTxOSpec
     DbSync.Parser.MetadataSpec

@@ -6,9 +6,8 @@ module DbSync.Phase.Ingest.Writer.Metadata
 import Cardano.Prelude
 
 import DbSync.Db.Loader (LoaderStream (..))
-import DbSync.Db.Schema.Ids (TxMetadataId)
 import DbSync.Db.Schema.Metadata (TxMetadata, encodeTxMetadataCopy, txMetadataTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
 
-writeTxMetadataCopy :: LoaderStream -> TxMetadataId -> TxMetadata -> IO ()
-writeTxMetadataCopy ls mid md = lsWriteRow ls (tdName txMetadataTableDef) (encodeTxMetadataCopy mid md)
+writeTxMetadataCopy :: LoaderStream -> TxMetadata -> IO ()
+writeTxMetadataCopy ls md = lsWriteRow ls (tdName txMetadataTableDef) (encodeTxMetadataCopy md)

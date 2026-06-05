@@ -1,13 +1,11 @@
 -- | Ingest 'IdResolver' fragments for the @utxo@ extractor.
 --
--- Covers ID assignment for tx_in / collateral / reference and the
--- address-buffer + utxo-store interactions.
+-- Handles address-buffer enqueue and UTxO-store cache interactions.
+-- Per-row ID assignment for @tx_in@ / collateral / reference is
+-- handled by PostgreSQL IDENTITY columns at COPY time.
 module DbSync.Phase.Ingest.Resolver.UTxO
   ( -- * ID assignment
-    assignTxInIdIngest
-  , assignCollateralTxInIdIngest
-  , assignCollateralTxOutIdIngest
-  , assignReferenceTxInIdIngest
+    assignCollateralTxOutIdIngest
 
     -- * Address buffering
   , recordTxOutAddressIngest
@@ -27,15 +25,7 @@ import Cardano.Prelude
 import Data.IORef (IORef)
 
 import DbSync.Db.Schema.Address (Address)
-import DbSync.Db.Schema.Ids
-  ( AddressId
-  , CollateralTxInId (..)
-  , CollateralTxOutId (..)
-  , ReferenceTxInId (..)
-  , TxId
-  , TxInId (..)
-  , TxOutId
-  )
+import DbSync.Db.Schema.Ids (AddressId, CollateralTxOutId (..), TxId, TxOutId)
 import DbSync.Db.Types (DbLovelace)
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Phase.Ingest.Counter (IdCounters (..))
@@ -49,25 +39,10 @@ import DbSync.Worker.TxOut.AddressBuffer
   )
 import DbSync.Worker.TxOut.ConsumedByBuffer (ConsumedByBufferRef, recordConsumedBy)
 
--- ---------------------------------------------------------------------------
--- * ID assignment
--- ---------------------------------------------------------------------------
-
-assignTxInIdIngest :: IORef ExtractState -> IO TxInId
-assignTxInIdIngest extractStateRef =
-  allocateNextId extractStateRef icTxInId (\cs c -> cs { icTxInId = c }) TxInId
-
-assignCollateralTxInIdIngest :: IORef ExtractState -> IO CollateralTxInId
-assignCollateralTxInIdIngest extractStateRef =
-  allocateNextId extractStateRef icCollateralTxInId (\cs c -> cs { icCollateralTxInId = c }) CollateralTxInId
-
 assignCollateralTxOutIdIngest :: IORef ExtractState -> IO CollateralTxOutId
 assignCollateralTxOutIdIngest extractStateRef =
-  allocateNextId extractStateRef icCollateralTxOutId (\cs c -> cs { icCollateralTxOutId = c }) CollateralTxOutId
-
-assignReferenceTxInIdIngest :: IORef ExtractState -> IO ReferenceTxInId
-assignReferenceTxInIdIngest extractStateRef =
-  allocateNextId extractStateRef icReferenceTxInId (\cs c -> cs { icReferenceTxInId = c }) ReferenceTxInId
+  allocateNextId extractStateRef icCollateralTxOutId
+    (\cs c -> cs { icCollateralTxOutId = c }) CollateralTxOutId
 
 -- ---------------------------------------------------------------------------
 -- * Address buffering

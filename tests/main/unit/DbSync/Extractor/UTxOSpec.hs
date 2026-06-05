@@ -235,19 +235,19 @@ spec = do
   describe "processUTxO: tx_in resolution via UtxoCache" $ do
     it "writes tx_in.tx_out_id from the cache when the producer is in-block" $ do
       written <- runFullPipeline twoTxsInputSpendsFirst
-      let inIds = mapMaybe (SU.txInTxOutId . snd) (twTxIns written)
+      let inIds = mapMaybe SU.txInTxOutId (twTxIns written)
       length (twTxIns written) `shouldBe` 1
       length inIds              `shouldBe` 1
 
     it "leaves tx_in.tx_out_id NULL on a cache miss" $ do
       written <- runFullPipeline (blockSpendingMissingTx (BS.replicate 32 0xee))
-      let inIds = mapMaybe (SU.txInTxOutId . snd) (twTxIns written)
+      let inIds = mapMaybe SU.txInTxOutId (twTxIns written)
       length (twTxIns written) `shouldBe` 1
       inIds                     `shouldBe` []
 
     it "writes the same value for reference inputs that hit the cache" $ do
       written <- runFullPipeline twoTxsReferenceSpendsFirst
-      let refIds = mapMaybe (SU.referenceTxInTxOutId . snd) (twReferenceTxIns written)
+      let refIds = mapMaybe SU.referenceTxInTxOutId (twReferenceTxIns written)
       length (twReferenceTxIns written) `shouldBe` 1
       length refIds                      `shouldBe` 1
 
@@ -373,6 +373,14 @@ blockWithTwoOutputsSameStake rawAddr =
             , txMetadata         = Nothing
             , txMint             = []
             , txCborRaw          = Nothing
+            , txScripts          = []
+            , txDatums           = []
+            , txRedeemers        = []
+            , txExtraKeyWitnesses = []
+            , txParamProposal    = []
+            , txProposals        = []
+            , txVotingProcedures = []
+            , txVotingAnchors    = []
             }
         ]
     }
@@ -420,6 +428,14 @@ singleOutputTx rawAddr value = GenericTx
   , txMetadata         = Nothing
   , txMint             = []
   , txCborRaw          = Nothing
+  , txScripts          = []
+  , txDatums           = []
+  , txRedeemers        = []
+  , txExtraKeyWitnesses = []
+  , txParamProposal    = []
+  , txProposals        = []
+  , txVotingProcedures = []
+  , txVotingAnchors    = []
   }
 
 mkOutput :: Word16 -> ByteString -> Word64 -> GenericTxOut

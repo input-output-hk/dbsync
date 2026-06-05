@@ -409,9 +409,11 @@ indexExistsSql td idxName = T.unwords
   , "AND indexname = '" <> idxName <> "'"
   ]
 
--- | @SELECT nextval('<table>_id_seq')@.
+-- | @SELECT nextval(pg_get_serial_sequence('<table>', 'id'))@,
+-- resolving the actual sequence name (explicit or IDENTITY-backed).
 nextvalSql :: TableDef -> Text
-nextvalSql td = "SELECT nextval('" <> tdName td <> "_id_seq')"
+nextvalSql td =
+  "SELECT nextval(pg_get_serial_sequence('" <> tdName td <> "', 'id'))"
 
 -- ---------------------------------------------------------------------------
 -- Fixtures live in 'DbSync.Test.Fixtures'; shared with 'BackfillSpec'.

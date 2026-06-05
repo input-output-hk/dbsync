@@ -69,7 +69,6 @@ spec = describe "DbSync.SyncState.Row" $
               ssrBlockIdCounter row         `shouldBe` 1
               ssrTxIdCounter row            `shouldBe` 1
               ssrSlotLeaderIdCounter row    `shouldBe` 1
-              ssrEpochSyncStatsIdCounter row `shouldBe` 1
               -- last_committed_* are NULL on a fresh seed
               ssrLastCommittedSlot row      `shouldBe` Nothing
               ssrLastCommittedBlockNo row   `shouldBe` Nothing
@@ -259,37 +258,23 @@ sampleRow = SyncStateRow
   , ssrBlockIdCounter                = 501
   , ssrTxIdCounter                   = 1500
   , ssrTxOutIdCounter                = 3000
-  , ssrTxInIdCounter                 = 2800
-  , ssrCollateralTxInIdCounter       = 100
-  , ssrReferenceTxInIdCounter        = 50
-  , ssrTxMetadataIdCounter           = 200
-  , ssrMaTxMintIdCounter             = 300
-  , ssrMaTxOutIdCounter              = 400
   , ssrSlotLeaderIdCounter           = 10
   , ssrAddressIdCounter              = 1
   , ssrStakeAddressIdCounter         = 750
   , ssrPoolHashIdCounter             = 25
   , ssrMultiAssetIdCounter           = 600
   , ssrScriptIdCounter               = 80
-  , ssrStakeRegistrationIdCounter    = 700
-  , ssrStakeDeregistrationIdCounter  = 50
-  , ssrDelegationIdCounter           = 900
-  , ssrWithdrawalIdCounter           = 200
   , ssrPoolUpdateIdCounter           = 30
   , ssrPoolMetadataRefIdCounter      = 20
-  , ssrPoolOwnerIdCounter            = 35
-  , ssrPoolRetireIdCounter           = 5
-  , ssrPoolRelayIdCounter            = 40
-  , ssrTxCborIdCounter               = 1500
-  , ssrEpochSyncStatsIdCounter       = 5
-  , ssrAdaPotsIdCounter              = 5
-  , ssrCollateralTxOutIdCounter      = 1
-  , ssrEpochParamIdCounter           = 1
-  , ssrEpochStateIdCounter           = 1
   , ssrCostModelIdCounter            = 1
-  , ssrPotTransferIdCounter          = 1
-  , ssrTreasuryIdCounter             = 1
-  , ssrReserveIdCounter              = 1
+  , ssrRedeemerIdCounter             = 1
+  , ssrCollateralTxOutIdCounter      = 1
+  , ssrEpochSyncStatsIdCounter       = 1
+  , ssrGovActionProposalIdCounter            = 1
+  , ssrParamProposalIdCounter            = 1
+  , ssrCommitteeIdCounter            = 1
+  , ssrConstitutionIdCounter            = 1
+  , ssrEventInfoIdCounter            = 1
   , ssrSchemaVersionApplied          = 1
   , ssrLedgerEnabled                 = True
   , ssrSyncComplete                  = False

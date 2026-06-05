@@ -199,6 +199,14 @@ txWithPoolReg validContract poolHash = GenericTx
   , txMetadata         = Nothing
   , txMint             = []
   , txCborRaw          = Nothing
+  , txScripts          = []
+  , txDatums           = []
+  , txRedeemers        = []
+  , txExtraKeyWitnesses = []
+  , txParamProposal    = []
+  , txProposals        = []
+  , txVotingProcedures = []
+  , txVotingAnchors    = []
   }
 
 shelleyEmptyBlock :: Word64 -> GenericBlock

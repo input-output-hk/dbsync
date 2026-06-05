@@ -32,14 +32,14 @@ import Data.IORef (newIORef)
 
 import qualified Hasql.Connection as Conn
 
-import qualified DbSync.Phase.Following.Resolver.Cbor as Cbor
 import qualified DbSync.Phase.Following.Resolver.Core as Core
 import qualified DbSync.Phase.Following.Resolver.Epoch as Epoch
 import qualified DbSync.Phase.Following.Resolver.EpochBoundary as EpochBoundary
+import qualified DbSync.Phase.Following.Resolver.Governance as Governance
 import DbSync.Phase.Following.Resolver.Internal (newBlockDedupCache)
-import qualified DbSync.Phase.Following.Resolver.Metadata as Metadata
 import qualified DbSync.Phase.Following.Resolver.MultiAsset as MultiAsset
 import qualified DbSync.Phase.Following.Resolver.Pool as Pool
+import qualified DbSync.Phase.Following.Resolver.ScriptsDatums as ScriptsDatums
 import qualified DbSync.Phase.Following.Resolver.StakeDelegation as Stake
 import qualified DbSync.Phase.Following.Resolver.UTxO as UTxO
 import DbSync.Phase.Following.IdAllocator (PreAllocatedIds)
@@ -68,53 +68,51 @@ mkFollowResolver conn = do
     , recordCollateralTxOutAddress = UTxO.recordCollateralTxOutAddressFollow
     , resolveAddressId             = UTxO.resolveAddressIdConn         conn
     , assignTxOutId                = UTxO.assignTxOutIdConn             conn
-    , assignTxInId                 = UTxO.assignTxInIdConn              conn
-    , assignCollateralTxInId       = UTxO.assignCollateralTxInIdConn    conn
     , assignCollateralTxOutId      = UTxO.assignCollateralTxOutIdConn   conn
-    , assignReferenceTxInId        = UTxO.assignReferenceTxInIdConn     conn
     , resolveInputValues           = UTxO.resolveInputValuesFollow      conn
     , resolveInputUtxo             = UTxO.resolveInputUtxoFollow        conn
     , recordTxOutputs              = UTxO.recordTxOutputsFollow
     , recordConsumed               = UTxO.recordConsumedFollow
     , deleteCachedUtxo             = UTxO.deleteCachedUtxoFollow
 
-      -- Metadata
-    , assignTxMetadataId = Metadata.assignTxMetadataIdConn conn
-
       -- MultiAsset
     , resolveMultiAsset = MultiAsset.resolveMultiAssetConn conn
-    , assignMaTxMintId  = MultiAsset.assignMaTxMintIdConn  conn
-    , assignMaTxOutId   = MultiAsset.assignMaTxOutIdConn   conn
 
       -- StakeDelegation
     , resolveStakeAddress         = Stake.resolveStakeAddressConn         conn
-    , assignStakeRegistrationId   = Stake.assignStakeRegistrationIdConn   conn
-    , assignStakeDeregistrationId = Stake.assignStakeDeregistrationIdConn conn
-    , assignDelegationId          = Stake.assignDelegationIdConn          conn
-    , assignWithdrawalId          = Stake.assignWithdrawalIdConn          conn
-    , assignPotTransferId         = Stake.assignPotTransferIdStub
-    , assignTreasuryId            = Stake.assignTreasuryIdStub
-    , assignReserveId             = Stake.assignReserveIdStub
 
       -- Pool
     , resolvePoolHash         = Pool.resolvePoolHashConn         conn
     , assignPoolUpdateId      = Pool.assignPoolUpdateIdConn      conn
     , assignPoolMetadataRefId = Pool.assignPoolMetadataRefIdConn conn
-    , assignPoolOwnerId       = Pool.assignPoolOwnerIdConn       conn
-    , assignPoolRetireId      = Pool.assignPoolRetireIdConn      conn
-    , assignPoolRelayId       = Pool.assignPoolRelayIdConn       conn
-
-      -- CBOR
-    , assignTxCborId = Cbor.assignTxCborIdConn conn
 
       -- EpochSyncStats (stub)
     , assignEpochSyncStatsId = Epoch.assignEpochSyncStatsIdStub
 
       -- EpochBoundary (stubs)
-    , assignAdaPotsId    = EpochBoundary.assignAdaPotsIdStub
-    , assignEpochParamId = EpochBoundary.assignEpochParamIdStub
-    , assignEpochStateId = EpochBoundary.assignEpochStateIdStub
     , resolveCostModel   = EpochBoundary.resolveCostModelStub
+
+      -- ScriptsDatums (stubs)
+    , resolveDatum            = ScriptsDatums.resolveDatumStub
+    , resolveScript           = ScriptsDatums.resolveScriptStub
+    , resolveRedeemerData     = ScriptsDatums.resolveRedeemerDataStub
+    , assignRedeemerId        = ScriptsDatums.assignRedeemerIdStub
+
+      -- Governance (stubs)
+    , resolveDrepHash             = Governance.resolveDrepHashStub
+    , resolveCommitteeHash        = Governance.resolveCommitteeHashStub
+    , resolveVotingAnchor         = Governance.resolveVotingAnchorStub
+    , assignGovActionProposalId   = Governance.assignGovActionProposalIdStub
+    , assignParamProposalId       = Governance.assignParamProposalIdStub
+    , assignCommitteeId           = Governance.assignCommitteeIdStub
+    , assignConstitutionId        = Governance.assignConstitutionIdStub
+    , assignEventInfoId           = Governance.assignEventInfoIdStub
+    , lookupGovActionProposalId   = Governance.lookupGovActionProposalIdStub
+    , recordGovActionProposalId   = Governance.recordGovActionProposalIdStub
+    , readEnactedEpochStateIds    = Governance.readEnactedEpochStateIdsStub
+    , writeEnactedEpochStateIds   = Governance.writeEnactedEpochStateIdsStub
+    , readGovExpiresAfter         = Governance.readGovExpiresAfterStub
+    , writeGovExpiresAfter        = Governance.writeGovExpiresAfterStub
     }
 
 -- ---------------------------------------------------------------------------
@@ -154,51 +152,49 @@ mkBufferedFollowResolver conn preAlloc buf = do
     , recordCollateralTxOutAddress = UTxO.recordCollateralTxOutAddressFollow
     , resolveAddressId             = UTxO.resolveAddressIdBuf            conn buf cache
     , assignTxOutId                = UTxO.assignTxOutIdBuf                preAlloc
-    , assignTxInId                 = UTxO.assignTxInIdBuf                 preAlloc
-    , assignCollateralTxInId       = UTxO.assignCollateralTxInIdBuf       preAlloc
     , assignCollateralTxOutId      = UTxO.assignCollateralTxOutIdBuf      preAlloc
-    , assignReferenceTxInId        = UTxO.assignReferenceTxInIdBuf        preAlloc
     , resolveInputValues           = UTxO.resolveInputValuesFollow         conn
     , resolveInputUtxo             = UTxO.resolveInputUtxoFollow           conn
     , recordTxOutputs              = UTxO.recordTxOutputsFollow
     , recordConsumed               = UTxO.recordConsumedFollow
     , deleteCachedUtxo             = UTxO.deleteCachedUtxoFollow
 
-      -- Metadata
-    , assignTxMetadataId = Metadata.assignTxMetadataIdBuf preAlloc
-
       -- MultiAsset
     , resolveMultiAsset = MultiAsset.resolveMultiAssetBuf conn cache
-    , assignMaTxMintId  = MultiAsset.assignMaTxMintIdBuf  preAlloc
-    , assignMaTxOutId   = MultiAsset.assignMaTxOutIdBuf   preAlloc
 
       -- StakeDelegation
     , resolveStakeAddress         = Stake.resolveStakeAddressBuf         conn cache
-    , assignStakeRegistrationId   = Stake.assignStakeRegistrationIdBuf   preAlloc
-    , assignStakeDeregistrationId = Stake.assignStakeDeregistrationIdBuf preAlloc
-    , assignDelegationId          = Stake.assignDelegationIdBuf          preAlloc
-    , assignWithdrawalId          = Stake.assignWithdrawalIdBuf          preAlloc
-    , assignPotTransferId         = Stake.assignPotTransferIdStub
-    , assignTreasuryId            = Stake.assignTreasuryIdStub
-    , assignReserveId             = Stake.assignReserveIdStub
 
       -- Pool
     , resolvePoolHash         = Pool.resolvePoolHashBuf         conn cache
     , assignPoolUpdateId      = Pool.assignPoolUpdateIdBuf      preAlloc
     , assignPoolMetadataRefId = Pool.assignPoolMetadataRefIdBuf preAlloc
-    , assignPoolOwnerId       = Pool.assignPoolOwnerIdBuf       preAlloc
-    , assignPoolRetireId      = Pool.assignPoolRetireIdBuf      preAlloc
-    , assignPoolRelayId       = Pool.assignPoolRelayIdBuf       preAlloc
-
-      -- CBOR
-    , assignTxCborId = Cbor.assignTxCborIdBuf preAlloc
 
       -- EpochSyncStats (stub)
     , assignEpochSyncStatsId = Epoch.assignEpochSyncStatsIdStub
 
       -- EpochBoundary (stubs)
-    , assignAdaPotsId    = EpochBoundary.assignAdaPotsIdStub
-    , assignEpochParamId = EpochBoundary.assignEpochParamIdStub
-    , assignEpochStateId = EpochBoundary.assignEpochStateIdStub
     , resolveCostModel   = EpochBoundary.resolveCostModelStub
+
+      -- ScriptsDatums (stubs)
+    , resolveDatum            = ScriptsDatums.resolveDatumStub
+    , resolveScript           = ScriptsDatums.resolveScriptStub
+    , resolveRedeemerData     = ScriptsDatums.resolveRedeemerDataStub
+    , assignRedeemerId        = ScriptsDatums.assignRedeemerIdStub
+
+      -- Governance (stubs)
+    , resolveDrepHash             = Governance.resolveDrepHashStub
+    , resolveCommitteeHash        = Governance.resolveCommitteeHashStub
+    , resolveVotingAnchor         = Governance.resolveVotingAnchorStub
+    , assignGovActionProposalId   = Governance.assignGovActionProposalIdStub
+    , assignParamProposalId       = Governance.assignParamProposalIdStub
+    , assignCommitteeId           = Governance.assignCommitteeIdStub
+    , assignConstitutionId        = Governance.assignConstitutionIdStub
+    , assignEventInfoId           = Governance.assignEventInfoIdStub
+    , lookupGovActionProposalId   = Governance.lookupGovActionProposalIdStub
+    , recordGovActionProposalId   = Governance.recordGovActionProposalIdStub
+    , readEnactedEpochStateIds    = Governance.readEnactedEpochStateIdsStub
+    , writeEnactedEpochStateIds   = Governance.writeEnactedEpochStateIdsStub
+    , readGovExpiresAfter         = Governance.readGovExpiresAfterStub
+    , writeGovExpiresAfter        = Governance.writeGovExpiresAfterStub
     }

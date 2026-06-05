@@ -75,5 +75,6 @@ epochParamPendingTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }

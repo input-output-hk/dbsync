@@ -22,7 +22,6 @@ import DbSync.Parser.Types (GenericTx (..))
 import DbSync.Db.Schema.Metadata
 import DbSync.Db.Types (DbWord64 (..))
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
-import DbSync.Resolver (HasResolver (..), IdResolver (..))
 import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- ---------------------------------------------------------------------------
@@ -48,23 +47,20 @@ metadataExtractor = ExtractorDef
 -- recorded on-chain.
 processMetadata :: ProcessBlockFn
 processMetadata ctx = do
-  resolver <- asks getResolver
-  writer   <- asks getWriter
+  writer <- asks getWriter
   forM_ (bcTxs ctx) $ \tc ->
     when (txValidContract (tcGenTx tc)) $
       case txMetadata (tcGenTx tc) of
         Nothing    -> pure ()
-        Just mdMap -> forM_ (Map.toAscList mdMap) (liftIO . writeOne resolver writer (tcTxId tc))
+        Just mdMap -> forM_ (Map.toAscList mdMap) (liftIO . writeOne writer (tcTxId tc))
   where
-    writeOne r w txId (key, value) = do
-      mdId <- assignTxMetadataId r
-      let row = TxMetadata
-            { txMetadataKey   = DbWord64 key
-            , txMetadataJson  = renderJson value
-            , txMetadataBytes = serialiseSingleton key value
-            , txMetadataTxId  = txId
-            }
-      writeTxMetadata w mdId row
+    writeOne w txId (key, value) =
+      writeTxMetadata w TxMetadata
+        { txMetadataKey   = DbWord64 key
+        , txMetadataJson  = renderJson value
+        , txMetadataBytes = serialiseSingleton key value
+        , txMetadataTxId  = txId
+        }
 
     -- 'Aeson.encode' yields valid UTF-8 by construction, so
     -- 'Text.decodeUtf8'' should never fail here; the 'Nothing'

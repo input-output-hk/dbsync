@@ -131,30 +131,24 @@ processPool ctx = do
           -- 5. Write pool owners
           forM_ (prdOwners prd) $ \ownerHash -> do
             ownerAddrId <- resolveAndWriteStakeAddress ownerHash
-            poId <- liftIO $ assignPoolOwnerId resolver
-            let po = PoolOwner
-                  { poolOwnerAddrId       = ownerAddrId
-                  , poolOwnerPoolUpdateId = puId
-                  }
-            liftIO $ writePoolOwner writer poId po
+            liftIO $ writePoolOwner writer PoolOwner
+              { poolOwnerAddrId       = ownerAddrId
+              , poolOwnerPoolUpdateId = puId
+              }
 
           -- 6. Write pool relays
-          forM_ (prdRelays prd) $ \relayData -> do
-            prId <- liftIO $ assignPoolRelayId resolver
-            let pr = mkPoolRelay puId relayData
-            liftIO $ writePoolRelay writer prId pr
+          forM_ (prdRelays prd) $ \relayData ->
+            liftIO $ writePoolRelay writer (mkPoolRelay puId relayData)
 
         -- Pool retirement
         CertPoolRetirement poolKeyHash retiringEpoch -> do
           (phId, _) <- resolveAndWritePoolHash poolKeyHash
-          prId <- liftIO $ assignPoolRetireId resolver
-          let pr = PoolRetire
-                { poolRetireHashId        = phId
-                , poolRetireCertIndex     = certIdx
-                , poolRetireAnnouncedTxId = txId
-                , poolRetireRetiringEpoch = retiringEpoch
-                }
-          liftIO $ writePoolRetire writer prId pr
+          liftIO $ writePoolRetire writer PoolRetire
+            { poolRetireHashId        = phId
+            , poolRetireCertIndex     = certIdx
+            , poolRetireAnnouncedTxId = txId
+            , poolRetireRetiringEpoch = retiringEpoch
+            }
 
         -- All other cert types: not pool-related
         _ -> pure ()

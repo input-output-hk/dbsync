@@ -75,6 +75,7 @@ txMetadataTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys =
       [ ForeignKey "tx_id" "tx" "id"
       ]
@@ -84,11 +85,10 @@ txMetadataTableDef = TableDef
 -- * COPY encoding
 -- ---------------------------------------------------------------------------
 
-encodeTxMetadataCopy :: TxMetadataId -> TxMetadata -> ByteString
-encodeTxMetadataCopy (TxMetadataId mid) md =
+encodeTxMetadataCopy :: TxMetadata -> ByteString
+encodeTxMetadataCopy md =
   buildCopyRow
-    [ Just $ bInt64 mid
-    , Just $ bWord64 (unDbWord64 $ txMetadataKey md)
+    [ Just $ bWord64 (unDbWord64 $ txMetadataKey md)
     , bText <$> txMetadataJson md
     , Just $ bHex (txMetadataBytes md)
     , Just $ bInt64 (getTxId $ txMetadataTxId md)

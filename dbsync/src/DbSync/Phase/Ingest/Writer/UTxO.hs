@@ -12,14 +12,7 @@ import Cardano.Prelude
 
 import DbSync.Db.Loader (LoaderStream (..))
 import DbSync.Db.Schema.Address (Address, addressTableDef, encodeAddressCopy)
-import DbSync.Db.Schema.Ids
-  ( AddressId
-  , CollateralTxInId
-  , CollateralTxOutId
-  , ReferenceTxInId
-  , TxInId
-  , TxOutId
-  )
+import DbSync.Db.Schema.Ids (AddressId, CollateralTxOutId, TxOutId)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Schema.UTxO
   ( CollateralTxIn
@@ -45,14 +38,14 @@ writeAddressCopy ls aid addr = lsWriteRow ls (tdName addressTableDef) (encodeAdd
 writeTxOutCopy :: LoaderStream -> TxOutId -> TxOut -> IO ()
 writeTxOutCopy ls oid txo = lsWriteRow ls (tdName txOutTableDef) (encodeTxOutCopy oid txo)
 
-writeTxInCopy :: LoaderStream -> TxInId -> TxIn -> IO ()
-writeTxInCopy ls iid ti = lsWriteRow ls (tdName txInTableDef) (encodeTxInCopy iid ti)
+writeTxInCopy :: LoaderStream -> TxIn -> IO ()
+writeTxInCopy ls ti = lsWriteRow ls (tdName txInTableDef) (encodeTxInCopy ti)
 
-writeCollateralTxInCopy :: LoaderStream -> CollateralTxInId -> CollateralTxIn -> IO ()
-writeCollateralTxInCopy ls iid ci = lsWriteRow ls (tdName collateralTxInTableDef) (encodeCollateralTxInCopy iid ci)
+writeCollateralTxInCopy :: LoaderStream -> CollateralTxIn -> IO ()
+writeCollateralTxInCopy ls ci = lsWriteRow ls (tdName collateralTxInTableDef) (encodeCollateralTxInCopy ci)
 
 writeCollateralTxOutCopy :: LoaderStream -> CollateralTxOutId -> CollateralTxOut -> IO ()
-writeCollateralTxOutCopy ls oid co = lsWriteRow ls (tdName collateralTxOutTableDef) (encodeCollateralTxOutCopy oid co)
+writeCollateralTxOutCopy ls cid co = lsWriteRow ls (tdName collateralTxOutTableDef) (encodeCollateralTxOutCopy cid co)
 
-writeReferenceTxInCopy :: LoaderStream -> ReferenceTxInId -> ReferenceTxIn -> IO ()
-writeReferenceTxInCopy ls iid ri = lsWriteRow ls (tdName referenceTxInTableDef) (encodeReferenceTxInCopy iid ri)
+writeReferenceTxInCopy :: LoaderStream -> ReferenceTxIn -> IO ()
+writeReferenceTxInCopy ls ri = lsWriteRow ls (tdName referenceTxInTableDef) (encodeReferenceTxInCopy ri)

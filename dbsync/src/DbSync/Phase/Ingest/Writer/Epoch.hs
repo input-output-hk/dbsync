@@ -15,4 +15,5 @@ import DbSync.Db.Schema.Ids (EpochSyncStatsId)
 import DbSync.Db.Schema.Types (TableDef (..))
 
 writeEpochSyncStatsCopy :: LoaderStream -> EpochSyncStatsId -> EpochSyncStats -> IO ()
-writeEpochSyncStatsCopy ls essid ess = lsWriteRow ls (tdName epochSyncStatsTableDef) (encodeEpochSyncStatsCopy essid ess)
+writeEpochSyncStatsCopy ls essid ess =
+  lsWriteRow ls (tdName epochSyncStatsTableDef) (encodeEpochSyncStatsCopy essid ess)

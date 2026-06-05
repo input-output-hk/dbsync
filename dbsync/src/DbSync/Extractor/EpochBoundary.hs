@@ -55,7 +55,13 @@ import DbSync.Db.Schema.EpochBoundary
   , epochParamTableDef
   , epochStateTableDef
   )
-import DbSync.Db.Schema.Ids (BlockId, CostModelId)
+import DbSync.Db.Schema.Ids
+  ( BlockId
+  , CommitteeId (..)
+  , ConstitutionId (..)
+  , CostModelId
+  , GovActionProposalId (..)
+  )
 import DbSync.Db.Types (DbWord64 (..))
 import DbSync.Extractor (ExtractorDef (..))
 import qualified DbSync.Worker.Ledger.ProtoParams as Proto
@@ -129,7 +135,7 @@ runEpochBoundary applyResult blockId =
 -- | Build and dispatch the 'AdaPots' row for the boundary, if the
 -- ledger reported any pots data.
 writeBoundaryAdaPots
-  :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
+  :: (HasWriter env, MonadReader env m, MonadIO m)
   => ApplyResult
   -> Generic.NewEpoch
   -> BlockId
@@ -138,11 +144,8 @@ writeBoundaryAdaPots applyResult newEpoch blockId =
   case Generic.neAdaPots newEpoch of
     Strict.Nothing -> pure ()  -- Pre-Shelley; nothing to write
     Strict.Just pots -> do
-      resolver <- asks getResolver
-      writer   <- asks getWriter
-      apId <- liftIO $ assignAdaPotsId resolver
-      let row = mkAdaPotsRow applyResult newEpoch blockId pots
-      liftIO $ writeAdaPots writer apId row
+      writer <- asks getWriter
+      liftIO $ writeAdaPots writer (mkAdaPotsRow applyResult newEpoch blockId pots)
 
 -- | Build an 'AdaPots' record from the boundary's
 -- 'Shelley.AdaPots' value.
@@ -201,11 +204,10 @@ writeBoundaryProtoParams newEpoch blockId =
       let epoch = unEpochNo (Generic.neEpoch newEpoch)
           nonce = Generic.euNonce (Generic.neEpochUpdate newEpoch)
       mCostModelId <- writeBoundaryCostModel resolver writer (Proto.ppCostmdls params)
-      epId <- liftIO $ assignEpochParamId resolver
-      liftIO $ writeEpochParam writer epId
-        (mkEpochParamRow params epoch blockId nonce mCostModelId)
-      esId <- liftIO $ assignEpochStateId resolver
-      liftIO $ writeEpochState writer esId (mkEpochStateRow epoch)
+      (mCommitteeId, mNoConfId, mConstId) <- liftIO $ readEnactedEpochStateIds resolver
+      liftIO $ writeEpochParam writer (mkEpochParamRow params epoch blockId nonce mCostModelId)
+      liftIO $ writeEpochState writer
+        (mkEpochStateRow epoch mCommitteeId mNoConfId mConstId)
 
 -- | Dedup-write a cost_model row. Returns the (possibly already
 -- existing) row id when cost models are present in the protocol
@@ -325,14 +327,19 @@ mkEpochParamRow pp epoch blockId nonce mCostModelId =
         fmap fromRational (Proto.ppMinFeeRefScriptCostPerByte pp)
     }
 
--- | Build the 'EpochState' row. The three governance FK columns are
--- written 'Nothing'; a later slice that wires the governance
--- writers will populate them.
-mkEpochStateRow :: Word64 -> EpochState
-mkEpochStateRow epoch = EpochState
-  { epochStateCommitteeId    = Nothing
-  , epochStateNoConfidenceId = Nothing
-  , epochStateConstitutionId = Nothing
+-- | Build the 'EpochState' row. The three FK columns come from
+-- 'readEnactedEpochStateIds' on the resolver, which the governance
+-- boundary handler refreshes from @apGovActionState@.
+mkEpochStateRow
+  :: Word64
+  -> Maybe Int64     -- ^ committee.id
+  -> Maybe Int64     -- ^ no_confidence_id (gov_action_proposal.id)
+  -> Maybe Int64     -- ^ constitution.id
+  -> EpochState
+mkEpochStateRow epoch mCommitteeId mNoConfId mConstitutionId = EpochState
+  { epochStateCommitteeId    = CommitteeId <$> mCommitteeId
+  , epochStateNoConfidenceId = GovActionProposalId <$> mNoConfId
+  , epochStateConstitutionId = ConstitutionId <$> mConstitutionId
   , epochStateEpochNo        = epoch
   }
 

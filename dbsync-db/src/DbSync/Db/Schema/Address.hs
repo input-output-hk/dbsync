@@ -91,6 +91,7 @@ addressTableDef = TableDef
     -- on @raw@; this constraint is the DB-level safety net.
   , tdUniqueConstraints = [pure "raw_hash"]
   , tdGeneratedColumns  = [("raw_hash", "decode(md5(raw), 'hex')")]
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 

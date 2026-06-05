@@ -14,7 +14,8 @@
   },
   "db_options": {
     "utxo": true,
-    "epoch_sync_stats": true
+    "epoch_sync_stats": true,
+    "epoch": false
   },
   "metrics": {
     "prometheus_port": 8080

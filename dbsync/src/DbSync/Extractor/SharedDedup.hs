@@ -11,25 +11,65 @@ module DbSync.Extractor.SharedDedup
   ( resolveAndWritePoolHash
   , resolveAndWriteStakeAddress
   , resolveAndWriteMultiAsset
+  , resolveAndWriteDatum
+  , resolveAndWriteScript
+  , resolveAndWriteRedeemerData
+
+    -- Governance
+  , resolveAndWriteDrepHash
+  , resolveAndWriteAbstractDrep
+  , resolveAndWriteCommitteeHash
+  , resolveAndWriteVotingAnchor
+  , resolveAndWriteCostModel
+
   ) where
 
 import Cardano.Prelude
 
 import Cardano.Ledger.BaseTypes (Network (..))
+import qualified Cardano.Ledger.Alonzo.Scripts as Alonzo
+import Cardano.Ledger.Plutus.Language (Language)
 import qualified Data.ByteString as BS
 
-import DbSync.Db.Schema.Ids (MultiAssetId, PoolHashId, StakeAddressId)
+import DbSync.Db.Schema.EpochBoundary (CostModel (..))
+import DbSync.Db.Schema.Governance
+  ( CommitteeHash (..)
+  , DrepHash (..)
+  , VotingAnchor (..)
+  )
+import DbSync.Db.Schema.Ids
+  ( BlockId
+  , CommitteeHashId
+  , CostModelId
+  , DatumId
+  , DrepHashId
+  , MultiAssetId
+  , PoolHashId
+  , RedeemerDataId
+  , ScriptId
+  , StakeAddressId
+  , VotingAnchorId
+  )
 import DbSync.Db.Schema.MultiAsset (MultiAsset (..))
 import DbSync.Db.Schema.Pool (PoolHash (..))
+import DbSync.Db.Schema.ScriptsDatums (Datum, RedeemerData, Script)
 import DbSync.Db.Schema.StakeDelegation (StakeAddress (..))
+import DbSync.Db.Types (AnchorType, VoteUrl (..))
 import DbSync.App.Env (HasNetwork (..))
+import qualified DbSync.Extractor.EpochBoundary as EB
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
 import DbSync.Util.Bech32
   ( mkAssetFingerprint
+  , serialiseDrepToBech32
   , serialisePoolKeyHashToBech32
   , serialiseStakeKeyHashToBech32
   )
-import DbSync.Util.DedupHash (hashDedupKey)
+import DbSync.Util.DedupHash
+  ( committeeHashDedupKey
+  , drepHashDedupKey
+  , encodeVotingAnchorKey
+  , hashDedupKey
+  )
 import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- ---------------------------------------------------------------------------
@@ -120,6 +160,149 @@ resolveAndWriteMultiAsset policy name = do
   (maId, isNew) <- liftIO $ resolveMultiAsset resolver key ma
   when isNew $ liftIO $ writeMultiAsset writer maId ma
   pure maId
+
+-- | Resolve a datum by 32-byte hash, writing the @datum@ row on
+-- first sighting. The caller supplies the typed row so the same
+-- helper covers all eras' datum shapes.
+resolveAndWriteDatum
+  :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
+  => ByteString
+  -> Datum
+  -> m DatumId
+resolveAndWriteDatum hash row = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
+  (did, isNew) <- liftIO $ resolveDatum resolver hash row
+  when isNew $ liftIO $ writeDatum writer did row
+  pure did
+
+-- | Resolve a script by its hash, writing the @script@ row on
+-- first sighting.
+resolveAndWriteScript
+  :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
+  => ByteString
+  -> Script
+  -> m ScriptId
+resolveAndWriteScript hash row = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
+  (sid, isNew) <- liftIO $ resolveScript resolver hash row
+  when isNew $ liftIO $ writeScript writer sid row
+  pure sid
+
+-- | Resolve a redeemer-data payload by 32-byte hash, writing the
+-- @redeemer_data@ row on first sighting.
+resolveAndWriteRedeemerData
+  :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
+  => ByteString
+  -> RedeemerData
+  -> m RedeemerDataId
+resolveAndWriteRedeemerData hash row = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
+  (rdid, isNew) <- liftIO $ resolveRedeemerData resolver hash row
+  when isNew $ liftIO $ writeRedeemerData writer rdid row
+  pure rdid
+
+-- ---------------------------------------------------------------------------
+-- * Governance dedup helpers
+-- ---------------------------------------------------------------------------
+
+-- | Resolve a concrete DRep credential, writing the @drep_hash@ row
+-- on first sighting. @has_script@ flags script-credential DReps.
+resolveAndWriteDrepHash
+  :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
+  => ByteString    -- ^ 28-byte credential hash
+  -> Bool          -- ^ @has_script@
+  -> m DrepHashId
+resolveAndWriteDrepHash credHash hasScript = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
+  let row = DrepHash
+        { drepHashRaw       = Just credHash
+        , drepHashView      = serialiseDrepToBech32 credHash
+        , drepHashHasScript = hasScript
+        }
+  (did, isNew) <- liftIO $ resolveDrepHash resolver (drepHashDedupKey (Just credHash) (drepHashView row)) row
+  when isNew $ liftIO $ writeDrepHash writer did row
+  pure did
+
+-- | Resolve one of the two abstract DReps (@always_abstain@,
+-- @always_no_confidence@). The @raw@ column is NULL on these rows;
+-- the @view@ string is the dedup key.
+resolveAndWriteAbstractDrep
+  :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
+  => Text          -- ^ Sentinel @view@ string.
+  -> m DrepHashId
+resolveAndWriteAbstractDrep viewText = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
+  let row = DrepHash
+        { drepHashRaw       = Nothing
+        , drepHashView      = viewText
+        , drepHashHasScript = False
+        }
+  (did, isNew) <- liftIO $ resolveDrepHash resolver (drepHashDedupKey Nothing viewText) row
+  when isNew $ liftIO $ writeDrepHash writer did row
+  pure did
+
+-- | Resolve a committee-key credential by @(raw, has_script)@,
+-- writing the @committee_hash@ row on first sighting.
+resolveAndWriteCommitteeHash
+  :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
+  => ByteString    -- ^ 28-byte credential hash
+  -> Bool          -- ^ @has_script@
+  -> m CommitteeHashId
+resolveAndWriteCommitteeHash credHash hasScript = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
+  let row = CommitteeHash
+        { committeeHashRaw       = credHash
+        , committeeHashHasScript = hasScript
+        }
+  (cid, isNew) <- liftIO $ resolveCommitteeHash resolver (committeeHashDedupKey credHash hasScript) row
+  when isNew $ liftIO $ writeCommitteeHash writer cid row
+  pure cid
+
+-- | Resolve a voting anchor by @(url, data_hash, type)@, writing
+-- the @voting_anchor@ row on first sighting.
+resolveAndWriteVotingAnchor
+  :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
+  => Text          -- ^ Anchor URL.
+  -> ByteString    -- ^ 32-byte data hash.
+  -> AnchorType
+  -> BlockId       -- ^ Block in which the anchor was first observed.
+  -> m VotingAnchorId
+resolveAndWriteVotingAnchor url dataHash anchorType blockId = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
+  let !key = encodeVotingAnchorKey url dataHash anchorType
+      row = VotingAnchor
+        { votingAnchorUrl      = VoteUrl url
+        , votingAnchorDataHash = dataHash
+        , votingAnchorType     = anchorType
+        , votingAnchorBlockId  = blockId
+        }
+  (vid, isNew) <- liftIO $ resolveVotingAnchor resolver key anchorType row
+  when isNew $ liftIO $ writeVotingAnchor writer vid row
+  pure vid
+
+-- | Resolve a Plutus cost-model map by its canonical CBOR hash,
+-- writing the @cost_model@ row on first sighting. Lives here rather
+-- than in 'Extractor.EpochBoundary' so both the epoch-boundary path
+-- and the governance @ParameterChange@ path can share the dedup
+-- cache.
+resolveAndWriteCostModel
+  :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
+  => Map Language Alonzo.CostModel
+  -> m CostModelId
+resolveAndWriteCostModel cms = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
+  let row = EB.mkCostModelRow cms
+  (cmId, isNew) <- liftIO $ resolveCostModel resolver (costModelHash row) row
+  when isNew $ liftIO $ writeCostModel writer cmId row
+  pure cmId
 
 -- ---------------------------------------------------------------------------
 -- * Helpers

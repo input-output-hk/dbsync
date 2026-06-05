@@ -65,7 +65,6 @@ import DbSync.Phase.Ingest.LsmSession (LsmSession)
 import DbSync.Phase.Ingest.PipelineStats (emptyPipelineStats)
 import qualified DbSync.Phase.Ingest.UtxoStore as UtxoStore
 import DbSync.Phase.Type (SyncPhase (..), renderPhase)
-import DbSync.Resolver (IdResolver (..))
 import DbSync.SyncState.Manager (mkBoundarySyncStateRow)
 import DbSync.SyncState.Row (ControlConnection, writeSyncState)
 import DbSync.Trace (HasTracer (..))
@@ -87,6 +86,7 @@ import DbSync.Worker.TxOut.Worker
   , enqueueTxOutJob
   , readAddressIdCounter
   )
+import DbSync.Resolver (IdResolver (..))
 import DbSync.Writer (Writer (..))
 import DbSync.StateQuery (sdSlotNo)
 
@@ -268,15 +268,14 @@ handleEpochBoundary cls prev slot = do
         | otherwise   = 0
 
   essId <- liftIO $ assignEpochSyncStatsId resolver
-  let ess = EpochSyncStats
-        { epochSyncStatsEpochNo         = unEpochNo prev
-        , epochSyncStatsBlocksProcessed = blockCount
-        , epochSyncStatsBlocksPerSec    = blocksPerSec
-        , epochSyncStatsElapsedSec      = elapsedSec
-        , epochSyncStatsSyncedAt        = epochEnd
-        , epochSyncStatsPhase           = renderPhase IngestChainHistory
-        }
-  liftIO $ writeEpochSyncStats writer essId ess
+  liftIO $ writeEpochSyncStats writer essId EpochSyncStats
+    { epochSyncStatsEpochNo         = unEpochNo prev
+    , epochSyncStatsBlocksProcessed = blockCount
+    , epochSyncStatsBlocksPerSec    = blocksPerSec
+    , epochSyncStatsElapsedSec      = elapsedSec
+    , epochSyncStatsSyncedAt        = epochEnd
+    , epochSyncStatsPhase           = renderPhase IngestChainHistory
+    }
 
   when (elapsedSec > 10.0) $ liftIO performMajorGC
 

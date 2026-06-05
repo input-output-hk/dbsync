@@ -19,7 +19,6 @@ import DbSync.Db.Schema.MultiAsset
 import DbSync.Db.Types (DbWord64 (..))
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
 import DbSync.Extractor.SharedDedup (resolveAndWriteMultiAsset)
-import DbSync.Resolver (HasResolver (..), IdResolver (..))
 import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- ---------------------------------------------------------------------------
@@ -41,8 +40,7 @@ multiAssetExtractor = ExtractorDef
 
 processMultiAsset :: ProcessBlockFn
 processMultiAsset ctx = do
-  resolver <- asks getResolver
-  writer   <- asks getWriter
+  writer <- asks getWriter
   forM_ (bcTxs ctx) $ \tc -> do
     let txId   = tcTxId tc
         gtx    = tcGenTx tc
@@ -53,23 +51,19 @@ processMultiAsset ctx = do
     when (txValidContract gtx) $ do
       forM_ (txMint gtx) $ \(policy, name, quantity) -> do
         maId <- resolveAndWriteMultiAsset policy name
-        mintId <- liftIO $ assignMaTxMintId resolver
-        let mint = MaTxMint
-              { maTxMintQuantity = quantity
-              , maTxMintTxId     = txId
-              , maTxMintIdent    = maId
-              }
-        liftIO $ writeMaTxMint writer mintId mint
+        liftIO $ writeMaTxMint writer MaTxMint
+          { maTxMintQuantity = quantity
+          , maTxMintTxId     = txId
+          , maTxMintIdent    = maId
+          }
 
       forM_ (zip outIds (txOutputs gtx)) $ \(outId, gout) -> do
         forM_ (txOutMultiAssets gout) $ \(policy, name, quantity) -> do
           maId <- resolveAndWriteMultiAsset policy name
-          maoId <- liftIO $ assignMaTxOutId resolver
-          let mao = MaTxOut
-                { maTxOutQuantity = DbWord64 (fromIntegral quantity)
-                , maTxOutTxOutId  = outId
-                , maTxOutIdent    = maId
-                }
-          liftIO $ writeMaTxOut writer maoId mao
+          liftIO $ writeMaTxOut writer MaTxOut
+            { maTxOutQuantity = DbWord64 (fromIntegral quantity)
+            , maTxOutTxOutId  = outId
+            , maTxOutIdent    = maId
+            }
 
 

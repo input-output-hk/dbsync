@@ -77,17 +77,16 @@ epochParamSpec = describe "epochParamTableDef" $ do
       _ -> expectationFailure "expected exactly one nonce column"
 
   it "encodes a sample row as a tab-separated, newline-terminated COPY line" $ do
-    let row = encodeEpochParamCopy (EpochParamId 1) sampleEpochParam
+    let row = encodeEpochParamCopy sampleEpochParam
     BS8.last row `shouldBe` '\n'
-    BS.count (fromIntegral (fromEnum '\t')) row `shouldBe` 54
+    BS.count (fromIntegral (fromEnum '\t')) row `shouldBe` 53
 
-  it "writes epoch_no in field 1 and block_id at the documented index" $ do
-    let row = encodeEpochParamCopy (EpochParamId 7) sampleEpochParam
+  it "writes epoch_no in field 0 and block_id at the documented index" $ do
+    let row = encodeEpochParamCopy sampleEpochParam
         fields = BS8.split '\t' (BS8.init row)
-    fields !! 0 `shouldBe` "7"
-    fields !! 1 `shouldBe` "42"
-    -- block_id is column 30 (0-indexed), per tdColumns order
-    fields !! 30 `shouldBe` "555"
+    fields !! 0 `shouldBe` "42"
+    -- block_id is column 29 (0-indexed, id excluded), per tdColumns order
+    fields !! 29 `shouldBe` "555"
 
 -- ---------------------------------------------------------------------------
 -- * epoch_state
@@ -110,21 +109,19 @@ epochStateSpec = describe "epochStateTableDef" $ do
     lookup "constitution_id"  named `shouldBe` Just True
 
   it "encodes NULL FK columns with backslash-N" $ do
-    let row = encodeEpochStateCopy (EpochStateId 1) (EpochState Nothing Nothing Nothing 99)
+    let row = encodeEpochStateCopy (EpochState Nothing Nothing Nothing 99)
         fields = BS8.split '\t' (BS8.init row)
+    fields !! 0 `shouldBe` "\\N"
     fields !! 1 `shouldBe` "\\N"
     fields !! 2 `shouldBe` "\\N"
-    fields !! 3 `shouldBe` "\\N"
-    fields !! 4 `shouldBe` "99"
+    fields !! 3 `shouldBe` "99"
 
   it "encodes populated FK columns as their integer ids" $ do
-    let row = encodeEpochStateCopy
-                (EpochStateId 1)
-                (EpochState (Just (CommitteeId 10)) (Just (GovActionProposalId 20)) (Just (ConstitutionId 30)) 100)
+    let row = encodeEpochStateCopy (EpochState (Just (CommitteeId 10)) (Just (GovActionProposalId 20)) (Just (ConstitutionId 30)) 100)
         fields = BS8.split '\t' (BS8.init row)
-    fields !! 1 `shouldBe` "10"
-    fields !! 2 `shouldBe` "20"
-    fields !! 3 `shouldBe` "30"
+    fields !! 0 `shouldBe` "10"
+    fields !! 1 `shouldBe` "20"
+    fields !! 2 `shouldBe` "30"
 
 -- ---------------------------------------------------------------------------
 -- * cost_model
@@ -171,19 +168,15 @@ potTransferSpec = describe "potTransferTableDef" $ do
       `shouldBe` [ForeignKey "tx_id" "tx" "id"]
 
   it "encodes positive deltas as decimal" $ do
-    let row = encodePotTransferCopy
-                (PotTransferId 1)
-                (PotTransfer 0 (toDbInt65 1000) (toDbInt65 (-1000)) (TxId 9))
+    let row = encodePotTransferCopy (PotTransfer 0 (toDbInt65 1000) (toDbInt65 (-1000)) (TxId 9))
         fields = BS8.split '\t' (BS8.init row)
-    fields !! 2 `shouldBe` "1000"
-    fields !! 3 `shouldBe` "-1000"
+    fields !! 1 `shouldBe` "1000"
+    fields !! 2 `shouldBe` "-1000"
 
   it "encodes Int64 minBound through the DbInt65 sign-bit path" $ do
-    let row = encodePotTransferCopy
-                (PotTransferId 1)
-                (PotTransfer 0 (toDbInt65 minBound) (toDbInt65 0) (TxId 1))
+    let row = encodePotTransferCopy (PotTransfer 0 (toDbInt65 minBound) (toDbInt65 0) (TxId 1))
         fields = BS8.split '\t' (BS8.init row)
-    fields !! 2 `shouldBe` BS8.pack (show (minBound :: Int64))
+    fields !! 1 `shouldBe` BS8.pack (show (minBound :: Int64))
 
 -- ---------------------------------------------------------------------------
 -- * treasury
@@ -198,15 +191,12 @@ treasurySpec = describe "treasuryTableDef" $ do
       `shouldBe` [NE.fromList ["addr_id", "tx_id"]]
 
   it "encodes a positive payout" $ do
-    let row = encodeTreasuryCopy
-                (TreasuryId 1)
-                (Treasury (StakeAddressId 5) 2 (toDbInt65 12345) (TxId 99))
+    let row = encodeTreasuryCopy (Treasury (StakeAddressId 5) 2 (toDbInt65 12345) (TxId 99))
         fields = BS8.split '\t' (BS8.init row)
-    fields !! 0 `shouldBe` "1"
-    fields !! 1 `shouldBe` "5"
-    fields !! 2 `shouldBe` "2"
-    fields !! 3 `shouldBe` "12345"
-    fields !! 4 `shouldBe` "99"
+    fields !! 0 `shouldBe` "5"
+    fields !! 1 `shouldBe` "2"
+    fields !! 2 `shouldBe` "12345"
+    fields !! 3 `shouldBe` "99"
 
 -- ---------------------------------------------------------------------------
 -- * reserve
@@ -221,11 +211,9 @@ reserveSpec = describe "reserveTableDef" $ do
       `shouldBe` [NE.fromList ["addr_id", "tx_id"]]
 
   it "encodes a negative delta (reserves paying out)" $ do
-    let row = encodeReserveCopy
-                (ReserveId 1)
-                (Reserve (StakeAddressId 7) 4 (toDbInt65 (-50000)) (TxId 11))
+    let row = encodeReserveCopy (Reserve (StakeAddressId 7) 4 (toDbInt65 (-50000)) (TxId 11))
         fields = BS8.split '\t' (BS8.init row)
-    fields !! 3 `shouldBe` "-50000"
+    fields !! 2 `shouldBe` "-50000"
 
 -- ---------------------------------------------------------------------------
 -- * Fixtures

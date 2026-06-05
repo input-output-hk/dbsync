@@ -102,13 +102,18 @@ data DedupStore = DedupStore
     -- label differs from the save label.
   }
 
--- | The five dedup stores used during 'IngestChainHistory'.
+-- | The dedup stores used during 'IngestChainHistory'.
 data DedupStores = DedupStores
-  { dstPoolHash     :: !DedupStore  -- ^ pool key hash -> PoolHashId
-  , dstStakeAddress :: !DedupStore  -- ^ stake credential hash -> StakeAddressId
-  , dstSlotLeader   :: !DedupStore  -- ^ slot leader identifier -> SlotLeaderId
-  , dstMultiAsset   :: !DedupStore  -- ^ blake2b-224 (policy_id ++ asset_name) -> MultiAssetId
-  , dstScriptHash   :: !DedupStore  -- ^ script hash -> ScriptId
+  { dstPoolHash      :: !DedupStore  -- ^ pool key hash -> PoolHashId
+  , dstStakeAddress  :: !DedupStore  -- ^ stake credential hash -> StakeAddressId
+  , dstSlotLeader    :: !DedupStore  -- ^ slot leader identifier -> SlotLeaderId
+  , dstMultiAsset    :: !DedupStore  -- ^ blake2b-224 (policy_id ++ asset_name) -> MultiAssetId
+  , dstScriptHash    :: !DedupStore  -- ^ script hash -> ScriptId
+  , dstDatum         :: !DedupStore  -- ^ datum hash -> DatumId
+  , dstRedeemerData  :: !DedupStore  -- ^ redeemer-data hash -> RedeemerDataId
+  , dstDrepHash      :: !DedupStore  -- ^ DRep cred hash (or abstract sentinel) -> DrepHashId
+  , dstCommitteeHash :: !DedupStore  -- ^ committee cred hash + has_script byte -> CommitteeHashId
+  , dstVotingAnchor  :: !DedupStore  -- ^ encoded (url, data_hash, type) -> VotingAnchorId
   }
 
 -- | Wire-format wrapper around an 'Int64' value. The
@@ -159,7 +164,7 @@ closeDedupStore store = do
   table <- readIORef (dstTable store)
   LSMTree.closeTable table
 
--- | Open all five dedup stores under the shared session.
+-- | Open every dedup store under the shared session.
 newStores :: LsmSession -> IO DedupStores
 newStores lsm = DedupStores
   <$> openDedupStore lsm (LSMTree.SnapshotLabel "dedup-pool-hash")
@@ -172,15 +177,30 @@ newStores lsm = DedupStores
                          (LSMTree.toSnapshotName "current-multi-asset")
   <*> openDedupStore lsm (LSMTree.SnapshotLabel "dedup-script-hash")
                          (LSMTree.toSnapshotName "current-script-hash")
+  <*> openDedupStore lsm (LSMTree.SnapshotLabel "dedup-datum")
+                         (LSMTree.toSnapshotName "current-datum")
+  <*> openDedupStore lsm (LSMTree.SnapshotLabel "dedup-redeemer-data")
+                         (LSMTree.toSnapshotName "current-redeemer-data")
+  <*> openDedupStore lsm (LSMTree.SnapshotLabel "dedup-drep-hash")
+                         (LSMTree.toSnapshotName "current-drep-hash")
+  <*> openDedupStore lsm (LSMTree.SnapshotLabel "dedup-committee-hash")
+                         (LSMTree.toSnapshotName "current-committee-hash")
+  <*> openDedupStore lsm (LSMTree.SnapshotLabel "dedup-voting-anchor")
+                         (LSMTree.toSnapshotName "current-voting-anchor")
 
 -- | Close every store in the aggregate. The session stays open.
 closeStores :: DedupStores -> IO ()
 closeStores ds = do
-  closeDedupStore (dstPoolHash     ds)
-  closeDedupStore (dstStakeAddress ds)
-  closeDedupStore (dstSlotLeader   ds)
-  closeDedupStore (dstMultiAsset   ds)
-  closeDedupStore (dstScriptHash   ds)
+  closeDedupStore (dstPoolHash      ds)
+  closeDedupStore (dstStakeAddress  ds)
+  closeDedupStore (dstSlotLeader    ds)
+  closeDedupStore (dstMultiAsset    ds)
+  closeDedupStore (dstScriptHash    ds)
+  closeDedupStore (dstDatum         ds)
+  closeDedupStore (dstRedeemerData  ds)
+  closeDedupStore (dstDrepHash      ds)
+  closeDedupStore (dstCommitteeHash ds)
+  closeDedupStore (dstVotingAnchor  ds)
 
 -- ---------------------------------------------------------------------------
 -- Hot path
@@ -233,17 +253,27 @@ sizeApprox store = do
 -- output.
 dedupStoreSizes :: DedupStores -> IO [(Text, Int)]
 dedupStoreSizes ds = do
-  pool   <- sizeApprox (dstPoolHash     ds)
-  stake  <- sizeApprox (dstStakeAddress ds)
-  leader <- sizeApprox (dstSlotLeader   ds)
-  asset  <- sizeApprox (dstMultiAsset   ds)
-  script <- sizeApprox (dstScriptHash   ds)
+  pool   <- sizeApprox (dstPoolHash      ds)
+  stake  <- sizeApprox (dstStakeAddress  ds)
+  leader <- sizeApprox (dstSlotLeader    ds)
+  asset  <- sizeApprox (dstMultiAsset    ds)
+  script <- sizeApprox (dstScriptHash    ds)
+  datum  <- sizeApprox (dstDatum         ds)
+  rdata  <- sizeApprox (dstRedeemerData  ds)
+  drep   <- sizeApprox (dstDrepHash      ds)
+  comm   <- sizeApprox (dstCommitteeHash ds)
+  anchor <- sizeApprox (dstVotingAnchor  ds)
   pure
-    [ ("pool",        pool)
-    , ("stake",       stake)
-    , ("slot_leader", leader)
-    , ("multi_asset", asset)
-    , ("script",      script)
+    [ ("pool",           pool)
+    , ("stake",          stake)
+    , ("slot_leader",    leader)
+    , ("multi_asset",    asset)
+    , ("script",         script)
+    , ("datum",          datum)
+    , ("redeemer_data",  rdata)
+    , ("drep_hash",      drep)
+    , ("committee_hash", comm)
+    , ("voting_anchor",  anchor)
     ]
 
 -- ---------------------------------------------------------------------------

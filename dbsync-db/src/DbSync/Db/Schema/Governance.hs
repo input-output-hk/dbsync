@@ -423,6 +423,7 @@ drepHashTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = ["raw" :| ["has_script"]]
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
@@ -443,6 +444,7 @@ drepRegistrationTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys = []
   }
 
@@ -462,6 +464,7 @@ drepDistrTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = ["hash_id" :| ["epoch_no"]]
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys = []
   }
 
@@ -482,6 +485,7 @@ delegationVoteTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys = []
   }
 
@@ -511,6 +515,7 @@ govActionProposalTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
@@ -536,6 +541,7 @@ votingProcedureTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys = []
   }
 
@@ -555,9 +561,12 @@ votingAnchorTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = ["data_hash" :| ["url", "type"]]
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
+-- | FK-referenced by @epoch_state.constitution_id@, so 'constitution.id'
+-- is allocated from an in-process counter and the row carries it explicitly.
 constitutionTableDef :: TableDef
 constitutionTableDef = TableDef
   { tdName    = "constitution"
@@ -573,6 +582,7 @@ constitutionTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
@@ -591,6 +601,7 @@ committeeTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
@@ -608,6 +619,7 @@ committeeHashTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = ["raw" :| ["has_script"]]
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
@@ -626,6 +638,7 @@ committeeMemberTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys = []
   }
 
@@ -645,6 +658,7 @@ committeeRegistrationTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys = []
   }
 
@@ -664,6 +678,7 @@ committeeDeRegistrationTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys = []
   }
 
@@ -739,6 +754,7 @@ paramProposalTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
@@ -757,6 +773,7 @@ treasuryWithdrawalTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys = []
   }
 
@@ -776,6 +793,7 @@ eventInfoTableDef = TableDef
   , tdColumnDefaults    = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
@@ -792,32 +810,29 @@ encodeDrepHashCopy (DrepHashId rid) dh =
     , Just $ bBool (drepHashHasScript dh)
     ]
 
-encodeDrepRegistrationCopy :: DrepRegistrationId -> DrepRegistration -> ByteString
-encodeDrepRegistrationCopy (DrepRegistrationId rid) dr =
+encodeDrepRegistrationCopy :: DrepRegistration -> ByteString
+encodeDrepRegistrationCopy dr =
   buildCopyRow
-    [ Just $ bInt64 rid
-    , Just $ bInt64 (getTxId $ drepRegistrationTxId dr)
+    [ Just $ bInt64 (getTxId $ drepRegistrationTxId dr)
     , Just $ bInt64 (fromIntegral $ drepRegistrationCertIndex dr)
     , bInt64 <$> drepRegistrationDeposit dr
     , Just $ bInt64 (getDrepHashId $ drepRegistrationDrepHashId dr)
     , bInt64 . getVotingAnchorId <$> drepRegistrationVotingAnchorId dr
     ]
 
-encodeDrepDistrCopy :: DrepDistrId -> DrepDistr -> ByteString
-encodeDrepDistrCopy (DrepDistrId rid) dd =
+encodeDrepDistrCopy :: DrepDistr -> ByteString
+encodeDrepDistrCopy dd =
   buildCopyRow
-    [ Just $ bInt64 rid
-    , Just $ bInt64 (getDrepHashId $ drepDistrHashId dd)
+    [ Just $ bInt64 (getDrepHashId $ drepDistrHashId dd)
     , Just $ bWord64 (drepDistrAmount dd)
     , Just $ bWord64 (drepDistrEpochNo dd)
     , bWord64 <$> drepDistrActiveUntil dd
     ]
 
-encodeDelegationVoteCopy :: DelegationVoteId -> DelegationVote -> ByteString
-encodeDelegationVoteCopy (DelegationVoteId rid) dv =
+encodeDelegationVoteCopy :: DelegationVote -> ByteString
+encodeDelegationVoteCopy dv =
   buildCopyRow
-    [ Just $ bInt64 rid
-    , Just $ bInt64 (getStakeAddressId $ delegationVoteAddrId dv)
+    [ Just $ bInt64 (getStakeAddressId $ delegationVoteAddrId dv)
     , Just $ bInt64 (fromIntegral $ delegationVoteCertIndex dv)
     , Just $ bInt64 (getDrepHashId $ delegationVoteDrepHashId dv)
     , Just $ bInt64 (getTxId $ delegationVoteTxId dv)
@@ -847,11 +862,10 @@ encodeGovActionProposalCopy (GovActionProposalId rid) gap =
     , bWord64 <$> govActionProposalExpiredEpoch gap
     ]
 
-encodeVotingProcedureCopy :: VotingProcedureId -> VotingProcedure -> ByteString
-encodeVotingProcedureCopy (VotingProcedureId rid) vp =
+encodeVotingProcedureCopy :: VotingProcedure -> ByteString
+encodeVotingProcedureCopy vp =
   buildCopyRow
-    [ Just $ bInt64 rid
-    , Just $ bInt64 (getTxId $ votingProcedureTxId vp)
+    [ Just $ bInt64 (getTxId $ votingProcedureTxId vp)
     , Just $ bInt64 (fromIntegral $ votingProcedureIndex vp)
     , Just $ bInt64 (getGovActionProposalId $ votingProcedureGovActionProposalId vp)
     , Just $ bVoterRole (votingProcedureVoterRole vp)
@@ -899,32 +913,27 @@ encodeCommitteeHashCopy (CommitteeHashId rid) ch =
     , Just $ bBool (committeeHashHasScript ch)
     ]
 
-encodeCommitteeMemberCopy :: CommitteeMemberId -> CommitteeMember -> ByteString
-encodeCommitteeMemberCopy (CommitteeMemberId rid) cm =
+encodeCommitteeMemberCopy :: CommitteeMember -> ByteString
+encodeCommitteeMemberCopy cm =
   buildCopyRow
-    [ Just $ bInt64 rid
-    , Just $ bInt64 (getCommitteeId $ committeeMemberCommitteeId cm)
+    [ Just $ bInt64 (getCommitteeId $ committeeMemberCommitteeId cm)
     , Just $ bInt64 (getCommitteeHashId $ committeeMemberCommitteeHashId cm)
     , Just $ bWord64 (committeeMemberExpirationEpoch cm)
     ]
 
-encodeCommitteeRegistrationCopy
-  :: CommitteeRegistrationId -> CommitteeRegistration -> ByteString
-encodeCommitteeRegistrationCopy (CommitteeRegistrationId rid) cr =
+encodeCommitteeRegistrationCopy :: CommitteeRegistration -> ByteString
+encodeCommitteeRegistrationCopy cr =
   buildCopyRow
-    [ Just $ bInt64 rid
-    , Just $ bInt64 (getTxId $ committeeRegistrationTxId cr)
+    [ Just $ bInt64 (getTxId $ committeeRegistrationTxId cr)
     , Just $ bInt64 (fromIntegral $ committeeRegistrationCertIndex cr)
     , Just $ bInt64 (getCommitteeHashId $ committeeRegistrationColdKeyId cr)
     , Just $ bInt64 (getCommitteeHashId $ committeeRegistrationHotKeyId cr)
     ]
 
-encodeCommitteeDeRegistrationCopy
-  :: CommitteeDeRegistrationId -> CommitteeDeRegistration -> ByteString
-encodeCommitteeDeRegistrationCopy (CommitteeDeRegistrationId rid) cdr =
+encodeCommitteeDeRegistrationCopy :: CommitteeDeRegistration -> ByteString
+encodeCommitteeDeRegistrationCopy cdr =
   buildCopyRow
-    [ Just $ bInt64 rid
-    , Just $ bInt64 (getTxId $ committeeDeRegistrationTxId cdr)
+    [ Just $ bInt64 (getTxId $ committeeDeRegistrationTxId cdr)
     , Just $ bInt64 (fromIntegral $ committeeDeRegistrationCertIndex cdr)
     , bInt64 . getVotingAnchorId <$> committeeDeRegistrationVotingAnchorId cdr
     , Just $ bInt64 (getCommitteeHashId $ committeeDeRegistrationColdKeyId cdr)
@@ -993,12 +1002,10 @@ encodeParamProposalCopy (ParamProposalId rid) pp =
     , bDouble <$> paramProposalMinFeeRefScriptCostPerByte pp
     ]
 
-encodeTreasuryWithdrawalCopy
-  :: TreasuryWithdrawalId -> TreasuryWithdrawal -> ByteString
-encodeTreasuryWithdrawalCopy (TreasuryWithdrawalId rid) tw =
+encodeTreasuryWithdrawalCopy :: TreasuryWithdrawal -> ByteString
+encodeTreasuryWithdrawalCopy tw =
   buildCopyRow
-    [ Just $ bInt64 rid
-    , Just $ bInt64 (getGovActionProposalId $ treasuryWithdrawalGovActionProposalId tw)
+    [ Just $ bInt64 (getGovActionProposalId $ treasuryWithdrawalGovActionProposalId tw)
     , Just $ bInt64 (getStakeAddressId $ treasuryWithdrawalStakeAddressId tw)
     , Just $ bWord64 (unDbLovelace $ treasuryWithdrawalAmount tw)
     ]

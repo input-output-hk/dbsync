@@ -247,6 +247,7 @@ stakeAddressTableDef = TableDef
     -- whole table.
   , tdUniqueConstraints = [pure "hash_raw"]
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
@@ -267,6 +268,7 @@ stakeRegistrationTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys =
       [ ForeignKey "tx_id" "tx" "id"
       ]
@@ -289,6 +291,7 @@ stakeDeregistrationTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys =
       [ ForeignKey "tx_id" "tx" "id"
       ]
@@ -313,6 +316,7 @@ delegationTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys =
       [ ForeignKey "tx_id" "tx" "id"
       ]
@@ -334,6 +338,7 @@ withdrawalTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys =
       [ ForeignKey "tx_id" "tx" "id"
       ]
@@ -367,6 +372,7 @@ rewardTableDef = TableDef
           \then spendable_epoch-2 else 0 end) end)"
         )
       ]
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
@@ -394,6 +400,7 @@ rewardRestTableDef = TableDef
           \then spendable_epoch-1 else 0 end)"
         )
       ]
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
@@ -416,6 +423,7 @@ epochStakeTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = ["addr_id" :| ["pool_id", "epoch_no"]]
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
@@ -434,6 +442,7 @@ epochStakeProgressTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = [pure "epoch_no"]
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys = []
   }
 
@@ -450,33 +459,30 @@ encodeStakeAddressCopy (StakeAddressId sid) sa =
     , bHex <$> stakeAddressScriptHash sa
     ]
 
-encodeStakeRegistrationCopy :: StakeRegistrationId -> StakeRegistration -> ByteString
-encodeStakeRegistrationCopy (StakeRegistrationId sid) sr =
+encodeStakeRegistrationCopy :: StakeRegistration -> ByteString
+encodeStakeRegistrationCopy sr =
   buildCopyRow
-    [ Just $ bInt64 sid
-    , Just $ bInt64 (getStakeAddressId $ stakeRegistrationAddrId sr)
+    [ Just $ bInt64 (getStakeAddressId $ stakeRegistrationAddrId sr)
     , Just $ bInt64 (fromIntegral $ stakeRegistrationCertIndex sr)
     , Just $ bWord64 (stakeRegistrationEpochNo sr)
     , Just $ bInt64 (getTxId $ stakeRegistrationTxId sr)
     , bWord64 . unDbLovelace <$> stakeRegistrationDeposit sr
     ]
 
-encodeStakeDeregistrationCopy :: StakeDeregistrationId -> StakeDeregistration -> ByteString
-encodeStakeDeregistrationCopy (StakeDeregistrationId sid) sd =
+encodeStakeDeregistrationCopy :: StakeDeregistration -> ByteString
+encodeStakeDeregistrationCopy sd =
   buildCopyRow
-    [ Just $ bInt64 sid
-    , Just $ bInt64 (getStakeAddressId $ stakeDeregistrationAddrId sd)
+    [ Just $ bInt64 (getStakeAddressId $ stakeDeregistrationAddrId sd)
     , Just $ bInt64 (fromIntegral $ stakeDeregistrationCertIndex sd)
     , Just $ bWord64 (stakeDeregistrationEpochNo sd)
     , Just $ bInt64 (getTxId $ stakeDeregistrationTxId sd)
     , bInt64 . getRedeemerId <$> stakeDeregistrationRedeemerId sd
     ]
 
-encodeDelegationCopy :: DelegationId -> Delegation -> ByteString
-encodeDelegationCopy (DelegationId did) d =
+encodeDelegationCopy :: Delegation -> ByteString
+encodeDelegationCopy d =
   buildCopyRow
-    [ Just $ bInt64 did
-    , Just $ bInt64 (getStakeAddressId $ delegationAddrId d)
+    [ Just $ bInt64 (getStakeAddressId $ delegationAddrId d)
     , Just $ bInt64 (fromIntegral $ delegationCertIndex d)
     , Just $ bInt64 (getPoolHashId $ delegationPoolHashId d)
     , Just $ bWord64 (delegationActiveEpochNo d)
@@ -485,11 +491,10 @@ encodeDelegationCopy (DelegationId did) d =
     , bInt64 . getRedeemerId <$> delegationRedeemerId d
     ]
 
-encodeWithdrawalCopy :: WithdrawalId -> Withdrawal -> ByteString
-encodeWithdrawalCopy (WithdrawalId wid) w =
+encodeWithdrawalCopy :: Withdrawal -> ByteString
+encodeWithdrawalCopy w =
   buildCopyRow
-    [ Just $ bInt64 wid
-    , Just $ bInt64 (getStakeAddressId $ withdrawalAddrId w)
+    [ Just $ bInt64 (getStakeAddressId $ withdrawalAddrId w)
     , Just $ bInt64 (getTxId $ withdrawalTxId w)
     , Just $ bWord64 (unDbLovelace $ withdrawalAmount w)
     , bInt64 . getRedeemerId <$> withdrawalRedeemerId w

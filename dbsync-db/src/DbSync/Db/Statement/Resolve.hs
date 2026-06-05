@@ -105,7 +105,8 @@ resolveConsumedByTxIdStmt =
 -- orphan inputs stay NULL.
 ctasScript :: Text -> [Text] -> Text
 ctasScript table passthrough = T.unlines
-  [ "CREATE UNLOGGED TABLE " <> newName <> " (LIKE " <> table <> " INCLUDING DEFAULTS);"
+  [ "CREATE UNLOGGED TABLE " <> newName <> " (LIKE " <> table
+      <> " INCLUDING DEFAULTS INCLUDING IDENTITY);"
   , "INSERT INTO " <> newName <> " (" <> T.intercalate ", " allCols <> ")"
   , "SELECT " <> T.intercalate ", " selExprs
   , "  FROM " <> table <> " src"

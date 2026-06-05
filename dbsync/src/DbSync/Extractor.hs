@@ -240,6 +240,29 @@ data ExtractState = ExtractState
       -- ^ Hash → cost_model.id dedup cache. Populated at boot from
       --   the @cost_model@ table when resuming an existing sync;
       --   empty on a fresh start.
+  , esGovActionProposalCache :: !(Map (ByteString, Word64) Int64)
+      -- ^ @(proposing tx hash, proposal index) -> gov_action_proposal.id@
+      --   so vote rows in later blocks can resolve their target
+      --   proposal without a SELECT. Populated as proposals are
+      --   written; rebuilt at boot from @tx.hash@ +
+      --   @gov_action_proposal.index@.
+  , esCurrentCommitteeId    :: !(Maybe Int64)
+      -- ^ @committee.id@ representing the currently enacted committee,
+      --   stamped onto @epoch_state.committee_id@ at the next boundary.
+      --   Updated by the governance boundary handler when an
+      --   @UpdateCommittee@ proposal enacts.
+  , esCurrentNoConfidenceId :: !(Maybe Int64)
+      -- ^ @gov_action_proposal.id@ of the latest enacted
+      --   no-confidence action; stamped onto
+      --   @epoch_state.no_confidence_id@ at the next boundary.
+  , esCurrentConstitutionId :: !(Maybe Int64)
+      -- ^ @constitution.id@ representing the currently enacted
+      --   constitution; stamped onto @epoch_state.constitution_id@
+      --   at the next boundary.
+  , esGovExpiresAfter       :: !(Maybe Word64)
+      -- ^ Latest @apGovExpiresAfter@ (gov-action lifetime in epochs)
+      --   reported by the ledger worker. Used by the proposal pass
+      --   to compute @gov_action_proposal.expiration@.
   }
   deriving stock (Eq, Show)
 
@@ -247,7 +270,12 @@ data ExtractState = ExtractState
 -- previously-seen block.
 freshExtractState :: ExtractState
 freshExtractState = ExtractState
-  { esIdCounters     = freshIdCounters
-  , esLastBlockId    = Nothing
-  , esCostModelCache = mempty
+  { esIdCounters             = freshIdCounters
+  , esLastBlockId            = Nothing
+  , esCostModelCache         = mempty
+  , esGovActionProposalCache = mempty
+  , esCurrentCommitteeId     = Nothing
+  , esCurrentNoConfidenceId  = Nothing
+  , esCurrentConstitutionId  = Nothing
+  , esGovExpiresAfter        = Nothing
   }

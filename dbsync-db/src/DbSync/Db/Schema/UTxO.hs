@@ -178,6 +178,7 @@ txOutTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys =
       [ ForeignKey "tx_id" "tx" "id"
       ]
@@ -200,6 +201,7 @@ txInTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys =
       [ ForeignKey "tx_in_id" "tx" "id"
       ]
@@ -221,6 +223,7 @@ collateralTxInTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys =
       [ ForeignKey "tx_in_id" "tx" "id"
       ]
@@ -242,11 +245,16 @@ referenceTxInTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys =
       [ ForeignKey "tx_in_id" "tx" "id"
       ]
   }
 
+-- | @collateral_tx_out@ keeps an explicit @id@ — the address-buffer
+-- worker queues @(collateral_tx_out_id, raw, address)@ triples at
+-- write time and runs one bulk @UPDATE … WHERE id = ANY($1)@ per
+-- epoch; that flow needs the id known at COPY time.
 collateralTxOutTableDef :: TableDef
 collateralTxOutTableDef = TableDef
   { tdName    = "collateral_tx_out"
@@ -269,6 +277,7 @@ collateralTxOutTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = []
   , tdForeignKeys =
       [ ForeignKey "tx_id" "tx" "id"
       ]
@@ -293,41 +302,38 @@ encodeTxOutCopy (TxOutId oid) txo =
     , bInt64 . getTxId <$> txOutConsumedByTxId txo
     ]
 
-encodeTxInCopy :: TxInId -> TxIn -> ByteString
-encodeTxInCopy (TxInId iid) ti =
+encodeTxInCopy :: TxIn -> ByteString
+encodeTxInCopy ti =
   buildCopyRow
-    [ Just $ bInt64 iid
-    , Just $ bInt64 (getTxId $ txInTxInId ti)
+    [ Just $ bInt64 (getTxId $ txInTxInId ti)
     , bInt64 . getTxId <$> txInTxOutId ti
     , Just $ bWord64 (txInTxOutIndex ti)
     , Just $ bHex (txInTxOutHash ti)
     , bInt64 . getRedeemerId <$> txInRedeemerId ti
     ]
 
-encodeCollateralTxInCopy :: CollateralTxInId -> CollateralTxIn -> ByteString
-encodeCollateralTxInCopy (CollateralTxInId iid) ci =
+encodeCollateralTxInCopy :: CollateralTxIn -> ByteString
+encodeCollateralTxInCopy ci =
   buildCopyRow
-    [ Just $ bInt64 iid
-    , Just $ bInt64 (getTxId $ collateralTxInTxInId ci)
+    [ Just $ bInt64 (getTxId $ collateralTxInTxInId ci)
     , bInt64 . getTxId <$> collateralTxInTxOutId ci
     , Just $ bWord64 (collateralTxInTxOutIndex ci)
     , Just $ bHex (collateralTxInTxOutHash ci)
     ]
 
-encodeReferenceTxInCopy :: ReferenceTxInId -> ReferenceTxIn -> ByteString
-encodeReferenceTxInCopy (ReferenceTxInId iid) ri =
+encodeReferenceTxInCopy :: ReferenceTxIn -> ByteString
+encodeReferenceTxInCopy ri =
   buildCopyRow
-    [ Just $ bInt64 iid
-    , Just $ bInt64 (getTxId $ referenceTxInTxInId ri)
+    [ Just $ bInt64 (getTxId $ referenceTxInTxInId ri)
     , bInt64 . getTxId <$> referenceTxInTxOutId ri
     , Just $ bWord64 (referenceTxInTxOutIndex ri)
     , Just $ bHex (referenceTxInTxOutHash ri)
     ]
 
 encodeCollateralTxOutCopy :: CollateralTxOutId -> CollateralTxOut -> ByteString
-encodeCollateralTxOutCopy (CollateralTxOutId oid) co =
+encodeCollateralTxOutCopy (CollateralTxOutId rid) co =
   buildCopyRow
-    [ Just $ bInt64 oid
+    [ Just $ bInt64 rid
     , Just $ bInt64 (getTxId $ collateralTxOutTxId co)
     , Just $ bWord64 (collateralTxOutIndex co)
     , bInt64 . getAddressId <$> collateralTxOutAddressId co

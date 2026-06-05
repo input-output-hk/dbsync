@@ -524,6 +524,14 @@ sampleTx = GenericTx
   , txMetadata         = Nothing
   , txMint             = []
   , txCborRaw          = Nothing
+  , txScripts          = []
+  , txDatums           = []
+  , txRedeemers        = []
+  , txExtraKeyWitnesses = []
+  , txParamProposal    = []
+  , txProposals        = []
+  , txVotingProcedures = []
+  , txVotingAnchors    = []
   }
 
 -- | A non-Byron Shelley-shaped raw address. Header byte 0x00 (BasePaymentKey

@@ -273,4 +273,12 @@ mkTx idx txH = GenericTx
   , txMetadata          = Nothing
   , txMint              = []
   , txCborRaw           = Nothing
+  , txScripts           = []
+  , txDatums            = []
+  , txRedeemers         = []
+  , txExtraKeyWitnesses = []
+  , txParamProposal    = []
+  , txProposals        = []
+  , txVotingProcedures = []
+  , txVotingAnchors    = []
   }

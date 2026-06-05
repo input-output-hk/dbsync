@@ -5,37 +5,26 @@ module DbSync.Db.Statement.TxMetadata
   ( -- * Inserts
     insertTxMetadataRowStmt
 
-    -- * ID allocation
-  , nextTxMetadataIdStmt
   ) where
 
 import Cardano.Prelude
 
-import Data.Functor.Contravariant ((>$<))
 import qualified Data.Text as T
 import qualified Hasql.Decoders as D
 import qualified Hasql.Statement as Stmt
 
-import DbSync.Db.Schema.Ids (TxMetadataId (..), idEncoder)
 import DbSync.Db.Schema.Metadata (TxMetadata, txMetadataEncoder, txMetadataTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
-import DbSync.Db.Statement.Common (nextIdStmt)
 
 table :: Text
 table = tdName txMetadataTableDef
 
 -- | Insert a 'TxMetadata' with a caller-chosen id.
-insertTxMetadataRowStmt :: Stmt.Statement (TxMetadataId, TxMetadata) ()
+insertTxMetadataRowStmt :: Stmt.Statement TxMetadata ()
 insertTxMetadataRowStmt =
-  Stmt.preparable sql encoder D.noResult
+  Stmt.preparable sql txMetadataEncoder D.noResult
   where
-    encoder = (fst >$< idEncoder getTxMetadataId)
-           <> (snd >$< txMetadataEncoder)
     sql = T.concat
       [ "INSERT INTO ", table
-      , " (id, key, json, bytes, tx_id) VALUES ($1, $2, $3, $4, $5)"
+      , " (key, json, bytes, tx_id) VALUES ($1, $2, $3, $4)"
       ]
-
--- | Allocate a new id from the @tx_metadata_id_seq@ sequence.
-nextTxMetadataIdStmt :: Stmt.Statement () TxMetadataId
-nextTxMetadataIdStmt = nextIdStmt txMetadataTableDef TxMetadataId

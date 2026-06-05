@@ -12,12 +12,21 @@
 -- keys for the same input.
 module DbSync.Util.DedupHash
   ( hashDedupKey
+  , drepHashDedupKey
+  , committeeHashDedupKey
+  , encodeVotingAnchorKey
   ) where
 
 import Cardano.Prelude
 
 import qualified Cardano.Crypto.Hash.Blake2b as Blake2b
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Builder as BB
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Short as SBS
+import qualified Data.Text.Encoding as Text
+
+import DbSync.Db.Types (AnchorType, bAnchorType)
 
 -- | 28-byte Blake2b-224 digest of @bs@, packed as an unpinned
 -- 'SBS.ShortByteString'.
@@ -28,3 +37,26 @@ hashDedupKey :: ByteString -> SBS.ShortByteString
 hashDedupKey bs =
   let !digest = Blake2b.blake2b_libsodium 28 bs
   in SBS.toShort digest
+
+-- | Dedup key for a @drep_hash@ row: the credential hash for
+-- concrete DReps, the UTF-8 view string for abstract sentinels.
+drepHashDedupKey :: Maybe ByteString -> Text -> ByteString
+drepHashDedupKey (Just credHash) _ = credHash
+drepHashDedupKey Nothing         v = Text.encodeUtf8 v
+
+-- | Dedup key for a @committee_hash@ row: @raw <> [0|1]@.
+committeeHashDedupKey :: ByteString -> Bool -> ByteString
+committeeHashDedupKey credHash hasScript =
+  credHash <> BS.pack [if hasScript then 1 else 0]
+
+-- | Encode the @(url, data_hash, type)@ triple into a single dedup
+-- key. The URL is length-prefixed so the encoding is unambiguous.
+encodeVotingAnchorKey :: Text -> ByteString -> AnchorType -> ByteString
+encodeVotingAnchorKey url dataHash anchorType =
+  LBS.toStrict . BB.toLazyByteString $
+       BB.word32BE (fromIntegral (BS.length urlBytes))
+    <> BB.byteString urlBytes
+    <> BB.byteString dataHash
+    <> bAnchorType anchorType
+  where
+    urlBytes = Text.encodeUtf8 url

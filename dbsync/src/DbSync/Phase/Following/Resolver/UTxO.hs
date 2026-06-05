@@ -11,18 +11,12 @@ module DbSync.Phase.Following.Resolver.UTxO
 
     -- * Direct flavour
   , assignTxOutIdConn
-  , assignTxInIdConn
-  , assignCollateralTxInIdConn
   , assignCollateralTxOutIdConn
-  , assignReferenceTxInIdConn
   , resolveAddressIdConn
 
     -- * Buffered flavour
   , assignTxOutIdBuf
-  , assignTxInIdBuf
-  , assignCollateralTxInIdBuf
   , assignCollateralTxOutIdBuf
-  , assignReferenceTxInIdBuf
   , resolveAddressIdBuf
   ) where
 
@@ -35,25 +29,14 @@ import qualified Hasql.Connection as Conn
 import qualified Hasql.Pipeline as Pipeline
 
 import DbSync.Db.Schema.Address (Address)
-import DbSync.Db.Schema.Ids
-  ( AddressId
-  , CollateralTxInId
-  , CollateralTxOutId
-  , ReferenceTxInId
-  , TxId
-  , TxInId
-  , TxOutId
-  )
+import DbSync.Db.Schema.Ids (AddressId, CollateralTxOutId, TxId, TxOutId)
 import DbSync.Db.Types (DbLovelace)
 import DbSync.Db.Statement.Address
   ( insertAddressRowStmt
   , nextAddressIdStmt
   , queryAddressIdStmt
   )
-import DbSync.Db.Statement.CollateralTxIn (nextCollateralTxInIdStmt)
 import DbSync.Db.Statement.CollateralTxOut (nextCollateralTxOutIdStmt)
-import DbSync.Db.Statement.ReferenceTxIn (nextReferenceTxInIdStmt)
-import DbSync.Db.Statement.TxIn (nextTxInIdStmt)
 import DbSync.Db.Statement.TxOut
   ( nextTxOutIdStmt
   , queryInputUtxoStmt
@@ -115,17 +98,8 @@ deleteCachedUtxoFollow _ _ = pure ()
 assignTxOutIdConn :: Conn.Connection -> IO TxOutId
 assignTxOutIdConn conn = runStmt conn () nextTxOutIdStmt
 
-assignTxInIdConn :: Conn.Connection -> IO TxInId
-assignTxInIdConn conn = runStmt conn () nextTxInIdStmt
-
-assignCollateralTxInIdConn :: Conn.Connection -> IO CollateralTxInId
-assignCollateralTxInIdConn conn = runStmt conn () nextCollateralTxInIdStmt
-
 assignCollateralTxOutIdConn :: Conn.Connection -> IO CollateralTxOutId
 assignCollateralTxOutIdConn conn = runStmt conn () nextCollateralTxOutIdStmt
-
-assignReferenceTxInIdConn :: Conn.Connection -> IO ReferenceTxInId
-assignReferenceTxInIdConn conn = runStmt conn () nextReferenceTxInIdStmt
 
 -- | SELECT-by-bytes; on miss, allocate from the sequence and run the
 -- @address@ INSERT inline. Used by the direct (un-buffered) resolver.
@@ -146,17 +120,8 @@ resolveAddressIdConn conn rawBytes addr = do
 assignTxOutIdBuf :: PreAllocatedIds -> IO TxOutId
 assignTxOutIdBuf preAlloc = popHead "assignTxOutId" (paiTxOutIds preAlloc)
 
-assignTxInIdBuf :: PreAllocatedIds -> IO TxInId
-assignTxInIdBuf preAlloc = popHead "assignTxInId" (paiTxInIds preAlloc)
-
-assignCollateralTxInIdBuf :: PreAllocatedIds -> IO CollateralTxInId
-assignCollateralTxInIdBuf preAlloc = popHead "assignCollateralTxInId" (paiCollateralTxInIds preAlloc)
-
 assignCollateralTxOutIdBuf :: PreAllocatedIds -> IO CollateralTxOutId
 assignCollateralTxOutIdBuf preAlloc = popHead "assignCollateralTxOutId" (paiCollateralTxOutIds preAlloc)
-
-assignReferenceTxInIdBuf :: PreAllocatedIds -> IO ReferenceTxInId
-assignReferenceTxInIdBuf preAlloc = popHead "assignReferenceTxInId" (paiReferenceTxInIds preAlloc)
 
 -- | Same shape as 'resolveAddressIdConn' but the INSERT (when new)
 -- is queued on the 'WriteBuffer' instead of running inline. The

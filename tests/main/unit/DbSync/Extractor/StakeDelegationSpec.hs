@@ -65,7 +65,7 @@ spec = do
             }
       written <- runWith bld (blockWithStakeReg (Just 1_500_000))
       case twStakeRegistrations written of
-        [(_, sr)] ->
+        [sr] ->
           SSD.stakeRegistrationDeposit sr `shouldBe` Just (DbLovelace 1_500_000)
         _ -> panic "expected exactly one stake_registration"
 
@@ -75,14 +75,14 @@ spec = do
             }
       written <- runWith bld (blockWithStakeReg Nothing)
       case twStakeRegistrations written of
-        [(_, sr)] ->
+        [sr] ->
           SSD.stakeRegistrationDeposit sr `shouldBe` Just (DbLovelace 2_000_000)
         _ -> panic "expected exactly one stake_registration"
 
     it "leaves the column NULL when ledger is OFF and cert has no inline" $ do
       written <- runWith emptyBlockLedgerData (blockWithStakeReg Nothing)
       case twStakeRegistrations written of
-        [(_, sr)] -> SSD.stakeRegistrationDeposit sr `shouldBe` Nothing
+        [sr] -> SSD.stakeRegistrationDeposit sr `shouldBe` Nothing
         _ -> panic "expected exactly one stake_registration"
 
   describe "MIR certs" $ do
@@ -93,7 +93,7 @@ spec = do
       length (twReserves written) `shouldBe` 1
       length (twTreasuries written) `shouldBe` 0
       case twReserves written of
-        [(_, r)] -> do
+        [r] -> do
           fromDbInt65 (SEB.reserveAmount r) `shouldBe` 7_500_000
         _ -> panic "expected one reserve row"
 
@@ -103,7 +103,7 @@ spec = do
       length (twTreasuries written) `shouldBe` 1
       length (twReserves written) `shouldBe` 0
       case twTreasuries written of
-        [(_, t)] -> do
+        [t] -> do
           fromDbInt65 (SEB.treasuryAmount t) `shouldBe` 4_000_000
         _ -> panic "expected one treasury row"
 
@@ -115,14 +115,14 @@ spec = do
             ]
       written <- runWith emptyBlockLedgerData (blockWithMir MirReserves act)
       length (twReserves written) `shouldBe` 3
-      map (fromDbInt65 . SEB.reserveAmount . snd) (twReserves written)
+      map (fromDbInt65 . SEB.reserveAmount) (twReserves written)
         `shouldBe` [1_000_000, 2_000_000, 3_000_000]
 
     it "MirPotToPot on MirReserves: treasury +xfer, reserves -xfer" $ do
       written <- runWith emptyBlockLedgerData
                    (blockWithMir MirReserves (MirPotToPot 100))
       case twPotTransfers written of
-        [(_, pt)] -> do
+        [pt] -> do
           fromDbInt65 (SEB.potTransferTreasury pt) `shouldBe`  100
           fromDbInt65 (SEB.potTransferReserves pt) `shouldBe` -100
         _ -> panic "expected one pot_transfer row"
@@ -131,7 +131,7 @@ spec = do
       written <- runWith emptyBlockLedgerData
                    (blockWithMir MirTreasury (MirPotToPot 100))
       case twPotTransfers written of
-        [(_, pt)] -> do
+        [pt] -> do
           fromDbInt65 (SEB.potTransferTreasury pt) `shouldBe` -100
           fromDbInt65 (SEB.potTransferReserves pt) `shouldBe`  100
         _ -> panic "expected one pot_transfer row"
@@ -179,13 +179,21 @@ txWithStakeReg mDeposit = GenericTx
   , txCertificates =
       [ GenericTxCertificate
           { txCertIndex  = 0
-          , txCertAction = CertStakeRegistration stakeCred mDeposit
+           , txCertAction = CertStakeRegistration stakeCred mDeposit
           }
       ]
   , txWithdrawals      = []
   , txMetadata         = Nothing
   , txMint             = []
   , txCborRaw          = Nothing
+  , txScripts          = []
+  , txDatums           = []
+  , txRedeemers        = []
+  , txExtraKeyWitnesses = []
+  , txParamProposal    = []
+  , txProposals        = []
+  , txVotingProcedures = []
+  , txVotingAnchors    = []
   }
 
 sampleTime :: UTCTime
@@ -243,6 +251,14 @@ txWithMir pot act = GenericTx
   , txMetadata         = Nothing
   , txMint             = []
   , txCborRaw          = Nothing
+  , txScripts          = []
+  , txDatums           = []
+  , txRedeemers        = []
+  , txExtraKeyWitnesses = []
+  , txParamProposal    = []
+  , txProposals        = []
+  , txVotingProcedures = []
+  , txVotingAnchors    = []
   }
 
 blockWithMir :: MirPot -> MirAction -> GenericBlock

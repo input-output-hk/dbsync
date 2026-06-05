@@ -68,6 +68,7 @@ txCborTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys =
       [ ForeignKey "tx_id" "tx" "id"
       ]
@@ -77,11 +78,10 @@ txCborTableDef = TableDef
 -- * COPY encoding
 -- ---------------------------------------------------------------------------
 
-encodeTxCborCopy :: TxCborId -> TxCbor -> ByteString
-encodeTxCborCopy (TxCborId tcid) tc =
+encodeTxCborCopy :: TxCbor -> ByteString
+encodeTxCborCopy tc =
   buildCopyRow
-    [ Just $ bInt64 tcid
-    , Just $ bInt64 (getTxId $ txCborTxId tc)
+    [ Just $ bInt64 (getTxId $ txCborTxId tc)
     , Just $ bHex (txCborBytes tc)
     ]
 

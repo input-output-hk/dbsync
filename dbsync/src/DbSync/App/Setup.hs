@@ -53,6 +53,8 @@ import DbSync.Extractor.Cbor (cborExtractor)
 import DbSync.Extractor.Epoch (epochExtractor)
 import DbSync.Extractor.EpochBoundary (epochBoundaryExtractor)
 import DbSync.Extractor.EpochSyncStats (epochSyncStatsExtractor)
+import DbSync.Extractor.Governance (governanceExtractor)
+import DbSync.Extractor.ScriptsDatums (scriptsDatumsExtractor)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..), severityFromText)
 import DbSync.AppM (CoreM)
 
@@ -117,6 +119,8 @@ buildExtractors pc = do
     resolveExtractor "epoch_sync_stats" = epochSyncStatsExtractor
     resolveExtractor "epoch_boundary"   = epochBoundaryExtractor
     resolveExtractor "epoch"            = epochExtractor
+    resolveExtractor "scripts_datums"   = scriptsDatumsExtractor
+    resolveExtractor "governance"       = governanceExtractor
     resolveExtractor name               = stubExtractor name
 
     -- | (extractor name, enabled?). 'utxo' reads from the structured

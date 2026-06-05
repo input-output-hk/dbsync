@@ -26,17 +26,17 @@ import DbSync.Db.Schema.EpochBoundary
   , epochParamTableDef
   , epochStateTableDef
   )
-import DbSync.Db.Schema.Ids (AdaPotsId, CostModelId, EpochParamId, EpochStateId)
+import DbSync.Db.Schema.Ids (CostModelId)
 import DbSync.Db.Schema.Types (TableDef (..))
 
-writeAdaPotsCopy :: LoaderStream -> AdaPotsId -> AdaPots -> IO ()
-writeAdaPotsCopy ls apid pots = lsWriteRow ls (tdName adaPotsTableDef) (encodeAdaPotsCopy apid pots)
+writeAdaPotsCopy :: LoaderStream -> AdaPots -> IO ()
+writeAdaPotsCopy ls pots = lsWriteRow ls (tdName adaPotsTableDef) (encodeAdaPotsCopy pots)
 
-writeEpochParamCopy :: LoaderStream -> EpochParamId -> EpochParam -> IO ()
-writeEpochParamCopy ls epid ep = lsWriteRow ls (tdName epochParamTableDef) (encodeEpochParamCopy epid ep)
+writeEpochParamCopy :: LoaderStream -> EpochParam -> IO ()
+writeEpochParamCopy ls ep = lsWriteRow ls (tdName epochParamTableDef) (encodeEpochParamCopy ep)
 
-writeEpochStateCopy :: LoaderStream -> EpochStateId -> EpochState -> IO ()
-writeEpochStateCopy ls esid es = lsWriteRow ls (tdName epochStateTableDef) (encodeEpochStateCopy esid es)
+writeEpochStateCopy :: LoaderStream -> EpochState -> IO ()
+writeEpochStateCopy ls es = lsWriteRow ls (tdName epochStateTableDef) (encodeEpochStateCopy es)
 
 writeCostModelCopy :: LoaderStream -> CostModelId -> CostModel -> IO ()
 writeCostModelCopy ls cmid cm = lsWriteRow ls (tdName costModelTableDef) (encodeCostModelCopy cmid cm)

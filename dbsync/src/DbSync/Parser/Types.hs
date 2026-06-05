@@ -19,6 +19,9 @@ module DbSync.Parser.Types
   , GenericTxOut (..)
   , GenericTxCertificate (..)
   , GenericTxWithdrawal (..)
+  , GenericTxScript (..)
+  , GenericTxDatum (..)
+  , GenericTxRedeemer (..)
   , CertAction (..)
   , DRepIdent (..)
   , AnchorData (..)
@@ -27,6 +30,13 @@ module DbSync.Parser.Types
   , PoolRegistrationData (..)
   , PoolRelayData (..)
   , BlockEra (..)
+
+    -- * Governance types
+  , GovActionRef (..)
+  , GenericGovAction (..)
+  , GenericGovActionProposal (..)
+  , GenericVoter (..)
+  , GenericVotingProcedure (..)
 
     -- * Era classification
   , EraStakeModel (..)
@@ -41,10 +51,14 @@ import Cardano.Prelude
 import Cardano.Ledger.Metadata (Metadatum)
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
+import qualified Data.Set as Set
 import Data.Time.Clock (UTCTime)
 
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
 import Ouroboros.Network.Block (Point)
+
+import DbSync.Db.Types (ScriptPurpose, ScriptType, Vote)
+import DbSync.Parser.ParamProposal (GenericParamProposal)
 
 -- ---------------------------------------------------------------------------
 -- * Cardano point alias
@@ -157,10 +171,72 @@ data GenericTx = GenericTx
       -- extractor forces this field. This prevents accumulation of large
       -- pinned ByteStrings during parsing. @Nothing@ for Byron-era
       -- transactions where serialisation is non-trivial.
-  -- TODO: Add governance fields (proposals, voting procedures)
-  -- TODO: Add script/datum/redeemer fields
+  , txScripts           :: ![GenericTxScript]
+      -- ^ Scripts from the witness set and (where supported)
+      -- auxiliary data.
+  , txDatums            :: ![GenericTxDatum]
+      -- ^ Plutus datum witnesses.
+  , txRedeemers         :: ![GenericTxRedeemer]
+      -- ^ Plutus redeemer witnesses.
+  , txExtraKeyWitnesses :: ![ByteString]
+      -- ^ 28-byte required-signer key hashes.
+  , txParamProposal     :: ![GenericParamProposal]
+      -- ^ Pre-Conway genesis-key parameter proposals from the
+      -- @Update@ field. Conway+ leaves this empty; parameter
+      -- changes ride 'GovParameterChange' instead.
+  , txProposals         :: ![GenericGovActionProposal]
+      -- ^ Conway+ governance proposals from the tx body.
+  , txVotingProcedures  :: ![GenericVotingProcedure]
+      -- ^ Conway+ voting procedures from the tx body.
+  , txVotingAnchors     :: ![AnchorData]
+      -- ^ Flat union of anchors referenced by certs/proposals/votes
+      -- in this tx. The @voting_anchor.type@ enum is set by the call
+      -- site that writes the row (gov_action / drep / vote /
+      -- committee_dereg / constitution), so this convenience list
+      -- carries no per-anchor type tag.
   }
   deriving stock (Show)
+
+-- | A script attached to a transaction (witness set or auxiliary
+-- data).
+--
+-- 'gtsJson' carries the JSON rendering for native scripts that
+-- have one ('MultiSig', 'Timelock'); 'Nothing' for Plutus scripts
+-- and for Dijkstra native scripts. 'gtsBytes' carries the raw
+-- script CBOR when 'gtsJson' is absent.
+data GenericTxScript = GenericTxScript
+  { gtsHash           :: !ByteString
+  , gtsType           :: !ScriptType
+  , gtsJson           :: !(Maybe Text)
+  , gtsBytes          :: !(Maybe ByteString)
+  , gtsSerialisedSize :: !(Maybe Word64)
+  }
+  deriving stock (Eq, Show)
+
+-- | A Plutus datum witness. 'gtdValue' is the JSON rendering for
+-- the @datum.value@ JSONB column.
+data GenericTxDatum = GenericTxDatum
+  { gtdHash  :: !ByteString
+  , gtdBytes :: !ByteString
+  , gtdValue :: !(Maybe Text)
+  }
+  deriving stock (Eq, Show)
+
+-- | A Plutus redeemer. The embedded datum carries its own dedup
+-- key ('gtrDataHash') so the extractor can write the
+-- @redeemer_data@ row once per unique datum and link multiple
+-- @redeemer@ rows to it.
+data GenericTxRedeemer = GenericTxRedeemer
+  { gtrUnitMem    :: !Word64
+  , gtrUnitSteps  :: !Word64
+  , gtrPurpose    :: !ScriptPurpose
+  , gtrIndex      :: !Word64
+  , gtrScriptHash :: !(Maybe ByteString)
+  , gtrDataHash   :: !ByteString
+  , gtrDataBytes  :: !ByteString
+  , gtrDataValue  :: !(Maybe Text)
+  }
+  deriving stock (Eq, Show)
 
 -- | A transaction input reference.
 data GenericTxIn = GenericTxIn
@@ -294,6 +370,84 @@ data AnchorData = AnchorData
   , adHash :: !ByteString
   }
   deriving stock (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- * Governance types
+-- ---------------------------------------------------------------------------
+
+-- | Reference to a previously-submitted governance action. Pairs the
+-- proposing tx's 32-byte hash with the proposal's index within that
+-- tx; the orchestrator resolves the pair to a 'GovActionProposalId'
+-- via the per-block scratchpad (Ingest) or a SELECT (Follow).
+data GovActionRef = GovActionRef
+  { garTxHash :: !ByteString   -- ^ 32-byte proposing-tx hash
+  , garIndex  :: !Word64       -- ^ proposal index within the tx
+  }
+  deriving stock (Eq, Show)
+
+-- | A governance action's payload. The first 'Maybe GovActionRef' on
+-- the amendment-style arms is the previous-action reference; 'Nothing'
+-- means the proposal is starting a fresh amendment chain.
+--
+-- 'GovParameterChange' carries the embedded 'GenericParamProposal'
+-- (with its optional cost-model map) and an optional guardrail
+-- script hash. 'GovNewConstitution' carries the new constitution's
+-- anchor and an optional script hash.
+data GenericGovAction
+  = GovParameterChange  !(Maybe GovActionRef) !GenericParamProposal !(Maybe ByteString)
+  | GovHardForkInit     !(Maybe GovActionRef) !Word16 !Word16
+      -- ^ Target @(major, minor)@ protocol version.
+  | GovTreasuryWithdraw ![(ByteString, Word64)] !(Maybe ByteString)
+      -- ^ @[(reward-account, lovelace)]@ + optional guardrail script hash.
+  | GovNoConfidence     !(Maybe GovActionRef)
+  | GovUpdateCommittee
+      !(Maybe GovActionRef)
+      !(Set.Set ByteString)
+        -- ^ Cold keys to remove (28-byte credential hashes).
+      ![(ByteString, Word64)]
+        -- ^ Members to add: @(cold-key cred, expiration epoch)@.
+      !Word64 !Word64
+        -- ^ Quorum @(numerator, denominator)@.
+  | GovNewConstitution  !(Maybe GovActionRef) !AnchorData !(Maybe ByteString)
+  | GovInfoAction
+  deriving stock (Show)
+
+-- | A governance-action proposal as carried by a Conway+ tx body.
+--
+-- 'ggapDescriptionJson' is the canonical JSON encoding of the action
+-- (the ledger's @Aeson.encode@ output); the @gov_action_proposal.description@
+-- column stores it verbatim.
+data GenericGovActionProposal = GenericGovActionProposal
+  { ggapTxIndex         :: !Word64
+  , ggapReturnAddrCred  :: !ByteString    -- ^ Stake credential of the return-deposit address.
+  , ggapDeposit         :: !Word64        -- ^ Deposit amount in Lovelace.
+  , ggapAnchor          :: !AnchorData    -- ^ Anchor URL+hash for the off-chain document.
+  , ggapAction          :: !GenericGovAction
+  , ggapDescriptionJson :: !Text
+  }
+  deriving stock (Show)
+
+-- | A governance voter — one of three voter kinds matching the
+-- @voter_role@ enum on @voting_procedure@.
+data GenericVoter
+  = VoterDRep      !DRepIdent
+  | VoterStakePool !ByteString
+      -- ^ 28-byte pool key hash.
+  | VoterCommittee !ByteString !Bool
+      -- ^ 28-byte committee hot-key credential plus @has_script@ flag.
+  deriving stock (Eq, Show)
+
+-- | A single vote cast by a 'GenericVoter' on a governance action.
+data GenericVotingProcedure = GenericVotingProcedure
+  { gvpTxIndex     :: !Word16
+  , gvpVoter       :: !GenericVoter
+  , gvpGovActionId :: !GovActionRef
+  , gvpVote        :: !Vote
+  , gvpAnchor      :: !(Maybe AnchorData)
+  }
+  deriving stock (Show)
+
+-- ---------------------------------------------------------------------------
 
 -- | Pool registration data extracted from a @PoolRegistration@ certificate.
 data PoolRegistrationData = PoolRegistrationData

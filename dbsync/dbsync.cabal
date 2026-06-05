@@ -78,6 +78,9 @@ library
     DbSync.Parser.Byron
     DbSync.Parser.Dispatch
     DbSync.Parser.Metadata
+    DbSync.Parser.ParamProposal
+    DbSync.Parser.Script
+    DbSync.Parser.ScriptData
     DbSync.Parser.Tx
     DbSync.Parser.Types
 
@@ -88,10 +91,12 @@ library
     DbSync.Extractor.Epoch
     DbSync.Extractor.EpochBoundary
     DbSync.Extractor.EpochSyncStats
+    DbSync.Extractor.Governance
     DbSync.Extractor.Metadata
     DbSync.Extractor.MultiAsset
     DbSync.Extractor.Pipeline
     DbSync.Extractor.Pool
+    DbSync.Extractor.ScriptsDatums
     DbSync.Extractor.SharedDedup
     DbSync.Extractor.StakeDelegation
     DbSync.Extractor.UTxO
@@ -122,14 +127,14 @@ library
     DbSync.Phase.Ingest.PipelineStats
     DbSync.Phase.Ingest.ReceiverStats
     DbSync.Phase.Ingest.Resolver
-    DbSync.Phase.Ingest.Resolver.Cbor
     DbSync.Phase.Ingest.Resolver.Core
     DbSync.Phase.Ingest.Resolver.Epoch
     DbSync.Phase.Ingest.Resolver.EpochBoundary
+    DbSync.Phase.Ingest.Resolver.Governance
     DbSync.Phase.Ingest.Resolver.Internal
-    DbSync.Phase.Ingest.Resolver.Metadata
     DbSync.Phase.Ingest.Resolver.MultiAsset
     DbSync.Phase.Ingest.Resolver.Pool
+    DbSync.Phase.Ingest.Resolver.ScriptsDatums
     DbSync.Phase.Ingest.Resolver.StakeDelegation
     DbSync.Phase.Ingest.Resolver.UTxO
     DbSync.Phase.Ingest.UtxoStore
@@ -138,9 +143,11 @@ library
     DbSync.Phase.Ingest.Writer.Core
     DbSync.Phase.Ingest.Writer.Epoch
     DbSync.Phase.Ingest.Writer.EpochBoundary
+    DbSync.Phase.Ingest.Writer.Governance
     DbSync.Phase.Ingest.Writer.Metadata
     DbSync.Phase.Ingest.Writer.MultiAsset
     DbSync.Phase.Ingest.Writer.Pool
+    DbSync.Phase.Ingest.Writer.ScriptsDatums
     DbSync.Phase.Ingest.Writer.StakeDelegation
     DbSync.Phase.Ingest.Writer.UTxO
 
@@ -157,14 +164,14 @@ library
     DbSync.Phase.Following.IdAllocator
     DbSync.Phase.Following.IdCounts
     DbSync.Phase.Following.Resolver
-    DbSync.Phase.Following.Resolver.Cbor
     DbSync.Phase.Following.Resolver.Core
     DbSync.Phase.Following.Resolver.Epoch
     DbSync.Phase.Following.Resolver.EpochBoundary
+    DbSync.Phase.Following.Resolver.Governance
     DbSync.Phase.Following.Resolver.Internal
-    DbSync.Phase.Following.Resolver.Metadata
     DbSync.Phase.Following.Resolver.MultiAsset
     DbSync.Phase.Following.Resolver.Pool
+    DbSync.Phase.Following.Resolver.ScriptsDatums
     DbSync.Phase.Following.Resolver.StakeDelegation
     DbSync.Phase.Following.Resolver.UTxO
     DbSync.Phase.Following.Rollback
@@ -176,10 +183,12 @@ library
     DbSync.Phase.Following.Writer.Core
     DbSync.Phase.Following.Writer.Epoch
     DbSync.Phase.Following.Writer.EpochBoundary
+    DbSync.Phase.Following.Writer.Governance
     DbSync.Phase.Following.Writer.Internal
     DbSync.Phase.Following.Writer.Metadata
     DbSync.Phase.Following.Writer.MultiAsset
     DbSync.Phase.Following.Writer.Pool
+    DbSync.Phase.Following.Writer.ScriptsDatums
     DbSync.Phase.Following.Writer.StakeDelegation
     DbSync.Phase.Following.Writer.UTxO
 
@@ -263,6 +272,7 @@ library
     , ouroboros-network:api
     , ouroboros-network:framework
     , ouroboros-network:protocols
+    , plutus-ledger-api
     , random
     , resource-registry
     , small-steps

@@ -1,9 +1,8 @@
 -- | hasql writers for tables owned by the @stake_delegation@ extractor.
 --
 -- The three pot-rebalancing tables (@pot_transfer@, @treasury@,
--- @reserve@) are emitted by the stake-delegation extractor; the
--- Follow insert plumbing for them is not landed yet, hence the
--- 'todoWrite' stubs.
+-- @reserve@) have no Follow-phase insert wiring yet; their writers
+-- panic via 'todoWriteLeaf' if invoked.
 module DbSync.Phase.Following.Writer.StakeDelegation
   ( writeStakeAddressConn
   , writeStakeAddressBuf
@@ -28,16 +27,7 @@ import Cardano.Prelude
 import qualified Hasql.Connection as Conn
 
 import DbSync.Db.Schema.EpochBoundary (PotTransfer, Reserve, Treasury)
-import DbSync.Db.Schema.Ids
-  ( DelegationId
-  , PotTransferId
-  , ReserveId
-  , StakeAddressId
-  , StakeDeregistrationId
-  , StakeRegistrationId
-  , TreasuryId
-  , WithdrawalId
-  )
+import DbSync.Db.Schema.Ids (StakeAddressId)
 import DbSync.Db.Schema.StakeDelegation
   ( Delegation
   , StakeAddress
@@ -51,7 +41,7 @@ import DbSync.Db.Statement.StakeDeregistration (insertStakeDeregistrationRowStmt
 import DbSync.Db.Statement.StakeRegistration (insertStakeRegistrationRowStmt)
 import DbSync.Db.Statement.Withdrawal (insertWithdrawalRowStmt)
 import DbSync.Phase.Following.WriteBuffer (WriteBuffer)
-import DbSync.Phase.Following.Writer.Internal (queueBuf, runConn, todoWrite)
+import DbSync.Phase.Following.Writer.Internal (queueBuf, runConn, todoWriteLeaf)
 
 writeStakeAddressConn :: Conn.Connection -> StakeAddressId -> StakeAddress -> IO ()
 writeStakeAddressConn conn sid sa = runConn conn (sid, sa) insertStakeAddressRowStmt
@@ -59,47 +49,47 @@ writeStakeAddressConn conn sid sa = runConn conn (sid, sa) insertStakeAddressRow
 writeStakeAddressBuf :: WriteBuffer -> StakeAddressId -> StakeAddress -> IO ()
 writeStakeAddressBuf buf sid sa = queueBuf buf (sid, sa) insertStakeAddressRowStmt
 
-writeStakeRegistrationConn :: Conn.Connection -> StakeRegistrationId -> StakeRegistration -> IO ()
-writeStakeRegistrationConn conn sid sr = runConn conn (sid, sr) insertStakeRegistrationRowStmt
+writeStakeRegistrationConn :: Conn.Connection -> StakeRegistration -> IO ()
+writeStakeRegistrationConn conn sr = runConn conn sr insertStakeRegistrationRowStmt
 
-writeStakeRegistrationBuf :: WriteBuffer -> StakeRegistrationId -> StakeRegistration -> IO ()
-writeStakeRegistrationBuf buf sid sr = queueBuf buf (sid, sr) insertStakeRegistrationRowStmt
+writeStakeRegistrationBuf :: WriteBuffer -> StakeRegistration -> IO ()
+writeStakeRegistrationBuf buf sr = queueBuf buf sr insertStakeRegistrationRowStmt
 
-writeStakeDeregistrationConn :: Conn.Connection -> StakeDeregistrationId -> StakeDeregistration -> IO ()
-writeStakeDeregistrationConn conn sid sd = runConn conn (sid, sd) insertStakeDeregistrationRowStmt
+writeStakeDeregistrationConn :: Conn.Connection -> StakeDeregistration -> IO ()
+writeStakeDeregistrationConn conn sd = runConn conn sd insertStakeDeregistrationRowStmt
 
-writeStakeDeregistrationBuf :: WriteBuffer -> StakeDeregistrationId -> StakeDeregistration -> IO ()
-writeStakeDeregistrationBuf buf sid sd = queueBuf buf (sid, sd) insertStakeDeregistrationRowStmt
+writeStakeDeregistrationBuf :: WriteBuffer -> StakeDeregistration -> IO ()
+writeStakeDeregistrationBuf buf sd = queueBuf buf sd insertStakeDeregistrationRowStmt
 
-writeDelegationConn :: Conn.Connection -> DelegationId -> Delegation -> IO ()
-writeDelegationConn conn did d = runConn conn (did, d) insertDelegationRowStmt
+writeDelegationConn :: Conn.Connection -> Delegation -> IO ()
+writeDelegationConn conn d = runConn conn d insertDelegationRowStmt
 
-writeDelegationBuf :: WriteBuffer -> DelegationId -> Delegation -> IO ()
-writeDelegationBuf buf did d = queueBuf buf (did, d) insertDelegationRowStmt
+writeDelegationBuf :: WriteBuffer -> Delegation -> IO ()
+writeDelegationBuf buf d = queueBuf buf d insertDelegationRowStmt
 
-writeWithdrawalConn :: Conn.Connection -> WithdrawalId -> Withdrawal -> IO ()
-writeWithdrawalConn conn wid w = runConn conn (wid, w) insertWithdrawalRowStmt
+writeWithdrawalConn :: Conn.Connection -> Withdrawal -> IO ()
+writeWithdrawalConn conn w = runConn conn w insertWithdrawalRowStmt
 
-writeWithdrawalBuf :: WriteBuffer -> WithdrawalId -> Withdrawal -> IO ()
-writeWithdrawalBuf buf wid w = queueBuf buf (wid, w) insertWithdrawalRowStmt
+writeWithdrawalBuf :: WriteBuffer -> Withdrawal -> IO ()
+writeWithdrawalBuf buf w = queueBuf buf w insertWithdrawalRowStmt
 
--- TODO: insert plumbing for the pot tables; matches the original
--- monolithic writer where these were stubbed out.
+-- Follow-phase insert plumbing for the pot-rebalancing tables is
+-- not yet wired; the writers panic if invoked.
 
-writePotTransferConn :: Conn.Connection -> PotTransferId -> PotTransfer -> IO ()
-writePotTransferConn _ = todoWrite "writePotTransfer"
+writePotTransferConn :: Conn.Connection -> PotTransfer -> IO ()
+writePotTransferConn _ = todoWriteLeaf "writePotTransfer"
 
-writePotTransferBuf :: WriteBuffer -> PotTransferId -> PotTransfer -> IO ()
-writePotTransferBuf _ = todoWrite "writePotTransfer"
+writePotTransferBuf :: WriteBuffer -> PotTransfer -> IO ()
+writePotTransferBuf _ = todoWriteLeaf "writePotTransfer"
 
-writeTreasuryConn :: Conn.Connection -> TreasuryId -> Treasury -> IO ()
-writeTreasuryConn _ = todoWrite "writeTreasury"
+writeTreasuryConn :: Conn.Connection -> Treasury -> IO ()
+writeTreasuryConn _ = todoWriteLeaf "writeTreasury"
 
-writeTreasuryBuf :: WriteBuffer -> TreasuryId -> Treasury -> IO ()
-writeTreasuryBuf _ = todoWrite "writeTreasury"
+writeTreasuryBuf :: WriteBuffer -> Treasury -> IO ()
+writeTreasuryBuf _ = todoWriteLeaf "writeTreasury"
 
-writeReserveConn :: Conn.Connection -> ReserveId -> Reserve -> IO ()
-writeReserveConn _ = todoWrite "writeReserve"
+writeReserveConn :: Conn.Connection -> Reserve -> IO ()
+writeReserveConn _ = todoWriteLeaf "writeReserve"
 
-writeReserveBuf :: WriteBuffer -> ReserveId -> Reserve -> IO ()
-writeReserveBuf _ = todoWrite "writeReserve"
+writeReserveBuf :: WriteBuffer -> Reserve -> IO ()
+writeReserveBuf _ = todoWriteLeaf "writeReserve"

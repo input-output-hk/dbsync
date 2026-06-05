@@ -96,6 +96,7 @@ spec = do
             , tdColumnDefaults = []
             , tdUniqueConstraints = []
             , tdGeneratedColumns = []
+            , tdIdentityColumns = []
             , tdForeignKeys = []
             }
           sql = generateCreateTable simpleDef
@@ -122,6 +123,7 @@ spec = do
                 ]
             , tdUniqueConstraints = []
             , tdGeneratedColumns = []
+            , tdIdentityColumns = []
             , tdForeignKeys = []
             }
           sql = generateCreateTable defDef
@@ -143,6 +145,7 @@ spec = do
             , tdColumnDefaults = []
             , tdUniqueConstraints = []
             , tdGeneratedColumns = []
+            , tdIdentityColumns = []
             , tdForeignKeys = []
             }
           sql = generateCreateTable pkDef
@@ -164,6 +167,7 @@ spec = do
             , tdColumnDefaults = []
             , tdUniqueConstraints = []
             , tdGeneratedColumns = []
+            , tdIdentityColumns = []
             , tdForeignKeys = []
             }
           sql = generateCreateTable checkDef

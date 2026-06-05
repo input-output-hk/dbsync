@@ -5,7 +5,7 @@
 -- Pure tests — no PostgreSQL required. Verify that:
 --
 -- * The 'TableDef' has the expected shape (UNLOGGED, no PK during
---   ingest, 12 columns in golden order).
+--   ingest, columns in golden order).
 -- * 'encodeAdaPotsCopy' produces correctly tab-separated,
 --   newline-terminated COPY rows.
 -- * Numeric fields land in the right column index — guards against
@@ -27,7 +27,7 @@ import DbSync.Db.Schema.AdaPots
   , adaPotsTableDef
   , encodeAdaPotsCopy
   )
-import DbSync.Db.Schema.Ids (AdaPotsId (..), BlockId (..))
+import DbSync.Db.Schema.Ids (BlockId (..))
 import DbSync.Db.Schema.Types
   ( ColumnDef (..)
   , PgType (..)
@@ -56,7 +56,7 @@ spec = do
     it "carries no DEFAULT clauses" $
       tdColumnDefaults adaPotsTableDef `shouldBe` []
 
-    it "has 12 columns in golden order" $
+    it "lists columns in golden order" $
       map cdName (tdColumns adaPotsTableDef) `shouldBe`
         [ "id"
         , "slot_no"
@@ -91,56 +91,52 @@ spec = do
 
   describe "encodeAdaPotsCopy" $ do
     it "produces a row terminated with newline" $ do
-      let row = encodeAdaPotsCopy (AdaPotsId 1) sampleAdaPots
+      let row = encodeAdaPotsCopy sampleAdaPots
       BS8.last row `shouldBe` '\n'
 
-    it "produces 12 fields separated by 11 tabs" $ do
-      let row = encodeAdaPotsCopy (AdaPotsId 1) sampleAdaPots
+    it "separates every non-id column with a tab" $ do
+      let row = encodeAdaPotsCopy sampleAdaPots
           tabCount = BS.count (fromIntegral (fromEnum '\t')) row
-      tabCount `shouldBe` 11
+          nonIdCols = length (tdColumns adaPotsTableDef)
+                        - length (tdIdentityColumns adaPotsTableDef)
+      tabCount `shouldBe` nonIdCols - 1
 
-    it "writes the assigned id in field 0" $ do
-      let row = encodeAdaPotsCopy (AdaPotsId 42) sampleAdaPots
+    it "writes slot_no in field 0 and epoch_no in field 1" $ do
+      let row = encodeAdaPotsCopy sampleAdaPots
           fields = BS8.split '\t' (BS8.init row)
-      fields !! 0 `shouldBe` "42"
-
-    it "writes slot_no in field 1 and epoch_no in field 2" $ do
-      let row = encodeAdaPotsCopy (AdaPotsId 1) sampleAdaPots
-          fields = BS8.split '\t' (BS8.init row)
-      fields !! 1 `shouldBe` "123456"
-      fields !! 2 `shouldBe` "500"
+      fields !! 0 `shouldBe` "123456"
+      fields !! 1 `shouldBe` "500"
 
     it "writes the eight Lovelace pots in the documented field order" $ do
-      let row = encodeAdaPotsCopy (AdaPotsId 1) sampleAdaPots
+      let row = encodeAdaPotsCopy sampleAdaPots
           fields = BS8.split '\t' (BS8.init row)
-      -- treasury, reserves, rewards, utxo, deposits_stake, fees, drep, proposal
-      fields !! 3  `shouldBe` "1000000000000"   -- treasury
-      fields !! 4  `shouldBe` "12000000000000"  -- reserves
-      fields !! 5  `shouldBe` "5000000"         -- rewards
-      fields !! 6  `shouldBe` "30000000000"     -- utxo
-      fields !! 7  `shouldBe` "10000000"        -- deposits_stake
-      fields !! 8  `shouldBe` "150000"          -- fees
-      fields !! 10 `shouldBe` "200000"          -- deposits_drep
-      fields !! 11 `shouldBe` "75000"           -- deposits_proposal
+      fields !! 2  `shouldBe` "1000000000000"   -- treasury
+      fields !! 3  `shouldBe` "12000000000000"  -- reserves
+      fields !! 4  `shouldBe` "5000000"         -- rewards
+      fields !! 5  `shouldBe` "30000000000"     -- utxo
+      fields !! 6  `shouldBe` "10000000"        -- deposits_stake
+      fields !! 7  `shouldBe` "150000"          -- fees
+      fields !! 9  `shouldBe` "200000"          -- deposits_drep
+      fields !! 10 `shouldBe` "75000"           -- deposits_proposal
 
-    it "writes block_id in field 9" $ do
-      let row = encodeAdaPotsCopy (AdaPotsId 1) sampleAdaPots
+    it "writes block_id in field 8" $ do
+      let row = encodeAdaPotsCopy sampleAdaPots
           fields = BS8.split '\t' (BS8.init row)
-      fields !! 9 `shouldBe` "777"
+      fields !! 8 `shouldBe` "777"
 
     it "encodes zero-valued pots as 0 (not NULL)" $ do
-      let row = encodeAdaPotsCopy (AdaPotsId 1) zeroPots
+      let row = encodeAdaPotsCopy zeroPots
           fields = BS8.split '\t' (BS8.init row)
-      forM_ [3, 4, 5, 6, 7, 8, 10, 11] $ \i ->
+      forM_ [2, 3, 4, 5, 6, 7, 9, 10] $ \i ->
         fields !! i `shouldBe` "0"
 
     it "round-trips a maximum-Word64-valued field" $ do
       let maxField = sampleAdaPots
             { adaPotsTreasury = DbLovelace 18446744073709551615
             }
-          row = encodeAdaPotsCopy (AdaPotsId 1) maxField
+          row = encodeAdaPotsCopy maxField
           fields = BS8.split '\t' (BS8.init row)
-      fields !! 3 `shouldBe` "18446744073709551615"
+      fields !! 2 `shouldBe` "18446744073709551615"
 
 -- ---------------------------------------------------------------------------
 -- Test fixtures

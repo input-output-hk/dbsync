@@ -17,7 +17,8 @@
     "multi_asset": true,
     "metadata": true,
     "scripts_datums": true,
-    "epoch_sync_stats": true
+    "epoch_sync_stats": true,
+    "epoch": false
   },
   "metrics": {
     "prometheus_port": 8080

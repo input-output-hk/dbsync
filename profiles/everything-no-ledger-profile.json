@@ -26,8 +26,8 @@
     "scripts_datums": true,
     "governance": true,
     "cbor": true,
-    "epoch_sync_stats": true
-    
+    "epoch_sync_stats": true,
+    "epoch": true
   },
   "metrics": {
     "prometheus_port": 8080

@@ -160,6 +160,7 @@ test-suite dbsync-test
     DbSync.Phase.Following.RunSpec
     DbSync.Phase.FollowAtTipSpec
     DbSync.Phase.FollowEpochBoundarySpec
+    DbSync.Phase.FollowScriptsDatumsSpec
     DbSync.Phase.FollowPerfRealisticSpec
     DbSync.Phase.FollowPerfSpec
     DbSync.Phase.FollowRestartSpec
@@ -189,6 +190,7 @@ test-suite dbsync-test
     , cardano-crypto-class
     , cardano-ledger-alonzo
     , cardano-ledger-binary
+    , cardano-ledger-conway
     , cardano-ledger-core
     , cardano-prelude
     , cardano-slotting

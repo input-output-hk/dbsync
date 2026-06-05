@@ -35,7 +35,7 @@ import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
 import DbSync.Db.Schema.Ids (idDecoder)
-import DbSync.Db.Schema.Types (ColumnDef (..), TableDef (..))
+import DbSync.Db.Schema.Types (ColumnDef (..), PgType (..), TableDef (..))
 
 -- ---------------------------------------------------------------------------
 -- * ID allocation
@@ -71,6 +71,11 @@ insertableColumns td =
 -- 'insertableColumns'. The caller's hasql encoder must produce
 -- values in the same order as the columns appear in 'tdColumns'
 -- (minus any skipped IDENTITY \/ generated entries).
+--
+-- 'PgJsonb' columns are emitted as @$N::jsonb@. Hasql's text encoder
+-- is the canonical way to send a JSONB payload through the wire, but
+-- PostgreSQL refuses implicit @text -> jsonb@ coercion in
+-- parameterised INSERTs so the cast is required.
 insertRowSql :: TableDef -> Text
 insertRowSql td =
   T.concat
@@ -79,9 +84,15 @@ insertRowSql td =
     , " VALUES (", T.intercalate ", " placeholders, ")"
     ]
   where
-    cols         = map cdName (insertableColumns td)
+    columns      = insertableColumns td
+    cols         = map cdName columns
     placeholders =
-      [ "$" <> T.pack (show n) | n <- [1 .. length cols] ]
+      [ "$" <> T.pack (show n) <> castFor c
+      | (n, c) <- zip [1 :: Int ..] columns
+      ]
+    castFor c = case cdType c of
+      PgJsonb -> "::jsonb"
+      _       -> ""
 
 -- ---------------------------------------------------------------------------
 -- * Lookups

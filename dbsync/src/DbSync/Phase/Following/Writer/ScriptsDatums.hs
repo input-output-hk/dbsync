@@ -1,6 +1,9 @@
--- | hasql writers for tables owned by the @scripts_datums@
--- extractor. All flavours panic via 'todoWrite' until the insert
--- statements are wired.
+-- | hasql writers for tables owned by the @scripts_datums@ extractor.
+--
+-- @datum@, @script@, @redeemer_data@ are dedup-keyed; @redeemer@ is
+-- counter-managed; all four take a caller-allocated id. The
+-- @extra_key_witness@ leaf is IDENTITY-managed so the writer takes
+-- just the row.
 module DbSync.Phase.Following.Writer.ScriptsDatums
   ( writeDatumConn
   , writeDatumBuf
@@ -25,36 +28,46 @@ import DbSync.Db.Schema.Ids
   , ScriptId
   )
 import DbSync.Db.Schema.ScriptsDatums
-  ( Datum, ExtraKeyWitness, Redeemer, RedeemerData, Script )
+  ( Datum
+  , ExtraKeyWitness
+  , Redeemer
+  , RedeemerData
+  , Script
+  )
+import DbSync.Db.Statement.Datum (insertDatumRowStmt)
+import DbSync.Db.Statement.ExtraKeyWitness (insertExtraKeyWitnessRowStmt)
+import DbSync.Db.Statement.Redeemer (insertRedeemerRowStmt)
+import DbSync.Db.Statement.RedeemerData (insertRedeemerDataRowStmt)
+import DbSync.Db.Statement.Script (insertScriptRowStmt)
 import DbSync.Phase.Following.WriteBuffer (WriteBuffer)
-import DbSync.Phase.Following.Writer.Internal (todoWrite, todoWriteLeaf)
+import DbSync.Phase.Following.Writer.Internal (queueBuf, runConn)
 
 writeDatumConn :: Conn.Connection -> DatumId -> Datum -> IO ()
-writeDatumConn _ = todoWrite "writeDatum"
+writeDatumConn conn did d = runConn conn (did, d) insertDatumRowStmt
 
 writeDatumBuf :: WriteBuffer -> DatumId -> Datum -> IO ()
-writeDatumBuf _ = todoWrite "writeDatum"
+writeDatumBuf buf did d = queueBuf buf (did, d) insertDatumRowStmt
 
 writeScriptConn :: Conn.Connection -> ScriptId -> Script -> IO ()
-writeScriptConn _ = todoWrite "writeScript"
+writeScriptConn conn sid s = runConn conn (sid, s) insertScriptRowStmt
 
 writeScriptBuf :: WriteBuffer -> ScriptId -> Script -> IO ()
-writeScriptBuf _ = todoWrite "writeScript"
+writeScriptBuf buf sid s = queueBuf buf (sid, s) insertScriptRowStmt
 
 writeRedeemerConn :: Conn.Connection -> RedeemerId -> Redeemer -> IO ()
-writeRedeemerConn _ = todoWrite "writeRedeemer"
+writeRedeemerConn conn rid r = runConn conn (rid, r) insertRedeemerRowStmt
 
 writeRedeemerBuf :: WriteBuffer -> RedeemerId -> Redeemer -> IO ()
-writeRedeemerBuf _ = todoWrite "writeRedeemer"
+writeRedeemerBuf buf rid r = queueBuf buf (rid, r) insertRedeemerRowStmt
 
 writeRedeemerDataConn :: Conn.Connection -> RedeemerDataId -> RedeemerData -> IO ()
-writeRedeemerDataConn _ = todoWrite "writeRedeemerData"
+writeRedeemerDataConn conn rdid rd = runConn conn (rdid, rd) insertRedeemerDataRowStmt
 
 writeRedeemerDataBuf :: WriteBuffer -> RedeemerDataId -> RedeemerData -> IO ()
-writeRedeemerDataBuf _ = todoWrite "writeRedeemerData"
+writeRedeemerDataBuf buf rdid rd = queueBuf buf (rdid, rd) insertRedeemerDataRowStmt
 
 writeExtraKeyWitnessConn :: Conn.Connection -> ExtraKeyWitness -> IO ()
-writeExtraKeyWitnessConn _ = todoWriteLeaf "writeExtraKeyWitness"
+writeExtraKeyWitnessConn conn ekw = runConn conn ekw insertExtraKeyWitnessRowStmt
 
 writeExtraKeyWitnessBuf :: WriteBuffer -> ExtraKeyWitness -> IO ()
-writeExtraKeyWitnessBuf _ = todoWriteLeaf "writeExtraKeyWitness"
+writeExtraKeyWitnessBuf buf ekw = queueBuf buf ekw insertExtraKeyWitnessRowStmt

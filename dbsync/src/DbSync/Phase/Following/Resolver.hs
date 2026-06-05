@@ -94,11 +94,11 @@ mkFollowResolver conn = do
       -- EpochBoundary
     , resolveCostModel   = EpochBoundary.resolveCostModelConn conn
 
-      -- ScriptsDatums (stubs)
-    , resolveDatum            = ScriptsDatums.resolveDatumStub
-    , resolveScript           = ScriptsDatums.resolveScriptStub
-    , resolveRedeemerData     = ScriptsDatums.resolveRedeemerDataStub
-    , assignRedeemerId        = ScriptsDatums.assignRedeemerIdStub
+      -- ScriptsDatums
+    , resolveDatum            = ScriptsDatums.resolveDatumConn         conn
+    , resolveScript           = ScriptsDatums.resolveScriptConn        conn
+    , resolveRedeemerData     = ScriptsDatums.resolveRedeemerDataConn  conn
+    , assignRedeemerId        = ScriptsDatums.assignRedeemerIdConn     conn
 
       -- Governance (per-block stubs + IORef scratchpads)
     , resolveDrepHash             = Governance.resolveDrepHashStub
@@ -180,11 +180,11 @@ mkBufferedFollowResolver conn preAlloc buf = do
       -- EpochBoundary
     , resolveCostModel   = EpochBoundary.resolveCostModelBuf conn cache
 
-      -- ScriptsDatums (stubs)
-    , resolveDatum            = ScriptsDatums.resolveDatumStub
-    , resolveScript           = ScriptsDatums.resolveScriptStub
-    , resolveRedeemerData     = ScriptsDatums.resolveRedeemerDataStub
-    , assignRedeemerId        = ScriptsDatums.assignRedeemerIdStub
+      -- ScriptsDatums
+    , resolveDatum            = ScriptsDatums.resolveDatumBuf         conn cache
+    , resolveScript           = ScriptsDatums.resolveScriptBuf        conn cache
+    , resolveRedeemerData     = ScriptsDatums.resolveRedeemerDataBuf  conn cache
+    , assignRedeemerId        = ScriptsDatums.assignRedeemerIdBuf     preAlloc
 
       -- Governance (per-block stubs + IORef scratchpads)
     , resolveDrepHash             = Governance.resolveDrepHashStub

@@ -73,11 +73,13 @@ library
     DbSync.Db.Statement.CollateralTxOut
     DbSync.Db.Statement.ConsumedBy
     DbSync.Db.Statement.CostModel
+    DbSync.Db.Statement.Datum
     DbSync.Db.Statement.Delegation
     DbSync.Db.Statement.EpochFinalized
     DbSync.Db.Statement.EpochParam
     DbSync.Db.Statement.EpochParamPending
     DbSync.Db.Statement.EpochState
+    DbSync.Db.Statement.ExtraKeyWitness
     DbSync.Db.Statement.IdAllocator
     DbSync.Db.Statement.Indexes
     DbSync.Db.Statement.Loader
@@ -90,10 +92,13 @@ library
     DbSync.Db.Statement.PoolRelay
     DbSync.Db.Statement.PoolRetire
     DbSync.Db.Statement.PoolUpdate
+    DbSync.Db.Statement.Redeemer
+    DbSync.Db.Statement.RedeemerData
     DbSync.Db.Statement.ReferenceTxIn
     DbSync.Db.Statement.Resolve
     DbSync.Db.Statement.Resume
     DbSync.Db.Statement.Rollback
+    DbSync.Db.Statement.Script
     DbSync.Db.Statement.Sequences
     DbSync.Db.Statement.SlotLeader
     DbSync.Db.Statement.StakeAddress

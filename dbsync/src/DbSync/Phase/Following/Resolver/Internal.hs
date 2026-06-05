@@ -34,8 +34,11 @@ import DbSync.Db.Run (useConn)
 import DbSync.Db.Schema.Ids
   ( AddressId
   , CostModelId
+  , DatumId
   , MultiAssetId
   , PoolHashId
+  , RedeemerDataId
+  , ScriptId
   , SlotLeaderId
   , StakeAddressId
   )
@@ -60,17 +63,23 @@ runStmt conn p stmt = useConn "Phase.Following.Resolver" conn (Sess.statement p 
 -- within the block finds the previously-allocated id without
 -- consulting PG. Built fresh per block, discarded after COMMIT.
 data BlockDedupCache = BlockDedupCache
-  { bdcSlotLeader   :: !(IORef (Map ByteString SlotLeaderId))
-  , bdcPoolHash     :: !(IORef (Map ByteString PoolHashId))
-  , bdcStakeAddress :: !(IORef (Map ByteString StakeAddressId))
-  , bdcMultiAsset   :: !(IORef (Map (ByteString, ByteString) MultiAssetId))
-  , bdcAddress      :: !(IORef (Map ByteString AddressId))
-  , bdcCostModel    :: !(IORef (Map ByteString CostModelId))
+  { bdcSlotLeader    :: !(IORef (Map ByteString SlotLeaderId))
+  , bdcPoolHash      :: !(IORef (Map ByteString PoolHashId))
+  , bdcStakeAddress  :: !(IORef (Map ByteString StakeAddressId))
+  , bdcMultiAsset    :: !(IORef (Map (ByteString, ByteString) MultiAssetId))
+  , bdcAddress       :: !(IORef (Map ByteString AddressId))
+  , bdcCostModel     :: !(IORef (Map ByteString CostModelId))
+  , bdcDatum         :: !(IORef (Map ByteString DatumId))
+  , bdcScript        :: !(IORef (Map ByteString ScriptId))
+  , bdcRedeemerData  :: !(IORef (Map ByteString RedeemerDataId))
   }
 
 newBlockDedupCache :: IO BlockDedupCache
 newBlockDedupCache = BlockDedupCache
   <$> newIORef Map.empty
+  <*> newIORef Map.empty
+  <*> newIORef Map.empty
+  <*> newIORef Map.empty
   <*> newIORef Map.empty
   <*> newIORef Map.empty
   <*> newIORef Map.empty

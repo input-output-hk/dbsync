@@ -25,6 +25,7 @@ import DbSync.Parser.Types
   , GenericBlock (..)
   , GenericTx (..)
   , GenericTxCertificate (..)
+  , GenericTxRedeemer
   , PoolRegistrationData (..)
   )
 
@@ -40,6 +41,7 @@ data IdCounts = IdCounts
   , icCollateralTxOutIds :: !Int
   , icPoolUpdateIds      :: !Int
   , icPoolMetadataRefIds :: !Int
+  , icRedeemerIds        :: !Int
   }
   deriving stock (Eq, Show)
 
@@ -50,6 +52,7 @@ emptyIdCounts = IdCounts
   , icCollateralTxOutIds = 0
   , icPoolUpdateIds      = 0
   , icPoolMetadataRefIds = 0
+  , icRedeemerIds        = 0
   }
 
 -- | Walk every transaction in the block once and tally the ID
@@ -66,11 +69,13 @@ tally !c tx =
                                             Nothing -> 0
                                             Just _  -> 1
       !certCounts  = foldl' tallyCert emptyCertCounts (txCertificates tx)
+      !nRedeemers  = length (txRedeemers tx :: [GenericTxRedeemer])
   in n
        { icTxOutIds           = icTxOutIds n + nOuts
        , icCollateralTxOutIds = icCollateralTxOutIds n + nCollOuts
        , icPoolUpdateIds      = icPoolUpdateIds n + ccPoolUpdate certCounts
        , icPoolMetadataRefIds = icPoolMetadataRefIds n + ccPoolMetaRef certCounts
+       , icRedeemerIds        = icRedeemerIds n + nRedeemers
        }
 
 -- | Per-cert-kind tally accumulated while walking 'txCertificates'.

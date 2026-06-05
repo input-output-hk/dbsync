@@ -90,6 +90,7 @@ import qualified DbSync.Schema.InitSpec as SchemaInitSpec
 -- End-to-end
 import qualified DbSync.Phase.FollowAtTipSpec as PhaseFollowAtTipSpec
 import qualified DbSync.Phase.FollowEpochBoundarySpec as PhaseFollowEpochBoundarySpec
+import qualified DbSync.Phase.FollowScriptsDatumsSpec as PhaseFollowScriptsDatumsSpec
 import qualified DbSync.Phase.FollowPerfRealisticSpec as PhaseFollowPerfRealisticSpec
 import qualified DbSync.Phase.FollowPerfSpec as PhaseFollowPerfSpec
 import qualified DbSync.Phase.FollowReplayOnBootSpec as PhaseFollowReplayOnBootSpec
@@ -196,6 +197,7 @@ main = hspec $ do
     PhaseFollowReplayOnBootSpec.spec
     PhaseFollowAtTipSpec.spec
     PhaseFollowEpochBoundarySpec.spec
+    PhaseFollowScriptsDatumsSpec.spec
     PhaseFollowPerfSpec.spec
     PhaseFollowPerfRealisticSpec.spec
     PhaseMockChainSpec.spec

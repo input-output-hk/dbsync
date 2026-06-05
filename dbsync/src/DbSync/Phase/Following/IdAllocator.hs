@@ -33,9 +33,11 @@ import DbSync.Db.Schema.Ids
   ( CollateralTxOutId (..)
   , PoolMetadataRefId (..)
   , PoolUpdateId (..)
+  , RedeemerId (..)
   , TxId (..)
   , TxOutId (..)
   )
+import DbSync.Db.Schema.ScriptsDatums (redeemerTableDef)
 import DbSync.Db.Schema.Types (TableDef)
 import DbSync.Db.Statement.IdAllocator (bulkNextvalStmt)
 import DbSync.Db.Schema.UTxO (collateralTxOutTableDef, txOutTableDef)
@@ -55,6 +57,7 @@ data PreAllocatedIds = PreAllocatedIds
   , paiCollateralTxOutIds :: !(IORef [CollateralTxOutId])
   , paiPoolUpdateIds      :: !(IORef [PoolUpdateId])
   , paiPoolMetadataRefIds :: !(IORef [PoolMetadataRefId])
+  , paiRedeemerIds        :: !(IORef [RedeemerId])
   }
 
 -- | Pop the next ID from a per-sequence queue. Panics if the
@@ -84,6 +87,7 @@ allocateAllIds conn counts = do
           <*> allocFor collateralTxOutTableDef (icCollateralTxOutIds counts) CollateralTxOutId
           <*> allocFor poolUpdateTableDef      (icPoolUpdateIds counts)      PoolUpdateId
           <*> allocFor poolMetadataRefTableDef (icPoolMetadataRefIds counts) PoolMetadataRefId
+          <*> allocFor redeemerTableDef        (icRedeemerIds counts)        RedeemerId
 
   raw <- useConn "Phase.Following.IdAllocator" conn (Sess.pipeline pipeline)
   wrapInRefs raw
@@ -97,6 +101,7 @@ data AllocatedIdsRaw = AllocatedIdsRaw
   , rCollateralTxOutIds :: ![CollateralTxOutId]
   , rPoolUpdateIds      :: ![PoolUpdateId]
   , rPoolMetadataRefIds :: ![PoolMetadataRefId]
+  , rRedeemerIds        :: ![RedeemerId]
   }
 
 wrapInRefs :: AllocatedIdsRaw -> IO PreAllocatedIds
@@ -107,6 +112,7 @@ wrapInRefs r =
     <*> newIORef (rCollateralTxOutIds r)
     <*> newIORef (rPoolUpdateIds r)
     <*> newIORef (rPoolMetadataRefIds r)
+    <*> newIORef (rRedeemerIds r)
 
 -- | Issue one bulk @nextval@ call for the given table's sequence.
 --

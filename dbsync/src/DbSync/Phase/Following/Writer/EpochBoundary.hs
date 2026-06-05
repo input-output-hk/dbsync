@@ -1,6 +1,8 @@
--- | hasql writers for tables owned by the @epoch_boundary@
--- extractor. All flavours panic via 'todoWrite' until the insert
--- statements are wired.
+-- | hasql writers for tables owned by the @epoch_boundary@ extractor.
+--
+-- @ada_pots@, @epoch_param@, @epoch_state@ are IDENTITY leaves;
+-- @cost_model@ is counter-managed so the writer takes a
+-- caller-allocated 'CostModelId'.
 module DbSync.Phase.Following.Writer.EpochBoundary
   ( writeAdaPotsConn
   , writeAdaPotsBuf
@@ -19,29 +21,33 @@ import qualified Hasql.Connection as Conn
 import DbSync.Db.Schema.AdaPots (AdaPots)
 import DbSync.Db.Schema.EpochBoundary (CostModel, EpochParam, EpochState)
 import DbSync.Db.Schema.Ids (CostModelId)
+import DbSync.Db.Statement.AdaPots (insertAdaPotsRowStmt)
+import DbSync.Db.Statement.CostModel (insertCostModelRowStmt)
+import DbSync.Db.Statement.EpochParam (insertEpochParamRowStmt)
+import DbSync.Db.Statement.EpochState (insertEpochStateRowStmt)
 import DbSync.Phase.Following.WriteBuffer (WriteBuffer)
-import DbSync.Phase.Following.Writer.Internal (todoWrite, todoWriteLeaf)
+import DbSync.Phase.Following.Writer.Internal (queueBuf, runConn)
 
 writeAdaPotsConn :: Conn.Connection -> AdaPots -> IO ()
-writeAdaPotsConn _ = todoWriteLeaf "writeAdaPots"
+writeAdaPotsConn conn pots = runConn conn pots insertAdaPotsRowStmt
 
 writeAdaPotsBuf :: WriteBuffer -> AdaPots -> IO ()
-writeAdaPotsBuf _ = todoWriteLeaf "writeAdaPots"
+writeAdaPotsBuf buf pots = queueBuf buf pots insertAdaPotsRowStmt
 
 writeEpochParamConn :: Conn.Connection -> EpochParam -> IO ()
-writeEpochParamConn _ = todoWriteLeaf "writeEpochParam"
+writeEpochParamConn conn ep = runConn conn ep insertEpochParamRowStmt
 
 writeEpochParamBuf :: WriteBuffer -> EpochParam -> IO ()
-writeEpochParamBuf _ = todoWriteLeaf "writeEpochParam"
+writeEpochParamBuf buf ep = queueBuf buf ep insertEpochParamRowStmt
 
 writeEpochStateConn :: Conn.Connection -> EpochState -> IO ()
-writeEpochStateConn _ = todoWriteLeaf "writeEpochState"
+writeEpochStateConn conn es = runConn conn es insertEpochStateRowStmt
 
 writeEpochStateBuf :: WriteBuffer -> EpochState -> IO ()
-writeEpochStateBuf _ = todoWriteLeaf "writeEpochState"
+writeEpochStateBuf buf es = queueBuf buf es insertEpochStateRowStmt
 
 writeCostModelConn :: Conn.Connection -> CostModelId -> CostModel -> IO ()
-writeCostModelConn _ = todoWrite "writeCostModel"
+writeCostModelConn conn cmId cm = runConn conn (cmId, cm) insertCostModelRowStmt
 
 writeCostModelBuf :: WriteBuffer -> CostModelId -> CostModel -> IO ()
-writeCostModelBuf _ = todoWrite "writeCostModel"
+writeCostModelBuf buf cmId cm = queueBuf buf (cmId, cm) insertCostModelRowStmt

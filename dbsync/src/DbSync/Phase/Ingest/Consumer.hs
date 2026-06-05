@@ -71,7 +71,7 @@ import DbSync.Phase.Ingest.Boundary
   , PendingBoundary (..)
   , handleEpochBoundary
   , newConsumerLoopState
-  , waitForApplyResultAt
+  , readBoundaryApplyResult
   )
 import DbSync.Phase.Ingest.PipelineStats (PipelineStats (..))
 import DbSync.StateQuery
@@ -265,7 +265,7 @@ runConsumer = do
         -- on the ledger worker's @apNewEpoch@.
         case prevEpoch of
           Just prev | prev /= blockEpoch ->
-            runBoundaryExtractor watchdog hasLedger extractStRef slot
+            runBoundaryExtractor watchdog hasLedger extractStRef
           _ -> pure ()
 
         liftIO $ modifyIORef' (clsBlockCount cls) (+ 1)
@@ -339,9 +339,10 @@ logObservation tracer = \case
         ) Nothing
   Unchanged -> pure ()
 
--- | Wait for the ledger worker's apply-result at the boundary slot,
--- then run the 'EpochBoundary' extractor against it. No-op when the
--- ledger feature is disabled or no block has yet been extracted.
+-- | Drain the worker's next boundary 'ApplyResult' and run the
+-- governance and epoch-boundary extractors against it. No-op when
+-- the ledger feature is disabled or no block has yet been
+-- extracted.
 --
 -- 'runGovernanceBoundary' is only invoked when the @governance@
 -- extractor is enabled — its writes target tables owned by that
@@ -354,13 +355,12 @@ runBoundaryExtractor
   :: Watchdog
   -> HasLedgerEnv
   -> IORef ExtractState
-  -> SlotNo
   -> IngestM ()
-runBoundaryExtractor watchdog hasLedger extractStRef slot = case hasLedger of
+runBoundaryExtractor watchdog hasLedger extractStRef = case hasLedger of
   LedgerDisabled _   -> pure ()
   LedgerEnabled lenv -> do
-    liftIO $ setConsumerNote watchdog "consumer: waitForApplyResultAt (boundary)"
-    applyResult  <- liftIO $ waitForApplyResultAt lenv slot
+    liftIO $ setConsumerNote watchdog "consumer: readBoundaryApplyResult"
+    applyResult  <- liftIO $ readBoundaryApplyResult lenv
     mLastBlockId <- liftIO $ esLastBlockId <$> readIORef extractStRef
     governanceOn <- asks (prEnabled . pcGovernance . scOptions . getConfig)
     for_ mLastBlockId $ \lastBid -> do

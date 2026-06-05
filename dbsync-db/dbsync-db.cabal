@@ -64,6 +64,7 @@ library
     DbSync.Db.Schema.Migration
     DbSync.Db.Sql
     DbSync.Db.Sql.Refs
+    DbSync.Db.Statement.AdaPots
     DbSync.Db.Statement.Address
     DbSync.Db.Statement.Backfill
     DbSync.Db.Statement.Block
@@ -71,9 +72,12 @@ library
     DbSync.Db.Statement.Common
     DbSync.Db.Statement.CollateralTxOut
     DbSync.Db.Statement.ConsumedBy
+    DbSync.Db.Statement.CostModel
     DbSync.Db.Statement.Delegation
     DbSync.Db.Statement.EpochFinalized
+    DbSync.Db.Statement.EpochParam
     DbSync.Db.Statement.EpochParamPending
+    DbSync.Db.Statement.EpochState
     DbSync.Db.Statement.IdAllocator
     DbSync.Db.Statement.Indexes
     DbSync.Db.Statement.Loader

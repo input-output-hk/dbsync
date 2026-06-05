@@ -14,9 +14,10 @@ module DbSync.Phase.Ingest.Resolver
 
 import Cardano.Prelude
 
-import Data.IORef (IORef)
+import Data.IORef (IORef, readIORef)
 
-import DbSync.Extractor (ExtractState)
+import DbSync.Db.Schema.Ids (BlockId (..))
+import DbSync.Extractor (ExtractState (..))
 import DbSync.Phase.Ingest.DedupStore (DedupStores)
 import qualified DbSync.Phase.Ingest.Resolver.Core as Core
 import qualified DbSync.Phase.Ingest.Resolver.Epoch as Epoch
@@ -60,6 +61,7 @@ mkIngestResolver extractStateRef dedupStores addrBufRef utxoStore mConsumedByBuf
   , assignTxOutId     = Core.assignTxOutIdIngest     extractStateRef
   , resolveSlotLeader = Core.resolveSlotLeaderIngest dedupStores
   , resolvePrevBlock  = Core.resolvePrevBlockIngest  extractStateRef
+  , lookupLastBlockId = fmap (fmap BlockId . esLastBlockId) (readIORef extractStateRef)
 
     -- UTxO
   , recordTxOutAddress           = UTxO.recordTxOutAddressIngest           addrBufRef

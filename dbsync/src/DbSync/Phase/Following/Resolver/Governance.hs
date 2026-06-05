@@ -1,7 +1,14 @@
+{-# LANGUAGE BangPatterns #-}
+
 -- | Follow 'IdResolver' fragments for the @governance@ extractor.
 --
--- Follow-phase plumbing is not landed for any of these IDs; both
--- direct and buffered flavours use the same stubs.
+-- Per-block governance writes are not yet plumbed for Follow; the
+-- dedup resolvers and assigners panic. The cross-block scratchpad
+-- ops are backed by per-session 'IORef's so 'runEpochBoundary' can
+-- read 'readEnactedEpochStateIds' without hitting a stub: with
+-- governance disabled in Follow they stay at their defaults
+-- (@(Nothing, Nothing, Nothing)@ and @Nothing@) and 'epoch_state'
+-- writes NULLs into the three governance FK columns.
 module DbSync.Phase.Following.Resolver.Governance
   ( -- Counter / nextval-style FKs
     assignGovActionProposalIdStub
@@ -15,16 +22,21 @@ module DbSync.Phase.Following.Resolver.Governance
   , resolveCommitteeHashStub
   , resolveVotingAnchorStub
 
-    -- Cross-block scratchpads (no Follow plumbing yet)
-  , lookupGovActionProposalIdStub
-  , recordGovActionProposalIdStub
-  , readEnactedEpochStateIdsStub
-  , writeEnactedEpochStateIdsStub
-  , readGovExpiresAfterStub
-  , writeGovExpiresAfterStub
+    -- Cross-block scratchpads — IORef-backed
+  , GovScratchpad
+  , newGovScratchpad
+  , lookupGovActionProposalIdRef
+  , recordGovActionProposalIdRef
+  , readEnactedEpochStateIdsRef
+  , writeEnactedEpochStateIdsRef
+  , readGovExpiresAfterRef
+  , writeGovExpiresAfterRef
   ) where
 
 import Cardano.Prelude
+
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
+import qualified Data.Map.Strict as Map
 
 import DbSync.Db.Schema.Governance (CommitteeHash, DrepHash, VotingAnchor)
 import DbSync.Db.Schema.Ids
@@ -39,6 +51,10 @@ import DbSync.Db.Schema.Ids
   )
 import DbSync.Db.Types (AnchorType)
 import DbSync.Phase.Following.Resolver.Internal (todoResolve)
+
+-- ---------------------------------------------------------------------------
+-- * Per-block / counter stubs (unchanged — governance Follow not wired)
+-- ---------------------------------------------------------------------------
 
 assignGovActionProposalIdStub :: IO GovActionProposalId
 assignGovActionProposalIdStub = todoResolve "assignGovActionProposalId"
@@ -66,23 +82,50 @@ resolveVotingAnchorStub
   :: ByteString -> AnchorType -> VotingAnchor -> IO (VotingAnchorId, Bool)
 resolveVotingAnchorStub _ _ _ = todoResolve "resolveVotingAnchor"
 
-lookupGovActionProposalIdStub
-  :: ByteString -> Word64 -> IO (Maybe GovActionProposalId)
-lookupGovActionProposalIdStub _ _ = todoResolve "lookupGovActionProposalId"
+-- ---------------------------------------------------------------------------
+-- * Cross-block scratchpads
+-- ---------------------------------------------------------------------------
 
-recordGovActionProposalIdStub
-  :: ByteString -> Word64 -> GovActionProposalId -> IO ()
-recordGovActionProposalIdStub _ _ _ = todoResolve "recordGovActionProposalId"
+-- | Per-session governance scratchpad. Mirrors the Ingest fields on
+-- 'ExtractState' but lives in process-local IORefs because Follow
+-- has no equivalent state record.
+data GovScratchpad = GovScratchpad
+  { gsProposalCache       :: !(IORef (Map (ByteString, Word64) GovActionProposalId))
+  , gsEnactedEpochStateIds :: !(IORef (Maybe Int64, Maybe Int64, Maybe Int64))
+  , gsExpiresAfter        :: !(IORef (Maybe Word64))
+  }
 
-readEnactedEpochStateIdsStub :: IO (Maybe Int64, Maybe Int64, Maybe Int64)
-readEnactedEpochStateIdsStub = todoResolve "readEnactedEpochStateIds"
+newGovScratchpad :: IO GovScratchpad
+newGovScratchpad =
+  GovScratchpad
+    <$> newIORef Map.empty
+    <*> newIORef (Nothing, Nothing, Nothing)
+    <*> newIORef Nothing
 
-writeEnactedEpochStateIdsStub
-  :: (Maybe Int64, Maybe Int64, Maybe Int64) -> IO ()
-writeEnactedEpochStateIdsStub _ = todoResolve "writeEnactedEpochStateIds"
+lookupGovActionProposalIdRef
+  :: GovScratchpad -> ByteString -> Word64 -> IO (Maybe GovActionProposalId)
+lookupGovActionProposalIdRef gs txHash idx = do
+  m <- readIORef (gsProposalCache gs)
+  pure (Map.lookup (txHash, idx) m)
 
-readGovExpiresAfterStub :: IO (Maybe Word64)
-readGovExpiresAfterStub = todoResolve "readGovExpiresAfter"
+recordGovActionProposalIdRef
+  :: GovScratchpad -> ByteString -> Word64 -> GovActionProposalId -> IO ()
+recordGovActionProposalIdRef gs txHash idx gid =
+  atomicModifyIORef' (gsProposalCache gs) $ \m ->
+    (Map.insert (txHash, idx) gid m, ())
 
-writeGovExpiresAfterStub :: Maybe Word64 -> IO ()
-writeGovExpiresAfterStub _ = todoResolve "writeGovExpiresAfter"
+readEnactedEpochStateIdsRef
+  :: GovScratchpad -> IO (Maybe Int64, Maybe Int64, Maybe Int64)
+readEnactedEpochStateIdsRef = readIORef . gsEnactedEpochStateIds
+
+writeEnactedEpochStateIdsRef
+  :: GovScratchpad -> (Maybe Int64, Maybe Int64, Maybe Int64) -> IO ()
+writeEnactedEpochStateIdsRef gs !triple =
+  atomicModifyIORef' (gsEnactedEpochStateIds gs) $ \_ -> (triple, ())
+
+readGovExpiresAfterRef :: GovScratchpad -> IO (Maybe Word64)
+readGovExpiresAfterRef = readIORef . gsExpiresAfter
+
+writeGovExpiresAfterRef :: GovScratchpad -> Maybe Word64 -> IO ()
+writeGovExpiresAfterRef gs !mv =
+  atomicModifyIORef' (gsExpiresAfter gs) $ \_ -> (mv, ())

@@ -67,6 +67,12 @@ data IdResolver m = IdResolver
     -- | Look up the previous block's ID by its hash.
   , resolvePrevBlock  :: !(ByteString -> m (Maybe BlockId))
 
+    -- | The most-recently-assigned block ID, or 'Nothing' before the
+    -- first block of the current session. Used by the boundary
+    -- handler to populate FK columns that reference the boundary
+    -- block's @id@.
+  , lookupLastBlockId :: !(m (Maybe BlockId))
+
     -- ---------------------------------------------------------------
     -- UTxO extractor IDs
     -- ---------------------------------------------------------------

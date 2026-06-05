@@ -47,6 +47,7 @@ import DbSync.Db.Statement.Transaction (beginSql, commitSql, rollbackSql)
 
 import DbSync.App.Env (CoreEnv (..), FollowEnv (..))
 import DbSync.Extractor (ExtractorDef (..))
+import DbSync.Extractor.EpochBoundary (runEpochBoundary)
 import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.ChainSync.Msg (ChainSyncMsg (..))
 import DbSync.Phase.Following.IdAllocator (allocateAllIds)
@@ -55,6 +56,10 @@ import DbSync.Phase.Following.Resolver (mkBufferedFollowResolver)
 import qualified DbSync.Phase.Following.Rollback as Rollback
 import DbSync.Phase.Following.WriteBuffer (drain, newWriteBuffer)
 import DbSync.Phase.Following.Writer (mkBufferedWriter)
+import DbSync.Phase.Ingest.Boundary (readBoundaryApplyResult)
+import DbSync.Resolver (HasResolver (..), IdResolver (..))
+import DbSync.Worker.Ledger.Types (HasLedgerEnv (..))
+import DbSync.Writer (HasWriter)
 import DbSync.Phase.Current
   ( CurrentPhase
   , readCurrentPhase
@@ -209,6 +214,7 @@ processForward progressRef replayRef cardanoBlock = do
     { feWatchdog
     , feStateQueryVar
     , feHasqlConnection
+    , feHasLedgerEnv
     , feReplayBootSlot
     , feReplayStartSlot
     } <- ask
@@ -231,11 +237,16 @@ processForward progressRef replayRef cardanoBlock = do
       liftIO $ void $ atomically $ observeBlockSTM feStateQueryVar cardanoBlock
       sd <- getSlotDetails slot
       let !genBlock = parseBlock sd cardanoBlock
+          !curEpoch = unEpochNo (blkEpochNo genBlock)
           !counts   = countAssignableIds genBlock
           triple    = ( unSlotNo  (blkSlotNo  genBlock)
                       , unBlockNo (blkBlockNo genBlock)
                       , blkHash   genBlock
                       )
+      prevEpoch <- liftIO $ fpLastEpoch <$> readIORef progressRef
+      let boundaryCrossed = case prevEpoch of
+            Just prev -> prev /= curEpoch
+            Nothing   -> False
       liftIO $ do
         preAllocated <- allocateAllIds feHasqlConnection counts
         buf          <- newWriteBuffer
@@ -243,12 +254,28 @@ processForward progressRef replayRef cardanoBlock = do
         let writer      = mkBufferedWriter buf
             bufferedEnv = env { feResolver = resolver, feWriter = writer }
         runAppM bufferedEnv (processBlock genBlock)
+        when boundaryCrossed $
+          runAppM bufferedEnv (runFollowBoundary feHasLedgerEnv)
         writes <- drain buf
         let flushAndAdvance =
               writes *> void (Pipeline.statement triple writeSyncStateSlotStmt)
         runFollowBlockTx feHasqlConnection feWatchdog flushAndAdvance
       maybeFlipToTip (blkSlotNo genBlock)
       maybeLogProgress progressRef genBlock
+
+-- | Drain the ledger worker's next boundary 'ApplyResult' and run the
+-- 'EpochBoundary' extractor against it. No-op when the ledger feature
+-- is disabled or no block has yet been extracted.
+runFollowBoundary
+  :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
+  => HasLedgerEnv -> m ()
+runFollowBoundary = \case
+  LedgerDisabled _   -> pure ()
+  LedgerEnabled lenv -> do
+    applyResult <- liftIO $ readBoundaryApplyResult lenv
+    resolver    <- asks getResolver
+    mBlockId    <- liftIO $ lookupLastBlockId resolver
+    for_ mBlockId $ runEpochBoundary applyResult
 
 -- | Step the replay-progress state machine for this block and emit
 -- any indicated trace. A no-op outside the replay window (the

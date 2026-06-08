@@ -32,6 +32,8 @@ validateConfig cfg =
       , checkCurrentStateRequiresLedger cfg
       , checkMultiAssetRequiresUtxo cfg
       , checkPoolRequiresStakeDelegation cfg
+      , checkOffChainPoolsRequiresPool cfg
+      , checkOffChainVotesRequiresGovernance cfg
       ]
 
 -- ---------------------------------------------------------------------------
@@ -123,6 +125,35 @@ checkPoolRequiresStakeDelegation cfg
           "pool extractor requires stake_delegation extractor to be enabled. \
           \pool_update and pool_owner reference stake_address rows from the \
           \stake_delegation extractor, and both share the pool_hash dedup table."
+      ]
+  | otherwise = []
+  where
+    extractors = scOptions cfg
+
+-- | off_chain_pools rows reference pool_hash and pool_metadata_ref
+-- rows written by the pool extractor.
+checkOffChainPoolsRequiresPool :: SyncConfig -> [ConfigError]
+checkOffChainPoolsRequiresPool cfg
+  | prEnabled (pcOffChainPools extractors) && not (prEnabled (pcPool extractors)) =
+      [ ConfigValidationError
+          "off_chain_pools extractor requires pool extractor to be enabled. \
+          \off_chain_pool_data and off_chain_pool_fetch_error reference \
+          \pool_hash and pool_metadata_ref rows written by the pool extractor."
+      ]
+  | otherwise = []
+  where
+    extractors = scOptions cfg
+
+-- | off_chain_votes anchor metadata only has meaning when the
+-- governance extractor is enabled — the voting_anchor rows it fetches
+-- are produced by the governance pass.
+checkOffChainVotesRequiresGovernance :: SyncConfig -> [ConfigError]
+checkOffChainVotesRequiresGovernance cfg
+  | prEnabled (pcOffChainVotes extractors) && not (prEnabled (pcGovernance extractors)) =
+      [ ConfigValidationError
+          "off_chain_votes extractor requires governance extractor to be enabled. \
+          \off_chain_vote_data fetches metadata for voting_anchor rows written \
+          \by the governance extractor."
       ]
   | otherwise = []
   where

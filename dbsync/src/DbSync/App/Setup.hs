@@ -17,6 +17,9 @@ module DbSync.App.Setup
 
     -- * Startup
   , runStartup
+
+    -- * Worker setup
+  , setupOffChainPoolWorker
   ) where
 
 import Cardano.Prelude
@@ -27,6 +30,7 @@ import qualified Data.Graph as Graph
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as Text
 import qualified Data.Tree as Tree
+import qualified Hasql.Connection.Settings as HasqlSettings
 
 import DbSync.App.Config.Types
   ( LoggingConfig (..)
@@ -47,6 +51,7 @@ import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Extractor.UTxO (utxoExtractor)
 import DbSync.Extractor.Metadata (metadataExtractor)
 import DbSync.Extractor.MultiAsset (multiAssetExtractor)
+import DbSync.Extractor.OffChainPools (offChainPoolsExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Extractor.Pool (poolExtractor)
 import DbSync.Extractor.PoolStats (poolStatsExtractor)
@@ -59,6 +64,12 @@ import DbSync.Extractor.ScriptsDatums (scriptsDatumsExtractor)
 import DbSync.Extractor.StakeDelegationLedger (stakeDelegationLedgerExtractor)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..), severityFromText)
 import DbSync.AppM (CoreM)
+import DbSync.Worker.OffChain.Pool
+  ( OffChainPoolWorker
+  , defaultOffChainPoolConfig
+  , mkOffChainPoolWorker
+  , stubPoolFetcher
+  )
 
 -- ---------------------------------------------------------------------------
 -- * Environment construction
@@ -125,6 +136,7 @@ buildExtractors pc = do
     resolveExtractor "epoch"                   = epochExtractor
     resolveExtractor "scripts_datums"          = scriptsDatumsExtractor
     resolveExtractor "governance"              = governanceExtractor
+    resolveExtractor "off_chain_pools"         = offChainPoolsExtractor
     resolveExtractor name                      = stubExtractor name
 
     -- | (extractor name, enabled?). 'utxo' reads from the structured
@@ -145,6 +157,8 @@ buildExtractors pc = do
       , ("pool_stats",              prEnabled (pcPoolStats pc))
       , ("epoch",                   prEnabled (pcEpoch pc))
       , ("current_state",           prEnabled (pcCurrentState pc))
+      , ("off_chain_pools",         prEnabled (pcOffChainPools pc))
+      , ("off_chain_votes",         prEnabled (pcOffChainVotes pc))
       ]
 
 -- ---------------------------------------------------------------------------
@@ -277,3 +291,24 @@ runStartup = do
 -- | Format a list of extractor names for logging.
 showExtractorList :: [Text] -> Text
 showExtractorList = mconcat . intersperse ", "
+
+-- ---------------------------------------------------------------------------
+-- * Worker setup
+-- ---------------------------------------------------------------------------
+
+-- | Spawn the off-chain pool worker iff @off_chain_pools@ is enabled.
+-- Slice 6 mirrors this for @off_chain_votes@.
+setupOffChainPoolWorker
+  :: AppTracer
+  -> HasqlSettings.Settings
+  -> SyncOptions
+  -> IO (Maybe OffChainPoolWorker)
+setupOffChainPoolWorker tracer hasqlSettings opts
+  | prEnabled (pcOffChainPools opts) =
+      Just <$>
+        mkOffChainPoolWorker
+          tracer
+          hasqlSettings
+          defaultOffChainPoolConfig
+          stubPoolFetcher
+  | otherwise = pure Nothing

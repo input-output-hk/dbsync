@@ -378,7 +378,7 @@ delistedPoolTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = [pure "hash_raw"]
   , tdGeneratedColumns = []
-  , tdIdentityColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys = []
   }
 
@@ -396,7 +396,7 @@ reservedPoolTickerTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = [pure "name"]
   , tdGeneratedColumns = []
-  , tdIdentityColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys = []
   }
 
@@ -477,18 +477,14 @@ encodePoolStatCopy ps =
     , bWord64 . unDbWord64 <$> poolStatVotingPower ps
     ]
 
-encodeDelistedPoolCopy :: DelistedPoolId -> DelistedPool -> ByteString
-encodeDelistedPoolCopy (DelistedPoolId did) dp =
-  buildCopyRow
-    [ Just $ bInt64 did
-    , Just $ bHex (delistedPoolHashRaw dp)
-    ]
+encodeDelistedPoolCopy :: DelistedPool -> ByteString
+encodeDelistedPoolCopy dp =
+  buildCopyRow [ Just $ bHex (delistedPoolHashRaw dp) ]
 
-encodeReservedPoolTickerCopy :: ReservedPoolTickerId -> ReservedPoolTicker -> ByteString
-encodeReservedPoolTickerCopy (ReservedPoolTickerId rid) rpt =
+encodeReservedPoolTickerCopy :: ReservedPoolTicker -> ByteString
+encodeReservedPoolTickerCopy rpt =
   buildCopyRow
-    [ Just $ bInt64 rid
-    , Just $ bText (reservedPoolTickerName rpt)
+    [ Just $ bText (reservedPoolTickerName rpt)
     , Just $ bHex (reservedPoolTickerPoolHash rpt)
     ]
 

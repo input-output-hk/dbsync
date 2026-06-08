@@ -76,6 +76,7 @@ import DbSync.Worker.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..))
 import DbSync.Metrics (HasMetrics (..), Metrics)
 import DbSync.Phase.Current (HasCurrentPhase (..), CurrentPhase, readCurrentPhase)
 import DbSync.Resolver (HasResolver (..), IdResolver)
+import DbSync.Worker.OffChain.Pool (OffChainPoolWorker)
 import DbSync.Worker.TxOut.AddressBuffer (AddressBufferRef)
 import DbSync.Worker.TxOut.ConsumedByBuffer (ConsumedByBufferRef)
 import DbSync.Worker.TxOut.Worker (TxOutWorker)
@@ -196,6 +197,12 @@ data IngestEnv = IngestEnv
     -- @address@ rows, @tx_out.address_id@, @collateral_tx_out.address_id@,
     -- and (when the flag is on) @tx_out.consumed_by_tx_id@ for the
     -- epoch one boundary behind the main pipeline.
+  , ieOffChainPoolWorker :: !(Maybe OffChainPoolWorker)
+    -- ^ Off-chain stake-pool metadata fetcher. 'Nothing' when the
+    -- @off_chain_pools@ option is disabled. Polls PG on its own
+    -- connection for @pool_metadata_ref@ rows lacking a result and
+    -- writes either @off_chain_pool_data@ (success) or
+    -- @off_chain_pool_fetch_error@ (failure).
   , ieLsmSession :: !LsmSession
     -- ^ Shared LSM session backing the ingest-phase scratch
     -- tables. Owned by 'IngestEnv'; the App-level shutdown calls
@@ -338,6 +345,9 @@ data FollowEnv = FollowEnv
     -- ^ Lower edge of the Follow replay window — the chosen
     -- snapshot\'s slot. Drives the percentage segment of the replay
     -- progress log. 'Just' iff 'feReplayBootSlot' is.
+  , feOffChainPoolWorker  :: !(Maybe OffChainPoolWorker)
+    -- ^ Carried over from 'IngestEnv' so the worker keeps polling
+    -- across the phase boundary. 'Nothing' when disabled.
   }
 
 -- ---------------------------------------------------------------------------
@@ -375,6 +385,7 @@ mkFollowEnvFromIngest ie conn resolver writer =
     , feRollbackBoundary    = ieRollbackBoundary ie
     , feReplayBootSlot      = Nothing
     , feReplayStartSlot     = Nothing
+    , feOffChainPoolWorker  = ieOffChainPoolWorker ie
     }
 
 -- ---------------------------------------------------------------------------

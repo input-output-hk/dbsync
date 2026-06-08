@@ -278,6 +278,13 @@ mkTestWriter ref = Writer
       atomicModifyIORef' ref $ \s ->
         (s { twPoolStats = twPoolStats s ++ [ps] }, ())
 
+    -- OffChainPools — written by the off-chain pool worker, not by
+    -- the extractor under test. No-op in unit tests.
+  , writeOffChainPoolData       = \_ -> pure ()
+  , writeOffChainPoolFetchError = \_ -> pure ()
+  , writeDelistedPool           = \_ -> pure ()
+  , writeReservedPoolTicker     = \_ -> pure ()
+
     -- CBOR (no-op)
   , writeTxCbor = \_ -> pure ()
 

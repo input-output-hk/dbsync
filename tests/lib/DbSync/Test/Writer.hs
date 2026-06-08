@@ -64,7 +64,14 @@ import DbSync.Db.Schema.MultiAsset (MaTxMint)
 import DbSync.Db.Schema.Pool (PoolHash, PoolStat, PoolUpdate)
 import DbSync.Db.Schema.ScriptsDatums
   ( Datum, ExtraKeyWitness, Redeemer, RedeemerData, Script )
-import DbSync.Db.Schema.StakeDelegation (StakeAddress, StakeRegistration)
+import DbSync.Db.Schema.StakeDelegation
+  ( EpochStake
+  , EpochStakeProgress
+  , PotReward
+  , Reward
+  , StakeAddress
+  , StakeRegistration
+  )
 import DbSync.Db.Schema.UTxO (CollateralTxIn, CollateralTxOut, ReferenceTxIn, TxIn, TxOut)
 import DbSync.Writer (Writer (..))
 
@@ -87,6 +94,10 @@ data TestWriterState = TestWriterState
   , twReferenceTxIns    :: ![ReferenceTxIn]
   , twStakeAddresses    :: ![(StakeAddressId, StakeAddress)]
   , twStakeRegistrations :: ![StakeRegistration]
+  , twRewards           :: ![Reward]
+  , twPotRewards        :: ![PotReward]
+  , twEpochStakes       :: ![EpochStake]
+  , twEpochStakeProgresses :: ![EpochStakeProgress]
   , twPoolHashes        :: ![(PoolHashId, PoolHash)]
   , twPoolUpdates       :: ![(PoolUpdateId, PoolUpdate)]
   , twPoolStats         :: ![PoolStat]
@@ -139,6 +150,10 @@ emptyTestWriterState = TestWriterState
   , twReferenceTxIns    = []
   , twStakeAddresses    = []
   , twStakeRegistrations = []
+  , twRewards           = []
+  , twPotRewards        = []
+  , twEpochStakes       = []
+  , twEpochStakeProgresses = []
   , twPoolHashes        = []
   , twPoolUpdates       = []
   , twPoolStats         = []
@@ -235,6 +250,18 @@ mkTestWriter ref = Writer
   , writeStakeDeregistration = \_ -> pure ()
   , writeDelegation          = \_ -> pure ()
   , writeWithdrawal          = \_ -> pure ()
+  , writeReward = \r ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twRewards = twRewards s ++ [r] }, ())
+  , writePotReward = \pr ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twPotRewards = twPotRewards s ++ [pr] }, ())
+  , writeEpochStake = \es ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twEpochStakes = twEpochStakes s ++ [es] }, ())
+  , writeEpochStakeProgress = \esp ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twEpochStakeProgresses = twEpochStakeProgresses s ++ [esp] }, ())
 
     -- Pool
   , writePoolHash = \phid ph ->

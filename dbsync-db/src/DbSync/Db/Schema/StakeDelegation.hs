@@ -350,6 +350,9 @@ withdrawalTableDef = TableDef
 -- reward @type@: refund rewards are earned in the same epoch they
 -- become spendable; everything else is earned two epochs earlier
 -- (with a @0@ floor for the genesis-era window).
+--
+-- IDENTITY leaf: nothing FKs into @reward@, so PostgreSQL allocates
+-- the id from the backing sequence at INSERT time.
 rewardTableDef :: TableDef
 rewardTableDef = TableDef
   { tdName    = "reward"
@@ -374,12 +377,14 @@ rewardTableDef = TableDef
           \then spendable_epoch-2 else 0 end) end)"
         )
       ]
-  , tdIdentityColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys = []
   }
 
 -- | @pot_reward.earned_epoch@ is one epoch behind
 -- @spendable_epoch@ (with a @0@ floor for epoch 0).
+--
+-- IDENTITY leaf: same reasoning as 'rewardTableDef'.
 potRewardTableDef :: TableDef
 potRewardTableDef = TableDef
   { tdName    = "pot_reward"
@@ -402,13 +407,15 @@ potRewardTableDef = TableDef
           \then spendable_epoch-1 else 0 end)"
         )
       ]
-  , tdIdentityColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys = []
   }
 
 -- | The @epoch_stake@ table. The triple (addr_id, pool_id,
 -- epoch_no) is unique; the constraint is added during
 -- @PreparingForVolatileTail@, not at @CREATE TABLE@ time.
+--
+-- IDENTITY leaf: nothing FKs into @epoch_stake@.
 epochStakeTableDef :: TableDef
 epochStakeTableDef = TableDef
   { tdName    = "epoch_stake"
@@ -425,11 +432,13 @@ epochStakeTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = ["addr_id" :| ["pool_id", "epoch_no"]]
   , tdGeneratedColumns = []
-  , tdIdentityColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys = []
   }
 
 -- | The @epoch_stake_progress@ table. Unique on @epoch_no@.
+--
+-- IDENTITY leaf: nothing FKs into @epoch_stake_progress@.
 epochStakeProgressTableDef :: TableDef
 epochStakeProgressTableDef = TableDef
   { tdName    = "epoch_stake_progress"
@@ -444,7 +453,7 @@ epochStakeProgressTableDef = TableDef
   , tdColumnDefaults = []
   , tdUniqueConstraints = [pure "epoch_no"]
   , tdGeneratedColumns = []
-  , tdIdentityColumns = []
+  , tdIdentityColumns = ["id"]
   , tdForeignKeys = []
   }
 
@@ -502,49 +511,45 @@ encodeWithdrawalCopy w =
     , bInt64 . getRedeemerId <$> withdrawalRedeemerId w
     ]
 
--- | COPY row for @reward@. @earned_epoch@ is omitted because
--- PostgreSQL computes it via the @GENERATED ALWAYS AS (...) STORED@
--- expression on the column; the COPY column list (built by
--- 'DbSync.Db.Loader.Connection.buildColumnList') excludes it.
-encodeRewardCopy :: RewardId -> Reward -> ByteString
-encodeRewardCopy (RewardId rid) r =
+-- | COPY row for @reward@. The id is allocated by PostgreSQL from
+-- the IDENTITY sequence, and @earned_epoch@ is computed via the
+-- @GENERATED ALWAYS AS (...) STORED@ expression; the COPY column
+-- list (built by 'DbSync.Db.Loader.Connection.buildColumnList')
+-- excludes both.
+encodeRewardCopy :: Reward -> ByteString
+encodeRewardCopy r =
   buildCopyRow
-    [ Just $ bInt64 rid
-    , Just $ bInt64 (getStakeAddressId $ rewardAddrId r)
+    [ Just $ bInt64 (getStakeAddressId $ rewardAddrId r)
     , Just $ bRewardSource (rewardType r)
     , Just $ bWord64 (unDbLovelace $ rewardAmount r)
     , Just $ bWord64 (rewardSpendableEpoch r)
     , Just $ bInt64 (getPoolHashId $ rewardPoolId r)
     ]
 
--- | COPY row for @pot_reward@. Same generated-column treatment as
--- 'encodeRewardCopy'.
-encodePotRewardCopy :: PotRewardId -> PotReward -> ByteString
-encodePotRewardCopy (PotRewardId rid) pr =
+-- | COPY row for @pot_reward@. Same generated-column + identity
+-- treatment as 'encodeRewardCopy'.
+encodePotRewardCopy :: PotReward -> ByteString
+encodePotRewardCopy pr =
   buildCopyRow
-    [ Just $ bInt64 rid
-    , Just $ bInt64 (getStakeAddressId $ potRewardAddrId pr)
+    [ Just $ bInt64 (getStakeAddressId $ potRewardAddrId pr)
     , Just $ bRewardSource (potRewardType pr)
     , Just $ bWord64 (unDbLovelace $ potRewardAmount pr)
     , Just $ bWord64 (potRewardSpendableEpoch pr)
     ]
 
-encodeEpochStakeCopy :: EpochStakeId -> EpochStake -> ByteString
-encodeEpochStakeCopy (EpochStakeId eid) es =
+encodeEpochStakeCopy :: EpochStake -> ByteString
+encodeEpochStakeCopy es =
   buildCopyRow
-    [ Just $ bInt64 eid
-    , Just $ bInt64 (getStakeAddressId $ epochStakeAddrId es)
+    [ Just $ bInt64 (getStakeAddressId $ epochStakeAddrId es)
     , Just $ bInt64 (getPoolHashId $ epochStakePoolId es)
     , Just $ bWord64 (unDbLovelace $ epochStakeAmount es)
     , Just $ bWord64 (epochStakeEpochNo es)
     ]
 
-encodeEpochStakeProgressCopy
-  :: EpochStakeProgressId -> EpochStakeProgress -> ByteString
-encodeEpochStakeProgressCopy (EpochStakeProgressId eid) esp =
+encodeEpochStakeProgressCopy :: EpochStakeProgress -> ByteString
+encodeEpochStakeProgressCopy esp =
   buildCopyRow
-    [ Just $ bInt64 eid
-    , Just $ bWord64 (epochStakeProgressEpochNo esp)
+    [ Just $ bWord64 (epochStakeProgressEpochNo esp)
     , Just $ bBool (epochStakeProgressCompleted esp)
     ]
 

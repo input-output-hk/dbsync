@@ -272,38 +272,40 @@ instance FromJSON LogFormat where
 -- 'pcUtxo' is structured because the UTxO extractor has multiple
 -- knobs that route different Prep paths; the rest are flat bools.
 data SyncOptions = SyncOptions
-  { pcUtxo            :: !UtxoOption
-  , pcMultiAsset      :: !SyncOption
-  , pcMetadata        :: !SyncOption
-  , pcStakeDelegation :: !SyncOption
-  , pcPool            :: !SyncOption
-  , pcScriptsDatums   :: !SyncOption
-  , pcGovernance      :: !SyncOption
-  , pcCbor            :: !SyncOption
-  , pcEpochSyncStats  :: !SyncOption
-  , pcEpochBoundary   :: !SyncOption
-  , pcPoolStats       :: !SyncOption
-  , pcEpoch           :: !SyncOption
-  , pcCurrentState    :: !SyncOption
+  { pcUtxo                  :: !UtxoOption
+  , pcMultiAsset            :: !SyncOption
+  , pcMetadata              :: !SyncOption
+  , pcStakeDelegation       :: !SyncOption
+  , pcStakeDelegationLedger :: !SyncOption
+  , pcPool                  :: !SyncOption
+  , pcScriptsDatums         :: !SyncOption
+  , pcGovernance            :: !SyncOption
+  , pcCbor                  :: !SyncOption
+  , pcEpochSyncStats        :: !SyncOption
+  , pcEpochBoundary         :: !SyncOption
+  , pcPoolStats             :: !SyncOption
+  , pcEpoch                 :: !SyncOption
+  , pcCurrentState          :: !SyncOption
   }
   deriving stock (Eq, Show)
 
 instance FromJSON SyncOptions where
   parseJSON = Aeson.withObject "SyncOptions" $ \o ->
     SyncOptions
-      <$> o .:? "utxo"             .!= defaultUtxoOption
-      <*> o .:? "multi_asset"      .!= disabled
-      <*> o .:? "metadata"         .!= disabled
-      <*> o .:? "stake_delegation" .!= disabled
-      <*> o .:? "pool"             .!= disabled
-      <*> o .:? "scripts_datums"   .!= disabled
-      <*> o .:? "governance"       .!= disabled
-      <*> o .:? "cbor"             .!= disabled
-      <*> o .:? "epoch_sync_stats" .!= disabled
-      <*> o .:? "epoch_boundary"   .!= disabled
-      <*> o .:? "pool_stats"       .!= disabled
-      <*> o .:? "epoch"            .!= epochDefault
-      <*> o .:? "current_state"    .!= disabled
+      <$> o .:? "utxo"                    .!= defaultUtxoOption
+      <*> o .:? "multi_asset"             .!= disabled
+      <*> o .:? "metadata"                .!= disabled
+      <*> o .:? "stake_delegation"        .!= disabled
+      <*> o .:? "stake_delegation_ledger" .!= disabled
+      <*> o .:? "pool"                    .!= disabled
+      <*> o .:? "scripts_datums"          .!= disabled
+      <*> o .:? "governance"              .!= disabled
+      <*> o .:? "cbor"                    .!= disabled
+      <*> o .:? "epoch_sync_stats"        .!= disabled
+      <*> o .:? "epoch_boundary"          .!= disabled
+      <*> o .:? "pool_stats"              .!= disabled
+      <*> o .:? "epoch"                   .!= epochDefault
+      <*> o .:? "current_state"           .!= disabled
     where
       disabled     = SyncOption False
       epochDefault = SyncOption True
@@ -315,19 +317,20 @@ instance FromJSON SyncOptions where
 -- added by @buildExtractors@ and is not represented here.
 defaultSyncOptions :: SyncOptions
 defaultSyncOptions = SyncOptions
-  { pcUtxo            = defaultUtxoOption
-  , pcMultiAsset      = SyncOption False
-  , pcMetadata        = SyncOption False
-  , pcStakeDelegation = SyncOption False
-  , pcPool            = SyncOption False
-  , pcScriptsDatums   = SyncOption False
-  , pcGovernance      = SyncOption False
-  , pcCbor            = SyncOption False
-  , pcEpochSyncStats  = SyncOption False
-  , pcEpochBoundary   = SyncOption False
-  , pcPoolStats       = SyncOption False
-  , pcEpoch           = SyncOption True
-  , pcCurrentState    = SyncOption False
+  { pcUtxo                  = defaultUtxoOption
+  , pcMultiAsset            = SyncOption False
+  , pcMetadata              = SyncOption False
+  , pcStakeDelegation       = SyncOption False
+  , pcStakeDelegationLedger = SyncOption False
+  , pcPool                  = SyncOption False
+  , pcScriptsDatums         = SyncOption False
+  , pcGovernance            = SyncOption False
+  , pcCbor                  = SyncOption False
+  , pcEpochSyncStats        = SyncOption False
+  , pcEpochBoundary         = SyncOption False
+  , pcPoolStats             = SyncOption False
+  , pcEpoch                 = SyncOption True
+  , pcCurrentState          = SyncOption False
   }
 
 -- | Configuration for a single option.

@@ -52,11 +52,12 @@ import DbSync.App.Config.Types
   , SyncOption (..)
   , SyncOptions (..)
   )
-import DbSync.App.Env (CoreEnv (..), FollowEnv (..), HasConfig (..))
-import DbSync.Extractor (ExtractorDef (..))
+import DbSync.App.Env (CoreEnv (..), FollowEnv (..), HasConfig (..), HasNetwork)
+import DbSync.Extractor (ExtractorDef (..), takeBlockLedgerData)
 import DbSync.Extractor.EpochBoundary (runEpochBoundary)
 import DbSync.Extractor.Governance (runGovernanceBoundary)
 import DbSync.Extractor.PoolStats (runPoolStatsBoundary)
+import DbSync.Extractor.StakeDelegationLedger (runStakeDelegationLedgerBoundary)
 import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.ChainSync.Msg (ChainSyncMsg (..))
 import DbSync.Phase.Following.IdAllocator (allocateAllIds)
@@ -252,6 +253,9 @@ processForward progressRef replayRef cardanoBlock = do
       -- unchanged (it gates on the queue + latest received point,
       -- not on PG writes).
       liftIO $ setConsumerNote feWatchdog "follow: replay-skip"
+      -- The worker still enqueues a per-block ApplyResult for the
+      -- replayed block; drain and discard so the queue stays empty.
+      liftIO $ void $ takeBlockLedgerData feHasLedgerEnv
       maybeFlipToTip slot
     _ -> do
       liftIO $ void $ atomically $ observeBlockSTM feStateQueryVar cardanoBlock
@@ -304,6 +308,7 @@ runFollowBoundary
      , HasWriter env
      , HasConfig env
      , HasControlConnection env
+     , HasNetwork env
      , MonadReader env m
      , MonadIO m
      )
@@ -316,10 +321,12 @@ runFollowBoundary = \case
     mBlockId     <- liftIO $ lookupLastBlockId resolver
     governanceOn <- asks (prEnabled . pcGovernance . scOptions . getConfig)
     poolStatsOn  <- asks (prEnabled . pcPoolStats  . scOptions . getConfig)
+    sdlOn        <- asks (prEnabled . pcStakeDelegationLedger . scOptions . getConfig)
     for_ mBlockId $ \blockId -> do
       when governanceOn $ runGovernanceBoundary applyResult blockId
       runEpochBoundary applyResult blockId
       when poolStatsOn  $ runPoolStatsBoundary  applyResult blockId
+      when sdlOn        $ runStakeDelegationLedgerBoundary applyResult blockId
 
 -- | Step the replay-progress state machine for this block and emit
 -- any indicated trace. A no-op outside the replay window (the

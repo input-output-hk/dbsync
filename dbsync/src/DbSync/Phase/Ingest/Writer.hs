@@ -72,6 +72,12 @@ import DbSync.Phase.Ingest.Writer.StakeDelegation
   , writeTreasuryCopy
   , writeWithdrawalCopy
   )
+import DbSync.Phase.Ingest.Writer.StakeDelegationLedger
+  ( writeEpochStakeCopy
+  , writeEpochStakeProgressCopy
+  , writePotRewardCopy
+  , writeRewardCopy
+  )
 import DbSync.Phase.Ingest.Writer.UTxO
   ( writeAddressCopy
   , writeCollateralTxInCopy
@@ -117,6 +123,12 @@ mkWriter ls = Writer
   , writePotTransfer         = writePotTransferCopy ls
   , writeTreasury            = writeTreasuryCopy ls
   , writeReserve             = writeReserveCopy ls
+
+    -- StakeDelegation (ledger-derived)
+  , writeReward             = writeRewardCopy ls
+  , writePotReward          = writePotRewardCopy ls
+  , writeEpochStake         = writeEpochStakeCopy ls
+  , writeEpochStakeProgress = writeEpochStakeProgressCopy ls
 
     -- Pool
   , writePoolHash        = writePoolHashCopy ls

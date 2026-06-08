@@ -100,6 +100,7 @@ library
     DbSync.Extractor.ScriptsDatums
     DbSync.Extractor.SharedDedup
     DbSync.Extractor.StakeDelegation
+    DbSync.Extractor.StakeDelegationLedger
     DbSync.Extractor.UTxO
 
     -- Cross-phase resolver / writer interfaces
@@ -151,6 +152,7 @@ library
     DbSync.Phase.Ingest.Writer.PoolStats
     DbSync.Phase.Ingest.Writer.ScriptsDatums
     DbSync.Phase.Ingest.Writer.StakeDelegation
+    DbSync.Phase.Ingest.Writer.StakeDelegationLedger
     DbSync.Phase.Ingest.Writer.UTxO
 
     -- Phase: Preparing
@@ -193,6 +195,7 @@ library
     DbSync.Phase.Following.Writer.PoolStats
     DbSync.Phase.Following.Writer.ScriptsDatums
     DbSync.Phase.Following.Writer.StakeDelegation
+    DbSync.Phase.Following.Writer.StakeDelegationLedger
     DbSync.Phase.Following.Writer.UTxO
 
     -- Side-channel workers

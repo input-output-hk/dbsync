@@ -8,11 +8,8 @@ triple, not the era-specific @'Cardano.Ledger.Reward'@ that comes out
 of the ledger. Extractors and the event pipeline consume these
 unified values without caring which era produced them.
 
-@'RewardSource'@ also lives here rather than in the DB package: the
-ledger code only uses it for building
-'DbSync.Worker.Ledger.Event.LedgerEvent' values, and the database encoding
-(added when the @reward@ projection is wired up) can depend on this
-module just as easily as the other way round.
+@'RewardSource'@ is re-exported from 'DbSync.Db.Types' so the worker
+and the schema agree on the single canonical enum.
 -}
 module DbSync.Worker.Ledger.Rewards
   ( -- * Reward source tag
@@ -36,25 +33,8 @@ import qualified Cardano.Ledger.Rewards as Ledger
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 
+import DbSync.Db.Types (RewardSource (..))
 import DbSync.Worker.Ledger.Keys (PoolKeyHash, StakeCred)
-
--- ---------------------------------------------------------------------------
--- * Reward source tag
--- ---------------------------------------------------------------------------
-
--- | The origin of a reward entry, carried by every 'Reward' and
--- 'PotReward' value and ultimately written to the @reward@ table.
---
--- The DB enum encoding uses the @leader@ \/ @member@ \/ ... labels
--- derived from each constructor.
-data RewardSource
-  = RwdLeader
-  | RwdMember
-  | RwdReserves
-  | RwdTreasury
-  | RwdDepositRefund
-  | RwdProposalRefund
-  deriving stock (Bounded, Enum, Eq, Ord, Show)
 
 -- ---------------------------------------------------------------------------
 -- * Reward values

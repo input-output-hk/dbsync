@@ -51,19 +51,20 @@ loadTestConfigs = do
 -- | Build SyncOptions with selected extractors enabled.
 optionsWith :: [Text] -> SyncOptions
 optionsWith enabled = SyncOptions
-  { pcUtxo            = defaultUtxoOption { uoEnabled = "utxo" `elem` enabled }
-  , pcMultiAsset      = mk "multi_asset"
-  , pcMetadata        = mk "metadata"
-  , pcStakeDelegation = mk "stake_delegation"
-  , pcPool            = mk "pool"
-  , pcScriptsDatums   = mk "scripts_datums"
-  , pcGovernance      = mk "governance"
-  , pcCbor            = mk "cbor"
-  , pcEpochSyncStats  = mk "epoch_sync_stats"
-  , pcEpochBoundary   = mk "epoch_boundary"
-  , pcPoolStats       = mk "pool_stats"
-  , pcEpoch           = mk "epoch"
-  , pcCurrentState    = mk "current_state"
+  { pcUtxo                  = defaultUtxoOption { uoEnabled = "utxo" `elem` enabled }
+  , pcMultiAsset            = mk "multi_asset"
+  , pcMetadata              = mk "metadata"
+  , pcStakeDelegation       = mk "stake_delegation"
+  , pcStakeDelegationLedger = mk "stake_delegation_ledger"
+  , pcPool                  = mk "pool"
+  , pcScriptsDatums         = mk "scripts_datums"
+  , pcGovernance            = mk "governance"
+  , pcCbor                  = mk "cbor"
+  , pcEpochSyncStats        = mk "epoch_sync_stats"
+  , pcEpochBoundary         = mk "epoch_boundary"
+  , pcPoolStats             = mk "pool_stats"
+  , pcEpoch                 = mk "epoch"
+  , pcCurrentState          = mk "current_state"
   }
   where
     mk name = SyncOption (name `elem` enabled)
@@ -97,13 +98,14 @@ spec = describe "DbSync.App" $ do
       logRef <- newIORef []
       let tracer = mkTestTracer logRef
       env <- buildCoreEnv tracer syncCfg nodeCfg Mainnet
-      -- full-config.json enables 11 explicitly (core, utxo, multi_asset,
-      -- metadata, stake_delegation, pool, scripts_datums, governance,
-      -- epoch_sync_stats, epoch_boundary, pool_stats). 'epoch' defaults to
-      -- true so the resolved list has 12 entries; cbor and current_state
+      -- full-config.json enables 11 optional extractors (utxo, multi_asset,
+      -- metadata, stake_delegation, stake_delegation_ledger, pool,
+      -- scripts_datums, governance, epoch_sync_stats, epoch_boundary,
+      -- pool_stats). 'core' is added unconditionally and 'epoch' defaults to
+      -- true, so the resolved list has 13 entries; cbor and current_state
       -- stay off.
       let projCount = length (ceExtractors env)
-      projCount `shouldBe` 12
+      projCount `shouldBe` 13
 
     it "uses real coreExtractor (not a stub) for 'core'" $ do
       (syncCfg, nodeCfg) <- loadTestConfigs

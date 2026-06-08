@@ -56,6 +56,7 @@ import DbSync.Extractor.EpochBoundary (epochBoundaryExtractor)
 import DbSync.Extractor.EpochSyncStats (epochSyncStatsExtractor)
 import DbSync.Extractor.Governance (governanceExtractor)
 import DbSync.Extractor.ScriptsDatums (scriptsDatumsExtractor)
+import DbSync.Extractor.StakeDelegationLedger (stakeDelegationLedgerExtractor)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..), severityFromText)
 import DbSync.AppM (CoreM)
 
@@ -111,37 +112,39 @@ buildExtractors pc = do
     -- | Resolve a named extractor to its real implementation (if available)
     -- or a stub (if not yet implemented).
     resolveExtractor :: Text -> ExtractorDef
-    resolveExtractor "utxo"             = utxoExtractor
-    resolveExtractor "metadata"         = metadataExtractor
-    resolveExtractor "multi_asset"      = multiAssetExtractor
-    resolveExtractor "stake_delegation" = stakeDelegationExtractor
-    resolveExtractor "pool"             = poolExtractor
-    resolveExtractor "cbor"             = cborExtractor
-    resolveExtractor "epoch_sync_stats" = epochSyncStatsExtractor
-    resolveExtractor "epoch_boundary"   = epochBoundaryExtractor
-    resolveExtractor "pool_stats"       = poolStatsExtractor
-    resolveExtractor "epoch"            = epochExtractor
-    resolveExtractor "scripts_datums"   = scriptsDatumsExtractor
-    resolveExtractor "governance"       = governanceExtractor
-    resolveExtractor name               = stubExtractor name
+    resolveExtractor "utxo"                    = utxoExtractor
+    resolveExtractor "metadata"                = metadataExtractor
+    resolveExtractor "multi_asset"             = multiAssetExtractor
+    resolveExtractor "stake_delegation"        = stakeDelegationExtractor
+    resolveExtractor "stake_delegation_ledger" = stakeDelegationLedgerExtractor
+    resolveExtractor "pool"                    = poolExtractor
+    resolveExtractor "cbor"                    = cborExtractor
+    resolveExtractor "epoch_sync_stats"        = epochSyncStatsExtractor
+    resolveExtractor "epoch_boundary"          = epochBoundaryExtractor
+    resolveExtractor "pool_stats"              = poolStatsExtractor
+    resolveExtractor "epoch"                   = epochExtractor
+    resolveExtractor "scripts_datums"          = scriptsDatumsExtractor
+    resolveExtractor "governance"              = governanceExtractor
+    resolveExtractor name                      = stubExtractor name
 
     -- | (extractor name, enabled?). 'utxo' reads from the structured
     -- 'UtxoOption'; the rest read the flat 'SyncOption' bool.
     optionalExtractors :: [(Text, Bool)]
     optionalExtractors =
-      [ ("utxo",             uoEnabled (pcUtxo pc))
-      , ("multi_asset",      prEnabled (pcMultiAsset pc))
-      , ("metadata",         prEnabled (pcMetadata pc))
-      , ("stake_delegation", prEnabled (pcStakeDelegation pc))
-      , ("pool",             prEnabled (pcPool pc))
-      , ("scripts_datums",   prEnabled (pcScriptsDatums pc))
-      , ("governance",       prEnabled (pcGovernance pc))
-      , ("cbor",             prEnabled (pcCbor pc))
-      , ("epoch_sync_stats", prEnabled (pcEpochSyncStats pc))
-      , ("epoch_boundary",   prEnabled (pcEpochBoundary pc))
-      , ("pool_stats",       prEnabled (pcPoolStats pc))
-      , ("epoch",            prEnabled (pcEpoch pc))
-      , ("current_state",    prEnabled (pcCurrentState pc))
+      [ ("utxo",                    uoEnabled (pcUtxo pc))
+      , ("multi_asset",             prEnabled (pcMultiAsset pc))
+      , ("metadata",                prEnabled (pcMetadata pc))
+      , ("stake_delegation",        prEnabled (pcStakeDelegation pc))
+      , ("stake_delegation_ledger", prEnabled (pcStakeDelegationLedger pc))
+      , ("pool",                    prEnabled (pcPool pc))
+      , ("scripts_datums",          prEnabled (pcScriptsDatums pc))
+      , ("governance",              prEnabled (pcGovernance pc))
+      , ("cbor",                    prEnabled (pcCbor pc))
+      , ("epoch_sync_stats",        prEnabled (pcEpochSyncStats pc))
+      , ("epoch_boundary",          prEnabled (pcEpochBoundary pc))
+      , ("pool_stats",              prEnabled (pcPoolStats pc))
+      , ("epoch",                   prEnabled (pcEpoch pc))
+      , ("current_state",           prEnabled (pcCurrentState pc))
       ]
 
 -- ---------------------------------------------------------------------------

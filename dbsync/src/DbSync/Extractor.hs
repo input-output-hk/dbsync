@@ -27,6 +27,8 @@ module DbSync.Extractor
   , blockDepositsMap
   , blockStakeKeyDeposit
   , blockPoolDeposit
+  , blockStakeSlice
+  , takeBlockLedgerData
 
     -- * Accessor classes
   , HasExtractors (..)
@@ -42,12 +44,21 @@ import Cardano.Prelude
 
 import Cardano.Ledger.BaseTypes (Network)
 import Cardano.Ledger.Coin (Coin)
+import qualified Control.Concurrent.Class.MonadSTM.Strict as Strict
+import Control.Concurrent.STM.TBQueue (readTBQueue)
 
 import DbSync.Parser.Types (GenericBlock, GenericTx)
 import DbSync.Phase.Ingest.Counter (IdCounters, freshIdCounters)
 import DbSync.Db.Schema.Ids (BlockId, PoolHashId, SlotLeaderId, StakeAddressId, TxId, TxOutId)
 import DbSync.Db.Schema.Types (TableDef)
-import DbSync.Worker.Ledger.Types (DepositsMap, emptyDepositsMap)
+import qualified DbSync.Worker.Ledger.StakeDist as Generic
+import DbSync.Worker.Ledger.Types
+  ( ApplyResult (..)
+  , DepositsMap
+  , HasLedgerEnv (..)
+  , LedgerEnv (..)
+  , emptyDepositsMap
+  )
 import DbSync.Phase.Type (SyncPhase)
 import DbSync.Resolver (HasResolver)
 import DbSync.Writer (HasWriter)
@@ -158,30 +169,30 @@ data TxContext = TxContext
 data BlockLedgerData
   = LedgerDataOff
   | LedgerDataOn !LedgerOutputs
-  deriving stock (Eq, Show)
 
 -- | Per-block ledger output when the ledger feature is on.
 data LedgerOutputs = LedgerOutputs
   { loDepositsMap     :: !DepositsMap
-      -- ^ Per-tx deposits, keyed by tx-body hash. Plain txs aren't here.
+      -- ^ Per-tx deposits, keyed by tx-body hash.
   , loStakeKeyDeposit :: !(Maybe Coin)
       -- ^ Protocol-param stake-key deposit at this block.
   , loPoolDeposit     :: !(Maybe Coin)
       -- ^ Protocol-param pool deposit at this block.
+  , loStakeSlice      :: !Generic.StakeSliceRes
+      -- ^ Per-block slice of the "mark" stake distribution.
   }
-  deriving stock (Eq, Show)
 
 -- | Default for the ledger-disabled case.
 emptyBlockLedgerData :: BlockLedgerData
 emptyBlockLedgerData = LedgerDataOff
 
--- | All-zero/Nothing 'LedgerOutputs'. Convenient base for tests and
--- for the worker before any deposit observation has landed.
+-- | All-zero/Nothing 'LedgerOutputs'.
 emptyLedgerOutputs :: LedgerOutputs
 emptyLedgerOutputs = LedgerOutputs
   { loDepositsMap     = emptyDepositsMap
   , loStakeKeyDeposit = Nothing
   , loPoolDeposit     = Nothing
+  , loStakeSlice      = Generic.NoSlices
   }
 
 -- | Per-tx deposits map; 'emptyDepositsMap' when ledger is off.
@@ -201,6 +212,29 @@ blockPoolDeposit :: BlockLedgerData -> Maybe Coin
 blockPoolDeposit = \case
   LedgerDataOff   -> Nothing
   LedgerDataOn lo -> loPoolDeposit lo
+
+-- | Per-block stake slice; 'Generic.NoSlices' when ledger is off
+-- and for Byron / pre-Shelley blocks.
+blockStakeSlice :: BlockLedgerData -> Generic.StakeSliceRes
+blockStakeSlice = \case
+  LedgerDataOff   -> Generic.NoSlices
+  LedgerDataOn lo -> loStakeSlice lo
+
+-- | Drain the worker's next per-block 'ApplyResult' and project it
+-- onto 'BlockLedgerData'. Blocks until one is available; the
+-- ledger-OFF arm returns 'emptyBlockLedgerData' without touching any
+-- queue.
+takeBlockLedgerData :: HasLedgerEnv -> IO BlockLedgerData
+takeBlockLedgerData = \case
+  LedgerDisabled _   -> pure emptyBlockLedgerData
+  LedgerEnabled lenv -> do
+    appResult <- Strict.atomically (readTBQueue (leBlockApplyResults lenv))
+    pure $ LedgerDataOn LedgerOutputs
+      { loDepositsMap     = apDepositsMap appResult
+      , loStakeKeyDeposit = Nothing
+      , loPoolDeposit     = Nothing
+      , loStakeSlice      = apStakeSlice appResult
+      }
 
 -- ---------------------------------------------------------------------------
 -- * Accessor classes

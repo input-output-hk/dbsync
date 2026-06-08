@@ -94,6 +94,7 @@ spec = describe "DbSync.App.Config.Types" $ do
           prEnabled (pcMultiAsset (scOptions cfg))      `shouldBe` False
           prEnabled (pcMetadata (scOptions cfg))        `shouldBe` False
           prEnabled (pcStakeDelegation (scOptions cfg)) `shouldBe` False
+          prEnabled (pcStakeDelegationLedger (scOptions cfg)) `shouldBe` False
           prEnabled (pcPool (scOptions cfg))            `shouldBe` False
           prEnabled (pcScriptsDatums (scOptions cfg))   `shouldBe` False
           prEnabled (pcGovernance (scOptions cfg))      `shouldBe` False

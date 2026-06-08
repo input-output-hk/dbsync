@@ -117,19 +117,20 @@ ledgerEnabledTestProfile =
 -- @governance@, @current_state@ (stubs).
 allImplementedExtractors :: SyncOptions
 allImplementedExtractors = SyncOptions
-  { pcUtxo            = defaultUtxoOption { uoEnabled = True }
-  , pcMultiAsset      = SyncOption True
-  , pcMetadata        = SyncOption True
-  , pcStakeDelegation = SyncOption True
-  , pcPool            = SyncOption True
-  , pcScriptsDatums   = SyncOption False
-  , pcGovernance      = SyncOption False
-  , pcCbor            = SyncOption True
-  , pcEpochSyncStats  = SyncOption True
-  , pcEpochBoundary   = SyncOption True
-  , pcPoolStats       = SyncOption False
-  , pcEpoch           = SyncOption True
-  , pcCurrentState    = SyncOption False
+  { pcUtxo                  = defaultUtxoOption { uoEnabled = True }
+  , pcMultiAsset            = SyncOption True
+  , pcMetadata              = SyncOption True
+  , pcStakeDelegation       = SyncOption True
+  , pcStakeDelegationLedger = SyncOption False
+  , pcPool                  = SyncOption True
+  , pcScriptsDatums         = SyncOption False
+  , pcGovernance            = SyncOption False
+  , pcCbor                  = SyncOption True
+  , pcEpochSyncStats        = SyncOption True
+  , pcEpochBoundary         = SyncOption True
+  , pcPoolStats             = SyncOption False
+  , pcEpoch                 = SyncOption True
+  , pcCurrentState          = SyncOption False
   }
 
 -- | Same as 'minimalProfile' but with caller-supplied 'SyncOptions'.

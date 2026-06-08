@@ -141,12 +141,12 @@ assignEventInfoIdBuf conn = runStmt conn () nextEventInfoIdStmt
 
 -- | Resolve a @drep_hash@ row. The cache key is the encoded dedup
 -- key supplied by 'SharedDedup.resolveAndWriteDrepHash'; the SELECT
--- uses @(raw, has_script)@ which matches the table's unique
--- constraint.
+-- keys on @(raw, has_script, view)@ — @view@ distinguishes the two
+-- abstract DReps, which share @(NULL, FALSE)@.
 resolveDrepHashConn
   :: Conn.Connection -> ByteString -> DrepHash -> IO (DrepHashId, Bool)
 resolveDrepHashConn conn _key row = do
-  mId <- runStmt conn (drepHashRaw row, drepHashHasScript row) queryDrepHashIdStmt
+  mId <- runStmt conn (drepHashSelectKey row) queryDrepHashIdStmt
   case mId of
     Just did -> pure (did, False)
     Nothing  -> do
@@ -163,10 +163,14 @@ resolveDrepHashBuf conn cache key row =
   resolveDedupWith
     conn
     key
-    (drepHashRaw row, drepHashHasScript row)
+    (drepHashSelectKey row)
     (bdcDrepHash cache)
     queryDrepHashIdStmt
     nextDrepHashIdStmt
+
+drepHashSelectKey :: DrepHash -> (Maybe ByteString, Bool, Text)
+drepHashSelectKey row =
+  (drepHashRaw row, drepHashHasScript row, drepHashView row)
 
 resolveCommitteeHashConn
   :: Conn.Connection -> ByteString -> CommitteeHash -> IO (CommitteeHashId, Bool)

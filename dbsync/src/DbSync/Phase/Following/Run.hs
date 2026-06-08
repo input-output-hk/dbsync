@@ -24,6 +24,7 @@ import Cardano.Prelude
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import qualified Control.Concurrent.STM as STM
+import Control.Monad.IO.Unlift (withRunInIO)
 import Control.Tracer (traceWith)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
@@ -84,6 +85,8 @@ import DbSync.Trace.Replay
   , advanceReplay
   , renderReplayPercent
   )
+import DbSync.Db.Schema.Types (TableDef)
+import DbSync.Error (AppError (..))
 import DbSync.Trace.Timing (fmtCount, fmtDuration, fmtF2)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 import DbSync.Trace.Watchdog (Watchdog, bumpConsumer, setConsumerNote)
@@ -375,20 +378,25 @@ rollbackQuiet conn =
 -- 'FollowingChainTip' once the consumer has caught the receiver's
 -- latest received slot and the block queue is empty. One-way:
 -- a subsequent 'MsgRollback' is the only path back.
+--
+-- Suppressed inside the replay window: the skip-only consumer
+-- outpaces the receiver, so the predicate fires spuriously.
 maybeFlipToTip :: SlotNo -> FollowM ()
 maybeFlipToTip appliedSlot = do
-  FollowEnv{feCore, feBlockQueue, feLatestReceivedPoint} <- ask
+  FollowEnv{feCore, feBlockQueue, feLatestReceivedPoint, feReplayBootSlot} <- ask
   let phaseRef = ceCurrentPhase feCore
-  phase <- liftIO $ readCurrentPhase phaseRef
-  when (phase == FollowingVolatileTail) $ do
-    qLen <- liftIO $ atomically (STM.lengthTBQueue feBlockQueue)
-    when (qLen == 0) $ do
-      mLatest <- liftIO $ readIORef feLatestReceivedPoint
-      case mLatest of
-        Just (BlockPoint latestSlot _)
-          | appliedSlot >= latestSlot ->
-              setCurrentPhase phaseRef FollowingChainTip
-        _ -> pure ()
+      inReplay = maybe False (appliedSlot <=) feReplayBootSlot
+  unless inReplay $ do
+    phase <- liftIO $ readCurrentPhase phaseRef
+    when (phase == FollowingVolatileTail) $ do
+      qLen <- liftIO $ atomically (STM.lengthTBQueue feBlockQueue)
+      when (qLen == 0) $ do
+        mLatest <- liftIO $ readIORef feLatestReceivedPoint
+        case mLatest of
+          Just (BlockPoint latestSlot _)
+            | appliedSlot >= latestSlot ->
+                setCurrentPhase phaseRef FollowingChainTip
+          _ -> pure ()
 
 -- | Write the @epoch_sync_stats@ row for the just-finished epoch.
 -- Block count and elapsed window come from the pre-block
@@ -547,4 +555,43 @@ processRollback point = do
     component <- readPhaseComponent phaseRef
     traceWith tracer $ LogMsg Info component
       ("rollback to " <> show point) Nothing
-  Rollback.rollbackToPoint tableDefs point
+  rollbackWithRetry tableDefs point
+
+-- | Total attempts (initial + retries) before a rollback failure
+-- surfaces. Reads are idempotent and writes run in one PG
+-- transaction, so a mid-flight failure commits nothing.
+rollbackMaxAttempts :: Int
+rollbackMaxAttempts = 3
+
+-- | Wait before the first retry (microseconds); doubles each retry.
+rollbackBaseDelayMicros :: Int
+rollbackBaseDelayMicros = 250_000
+
+-- | Run the rollback cascade, retrying a few times on
+-- 'AppDatabaseError'. Lets a transient PG-side glitch (e.g. EINTR
+-- surfaced as @XX000 internal_error@) ride out without crashing.
+rollbackWithRetry :: [TableDef] -> CardanoPoint -> FollowM ()
+rollbackWithRetry tableDefs point = go 1
+  where
+    go attempt = do
+      tracer <- asks getTracer
+      result <- withRunInIO $ \runInIO ->
+        try (runInIO (Rollback.rollbackToPoint tableDefs point))
+      case (result :: Either AppError ()) of
+        Right () -> pure ()
+        Left (AppDatabaseError _ msg)
+          | attempt < rollbackMaxAttempts -> do
+              let delayMicros =
+                    rollbackBaseDelayMicros * 2 ^ (attempt - 1)
+              liftIO $ do
+                traceWith tracer $ LogMsg Warning "Rollback" (mconcat
+                  [ "transient PG error rolling back to ", show point
+                  , " (attempt ", show attempt
+                  , "/", show rollbackMaxAttempts
+                  , "); retrying in "
+                  , show (delayMicros `div` 1000), "ms — "
+                  , msg
+                  ]) Nothing
+                threadDelay delayMicros
+              go (attempt + 1)
+        Left e -> liftIO (throwIO e)

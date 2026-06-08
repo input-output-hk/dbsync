@@ -31,15 +31,18 @@ import Cardano.Prelude
 
 import qualified Data.Text as T
 
-import Cardano.Ledger.Address (AccountAddress (..), AccountId (..))
-import Cardano.Ledger.BaseTypes (Network (..))
+import Cardano.Ledger.Address (AccountAddress (..), AccountId (..), Withdrawals (..))
+import Cardano.Ledger.BaseTypes (Network (..), StrictMaybe (..))
 import Cardano.Ledger.Coin (Coin (..))
 import qualified Cardano.Ledger.Conway.Governance as Governance
 import Cardano.Ledger.Conway.Tx (AlonzoTx (..), Tx (..))
+import Cardano.Ledger.Conway.TxCert (Delegatee (..))
 import qualified Cardano.Ledger.Core as Core
+import Cardano.Ledger.Credential (Credential)
+import qualified Cardano.Ledger.DRep as Ledger
 import Ouroboros.Consensus.Shelley.Eras (ConwayEra)
 
-import Test.Hspec (Spec, describe, it, shouldSatisfy)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 import qualified Cardano.Mock.Forging.Tx.Conway as Conway
 import qualified Cardano.Mock.Forging.Tx.Generic as Generic
@@ -84,7 +87,7 @@ import DbSync.Test.PgAssertions (countRows)
 -- ---------------------------------------------------------------------------
 
 spec :: Spec
-spec = describe "Follow governance writes" $
+spec = describe "Follow governance writes" $ do
   it "lands cert, proposal, vote rows for Conway-era governance txs at tip" $
     withMockNode conwayConfigDir $ \mn ->
       withTempDir "dbsync-test-follow-governance" $ \ledgerDir -> do
@@ -181,6 +184,51 @@ spec = describe "Follow governance writes" $
             )
           voteFk `shouldSatisfy` (not . T.null)
 
+  -- | Both abstract DReps share @(raw=NULL, has_script=FALSE)@; the
+  -- Follow-phase SELECT must filter on @view@ to disambiguate them.
+  -- A naive @WHERE raw IS NOT DISTINCT FROM $1 AND has_script = $2@
+  -- lookup would match both rows and crash with
+  -- @UnexpectedRowCountStatementError@.
+  it "resolves abstract DReps at tip when both NULL-raw rows already exist" $
+    withMockNode conwayConfigDir $ \mn ->
+      withTempDir "dbsync-test-follow-abstract-drep" $ \ledgerDir -> do
+        tracer <- quietTracer
+
+        case Generic.unregisteredStakeCredentials of
+          credA : credB : credC : _ -> do
+            -- 250 empty blocks plus two cert blocks that seed both
+            -- abstract DReps during Ingest.
+            _ <- forgeAndPushBlocks mn 250
+            _ <- forgeAndPush mn
+                   [buildRegDelegVoteTx credA Ledger.DRepAlwaysAbstain]
+            _ <- forgeAndPush mn
+                   [buildRegDelegVoteTx credB Ledger.DRepAlwaysNoConfidence]
+
+            withAppSession tracer governanceTestProfile mn ledgerDir $ \_ -> do
+              waitForSyncComplete 120
+
+              -- Ingest landed exactly two NULL-raw rows.
+              abstractIngest <- queryDrepHashNullRawCount
+              abstractIngest `shouldBe` "2"
+
+              -- One more block at tip that targets DRepAlwaysAbstain
+              -- again. With the SELECT keyed only on (raw, has_script)
+              -- this lookup returns 2 rows and the consumer panics.
+              _ <- forgeAndPush mn
+                     [buildRegDelegVoteTx credC Ledger.DRepAlwaysAbstain]
+
+              let expectedBlocks = 250 + 3
+              waitFor
+                (tdName blockTableDef <> " count reaches " <> show expectedBlocks)
+                (do n <- countRows (tdName blockTableDef); pure (n >= expectedBlocks))
+                60
+
+              -- No new NULL-raw row: the existing drep_always_abstain
+              -- row was reused.
+              abstractFollow <- queryDrepHashNullRawCount
+              abstractFollow `shouldBe` "2"
+          _ -> panic "unregisteredStakeCredentials has fewer than 3 entries"
+
 -- ---------------------------------------------------------------------------
 -- * Profile
 -- ---------------------------------------------------------------------------
@@ -232,6 +280,26 @@ treasuryTx = case Generic.unregisteredStakeCredentials of
 voteOnProposal :: Governance.GovActionId -> Core.Tx Core.TopTx ConwayEra
 voteOnProposal gaId =
   Conway.mkGovVoteYesTx gaId (Generic.drepVoters)
+
+-- | One-tx pair: register @cred@ as a stake credential, then in the
+-- following cert delegate its vote to @drep@. The governance extractor
+-- materialises a @drep_hash@ row for the abstract sentinels and a
+-- @delegation_vote@ row linking the stake credential.
+buildRegDelegVoteTx
+  :: Credential Core.Staking -> Ledger.DRep -> Mock.TxEra
+buildRegDelegVoteTx cred drep =
+  case Conway.mkDCertTx [regCert, delegCert] (Withdrawals mempty) Nothing of
+    Right tx -> Mock.TxConway tx
+    Left err -> panic $ "buildRegDelegVoteTx: " <> show err
+  where
+    regCert   = Conway.mkRegTxCert SNothing cred
+    delegCert = Conway.mkDelegTxCert (DelegVote drep) cred
+
+-- | @SELECT count(*) FROM drep_hash WHERE raw IS NULL@ as a stripped
+-- 'Text', so callers can compare against literals like @"2"@.
+queryDrepHashNullRawCount :: IO Text
+queryDrepHashNullRawCount =
+  T.strip <$> queryTestDb "SELECT count(*) FROM drep_hash WHERE raw IS NULL"
 
 -- ---------------------------------------------------------------------------
 -- * Pure txid derivation

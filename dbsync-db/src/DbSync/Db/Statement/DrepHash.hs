@@ -1,10 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Hasql 'Statement' bindings for the @drep_hash@ dedup table.
---
--- The unique constraint is @(raw, has_script)@. @raw@ is NULL for
--- the two abstract DReps; @raw IS NOT DISTINCT FROM $1@ handles the
--- NULL case alongside concrete-hash matches.
 module DbSync.Db.Statement.DrepHash
   ( insertDrepHashRowStmt
   , nextDrepHashIdStmt
@@ -32,14 +28,16 @@ insertDrepHashRowStmt =
 nextDrepHashIdStmt :: Stmt.Statement () DrepHashId
 nextDrepHashIdStmt = nextIdStmt drepHashTableDef DrepHashId
 
--- | Look up @drep_hash.id@ by @(raw, has_script)@. @raw@ may be NULL
--- for the abstract DReps; @IS NOT DISTINCT FROM@ handles that.
-queryDrepHashIdStmt :: Stmt.Statement (Maybe ByteString, Bool) (Maybe DrepHashId)
+-- | Look up @drep_hash.id@ by @(raw, has_script, view)@. @view@ is
+-- required to disambiguate the two abstract DReps, which both have
+-- @raw=NULL@ and @has_script=FALSE@.
+queryDrepHashIdStmt :: Stmt.Statement (Maybe ByteString, Bool, Text) (Maybe DrepHashId)
 queryDrepHashIdStmt =
   Stmt.preparable sql encoder (D.rowMaybe (idDecoder DrepHashId))
   where
     sql =
       "SELECT id FROM drep_hash \
-      \WHERE raw IS NOT DISTINCT FROM $1 AND has_script = $2"
-    encoder = (fst >$< E.param (E.nullable E.bytea))
-           <> (snd >$< E.param (E.nonNullable E.bool))
+      \WHERE raw IS NOT DISTINCT FROM $1 AND has_script = $2 AND view = $3"
+    encoder = ((\(r, _, _) -> r) >$< E.param (E.nullable E.bytea))
+           <> ((\(_, s, _) -> s) >$< E.param (E.nonNullable E.bool))
+           <> ((\(_, _, v) -> v) >$< E.param (E.nonNullable E.text))

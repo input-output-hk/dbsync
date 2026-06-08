@@ -97,6 +97,7 @@ import qualified DbSync.Phase.FollowScriptsDatumsSpec as PhaseFollowScriptsDatum
 import qualified DbSync.Phase.FollowPerfRealisticSpec as PhaseFollowPerfRealisticSpec
 import qualified DbSync.Phase.FollowPerfSpec as PhaseFollowPerfSpec
 import qualified DbSync.Phase.FollowReplayOnBootSpec as PhaseFollowReplayOnBootSpec
+import qualified DbSync.Phase.FollowReplayWindowSpec as PhaseFollowReplayWindowSpec
 import qualified DbSync.Phase.FollowRestartSpec as PhaseFollowRestartSpec
 import qualified DbSync.Phase.IngestPrepFollowSpec as PhaseIngestPrepFollowSpec
 import qualified DbSync.Phase.IngestRestartSpec as PhaseIngestRestartSpec
@@ -198,6 +199,7 @@ main = hspec $ do
     PhaseLsmLifecycleSpec.spec
     PhaseFollowRestartSpec.spec
     PhaseFollowReplayOnBootSpec.spec
+    PhaseFollowReplayWindowSpec.spec
     PhaseFollowAtTipSpec.spec
     PhaseFollowEpochBoundarySpec.spec
     PhaseFollowEpochSyncStatsSpec.spec

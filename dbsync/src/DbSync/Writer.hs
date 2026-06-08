@@ -55,7 +55,18 @@ import DbSync.Db.Schema.Governance
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Metadata (TxMetadata)
 import DbSync.Db.Schema.MultiAsset (MultiAsset, MaTxMint, MaTxOut)
-import DbSync.Db.Schema.Pool (PoolHash, PoolStat, PoolUpdate, PoolMetadataRef, PoolOwner, PoolRetire, PoolRelay)
+import DbSync.Db.Schema.OffChainPool (OffChainPoolData, OffChainPoolFetchError)
+import DbSync.Db.Schema.Pool
+  ( DelistedPool
+  , PoolHash
+  , PoolMetadataRef
+  , PoolOwner
+  , PoolRelay
+  , PoolRetire
+  , PoolStat
+  , PoolUpdate
+  , ReservedPoolTicker
+  )
 import DbSync.Db.Schema.ScriptsDatums
   ( Datum, ExtraKeyWitness, Redeemer, RedeemerData, Script )
 import DbSync.Db.Schema.StakeDelegation
@@ -133,6 +144,14 @@ data Writer m = Writer
   , writePoolRetire      :: !(PoolRetire -> m ())
   , writePoolRelay       :: !(PoolRelay -> m ())
   , writePoolStat        :: !(PoolStat -> m ())
+
+    -- ---------------------------------------------------------------
+    -- OffChainPools tables (all IDENTITY leaves)
+    -- ---------------------------------------------------------------
+  , writeOffChainPoolData       :: !(OffChainPoolData -> m ())
+  , writeOffChainPoolFetchError :: !(OffChainPoolFetchError -> m ())
+  , writeDelistedPool           :: !(DelistedPool -> m ())
+  , writeReservedPoolTicker     :: !(ReservedPoolTicker -> m ())
 
     -- ---------------------------------------------------------------
     -- CBOR tables

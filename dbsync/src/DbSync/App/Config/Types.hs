@@ -286,6 +286,8 @@ data SyncOptions = SyncOptions
   , pcPoolStats             :: !SyncOption
   , pcEpoch                 :: !SyncOption
   , pcCurrentState          :: !SyncOption
+  , pcOffChainPools         :: !SyncOption
+  , pcOffChainVotes         :: !SyncOption
   }
   deriving stock (Eq, Show)
 
@@ -306,6 +308,8 @@ instance FromJSON SyncOptions where
       <*> o .:? "pool_stats"              .!= disabled
       <*> o .:? "epoch"                   .!= epochDefault
       <*> o .:? "current_state"           .!= disabled
+      <*> o .:? "off_chain_pools"         .!= disabled
+      <*> o .:? "off_chain_votes"         .!= disabled
     where
       disabled     = SyncOption False
       epochDefault = SyncOption True
@@ -331,6 +335,8 @@ defaultSyncOptions = SyncOptions
   , pcPoolStats             = SyncOption False
   , pcEpoch                 = SyncOption True
   , pcCurrentState          = SyncOption False
+  , pcOffChainPools         = SyncOption False
+  , pcOffChainVotes         = SyncOption False
   }
 
 -- | Configuration for a single option.

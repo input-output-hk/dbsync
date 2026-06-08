@@ -40,6 +40,7 @@ import qualified DbSync.Phase.Following.Writer.EpochBoundary as EpochBoundary
 import qualified DbSync.Phase.Following.Writer.Governance as Governance
 import qualified DbSync.Phase.Following.Writer.Metadata as Metadata
 import qualified DbSync.Phase.Following.Writer.MultiAsset as MultiAsset
+import qualified DbSync.Phase.Following.Writer.OffChainPools as OffChainPools
 import qualified DbSync.Phase.Following.Writer.Pool as Pool
 import qualified DbSync.Phase.Following.Writer.PoolStats as PoolStats
 import qualified DbSync.Phase.Following.Writer.ScriptsDatums as ScriptsDatums
@@ -99,6 +100,12 @@ mkWriter conn = Writer
 
     -- PoolStats
   , writePoolStat        = PoolStats.writePoolStatConn conn
+
+    -- OffChainPools
+  , writeOffChainPoolData       = OffChainPools.writeOffChainPoolDataConn conn
+  , writeOffChainPoolFetchError = OffChainPools.writeOffChainPoolFetchErrorConn conn
+  , writeDelistedPool           = OffChainPools.writeDelistedPoolConn conn
+  , writeReservedPoolTicker     = OffChainPools.writeReservedPoolTickerConn conn
 
     -- CBOR
   , writeTxCbor = Cbor.writeTxCborConn conn
@@ -199,6 +206,12 @@ mkBufferedWriter buf = Writer
 
     -- PoolStats
   , writePoolStat        = PoolStats.writePoolStatBuf buf
+
+    -- OffChainPools
+  , writeOffChainPoolData       = OffChainPools.writeOffChainPoolDataBuf buf
+  , writeOffChainPoolFetchError = OffChainPools.writeOffChainPoolFetchErrorBuf buf
+  , writeDelistedPool           = OffChainPools.writeDelistedPoolBuf buf
+  , writeReservedPoolTicker     = OffChainPools.writeReservedPoolTickerBuf buf
 
     -- CBOR
   , writeTxCbor = Cbor.writeTxCborBuf buf

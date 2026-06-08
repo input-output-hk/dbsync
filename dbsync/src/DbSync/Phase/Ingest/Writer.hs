@@ -46,6 +46,12 @@ import DbSync.Phase.Ingest.Writer.MultiAsset
   , writeMaTxOutCopy
   , writeMultiAssetCopy
   )
+import DbSync.Phase.Ingest.Writer.OffChainPools
+  ( writeDelistedPoolCopy
+  , writeOffChainPoolDataCopy
+  , writeOffChainPoolFetchErrorCopy
+  , writeReservedPoolTickerCopy
+  )
 import DbSync.Phase.Ingest.Writer.Pool
   ( writePoolHashCopy
   , writePoolMetadataRefCopy
@@ -140,6 +146,12 @@ mkWriter ls = Writer
 
     -- PoolStats
   , writePoolStat        = writePoolStatCopy ls
+
+    -- OffChainPools
+  , writeOffChainPoolData       = writeOffChainPoolDataCopy ls
+  , writeOffChainPoolFetchError = writeOffChainPoolFetchErrorCopy ls
+  , writeDelistedPool           = writeDelistedPoolCopy ls
+  , writeReservedPoolTicker     = writeReservedPoolTickerCopy ls
 
     -- CBOR
   , writeTxCbor = writeTxCborCopy ls

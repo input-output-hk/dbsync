@@ -65,6 +65,8 @@ optionsWith enabled = SyncOptions
   , pcPoolStats             = mk "pool_stats"
   , pcEpoch                 = mk "epoch"
   , pcCurrentState          = mk "current_state"
+  , pcOffChainPools         = mk "off_chain_pools"
+  , pcOffChainVotes         = mk "off_chain_votes"
   }
   where
     mk name = SyncOption (name `elem` enabled)

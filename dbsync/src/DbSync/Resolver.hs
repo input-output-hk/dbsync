@@ -36,6 +36,7 @@ import DbSync.Db.Schema.ScriptsDatums (Datum, RedeemerData, Script)
 import DbSync.Db.Schema.StakeDelegation (StakeAddress)
 import DbSync.Db.Types (AnchorType, DbLovelace)
 import DbSync.Phase.Ingest.UtxoStore (UtxoTxEntry)
+import DbSync.Worker.OffChain.Types (PoolMetadataRef)
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -124,6 +125,17 @@ data IdResolver m = IdResolver
 
     -- | Assign the next pool_metadata_ref ID.
   , assignPoolMetadataRefId :: !(m PoolMetadataRefId)
+
+    -- ---------------------------------------------------------------
+    -- OffChainPools extractor hook
+    -- ---------------------------------------------------------------
+
+    -- | Record that the extractor observed a pool-metadata
+    -- registration. The production resolvers leave this as a no-op
+    -- — the off-chain pool worker independently polls PG for
+    -- @pool_metadata_ref@ rows that lack a result. Test resolvers
+    -- capture the call for assertions.
+  , enqueuePoolMetaFetch :: !(PoolMetadataRef -> m ())
 
     -- ---------------------------------------------------------------
     -- EpochSyncStats IDs

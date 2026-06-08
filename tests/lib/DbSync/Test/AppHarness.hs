@@ -131,6 +131,8 @@ allImplementedExtractors = SyncOptions
   , pcPoolStats             = SyncOption False
   , pcEpoch                 = SyncOption True
   , pcCurrentState          = SyncOption False
+  , pcOffChainPools         = SyncOption False
+  , pcOffChainVotes         = SyncOption False
   }
 
 -- | Same as 'minimalProfile' but with caller-supplied 'SyncOptions'.

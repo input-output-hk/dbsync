@@ -132,6 +132,9 @@ import DbSync.Worker.Ledger.State
   )
 import DbSync.Worker.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..))
 import DbSync.Worker.Ledger.Worker (withLedgerThreads)
+import DbSync.Worker.OffChain.Pool (closeOffChainPoolWorker)
+import DbSync.App.Setup (setupOffChainPoolWorker)
+import DbSync.App.Config.Types (SyncConfig (..))
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -876,45 +879,49 @@ runBootFollowRestart
       -- boundary baked in. Inside the window the worker suppresses
       -- snapshot writes and 'accumulateEpochParams' because those
       -- epochs are already represented in PG / on disk.
-      withLedgerThreads hasLedgerEnv mReplayBoot stateQueryVar watchdog $ do
-        -- A fresh receiver-side state. Ingest has been bypassed on this
-        -- restart path, so none of it is inherited from an upstream env.
-        blockQueue       <- newTBQueueIO 500
-        receiverStats    <- newReceiverStats
-        latestPointRef   <- newIORef Nothing
-        rollbackBoundary <- newTVarIO Nothing
+      withLedgerThreads hasLedgerEnv mReplayBoot stateQueryVar watchdog $
+        bracket
+          (setupOffChainPoolWorker tracer hasqlSettings (scOptions (ceConfig coreEnv)))
+          (mapM_ closeOffChainPoolWorker) $ \mPoolWorker -> do
+          -- A fresh receiver-side state. Ingest has been bypassed on this
+          -- restart path, so none of it is inherited from an upstream env.
+          blockQueue       <- newTBQueueIO 500
+          receiverStats    <- newReceiverStats
+          latestPointRef   <- newIORef Nothing
+          rollbackBoundary <- newTVarIO Nothing
 
-        let mLedgerQueue = case hasLedgerEnv of
-              LedgerEnabled lenv -> Just (leLedgerQueue lenv)
-              LedgerDisabled _   -> Nothing
-            intersectReq = IntersectAt [intersectPoint]
-            mkEnv conn resolver writer =
-              FollowEnv
-                { feCore                = coreEnv
-                , feBlockQueue          = blockQueue
-                , feHasLedgerEnv        = hasLedgerEnv
-                , feStateQueryVar       = stateQueryVar
-                , feSystemStart         = systemStart
-                , feReceiverStats       = receiverStats
-                , feWatchdog            = watchdog
-                , feLatestReceivedPoint = latestPointRef
-                , feHasqlConnection     = conn
-                , feResolver            = resolver
-                , feWriter              = writer
-                , feControlConnection   = consumerCtrlConn
-                , feRollbackBoundary    = rollbackBoundary
-                , feReplayBootSlot      = mReplayBoot
-                , feReplayStartSlot     = mReplayStart
-                }
+          let mLedgerQueue = case hasLedgerEnv of
+                LedgerEnabled lenv -> Just (leLedgerQueue lenv)
+                LedgerDisabled _   -> Nothing
+              intersectReq = IntersectAt [intersectPoint]
+              mkEnv conn resolver writer =
+                FollowEnv
+                  { feCore                = coreEnv
+                  , feBlockQueue          = blockQueue
+                  , feHasLedgerEnv        = hasLedgerEnv
+                  , feStateQueryVar       = stateQueryVar
+                  , feSystemStart         = systemStart
+                  , feReceiverStats       = receiverStats
+                  , feWatchdog            = watchdog
+                  , feLatestReceivedPoint = latestPointRef
+                  , feHasqlConnection     = conn
+                  , feResolver            = resolver
+                  , feWriter              = writer
+                  , feControlConnection   = consumerCtrlConn
+                  , feRollbackBoundary    = rollbackBoundary
+                  , feReplayBootSlot      = mReplayBoot
+                  , feReplayStartSlot     = mReplayStart
+                  , feOffChainPoolWorker  = mPoolWorker
+                  }
 
-        let mLastBlock = ssrLastCommittedBlockNo (frcSyncState frc)
-            kBlocks    = ceSecurityParam coreEnv
-        withAsync (runWatchdogIO tracer watchdog blockQueue mLedgerQueue Nothing) $ \watchdogThread -> do
-          link watchdogThread
-          withAsync (checkResumeGap tracer kBlocks mLastBlock rollbackBoundary) $ \gapThread -> do
-            link gapThread
-            runFollowSession tracer "Boot" iomgr hasqlSettings topLevelCfg
-              networkMagic socketPath intersectReq mShutdown mkEnv
+          let mLastBlock = ssrLastCommittedBlockNo (frcSyncState frc)
+              kBlocks    = ceSecurityParam coreEnv
+          withAsync (runWatchdogIO tracer watchdog blockQueue mLedgerQueue Nothing) $ \watchdogThread -> do
+            link watchdogThread
+            withAsync (checkResumeGap tracer kBlocks mLastBlock rollbackBoundary) $ \gapThread -> do
+              link gapThread
+              runFollowSession tracer "Boot" iomgr hasqlSettings topLevelCfg
+                networkMagic socketPath intersectReq mShutdown mkEnv
 
 -- | Open a dedicated Follow hasql connection, build its resolver and
 -- writer, hand them to the caller-supplied 'FollowEnv' builder, and

@@ -55,6 +55,7 @@ library
     DbSync.Db.Schema.EpochSyncStats
     DbSync.Db.Schema.AdaPots
     DbSync.Db.Schema.EpochBoundary
+    DbSync.Db.Schema.OffChainPool
     DbSync.Db.Schema.EpochView
     DbSync.Db.Schema.SyncState
     DbSync.Db.Schema.EpochParamPending
@@ -101,6 +102,7 @@ library
     DbSync.Db.Statement.MaTxMint
     DbSync.Db.Statement.MaTxOut
     DbSync.Db.Statement.MultiAsset
+    DbSync.Db.Statement.OffChainPool
     DbSync.Db.Statement.ParamProposal
     DbSync.Db.Statement.PoolHash
     DbSync.Db.Statement.PoolMetadataRef

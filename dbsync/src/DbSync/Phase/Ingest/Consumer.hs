@@ -60,10 +60,11 @@ import DbSync.AppM (IngestM)
 import DbSync.App.Env (IngestEnv (..))
 import DbSync.ChainSync.Msg (ChainSyncMsg (..))
 import DbSync.Db.Schema.Ids (BlockId (..))
-import DbSync.Extractor (ExtractState (..))
+import DbSync.Extractor (ExtractState (..), takeBlockLedgerData)
 import DbSync.Extractor.EpochBoundary (runEpochBoundary)
 import DbSync.Extractor.Governance (runGovernanceBoundary)
 import DbSync.Extractor.PoolStats (runPoolStatsBoundary)
+import DbSync.Extractor.StakeDelegationLedger (runStakeDelegationLedgerBoundary)
 import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.Parser.Dispatch (parseBlock)
 import DbSync.Parser.Types (GenericBlock (..))
@@ -235,6 +236,12 @@ runConsumer = do
 
       advanceReplayLog tracer (clsReplay cls) slot bootSlot replayStart
 
+      -- Replayed blocks bypass processBlock, but the worker still
+      -- enqueues a per-block ApplyResult; drain and discard so the
+      -- queue doesn't backpressure the worker.
+      when isReplay $
+        liftIO $ void $ takeBlockLedgerData hasLedger
+
       -- Replayed blocks are already in PG; skip processBlock.
       unless isReplay $ do
         liftIO $ setConsumerNote watchdog "consumer: observeBlock"
@@ -365,6 +372,7 @@ runBoundaryExtractor watchdog hasLedger extractStRef = case hasLedger of
     mLastBlockId <- liftIO $ esLastBlockId <$> readIORef extractStRef
     governanceOn <- asks (prEnabled . pcGovernance . scOptions . getConfig)
     poolStatsOn  <- asks (prEnabled . pcPoolStats  . scOptions . getConfig)
+    sdlOn        <- asks (prEnabled . pcStakeDelegationLedger . scOptions . getConfig)
     for_ mLastBlockId $ \lastBid -> do
       -- Governance runs first when enabled: it refreshes the
       -- enacted-state ids and apGovExpiresAfter on ExtractState that
@@ -378,6 +386,9 @@ runBoundaryExtractor watchdog hasLedger extractStRef = case hasLedger of
       when poolStatsOn $ do
         liftIO $ setConsumerNote watchdog "consumer: runPoolStatsBoundary"
         runPoolStatsBoundary applyResult (BlockId lastBid)
+      when sdlOn $ do
+        liftIO $ setConsumerNote watchdog "consumer: runStakeDelegationLedgerBoundary"
+        runStakeDelegationLedgerBoundary applyResult (BlockId lastBid)
 
 -- ---------------------------------------------------------------------------
 -- * Queue utilities

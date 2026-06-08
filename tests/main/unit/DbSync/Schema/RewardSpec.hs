@@ -27,11 +27,7 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 import DbSync.Db.Schema.Generate (generateCreateTable)
 import DbSync.Db.Schema.Ids
-  ( EpochStakeId (..)
-  , EpochStakeProgressId (..)
-  , PoolHashId (..)
-  , PotRewardId (..)
-  , RewardId (..)
+  ( PoolHashId (..)
   , StakeAddressId (..)
   )
 import DbSync.Db.Schema.StakeDelegation
@@ -200,41 +196,38 @@ generatedColumnDdlSpec = describe "generateCreateTable for tables with generated
 -- one fewer field than the table has columns; PostgreSQL fills in the
 -- generated column from its expression.
 copyEncoderSpec :: Spec
-copyEncoderSpec = describe "COPY encoders for generated-column tables" $ do
+copyEncoderSpec = describe "COPY encoders for IDENTITY + generated-column tables" $ do
 
-  it "encodeRewardCopy emits 6 tab-separated fields (earned_epoch omitted)" $ do
-    let row = encodeRewardCopy (RewardId 1) sampleReward
-        tabs = BS.count (fromIntegral (fromEnum '\t')) row
-    tabs `shouldBe` 5    -- 6 fields → 5 separators
-    BS8.last row `shouldBe` '\n'
-
-  it "encodeRewardCopy writes id, addr_id, type, amount, spendable_epoch, pool_id" $ do
-    let row = encodeRewardCopy (RewardId 42) sampleReward
-        fields = BS8.split '\t' (BS8.init row)
-    fields !! 0 `shouldBe` "42"
-    fields !! 1 `shouldBe` "7"
-    fields !! 2 `shouldBe` "leader"
-    fields !! 3 `shouldBe` "5000000"
-    fields !! 4 `shouldBe` "210"
-    fields !! 5 `shouldBe` "99"
-
-  it "encodePotRewardCopy emits 5 fields (earned_epoch omitted)" $ do
-    let row = encodePotRewardCopy (PotRewardId 1) samplePotReward
+  it "encodeRewardCopy emits 5 tab-separated fields (id IDENTITY, earned_epoch generated)" $ do
+    let row = encodeRewardCopy sampleReward
         tabs = BS.count (fromIntegral (fromEnum '\t')) row
     tabs `shouldBe` 4    -- 5 fields → 4 separators
+    BS8.last row `shouldBe` '\n'
 
-  it "encodeEpochStakeCopy emits 5 fields (no generated columns)" $ do
-    let row = encodeEpochStakeCopy (EpochStakeId 1) sampleEpochStake
+  it "encodeRewardCopy writes addr_id, type, amount, spendable_epoch, pool_id" $ do
+    let row = encodeRewardCopy sampleReward
+        fields = BS8.split '\t' (BS8.init row)
+    fields !! 0 `shouldBe` "7"
+    fields !! 1 `shouldBe` "leader"
+    fields !! 2 `shouldBe` "5000000"
+    fields !! 3 `shouldBe` "210"
+    fields !! 4 `shouldBe` "99"
+
+  it "encodePotRewardCopy emits 4 fields (id IDENTITY, earned_epoch generated)" $ do
+    let row = encodePotRewardCopy samplePotReward
         tabs = BS.count (fromIntegral (fromEnum '\t')) row
-    tabs `shouldBe` 4
+    tabs `shouldBe` 3    -- 4 fields → 3 separators
+
+  it "encodeEpochStakeCopy emits 4 fields (id IDENTITY, no generated columns)" $ do
+    let row = encodeEpochStakeCopy sampleEpochStake
+        tabs = BS.count (fromIntegral (fromEnum '\t')) row
+    tabs `shouldBe` 3
 
   it "encodeEpochStakeProgressCopy renders completed as 't'/'f'" $ do
-    let trueRow  = encodeEpochStakeProgressCopy (EpochStakeProgressId 1)
-                     (EpochStakeProgress 200 True)
-        falseRow = encodeEpochStakeProgressCopy (EpochStakeProgressId 2)
-                     (EpochStakeProgress 200 False)
-    BS8.split '\t' (BS8.init trueRow)  !! 2 `shouldBe` "t"
-    BS8.split '\t' (BS8.init falseRow) !! 2 `shouldBe` "f"
+    let trueRow  = encodeEpochStakeProgressCopy (EpochStakeProgress 200 True)
+        falseRow = encodeEpochStakeProgressCopy (EpochStakeProgress 200 False)
+    BS8.split '\t' (BS8.init trueRow)  !! 1 `shouldBe` "t"
+    BS8.split '\t' (BS8.init falseRow) !! 1 `shouldBe` "f"
 
 -- ---------------------------------------------------------------------------
 -- Helpers and fixtures

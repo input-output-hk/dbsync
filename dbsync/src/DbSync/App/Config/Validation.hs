@@ -28,6 +28,7 @@ validateConfig cfg =
     errors = concat
       [ checkEpochBoundaryRequiresLedger cfg
       , checkPoolStatsRequiresLedger cfg
+      , checkStakeDelegationLedgerRequiresLedger cfg
       , checkCurrentStateRequiresLedger cfg
       , checkMultiAssetRequiresUtxo cfg
       , checkPoolRequiresStakeDelegation cfg
@@ -61,6 +62,23 @@ checkPoolStatsRequiresLedger cfg
           "pool_stats extractor requires ledger.enabled = true. \
           \pool_stat rows are derived from the per-epoch pool \
           \distribution carried on the worker's ApplyResult."
+      ]
+  | otherwise = []
+  where
+    extractors = scOptions cfg
+    ledger = scLedger cfg
+
+-- | stake_delegation_ledger sources reward / pot_reward / epoch_stake /
+-- epoch_stake_progress rows from the worker's per-block stake slice
+-- and per-boundary apEvents. Requires ledger.enabled = true.
+checkStakeDelegationLedgerRequiresLedger :: SyncConfig -> [ConfigError]
+checkStakeDelegationLedgerRequiresLedger cfg
+  | prEnabled (pcStakeDelegationLedger extractors) && not (lcEnabled ledger) =
+      [ ConfigValidationError
+          "stake_delegation_ledger extractor requires ledger.enabled = true. \
+          \reward / pot_reward / epoch_stake / epoch_stake_progress rows are \
+          \derived from the worker's per-block stake slice and per-boundary \
+          \ledger events."
       ]
   | otherwise = []
   where

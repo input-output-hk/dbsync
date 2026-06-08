@@ -19,6 +19,7 @@
     "multi_asset": true,
     "metadata": true,
     "stake_delegation": true,
+    "stake_delegation_ledger": true,
     "pool": true,
     "scripts_datums": true,
     "governance": true,

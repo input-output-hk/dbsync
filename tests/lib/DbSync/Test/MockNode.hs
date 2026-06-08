@@ -19,6 +19,9 @@ module DbSync.Test.MockNode
   , forgeAndPushBlocks
   , forgeAndPushBlocksWith
   , forgeAndPushWithStakeCreds
+  , forgeAndPushDRepsAndDelegateVotes
+  , forgeAndPushCommitteeCreds
+  , forgeAndPushUntilNextEpoch
   , rollbackMockNode
 
     -- * Inspection
@@ -59,11 +62,13 @@ import qualified Cardano.Mock.ChainDB as MockChainDB
 import qualified Cardano.Mock.ChainSync.Server as MockServer
 import qualified Cardano.Mock.Forging.Interpreter as Mock
 import qualified Cardano.Mock.Forging.Tx.Conway as Conway
+import qualified Cardano.Mock.Forging.Tx.Conway.Scenarios as Scenarios
 import qualified Cardano.Mock.Forging.Types as Mock
 
 import DbSync.Test.MockChain
   ( MockChain (..)
   , forgeNextBlock
+  , forgeUntilNextEpoch
   , registerStakeCreds
   , reseedStateQueryFromLedger
   , withMockChain
@@ -225,6 +230,37 @@ forgeAndPushWithStakeCreds mn = do
   atomically $ MockServer.addBlock (mnServer mn) blk
   reseedStateQueryFromLedger (mnChain mn)
   pure blk
+
+-- | Forge one block that funds a fresh stake address, registers the
+-- first 'unregisteredDRepIds' entry, and delegates the stake's vote
+-- to that DRep. Prerequisite for any gov-action that needs DRep
+-- voters to ratify.
+forgeAndPushDRepsAndDelegateVotes :: MockNode -> IO (CardanoBlock StandardCrypto)
+forgeAndPushDRepsAndDelegateVotes mn = do
+  blk <- Scenarios.registerDRepsAndDelegateVotes (mcInterpreter (mnChain mn))
+  atomically $ MockServer.addBlock (mnServer mn) blk
+  reseedStateQueryFromLedger (mnChain mn)
+  pure blk
+
+-- | Forge one block that authorizes a hot key for every bootstrap
+-- committee cold key seeded in @genesis.conway.json@.
+forgeAndPushCommitteeCreds :: MockNode -> IO (CardanoBlock StandardCrypto)
+forgeAndPushCommitteeCreds mn = do
+  blk <- Scenarios.registerCommitteeCreds (mcInterpreter (mnChain mn))
+  atomically $ MockServer.addBlock (mnServer mn) blk
+  reseedStateQueryFromLedger (mnChain mn)
+  pure blk
+
+-- | Forge empty blocks until the chain ticks over to the next epoch.
+-- Returns every block forged this call (including the first block of
+-- the new epoch). Useful for advancing across an exact epoch boundary
+-- without depending on a hand-counted block count.
+forgeAndPushUntilNextEpoch :: MockNode -> IO [CardanoBlock StandardCrypto]
+forgeAndPushUntilNextEpoch mn = do
+  blks <- forgeUntilNextEpoch (mnChain mn)
+  for_ blks $ \blk -> atomically $ MockServer.addBlock (mnServer mn) blk
+  reseedStateQueryFromLedger (mnChain mn)
+  pure blks
 
 -- | Roll back the server-side chain DB to a point. A connected
 -- dbsync receiver sees a @MsgRollBackward@ on its next poll.

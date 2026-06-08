@@ -58,7 +58,17 @@ import DbSync.Db.Schema.MultiAsset (MultiAsset, MaTxMint, MaTxOut)
 import DbSync.Db.Schema.Pool (PoolHash, PoolStat, PoolUpdate, PoolMetadataRef, PoolOwner, PoolRetire, PoolRelay)
 import DbSync.Db.Schema.ScriptsDatums
   ( Datum, ExtraKeyWitness, Redeemer, RedeemerData, Script )
-import DbSync.Db.Schema.StakeDelegation (StakeAddress, StakeRegistration, StakeDeregistration, Delegation, Withdrawal)
+import DbSync.Db.Schema.StakeDelegation
+  ( Delegation
+  , EpochStake
+  , EpochStakeProgress
+  , PotReward
+  , Reward
+  , StakeAddress
+  , StakeDeregistration
+  , StakeRegistration
+  , Withdrawal
+  )
 import DbSync.Db.Schema.UTxO (TxOut, TxIn, CollateralTxIn, CollateralTxOut, ReferenceTxIn)
 
 -- ---------------------------------------------------------------------------
@@ -104,6 +114,14 @@ data Writer m = Writer
   , writeStakeDeregistration :: !(StakeDeregistration -> m ())
   , writeDelegation          :: !(Delegation -> m ())
   , writeWithdrawal          :: !(Withdrawal -> m ())
+
+    -- ---------------------------------------------------------------
+    -- StakeDelegation (ledger-derived) tables — IDENTITY leaves
+    -- ---------------------------------------------------------------
+  , writeReward             :: !(Reward -> m ())
+  , writePotReward          :: !(PotReward -> m ())
+  , writeEpochStake         :: !(EpochStake -> m ())
+  , writeEpochStakeProgress :: !(EpochStakeProgress -> m ())
 
     -- ---------------------------------------------------------------
     -- Pool tables

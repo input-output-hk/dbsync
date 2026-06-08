@@ -12,6 +12,7 @@
 module DbSync.Test.E2E
   ( -- * Common constants
     conwayConfigDir
+  , conwayRewardsConfigDir
 
     -- * App-session brackets
   , withAppSession
@@ -64,6 +65,12 @@ import DbSync.Trace.Types (AppTracer, LogMsg)
 -- security parameter (k=10) so e2e specs cross both quickly.
 conwayConfigDir :: FilePath
 conwayConfigDir = "data/config-conway"
+
+-- | Conway test config with @rho = 0.03@ so block-production rewards
+-- accumulate. Identical to 'conwayConfigDir' otherwise. Use for
+-- specs that assert on the @reward@ or @pot_reward@ tables.
+conwayRewardsConfigDir :: FilePath
+conwayRewardsConfigDir = "data/config-conway-rewards"
 
 -- ---------------------------------------------------------------------------
 -- * App-session brackets

@@ -317,6 +317,7 @@ mkHasLedgerEnv
     stateVar        <- newTVarIO Strict.Nothing
     latestApplyVar  <- newTVarIO Strict.Nothing
     boundaryQueue   <- newTBQueueIO boundaryQueueBound
+    blockApplyQueue <- newTBQueueIO blockApplyQueueBound
     ledgerQueue     <- newTBQueueIO ledgerQueueBound
     depositAccumRef <- newEpochParamsRef
     epochReady      <- newEmptyTMVarIO
@@ -416,6 +417,7 @@ mkHasLedgerEnv
           , leClose                = closeBackend
           , leLatestApplyResult    = latestApplyVar
           , leBoundaryApplyResults = boundaryQueue
+          , leBlockApplyResults    = blockApplyQueue
           , leDepositAccumulator   = depositAccumRef
           , leControlConnection    = ctrlConn
           , leCurrentPhase         = phaseRef
@@ -437,6 +439,12 @@ mkHasLedgerEnv
     -- look-ahead at 100 blocks.
     boundaryQueueBound :: Natural
     boundaryQueueBound = 16
+
+    -- One slot per worker-side look-ahead block. Sized slightly above
+    -- 'ledgerQueueBound' so the worker can keep enqueuing while the
+    -- consumer briefly stalls (e.g. on a slow PG transaction).
+    blockApplyQueueBound :: Natural
+    blockApplyQueueBound = 128
 
 -- | Seed the in-memory 'LedgerDB' buffer with the genesis state on
 -- a fresh boot. The resume path uses 'initLedgerDbFromSnapshot'
@@ -620,6 +628,7 @@ applyBlock blk slotDetails = do
               }
       liftIO $ atomically $ do
         writeTVar (leLatestApplyResult env) (Strict.Just appResult)
+        writeTBQueue (leBlockApplyResults env) appResult
         case apNewEpoch appResult of
           Strict.Just _  -> writeTBQueue (leBoundaryApplyResults env) appResult
           Strict.Nothing -> pure ()

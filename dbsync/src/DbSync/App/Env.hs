@@ -65,7 +65,7 @@ import DbSync.Extractor
   , HasExtractors (..)
   , HasLedgerData (..)
   , HasNetwork (..)
-  , emptyBlockLedgerData
+  , takeBlockLedgerData
   )
 import DbSync.Phase.Ingest.DedupStore (DedupStores)
 import DbSync.Phase.Ingest.PipelineStats (PipelineStats)
@@ -500,19 +500,15 @@ instance HasWriter FollowEnv where
 -- * HasLedgerData instances
 -- ---------------------------------------------------------------------------
 
--- | During 'IngestChainHistory' extractors never see ledger output
--- per block: the worker accumulates protocol-param deposits into
--- @epoch_param_pending@ at epoch boundaries and the post-load pass
--- backfills the affected columns once ingest exits. Keeping this
--- 'emptyBlockLedgerData' decouples the worker from the consumer's
--- hot path.
+-- | Drains the next per-block 'ApplyResult' from the worker's FIFO
+-- and projects it onto 'BlockLedgerData'. The consumer drives this
+-- once per processed block; the ledger-OFF arm returns empty without
+-- touching any queue.
 instance HasLedgerData IngestEnv where
-  getLedgerData _env _block = pure emptyBlockLedgerData
+  getLedgerData ie _block = takeBlockLedgerData (ieHasLedgerEnv ie)
 
--- | 'FollowEnv' currently has no ledger env; returns empty until
--- the Follow-side worker plumbing lands.
 instance HasLedgerData FollowEnv where
-  getLedgerData _ _ = pure emptyBlockLedgerData
+  getLedgerData fe _block = takeBlockLedgerData (feHasLedgerEnv fe)
 
 -- ---------------------------------------------------------------------------
 -- * HasCurrentPhase instances

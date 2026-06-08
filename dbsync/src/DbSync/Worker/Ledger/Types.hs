@@ -233,6 +233,12 @@ data LedgerEnv = LedgerEnv
     -- ^ FIFO of boundary 'ApplyResult' values (those with
     -- @apNewEpoch = Just@). Drained one per boundary by the
     -- consumer; the worker enqueues independently of 'apply' rate.
+  , leBlockApplyResults    :: !(TBQueue ApplyResult)
+    -- ^ FIFO of per-block 'ApplyResult' values. The worker enqueues
+    -- one entry per applied block; the consumer drains one per
+    -- processed block (replay-window blocks drain and discard).
+    -- Bounded so the worker creates back-pressure when the consumer
+    -- falls behind.
   , leDepositAccumulator   :: !EpochParamsRef
     -- ^ Per-epoch protocol-param deposit values (stake_key /
     -- pool). The worker writes to this on every applied non-replay

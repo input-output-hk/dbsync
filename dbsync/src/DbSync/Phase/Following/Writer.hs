@@ -44,6 +44,7 @@ import qualified DbSync.Phase.Following.Writer.Pool as Pool
 import qualified DbSync.Phase.Following.Writer.PoolStats as PoolStats
 import qualified DbSync.Phase.Following.Writer.ScriptsDatums as ScriptsDatums
 import qualified DbSync.Phase.Following.Writer.StakeDelegation as Stake
+import qualified DbSync.Phase.Following.Writer.StakeDelegationLedger as StakeLedger
 import qualified DbSync.Phase.Following.Writer.UTxO as UTxO
 import DbSync.Writer (Writer (..))
 
@@ -81,6 +82,12 @@ mkWriter conn = Writer
   , writePotTransfer         = Stake.writePotTransferConn conn
   , writeTreasury            = Stake.writeTreasuryConn conn
   , writeReserve             = Stake.writeReserveConn conn
+
+    -- StakeDelegation (ledger-derived)
+  , writeReward             = StakeLedger.writeRewardConn conn
+  , writePotReward          = StakeLedger.writePotRewardConn conn
+  , writeEpochStake         = StakeLedger.writeEpochStakeConn conn
+  , writeEpochStakeProgress = StakeLedger.writeEpochStakeProgressConn conn
 
     -- Pool
   , writePoolHash        = Pool.writePoolHashConn conn
@@ -175,6 +182,12 @@ mkBufferedWriter buf = Writer
   , writePotTransfer         = Stake.writePotTransferBuf buf
   , writeTreasury            = Stake.writeTreasuryBuf buf
   , writeReserve             = Stake.writeReserveBuf buf
+
+    -- StakeDelegation (ledger-derived)
+  , writeReward             = StakeLedger.writeRewardBuf buf
+  , writePotReward          = StakeLedger.writePotRewardBuf buf
+  , writeEpochStake         = StakeLedger.writeEpochStakeBuf buf
+  , writeEpochStakeProgress = StakeLedger.writeEpochStakeProgressBuf buf
 
     -- Pool
   , writePoolHash        = Pool.writePoolHashBuf buf

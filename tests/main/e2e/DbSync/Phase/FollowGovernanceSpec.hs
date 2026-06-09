@@ -50,8 +50,8 @@ import qualified Cardano.Mock.Forging.Types as Mock
 
 import DbSync.App.Config.Types
   ( SyncConfig (..)
-  , SyncOption (..)
-  , SyncOptions (..)
+  , OptionFlag (..)
+  , DbSyncOptions (..)
   )
 import DbSync.Db.Schema.Core (blockTableDef)
 import DbSync.Db.Schema.Governance
@@ -238,7 +238,7 @@ governanceTestProfile :: SyncConfig
 governanceTestProfile =
   ledgerEnabledTestProfile
     { scOptions = (scOptions ledgerEnabledTestProfile)
-        { pcGovernance = SyncOption True
+        { pcGovernance = OptionFlag True
         }
     }
 

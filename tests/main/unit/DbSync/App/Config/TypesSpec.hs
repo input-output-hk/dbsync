@@ -18,8 +18,8 @@ import DbSync.App.Config.Types
   , LogFormat (..)
   , LoggingConfig (..)
   , MetricsConfig (..)
-  , SyncOption (..)
-  , SyncOptions (..)
+  , OptionFlag (..)
+  , DbSyncOptions (..)
   , SyncConfig (..)
   , SyncMode (..)
   , SyncSettings (..)
@@ -84,7 +84,7 @@ spec = describe "DbSync.App.Config.Types" $ do
 
           -- All optional extractors default to OFF (opt-in semantics).
           -- The unconditional 'core' extractor isn't represented in
-          -- SyncOptions — it's added by buildExtractors regardless.
+          -- DbSyncOptions — it's added by buildExtractors regardless.
           uoEnabled (pcUtxo (scOptions cfg))            `shouldBe` False
           -- Per-utxo defaults — opt-in extractor, but back-pointer
           -- on by default once enabled, tx_in populated, archive.

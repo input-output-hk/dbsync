@@ -49,8 +49,8 @@ import DbSync.Db.Statement.Transaction (beginSql, commitSql, rollbackSql)
 
 import DbSync.App.Config.Types
   ( SyncConfig (..)
-  , SyncOption (..)
-  , SyncOptions (..)
+  , OptionFlag (..)
+  , DbSyncOptions (..)
   )
 import DbSync.App.Env (CoreEnv (..), FollowEnv (..), HasConfig (..), HasNetwork)
 import DbSync.Extractor (ExtractorDef (..), takeBlockLedgerData)

@@ -9,7 +9,7 @@
 -- The @db_options@ block is opt-in: every extractor defaults to
 -- disabled and must be enabled explicitly. The @core@ extractor is
 -- the sole exception — it is unconditional and not represented in
--- 'SyncOptions' at all.
+-- 'DbSyncOptions' at all.
 module DbSync.App.Config.Types
   ( -- * Top-level config
     SyncConfig (..)
@@ -23,8 +23,8 @@ module DbSync.App.Config.Types
   , LogFormat (..)
 
     -- * Sync options
-  , SyncOptions (..)
-  , SyncOption (..)
+  , DbSyncOptions (..)
+  , OptionFlag (..)
   , UtxoOption (..)
   , UtxoStrategy (..)
   , MetadataFormat (..)
@@ -37,7 +37,7 @@ module DbSync.App.Config.Types
   , defaultSnapshotNearTipEpoch
   , defaultMetricsConfig
   , defaultLoggingConfig
-  , defaultSyncOptions
+  , defaultDbSyncOptions
   , defaultUtxoOption
 
     -- * DB-sync node config (from db-sync-config.json)
@@ -71,7 +71,7 @@ data SyncConfig = SyncConfig
   { scDatabase :: !DatabaseConfig
   , scSync     :: !SyncSettings
   , scLedger   :: !LedgerConfig
-  , scOptions  :: !SyncOptions
+  , scOptions  :: !DbSyncOptions
   , scMetrics  :: !MetricsConfig
   , scLogging  :: !LoggingConfig
   }
@@ -83,7 +83,7 @@ instance FromJSON SyncConfig where
       <$> o .:  "database"
       <*> o .:? "sync"           .!= defaultSyncSettings
       <*> o .:? "ledger"         .!= defaultLedgerConfig
-      <*> o .:? "db_options"     .!= defaultSyncOptions
+      <*> o .:? "db_options"     .!= defaultDbSyncOptions
       <*> o .:? "metrics"        .!= defaultMetricsConfig
       <*> o .:? "logging"        .!= defaultLoggingConfig
 
@@ -271,29 +271,29 @@ instance FromJSON LogFormat where
 --
 -- 'pcUtxo' is structured because the UTxO extractor has multiple
 -- knobs that route different Prep paths; the rest are flat bools.
-data SyncOptions = SyncOptions
+data DbSyncOptions = DbSyncOptions
   { pcUtxo                  :: !UtxoOption
-  , pcMultiAsset            :: !SyncOption
-  , pcMetadata              :: !SyncOption
-  , pcStakeDelegation       :: !SyncOption
-  , pcStakeDelegationLedger :: !SyncOption
-  , pcPool                  :: !SyncOption
-  , pcScriptsDatums         :: !SyncOption
-  , pcGovernance            :: !SyncOption
-  , pcCbor                  :: !SyncOption
-  , pcEpochSyncStats        :: !SyncOption
-  , pcEpochBoundary         :: !SyncOption
-  , pcPoolStats             :: !SyncOption
-  , pcEpoch                 :: !SyncOption
-  , pcCurrentState          :: !SyncOption
-  , pcOffChainPools         :: !SyncOption
-  , pcOffChainVotes         :: !SyncOption
+  , pcMultiAsset            :: !OptionFlag
+  , pcMetadata              :: !OptionFlag
+  , pcStakeDelegation       :: !OptionFlag
+  , pcStakeDelegationLedger :: !OptionFlag
+  , pcPool                  :: !OptionFlag
+  , pcScriptsDatums         :: !OptionFlag
+  , pcGovernance            :: !OptionFlag
+  , pcCbor                  :: !OptionFlag
+  , pcEpochSyncStats        :: !OptionFlag
+  , pcEpochBoundary         :: !OptionFlag
+  , pcPoolStats             :: !OptionFlag
+  , pcEpoch                 :: !OptionFlag
+  , pcCurrentState          :: !OptionFlag
+  , pcOffChainPools         :: !OptionFlag
+  , pcOffChainVotes         :: !OptionFlag
   }
   deriving stock (Eq, Show)
 
-instance FromJSON SyncOptions where
-  parseJSON = Aeson.withObject "SyncOptions" $ \o ->
-    SyncOptions
+instance FromJSON DbSyncOptions where
+  parseJSON = Aeson.withObject "DbSyncOptions" $ \o ->
+    DbSyncOptions
       <$> o .:? "utxo"                    .!= defaultUtxoOption
       <*> o .:? "multi_asset"             .!= disabled
       <*> o .:? "metadata"                .!= disabled
@@ -311,32 +311,32 @@ instance FromJSON SyncOptions where
       <*> o .:? "off_chain_pools"         .!= disabled
       <*> o .:? "off_chain_votes"         .!= disabled
     where
-      disabled     = SyncOption False
-      epochDefault = SyncOption True
+      disabled     = OptionFlag False
+      epochDefault = OptionFlag True
 
 -- | Default option config used when the @"db_options"@ section is
 -- omitted: every optional extractor off /except/ 'pcEpoch', which
 -- defaults to true so the @epoch@ view machinery is available
 -- without an explicit opt-in. The unconditional @core@ extractor is
 -- added by @buildExtractors@ and is not represented here.
-defaultSyncOptions :: SyncOptions
-defaultSyncOptions = SyncOptions
+defaultDbSyncOptions :: DbSyncOptions
+defaultDbSyncOptions = DbSyncOptions
   { pcUtxo                  = defaultUtxoOption
-  , pcMultiAsset            = SyncOption False
-  , pcMetadata              = SyncOption False
-  , pcStakeDelegation       = SyncOption False
-  , pcStakeDelegationLedger = SyncOption False
-  , pcPool                  = SyncOption False
-  , pcScriptsDatums         = SyncOption False
-  , pcGovernance            = SyncOption False
-  , pcCbor                  = SyncOption False
-  , pcEpochSyncStats        = SyncOption False
-  , pcEpochBoundary         = SyncOption False
-  , pcPoolStats             = SyncOption False
-  , pcEpoch                 = SyncOption True
-  , pcCurrentState          = SyncOption False
-  , pcOffChainPools         = SyncOption False
-  , pcOffChainVotes         = SyncOption False
+  , pcMultiAsset            = OptionFlag False
+  , pcMetadata              = OptionFlag False
+  , pcStakeDelegation       = OptionFlag False
+  , pcStakeDelegationLedger = OptionFlag False
+  , pcPool                  = OptionFlag False
+  , pcScriptsDatums         = OptionFlag False
+  , pcGovernance            = OptionFlag False
+  , pcCbor                  = OptionFlag False
+  , pcEpochSyncStats        = OptionFlag False
+  , pcEpochBoundary         = OptionFlag False
+  , pcPoolStats             = OptionFlag False
+  , pcEpoch                 = OptionFlag True
+  , pcCurrentState          = OptionFlag False
+  , pcOffChainPools         = OptionFlag False
+  , pcOffChainVotes         = OptionFlag False
   }
 
 -- | Configuration for a single option.
@@ -344,15 +344,15 @@ defaultSyncOptions = SyncOptions
 -- Today this just wraps a 'Bool'; the wrapper is intentional so that
 -- options needing variants (e.g. multi-asset policy allowlists,
 -- metadata key filters, governance subsets) can grow without
--- breaking the @SyncOptions@ record.
-data SyncOption = SyncOption
+-- breaking the @DbSyncOptions@ record.
+data OptionFlag = OptionFlag
   { prEnabled :: !Bool
   }
   deriving stock (Eq, Show)
 
 -- | Parse a sync option from a plain JSON boolean (e.g. @"multi_asset": true@).
-instance FromJSON SyncOption where
-  parseJSON = Aeson.withBool "SyncOption" (pure . SyncOption)
+instance FromJSON OptionFlag where
+  parseJSON = Aeson.withBool "OptionFlag" (pure . OptionFlag)
 
 -- ---------------------------------------------------------------------------
 -- * UTxO extractor option

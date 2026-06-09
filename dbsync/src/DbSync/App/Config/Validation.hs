@@ -11,8 +11,8 @@ import Cardano.Prelude
 import DbSync.App.Config.Types
   ( ConfigError (..)
   , LedgerConfig (..)
-  , SyncOption (..)
-  , SyncOptions (..)
+  , OptionFlag (..)
+  , DbSyncOptions (..)
   , SyncConfig (..)
   , UtxoOption (..)
   )

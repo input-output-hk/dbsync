@@ -63,7 +63,7 @@ import DbSync.App.Config.Types
     ( DatabaseConfig(..),
       LedgerConfig(..),
       SyncConfig(..),
-      SyncOptions(..),
+      DbSyncOptions(..),
       UtxoOption(..) )
 import DbSync.Db.Loader (LoaderStream (..), closeLoaderStream, mkLoaderStream)
 import DbSync.Db.Schema.Types (TableDef)

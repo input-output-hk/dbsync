@@ -11,7 +11,7 @@ import Cardano.Prelude
 import qualified Hasql.Session as Sess
 
 import DbSync.AppM (LoggingM)
-import DbSync.App.Config.Types (SyncConfig (..), SyncOptions (..), UtxoOption (..))
+import DbSync.App.Config.Types (SyncConfig (..), DbSyncOptions (..), UtxoOption (..))
 import DbSync.Db.Run (useConn)
 import DbSync.Db.Statement.Resolve
   ( resolveCollateralTxInScript

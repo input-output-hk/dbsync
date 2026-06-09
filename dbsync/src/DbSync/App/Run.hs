@@ -36,7 +36,12 @@ import Ouroboros.Consensus.Shelley.Node (ShelleyGenesis (..))
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (listSnapshots)
 import Ouroboros.Network.Magic (NetworkMagic)
 
-import DbSync.App.Setup (buildCoreEnv, runStartup, setupOffChainPoolWorker)
+import DbSync.App.Setup
+  ( buildCoreEnv
+  , runStartup
+  , setupOffChainPoolWorker
+  , setupOffChainVoteWorker
+  )
 import DbSync.App.Args (AppArgs (..))
 import DbSync.AppM (runAppM)
 import DbSync.SyncState.Row
@@ -119,6 +124,10 @@ import DbSync.Phase.Preparing.Tuning (defaultPrepTuning)
 import DbSync.Worker.OffChain.Pool
   ( OffChainPoolWorker
   , closeOffChainPoolWorker
+  )
+import DbSync.Worker.OffChain.Vote
+  ( OffChainVoteWorker
+  , closeOffChainVoteWorker
   )
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Worker.TxOut.Worker
@@ -506,6 +515,8 @@ runIngestThenFollow
     txOutWorker      <- mkTxOutWorker tracer hasqlSettings initialAddressId
     mPoolWorker      <-
       setupOffChainPoolWorker tracer hasqlSettings (scOptions validProfile)
+    mVoteWorker      <-
+      setupOffChainVoteWorker tracer hasqlSettings (scOptions validProfile)
     utxoStore        <- openUtxoStore lsmSession
     let consumedByOn = uoConsumedByTxId (pcUtxo (scOptions validProfile))
     mConsumedByBuf <-
@@ -524,6 +535,7 @@ runIngestThenFollow
           , ieAddressBuffer           = addrBuffer
           , ieTxOutWorker             = txOutWorker
           , ieOffChainPoolWorker      = mPoolWorker
+          , ieOffChainVoteWorker      = mVoteWorker
           , ieLsmSession              = lsmSession
           , ieUtxoStore               = utxoStore
           , ieConsumedByBuffer        = mConsumedByBuf
@@ -553,7 +565,7 @@ runIngestThenFollow
     -- below) survive into Prep and Follow.
     let shutdownIngest             = closeIngestResources tracer loaderStream txOutWorker utxoStore dedupStores
         ingestAction               = runAppM ingestEnv runConsumer `finally` shutdownIngest
-        shutdownPostIngest         = closePipelineResources tracer consumerCtrlConn lsmSession hasLedgerEnv mPoolWorker
+        shutdownPostIngest         = closePipelineResources tracer consumerCtrlConn lsmSession hasLedgerEnv mPoolWorker mVoteWorker
         runPrepAndMarkComplete     = runPrep tracer coreEnv hasqlSettings tableDefs lsmSession
         mLedgerQueue               = case hasLedgerEnv of
           LedgerEnabled lenv -> Just (leLedgerQueue lenv)
@@ -629,8 +641,9 @@ closePipelineResources
   -> LsmSession
   -> HasLedgerEnv
   -> Maybe OffChainPoolWorker
+  -> Maybe OffChainVoteWorker
   -> IO ()
-closePipelineResources tracer consumerCtrlConn lsmSession hasLedgerEnv mPoolWorker = do
+closePipelineResources tracer consumerCtrlConn lsmSession hasLedgerEnv mPoolWorker mVoteWorker = do
   logInfoIO tracer "App" "Closing consumer control connection..."
   closeControlConnection consumerCtrlConn
     `catch` \(e :: SomeException) ->
@@ -640,6 +653,11 @@ closePipelineResources tracer consumerCtrlConn lsmSession hasLedgerEnv mPoolWork
     closeOffChainPoolWorker w
       `catch` \(e :: SomeException) ->
         logErrorIO tracer "App" $ "Error closing off-chain pool worker: " <> show e
+  for_ mVoteWorker $ \w -> do
+    logInfoIO tracer "App" "Stopping off-chain vote worker..."
+    closeOffChainVoteWorker w
+      `catch` \(e :: SomeException) ->
+        logErrorIO tracer "App" $ "Error closing off-chain vote worker: " <> show e
   logInfoIO tracer "App" "Closing ingest LSM session..."
   closeLsmSession lsmSession
     `catch` \(e :: SomeException) ->

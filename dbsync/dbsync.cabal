@@ -95,6 +95,7 @@ library
     DbSync.Extractor.Metadata
     DbSync.Extractor.MultiAsset
     DbSync.Extractor.OffChainPools
+    DbSync.Extractor.OffChainVotes
     DbSync.Extractor.Pipeline
     DbSync.Extractor.Pool
     DbSync.Extractor.PoolStats
@@ -137,6 +138,7 @@ library
     DbSync.Phase.Ingest.Resolver.Internal
     DbSync.Phase.Ingest.Resolver.MultiAsset
     DbSync.Phase.Ingest.Resolver.OffChainPools
+    DbSync.Phase.Ingest.Resolver.OffChainVotes
     DbSync.Phase.Ingest.Resolver.Pool
     DbSync.Phase.Ingest.Resolver.ScriptsDatums
     DbSync.Phase.Ingest.Resolver.StakeDelegation
@@ -151,6 +153,7 @@ library
     DbSync.Phase.Ingest.Writer.Metadata
     DbSync.Phase.Ingest.Writer.MultiAsset
     DbSync.Phase.Ingest.Writer.OffChainPools
+    DbSync.Phase.Ingest.Writer.OffChainVotes
     DbSync.Phase.Ingest.Writer.Pool
     DbSync.Phase.Ingest.Writer.PoolStats
     DbSync.Phase.Ingest.Writer.ScriptsDatums
@@ -178,6 +181,7 @@ library
     DbSync.Phase.Following.Resolver.Internal
     DbSync.Phase.Following.Resolver.MultiAsset
     DbSync.Phase.Following.Resolver.OffChainPools
+    DbSync.Phase.Following.Resolver.OffChainVotes
     DbSync.Phase.Following.Resolver.Pool
     DbSync.Phase.Following.Resolver.ScriptsDatums
     DbSync.Phase.Following.Resolver.StakeDelegation
@@ -196,6 +200,7 @@ library
     DbSync.Phase.Following.Writer.Metadata
     DbSync.Phase.Following.Writer.MultiAsset
     DbSync.Phase.Following.Writer.OffChainPools
+    DbSync.Phase.Following.Writer.OffChainVotes
     DbSync.Phase.Following.Writer.Pool
     DbSync.Phase.Following.Writer.PoolStats
     DbSync.Phase.Following.Writer.ScriptsDatums
@@ -217,10 +222,12 @@ library
     DbSync.Worker.Ledger.Types
     DbSync.Worker.Ledger.Worker
     DbSync.Worker.OffChain.Fetcher
+    DbSync.Worker.OffChain.Http
     DbSync.Worker.OffChain.Pool
     DbSync.Worker.OffChain.Retry
     DbSync.Worker.OffChain.Types
     DbSync.Worker.OffChain.Vote
+    DbSync.Worker.OffChain.Vote.Types
     DbSync.Worker.TxOut.AddressBuffer
     DbSync.Worker.TxOut.ConsumedByBuffer
     DbSync.Worker.TxOut.Worker
@@ -318,6 +325,13 @@ library
 
     -- CLI
     , optparse-applicative
+
+    -- HTTP
+    , http-client
+    , http-client-restricted
+    , http-types
+    , case-insensitive
+    , network
 
     -- Other
     , base16-bytestring

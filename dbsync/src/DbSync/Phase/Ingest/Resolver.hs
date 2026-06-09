@@ -25,6 +25,7 @@ import qualified DbSync.Phase.Ingest.Resolver.EpochBoundary as EpochBoundary
 import qualified DbSync.Phase.Ingest.Resolver.Governance as Governance
 import qualified DbSync.Phase.Ingest.Resolver.MultiAsset as MultiAsset
 import qualified DbSync.Phase.Ingest.Resolver.OffChainPools as OffChainPools
+import qualified DbSync.Phase.Ingest.Resolver.OffChainVotes as OffChainVotes
 import qualified DbSync.Phase.Ingest.Resolver.Pool as Pool
 import qualified DbSync.Phase.Ingest.Resolver.ScriptsDatums as ScriptsDatums
 import qualified DbSync.Phase.Ingest.Resolver.StakeDelegation as Stake
@@ -88,6 +89,9 @@ mkIngestResolver extractStateRef dedupStores addrBufRef utxoStore mConsumedByBuf
 
     -- OffChainPools
   , enqueuePoolMetaFetch    = OffChainPools.enqueuePoolMetaFetchIngest
+
+    -- OffChainVotes
+  , enqueueVoteMetaFetch    = OffChainVotes.enqueueVoteMetaFetchIngest
 
     -- EpochSyncStats
   , assignEpochSyncStatsId = Epoch.assignEpochSyncStatsIdIngest extractStateRef

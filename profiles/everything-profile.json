@@ -25,6 +25,8 @@
     "pool": true,
     "scripts_datums": true,
     "governance": true,
+    "off_chain_votes": true,  
+    "off_chain_pools": true,  
     "cbor": true,
     "epoch_sync_stats": true,
     "epoch_boundary": true,

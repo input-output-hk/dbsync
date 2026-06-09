@@ -41,6 +41,7 @@ import qualified DbSync.Phase.Following.Writer.Governance as Governance
 import qualified DbSync.Phase.Following.Writer.Metadata as Metadata
 import qualified DbSync.Phase.Following.Writer.MultiAsset as MultiAsset
 import qualified DbSync.Phase.Following.Writer.OffChainPools as OffChainPools
+import qualified DbSync.Phase.Following.Writer.OffChainVotes as OffChainVotes
 import qualified DbSync.Phase.Following.Writer.Pool as Pool
 import qualified DbSync.Phase.Following.Writer.PoolStats as PoolStats
 import qualified DbSync.Phase.Following.Writer.ScriptsDatums as ScriptsDatums
@@ -106,6 +107,15 @@ mkWriter conn = Writer
   , writeOffChainPoolFetchError = OffChainPools.writeOffChainPoolFetchErrorConn conn
   , writeDelistedPool           = OffChainPools.writeDelistedPoolConn conn
   , writeReservedPoolTicker     = OffChainPools.writeReservedPoolTickerConn conn
+
+    -- OffChainVotes
+  , writeOffChainVoteData           = OffChainVotes.writeOffChainVoteDataConn conn
+  , writeOffChainVoteGovActionData  = OffChainVotes.writeOffChainVoteGovActionDataConn conn
+  , writeOffChainVoteDrepData       = OffChainVotes.writeOffChainVoteDrepDataConn conn
+  , writeOffChainVoteAuthor         = OffChainVotes.writeOffChainVoteAuthorConn conn
+  , writeOffChainVoteReference      = OffChainVotes.writeOffChainVoteReferenceConn conn
+  , writeOffChainVoteExternalUpdate = OffChainVotes.writeOffChainVoteExternalUpdateConn conn
+  , writeOffChainVoteFetchError     = OffChainVotes.writeOffChainVoteFetchErrorConn conn
 
     -- CBOR
   , writeTxCbor = Cbor.writeTxCborConn conn
@@ -212,6 +222,15 @@ mkBufferedWriter buf = Writer
   , writeOffChainPoolFetchError = OffChainPools.writeOffChainPoolFetchErrorBuf buf
   , writeDelistedPool           = OffChainPools.writeDelistedPoolBuf buf
   , writeReservedPoolTicker     = OffChainPools.writeReservedPoolTickerBuf buf
+
+    -- OffChainVotes
+  , writeOffChainVoteData           = OffChainVotes.writeOffChainVoteDataBuf buf
+  , writeOffChainVoteGovActionData  = OffChainVotes.writeOffChainVoteGovActionDataBuf buf
+  , writeOffChainVoteDrepData       = OffChainVotes.writeOffChainVoteDrepDataBuf buf
+  , writeOffChainVoteAuthor         = OffChainVotes.writeOffChainVoteAuthorBuf buf
+  , writeOffChainVoteReference      = OffChainVotes.writeOffChainVoteReferenceBuf buf
+  , writeOffChainVoteExternalUpdate = OffChainVotes.writeOffChainVoteExternalUpdateBuf buf
+  , writeOffChainVoteFetchError     = OffChainVotes.writeOffChainVoteFetchErrorBuf buf
 
     -- CBOR
   , writeTxCbor = Cbor.writeTxCborBuf buf

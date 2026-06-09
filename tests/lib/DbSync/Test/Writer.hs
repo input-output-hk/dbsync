@@ -285,6 +285,16 @@ mkTestWriter ref = Writer
   , writeDelistedPool           = \_ -> pure ()
   , writeReservedPoolTicker     = \_ -> pure ()
 
+    -- OffChainVotes — written by the off-chain vote worker, not by
+    -- the extractor under test. No-op in unit tests.
+  , writeOffChainVoteData           = \_ -> pure ()
+  , writeOffChainVoteGovActionData  = \_ -> pure ()
+  , writeOffChainVoteDrepData       = \_ -> pure ()
+  , writeOffChainVoteAuthor         = \_ -> pure ()
+  , writeOffChainVoteReference      = \_ -> pure ()
+  , writeOffChainVoteExternalUpdate = \_ -> pure ()
+  , writeOffChainVoteFetchError     = \_ -> pure ()
+
     -- CBOR (no-op)
   , writeTxCbor = \_ -> pure ()
 

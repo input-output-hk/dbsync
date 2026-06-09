@@ -36,7 +36,7 @@ import DbSync.Db.Schema.ScriptsDatums (Datum, RedeemerData, Script)
 import DbSync.Db.Schema.StakeDelegation (StakeAddress)
 import DbSync.Db.Types (AnchorType, DbLovelace)
 import DbSync.Phase.Ingest.UtxoStore (UtxoTxEntry)
-import DbSync.Worker.OffChain.Types (PoolMetadataRef)
+import DbSync.Worker.OffChain.Types (PoolMetadataRef, VotingAnchorRef)
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -136,6 +136,17 @@ data IdResolver m = IdResolver
     -- @pool_metadata_ref@ rows that lack a result. Test resolvers
     -- capture the call for assertions.
   , enqueuePoolMetaFetch :: !(PoolMetadataRef -> m ())
+
+    -- ---------------------------------------------------------------
+    -- OffChainVotes extractor hook
+    -- ---------------------------------------------------------------
+
+    -- | Record that the extractor observed a voting anchor. The
+    -- production resolvers leave this as a no-op — the off-chain
+    -- vote worker independently polls PG for @voting_anchor@ rows
+    -- that lack a result. Test resolvers capture the call for
+    -- assertions.
+  , enqueueVoteMetaFetch :: !(VotingAnchorRef -> m ())
 
     -- ---------------------------------------------------------------
     -- EpochSyncStats IDs

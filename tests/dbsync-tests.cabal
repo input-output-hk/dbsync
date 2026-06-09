@@ -126,6 +126,7 @@ test-suite dbsync-test
     DbSync.Schema.GenerateSpec
     DbSync.Schema.GovernanceSpec
     DbSync.Schema.OffChainPoolSpec
+    DbSync.Schema.OffChainVoteSpec
     DbSync.Schema.RewardSpec
     DbSync.Schema.ScriptsDatumsSpec
     DbSync.Schema.SyncStateSpec
@@ -136,6 +137,7 @@ test-suite dbsync-test
     DbSync.Extractor.EpochSpec
     DbSync.Extractor.GovernanceSpec
     DbSync.Extractor.OffChainPoolsSpec
+    DbSync.Extractor.OffChainVotesSpec
     DbSync.Extractor.PipelineSpec
     DbSync.Extractor.PoolSpec
     DbSync.Extractor.ScriptsDatumsSpec
@@ -156,6 +158,7 @@ test-suite dbsync-test
     DbSync.SyncState.ResumeSpec
     DbSync.SyncState.RowSpec
     DbSync.Worker.OffChain.PoolSpec
+    DbSync.Worker.OffChain.VoteSpec
     DbSync.App.BootSpec
     DbSync.Phase.CurrentSpec
     DbSync.Phase.Following.BufferedDiffSpec

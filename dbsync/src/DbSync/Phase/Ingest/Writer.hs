@@ -52,6 +52,15 @@ import DbSync.Phase.Ingest.Writer.OffChainPools
   , writeOffChainPoolFetchErrorCopy
   , writeReservedPoolTickerCopy
   )
+import DbSync.Phase.Ingest.Writer.OffChainVotes
+  ( writeOffChainVoteAuthorCopy
+  , writeOffChainVoteDataCopy
+  , writeOffChainVoteDrepDataCopy
+  , writeOffChainVoteExternalUpdateCopy
+  , writeOffChainVoteFetchErrorCopy
+  , writeOffChainVoteGovActionDataCopy
+  , writeOffChainVoteReferenceCopy
+  )
 import DbSync.Phase.Ingest.Writer.Pool
   ( writePoolHashCopy
   , writePoolMetadataRefCopy
@@ -152,6 +161,15 @@ mkWriter ls = Writer
   , writeOffChainPoolFetchError = writeOffChainPoolFetchErrorCopy ls
   , writeDelistedPool           = writeDelistedPoolCopy ls
   , writeReservedPoolTicker     = writeReservedPoolTickerCopy ls
+
+    -- OffChainVotes
+  , writeOffChainVoteData           = writeOffChainVoteDataCopy ls
+  , writeOffChainVoteGovActionData  = writeOffChainVoteGovActionDataCopy ls
+  , writeOffChainVoteDrepData       = writeOffChainVoteDrepDataCopy ls
+  , writeOffChainVoteAuthor         = writeOffChainVoteAuthorCopy ls
+  , writeOffChainVoteReference      = writeOffChainVoteReferenceCopy ls
+  , writeOffChainVoteExternalUpdate = writeOffChainVoteExternalUpdateCopy ls
+  , writeOffChainVoteFetchError     = writeOffChainVoteFetchErrorCopy ls
 
     -- CBOR
   , writeTxCbor = writeTxCborCopy ls

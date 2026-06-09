@@ -40,8 +40,8 @@ import qualified Cardano.Mock.Forging.Types as Mock
 
 import DbSync.App.Config.Types
   ( SyncConfig (..)
-  , SyncOption (..)
-  , SyncOptions (..)
+  , OptionFlag (..)
+  , DbSyncOptions (..)
   )
 import DbSync.Db.Schema.Core (blockTableDef)
 import DbSync.Db.Schema.ScriptsDatums
@@ -140,7 +140,7 @@ scriptsDatumsTestProfile :: SyncConfig
 scriptsDatumsTestProfile =
   ledgerEnabledTestProfile
     { scOptions = (scOptions ledgerEnabledTestProfile)
-        { pcScriptsDatums = SyncOption True
+        { pcScriptsDatums = OptionFlag True
         }
     }
 

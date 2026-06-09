@@ -40,8 +40,8 @@ import qualified Cardano.Mock.Forging.Types as Mock
 
 import DbSync.App.Config.Types
   ( SyncConfig (..)
-  , SyncOption (..)
-  , SyncOptions (..)
+  , OptionFlag (..)
+  , DbSyncOptions (..)
   )
 import DbSync.Db.Schema.Core (blockTableDef)
 import DbSync.Db.Schema.StakeDelegation
@@ -187,7 +187,7 @@ spec = describe "Follow stake_delegation_ledger writes" $ do
 rewardProfile :: SyncConfig
 rewardProfile = ledgerEnabledTestProfile
   { scOptions = (scOptions ledgerEnabledTestProfile)
-      { pcStakeDelegationLedger = SyncOption True
+      { pcStakeDelegationLedger = OptionFlag True
       }
   }
 
@@ -196,8 +196,8 @@ rewardProfile = ledgerEnabledTestProfile
 treasuryProfile :: SyncConfig
 treasuryProfile = ledgerEnabledTestProfile
   { scOptions = (scOptions ledgerEnabledTestProfile)
-      { pcStakeDelegationLedger = SyncOption True
-      , pcGovernance            = SyncOption True
+      { pcStakeDelegationLedger = OptionFlag True
+      , pcGovernance            = OptionFlag True
       }
   }
 

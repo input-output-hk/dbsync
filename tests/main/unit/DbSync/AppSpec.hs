@@ -26,10 +26,10 @@ import DbSync.App.Config.Node (parseNodeConfig)
 import DbSync.App.Config.Types
   ( NodeConfig
   , SyncConfig (..)
-  , SyncOptions (..)
-  , SyncOption (..)
+  , DbSyncOptions (..)
+  , OptionFlag (..)
   , UtxoOption (..)
-  , defaultSyncOptions
+  , defaultDbSyncOptions
   , defaultUtxoOption
   )
 import DbSync.App.Config.Validation (validateConfig)
@@ -48,9 +48,9 @@ loadTestConfigs = do
   Right nodeCfg <- parseNodeConfig "fixtures/node-config.json"
   pure (validCfg, nodeCfg)
 
--- | Build SyncOptions with selected extractors enabled.
-optionsWith :: [Text] -> SyncOptions
-optionsWith enabled = SyncOptions
+-- | Build DbSyncOptions with selected extractors enabled.
+optionsWith :: [Text] -> DbSyncOptions
+optionsWith enabled = DbSyncOptions
   { pcUtxo                  = defaultUtxoOption { uoEnabled = "utxo" `elem` enabled }
   , pcMultiAsset            = mk "multi_asset"
   , pcMetadata              = mk "metadata"
@@ -69,7 +69,7 @@ optionsWith enabled = SyncOptions
   , pcOffChainVotes         = mk "off_chain_votes"
   }
   where
-    mk name = SyncOption (name `elem` enabled)
+    mk name = OptionFlag (name `elem` enabled)
 
 -- | Build a synthetic 'ExtractorDef' with the given name, version, and
 -- dependency list. Used to exercise validation / topo-sort with shapes
@@ -288,6 +288,6 @@ spec = describe "DbSync.App" $ do
         Right _    -> panic "expected buildCoreEnv to throw"
 
     it "default options yield core + epoch (epoch defaults to true)" $ do
-      case buildExtractors defaultSyncOptions of
+      case buildExtractors defaultDbSyncOptions of
         Left err -> panic ("unexpected validation failure: " <> err)
         Right xs -> map pdName xs `shouldBe` ["core", "epoch"]

@@ -61,14 +61,14 @@ import DbSync.App.Config.Types
   , LoggingConfig (..)
   , MetricsConfig (..)
   , SyncConfig (..)
-  , SyncOption (..)
-  , SyncOptions (..)
+  , OptionFlag (..)
+  , DbSyncOptions (..)
   , SyncMode (..)
   , SyncSettings (..)
   , UtxoOption (..)
   , defaultLedgerBackend
   , defaultSnapshotNearTipEpoch
-  , defaultSyncOptions
+  , defaultDbSyncOptions
   , defaultUtxoOption
   )
 import DbSync.Test.Database (queryTestDb, testDbName)
@@ -87,7 +87,7 @@ import DbSync.Test.PgAssertions (tableColumn)
 -- needs at least 'pool' enabled. Prefer 'defaultTestProfile' unless
 -- a test specifically exercises a pre-Shelley-only chain.
 minimalProfile :: SyncConfig
-minimalProfile = profileWithOptions defaultSyncOptions
+minimalProfile = profileWithOptions defaultDbSyncOptions
 
 -- | The standard test profile: every currently-implemented
 -- extractor enabled. Matches what an "everything" production
@@ -115,28 +115,28 @@ ledgerEnabledTestProfile =
 -- | All extractors with a real (non-stub) implementation today —
 -- see 'DbSync.App.resolveExtractor'. Skipped: @scripts_datums@,
 -- @governance@, @current_state@ (stubs).
-allImplementedExtractors :: SyncOptions
-allImplementedExtractors = SyncOptions
+allImplementedExtractors :: DbSyncOptions
+allImplementedExtractors = DbSyncOptions
   { pcUtxo                  = defaultUtxoOption { uoEnabled = True }
-  , pcMultiAsset            = SyncOption True
-  , pcMetadata              = SyncOption True
-  , pcStakeDelegation       = SyncOption True
-  , pcStakeDelegationLedger = SyncOption False
-  , pcPool                  = SyncOption True
-  , pcScriptsDatums         = SyncOption False
-  , pcGovernance            = SyncOption False
-  , pcCbor                  = SyncOption True
-  , pcEpochSyncStats        = SyncOption True
-  , pcEpochBoundary         = SyncOption True
-  , pcPoolStats             = SyncOption False
-  , pcEpoch                 = SyncOption True
-  , pcCurrentState          = SyncOption False
-  , pcOffChainPools         = SyncOption False
-  , pcOffChainVotes         = SyncOption False
+  , pcMultiAsset            = OptionFlag True
+  , pcMetadata              = OptionFlag True
+  , pcStakeDelegation       = OptionFlag True
+  , pcStakeDelegationLedger = OptionFlag False
+  , pcPool                  = OptionFlag True
+  , pcScriptsDatums         = OptionFlag False
+  , pcGovernance            = OptionFlag False
+  , pcCbor                  = OptionFlag True
+  , pcEpochSyncStats        = OptionFlag True
+  , pcEpochBoundary         = OptionFlag True
+  , pcPoolStats             = OptionFlag False
+  , pcEpoch                 = OptionFlag True
+  , pcCurrentState          = OptionFlag False
+  , pcOffChainPools         = OptionFlag False
+  , pcOffChainVotes         = OptionFlag False
   }
 
--- | Same as 'minimalProfile' but with caller-supplied 'SyncOptions'.
-profileWithOptions :: SyncOptions -> SyncConfig
+-- | Same as 'minimalProfile' but with caller-supplied 'DbSyncOptions'.
+profileWithOptions :: DbSyncOptions -> SyncConfig
 profileWithOptions opts = SyncConfig
   { scDatabase = DatabaseConfig
       { dcHost     = "localhost"

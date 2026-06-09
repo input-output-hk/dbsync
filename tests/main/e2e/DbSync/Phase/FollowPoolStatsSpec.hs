@@ -16,8 +16,8 @@ import Test.Hspec (Spec, describe, it, shouldSatisfy)
 
 import DbSync.App.Config.Types
   ( SyncConfig (..)
-  , SyncOption (..)
-  , SyncOptions (..)
+  , OptionFlag (..)
+  , DbSyncOptions (..)
   )
 import DbSync.Db.Schema.Core (blockTableDef)
 import DbSync.Db.Schema.Pool (poolStatTableDef)
@@ -78,6 +78,6 @@ spec = describe "Follow pool_stat writes" $
 poolStatsProfile :: SyncConfig
 poolStatsProfile = ledgerEnabledTestProfile
   { scOptions = (scOptions ledgerEnabledTestProfile)
-      { pcPoolStats = SyncOption True
+      { pcPoolStats = OptionFlag True
       }
   }

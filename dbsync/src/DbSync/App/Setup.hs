@@ -35,8 +35,8 @@ import qualified Hasql.Connection.Settings as HasqlSettings
 import DbSync.App.Config.Types
   ( LoggingConfig (..)
   , NodeConfig
-  , SyncOption (..)
-  , SyncOptions (..)
+  , OptionFlag (..)
+  , DbSyncOptions (..)
   , SyncConfig (..)
   , UtxoOption (..)
   )
@@ -109,7 +109,7 @@ buildCoreEnv tracer syncCfg nodeCfg network = do
 -- reference its block / tx / slot_leader rows. Optional extractors
 -- come from @db_options@; unknown names get a no-op stub so the
 -- schema is still created when work has not landed yet.
-buildExtractors :: SyncOptions -> Either Text [ExtractorDef]
+buildExtractors :: DbSyncOptions -> Either Text [ExtractorDef]
 buildExtractors pc = do
   let raw = coreExtractor : mapMaybe mkProj optionalExtractors
   validateExtractorDeps raw
@@ -140,7 +140,7 @@ buildExtractors pc = do
     resolveExtractor name                      = stubExtractor name
 
     -- | (extractor name, enabled?). 'utxo' reads from the structured
-    -- 'UtxoOption'; the rest read the flat 'SyncOption' bool.
+    -- 'UtxoOption'; the rest read the flat 'OptionFlag' bool.
     optionalExtractors :: [(Text, Bool)]
     optionalExtractors =
       [ ("utxo",                    uoEnabled (pcUtxo pc))
@@ -301,7 +301,7 @@ showExtractorList = mconcat . intersperse ", "
 setupOffChainPoolWorker
   :: AppTracer
   -> HasqlSettings.Settings
-  -> SyncOptions
+  -> DbSyncOptions
   -> IO (Maybe OffChainPoolWorker)
 setupOffChainPoolWorker tracer hasqlSettings opts
   | prEnabled (pcOffChainPools opts) =

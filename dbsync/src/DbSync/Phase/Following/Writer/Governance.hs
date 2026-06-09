@@ -59,26 +59,26 @@ import DbSync.Db.Schema.Ids
   , ParamProposalId
   , VotingAnchorId
   )
-import DbSync.Db.Statement.Committee (insertCommitteeRowStmt)
-import DbSync.Db.Statement.CommitteeDeRegistration
+import DbSync.Db.Statement.Governance (insertCommitteeRowStmt)
+import DbSync.Db.Statement.Governance
   ( insertCommitteeDeRegistrationRowStmt
   )
-import DbSync.Db.Statement.CommitteeHash (insertCommitteeHashRowStmt)
-import DbSync.Db.Statement.CommitteeMember (insertCommitteeMemberRowStmt)
-import DbSync.Db.Statement.CommitteeRegistration
+import DbSync.Db.Statement.Governance (insertCommitteeHashRowStmt)
+import DbSync.Db.Statement.Governance (insertCommitteeMemberRowStmt)
+import DbSync.Db.Statement.Governance
   ( insertCommitteeRegistrationRowStmt
   )
-import DbSync.Db.Statement.Constitution (insertConstitutionRowStmt)
-import DbSync.Db.Statement.DelegationVote (insertDelegationVoteRowStmt)
-import DbSync.Db.Statement.DrepDistr (insertDrepDistrRowStmt)
-import DbSync.Db.Statement.DrepHash (insertDrepHashRowStmt)
-import DbSync.Db.Statement.DrepRegistration (insertDrepRegistrationRowStmt)
-import DbSync.Db.Statement.EventInfo (insertEventInfoRowStmt)
-import DbSync.Db.Statement.GovActionProposal (insertGovActionProposalRowStmt)
-import DbSync.Db.Statement.ParamProposal (insertParamProposalRowStmt)
-import DbSync.Db.Statement.TreasuryWithdrawal (insertTreasuryWithdrawalRowStmt)
-import DbSync.Db.Statement.VotingAnchor (insertVotingAnchorRowStmt)
-import DbSync.Db.Statement.VotingProcedure (insertVotingProcedureRowStmt)
+import DbSync.Db.Statement.Governance (insertConstitutionRowStmt)
+import DbSync.Db.Statement.Governance (insertDelegationVoteRowStmt)
+import DbSync.Db.Statement.Governance (insertDrepDistrRowStmt)
+import DbSync.Db.Statement.Governance (insertDrepHashRowStmt)
+import DbSync.Db.Statement.Governance (insertDrepRegistrationRowStmt)
+import DbSync.Db.Statement.Governance (insertEventInfoRowStmt)
+import DbSync.Db.Statement.Governance (insertGovActionProposalRowStmt)
+import DbSync.Db.Statement.Governance (insertParamProposalRowStmt)
+import DbSync.Db.Statement.Governance (insertTreasuryWithdrawalRowStmt)
+import DbSync.Db.Statement.Governance (insertVotingAnchorRowStmt)
+import DbSync.Db.Statement.Governance (insertVotingProcedureRowStmt)
 import DbSync.Phase.Following.WriteBuffer (WriteBuffer)
 import DbSync.Phase.Following.Writer.Internal (queueBuf, runConn)
 

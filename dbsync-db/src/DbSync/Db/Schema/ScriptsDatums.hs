@@ -32,6 +32,16 @@ module DbSync.Db.Schema.ScriptsDatums
   , redeemerDataTableDef
   , extraKeyWitnessTableDef
 
+    -- * Column records (compile-time-safe column references)
+  , DatumCols (..), datumCols, datumColsList
+  , ScriptCols (..), scriptCols, scriptColsList
+  , RedeemerCols (..), redeemerCols, redeemerColsList
+  , RedeemerDataCols (..), redeemerDataCols, redeemerDataColsList
+  , ExtraKeyWitnessCols (..), extraKeyWitnessCols, extraKeyWitnessColsList
+
+    -- * Per-module column-record registry
+  , scriptsDatumsColumnRecords
+
     -- * COPY encoding
   , encodeDatumCopy
   , encodeScriptCopy
@@ -260,6 +270,175 @@ extraKeyWitnessTableDef = TableDef
   , tdIdentityColumns = ["id"]
   , tdForeignKeys = []
   }
+
+-- ---------------------------------------------------------------------------
+-- * Column records
+-- ---------------------------------------------------------------------------
+
+data DatumCols = DatumCols
+  { dmcId    :: !TableColumn
+  , dmcHash  :: !TableColumn
+  , dmcTxId  :: !TableColumn
+  , dmcValue :: !TableColumn
+  , dmcBytes :: !TableColumn
+  }
+
+datumCols :: DatumCols
+datumCols =
+  let c = TableColumn datumTableDef
+  in DatumCols
+       { dmcId    = c "id"
+       , dmcHash  = c "hash"
+       , dmcTxId  = c "tx_id"
+       , dmcValue = c "value"
+       , dmcBytes = c "bytes"
+       }
+
+datumColsList :: [TableColumn]
+datumColsList =
+  [ datumCols.dmcId
+  , datumCols.dmcHash
+  , datumCols.dmcTxId
+  , datumCols.dmcValue
+  , datumCols.dmcBytes
+  ]
+
+data ScriptCols = ScriptCols
+  { sccId             :: !TableColumn
+  , sccTxId           :: !TableColumn
+  , sccHash           :: !TableColumn
+  , sccType           :: !TableColumn
+  , sccJson           :: !TableColumn
+  , sccBytes          :: !TableColumn
+  , sccSerialisedSize :: !TableColumn
+  }
+
+scriptCols :: ScriptCols
+scriptCols =
+  let c = TableColumn scriptTableDef
+  in ScriptCols
+       { sccId             = c "id"
+       , sccTxId           = c "tx_id"
+       , sccHash           = c "hash"
+       , sccType           = c "type"
+       , sccJson           = c "json"
+       , sccBytes          = c "bytes"
+       , sccSerialisedSize = c "serialised_size"
+       }
+
+scriptColsList :: [TableColumn]
+scriptColsList =
+  [ scriptCols.sccId
+  , scriptCols.sccTxId
+  , scriptCols.sccHash
+  , scriptCols.sccType
+  , scriptCols.sccJson
+  , scriptCols.sccBytes
+  , scriptCols.sccSerialisedSize
+  ]
+
+data RedeemerCols = RedeemerCols
+  { rdcId             :: !TableColumn
+  , rdcTxId           :: !TableColumn
+  , rdcUnitMem        :: !TableColumn
+  , rdcUnitSteps      :: !TableColumn
+  , rdcFee            :: !TableColumn
+  , rdcPurpose        :: !TableColumn
+  , rdcIndex          :: !TableColumn
+  , rdcScriptHash     :: !TableColumn
+  , rdcRedeemerDataId :: !TableColumn
+  }
+
+redeemerCols :: RedeemerCols
+redeemerCols =
+  let c = TableColumn redeemerTableDef
+  in RedeemerCols
+       { rdcId             = c "id"
+       , rdcTxId           = c "tx_id"
+       , rdcUnitMem        = c "unit_mem"
+       , rdcUnitSteps      = c "unit_steps"
+       , rdcFee            = c "fee"
+       , rdcPurpose        = c "purpose"
+       , rdcIndex          = c "index"
+       , rdcScriptHash     = c "script_hash"
+       , rdcRedeemerDataId = c "redeemer_data_id"
+       }
+
+redeemerColsList :: [TableColumn]
+redeemerColsList =
+  [ redeemerCols.rdcId
+  , redeemerCols.rdcTxId
+  , redeemerCols.rdcUnitMem
+  , redeemerCols.rdcUnitSteps
+  , redeemerCols.rdcFee
+  , redeemerCols.rdcPurpose
+  , redeemerCols.rdcIndex
+  , redeemerCols.rdcScriptHash
+  , redeemerCols.rdcRedeemerDataId
+  ]
+
+data RedeemerDataCols = RedeemerDataCols
+  { rddcId    :: !TableColumn
+  , rddcHash  :: !TableColumn
+  , rddcTxId  :: !TableColumn
+  , rddcValue :: !TableColumn
+  , rddcBytes :: !TableColumn
+  }
+
+redeemerDataCols :: RedeemerDataCols
+redeemerDataCols =
+  let c = TableColumn redeemerDataTableDef
+  in RedeemerDataCols
+       { rddcId    = c "id"
+       , rddcHash  = c "hash"
+       , rddcTxId  = c "tx_id"
+       , rddcValue = c "value"
+       , rddcBytes = c "bytes"
+       }
+
+redeemerDataColsList :: [TableColumn]
+redeemerDataColsList =
+  [ redeemerDataCols.rddcId
+  , redeemerDataCols.rddcHash
+  , redeemerDataCols.rddcTxId
+  , redeemerDataCols.rddcValue
+  , redeemerDataCols.rddcBytes
+  ]
+
+data ExtraKeyWitnessCols = ExtraKeyWitnessCols
+  { ekwcId   :: !TableColumn
+  , ekwcHash :: !TableColumn
+  , ekwcTxId :: !TableColumn
+  }
+
+extraKeyWitnessCols :: ExtraKeyWitnessCols
+extraKeyWitnessCols =
+  let c = TableColumn extraKeyWitnessTableDef
+  in ExtraKeyWitnessCols
+       { ekwcId   = c "id"
+       , ekwcHash = c "hash"
+       , ekwcTxId = c "tx_id"
+       }
+
+extraKeyWitnessColsList :: [TableColumn]
+extraKeyWitnessColsList =
+  [ extraKeyWitnessCols.ekwcId
+  , extraKeyWitnessCols.ekwcHash
+  , extraKeyWitnessCols.ekwcTxId
+  ]
+
+-- ---------------------------------------------------------------------------
+-- * Per-module column-record registry
+-- ---------------------------------------------------------------------------
+
+scriptsDatumsColumnRecords :: [(TableDef, [TableColumn])]
+scriptsDatumsColumnRecords =
+  [ (datumTableDef,           datumColsList)
+  , (scriptTableDef,          scriptColsList)
+  , (redeemerTableDef,        redeemerColsList)
+  , (redeemerDataTableDef,    redeemerDataColsList)
+  , (extraKeyWitnessTableDef, extraKeyWitnessColsList)
+  ]
 
 -- ---------------------------------------------------------------------------
 -- * COPY encoding

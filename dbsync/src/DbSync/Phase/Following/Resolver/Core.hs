@@ -21,9 +21,9 @@ import qualified Hasql.Connection as Conn
 
 import DbSync.Db.Schema.Core (SlotLeader)
 import DbSync.Db.Schema.Ids (BlockId, SlotLeaderId, TxId)
-import DbSync.Db.Statement.Block (nextBlockIdStmt)
-import DbSync.Db.Statement.SlotLeader (nextSlotLeaderIdStmt, querySlotLeaderIdStmt)
-import DbSync.Db.Statement.Tx (nextTxIdStmt)
+import DbSync.Db.Statement.Core (nextBlockIdStmt)
+import DbSync.Db.Statement.Core (nextSlotLeaderIdStmt, querySlotLeaderIdStmt)
+import DbSync.Db.Statement.Core (nextTxIdStmt)
 import DbSync.Phase.Following.IdAllocator (PreAllocatedIds (..), popHead)
 import DbSync.Phase.Following.Resolver.Internal
   ( BlockDedupCache (..)

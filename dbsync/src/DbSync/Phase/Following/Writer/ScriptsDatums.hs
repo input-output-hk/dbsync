@@ -34,11 +34,11 @@ import DbSync.Db.Schema.ScriptsDatums
   , RedeemerData
   , Script
   )
-import DbSync.Db.Statement.Datum (insertDatumRowStmt)
-import DbSync.Db.Statement.ExtraKeyWitness (insertExtraKeyWitnessRowStmt)
-import DbSync.Db.Statement.Redeemer (insertRedeemerRowStmt)
-import DbSync.Db.Statement.RedeemerData (insertRedeemerDataRowStmt)
-import DbSync.Db.Statement.Script (insertScriptRowStmt)
+import DbSync.Db.Statement.ScriptsDatums (insertDatumRowStmt)
+import DbSync.Db.Statement.ScriptsDatums (insertExtraKeyWitnessRowStmt)
+import DbSync.Db.Statement.ScriptsDatums (insertRedeemerRowStmt)
+import DbSync.Db.Statement.ScriptsDatums (insertRedeemerDataRowStmt)
+import DbSync.Db.Statement.ScriptsDatums (insertScriptRowStmt)
 import DbSync.Phase.Following.WriteBuffer (WriteBuffer)
 import DbSync.Phase.Following.Writer.Internal (queueBuf, runConn)
 

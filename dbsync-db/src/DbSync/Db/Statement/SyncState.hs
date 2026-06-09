@@ -1,11 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Hasql 'Statement' bindings for the @dbsync_sync_state@ singleton row.
---
--- The schema type 'SyncStateRow' and its encoder\/decoder live in
--- 'DbSync.Db.Schema.SyncState'. This module pairs them with the
--- hand-written SQL templates and exposes them as
--- 'Stmt.Statement' values.
+-- | Hasql 'Statement' bindings for the @dbsync_sync_state@ singleton
+-- row. The schema type 'SyncStateRow' and its encoder/decoder live in
+-- 'DbSync.Db.Schema.SyncState'.
 module DbSync.Db.Statement.SyncState
   ( seedSyncStateStmt
   , readSyncStateStmt
@@ -21,167 +18,169 @@ module DbSync.Db.Statement.SyncState
 import Cardano.Prelude
 
 import Data.Functor.Contravariant ((>$<))
-import qualified Data.Text as T
 import qualified Hasql.Decoders as D
 import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
 import DbSync.Db.Schema.SyncState
-  ( SyncStateRow
+  ( SyncStateCols (..)
+  , SyncStateRow
+  , syncStateCols
   , syncStateRowDecoder
   , syncStateRowEncoder
+  , syncStateTableDef
   )
+import DbSync.Db.Sql.Refs (col, table)
 
 -- | Idempotent seed @INSERT@. Only @schema_version_applied@ and
--- @ledger_enabled@ come from the caller; all other columns pick up
--- their @DEFAULT@ values.
+-- @ledger_enabled@ come from the caller; other columns use their
+-- @DEFAULT@.
 seedSyncStateStmt :: Stmt.Statement (Int32, Bool) ()
 seedSyncStateStmt =
   Stmt.preparable sql encoder D.noResult
   where
-    sql =
-      "INSERT INTO dbsync_sync_state (schema_version_applied, ledger_enabled) \
-      \VALUES ($1, $2) ON CONFLICT (id) DO NOTHING"
+    sql = mconcat
+      [ "INSERT INTO ", table syncStateTableDef
+      , " (", col syncStateCols.sscSchemaVersionApplied
+      , ", ", col syncStateCols.sscLedgerEnabled, ")"
+      , " VALUES ($1, $2)"
+      , " ON CONFLICT (", col syncStateCols.sscId, ") DO NOTHING"
+      ]
     encoder =
          (fst >$< E.param (E.nonNullable E.int4))
       <> (snd >$< E.param (E.nonNullable E.bool))
 
--- | Read the singleton row, or 'Nothing' if it has never been seeded.
--- 'syncStateRowDecoder' consumes every column in table order, so a
--- plain @SELECT *@ suffices.
+-- | 'Nothing' if the singleton has never been seeded.
 readSyncStateStmt :: Stmt.Statement () (Maybe SyncStateRow)
 readSyncStateStmt =
   Stmt.preparable
-    "SELECT * FROM dbsync_sync_state WHERE id = 1"
+    ( "SELECT * FROM " <> table syncStateTableDef
+        <> " WHERE " <> col syncStateCols.sscId <> " = 1"
+    )
     E.noParams
     (D.rowMaybe syncStateRowDecoder)
 
--- | Write the consumer-owned columns of the singleton row. Returns
--- the affected row count so callers can verify the row exists.
---
--- Placeholder order matches 'syncStateRowEncoder'. Does __not__
--- touch @last_snapshot_slot@ or @sync_complete@ — those columns are
--- owned by 'markSnapshotCompleteStmt' and 'markSyncCompleteStmt'.
+-- | Write the consumer-owned columns. Placeholder order matches
+-- 'syncStateRowEncoder'. Does __not__ touch @last_snapshot_slot@ or
+-- @sync_complete@ — those are owned by 'markSnapshotCompleteStmt' and
+-- 'markSyncCompleteStmt'.
 writeSyncStateStmt :: Stmt.Statement SyncStateRow Int64
 writeSyncStateStmt =
   Stmt.preparable sql syncStateRowEncoder D.rowsAffected
   where
-    sql = T.concat
-      [ "UPDATE dbsync_sync_state SET"
-      , "  last_committed_slot             = $1"
-      , ", last_committed_block_no         = $2"
-      , ", last_committed_block_hash       = $3"
-      , ", block_id_counter                = $4"
-      , ", tx_id_counter                   = $5"
-      , ", tx_out_id_counter               = $6"
-      , ", slot_leader_id_counter          = $7"
-      , ", address_id_counter              = $8"
-      , ", stake_address_id_counter        = $9"
-      , ", pool_hash_id_counter            = $10"
-      , ", multi_asset_id_counter          = $11"
-      , ", script_id_counter               = $12"
-      , ", pool_update_id_counter          = $13"
-      , ", pool_metadata_ref_id_counter    = $14"
-      , ", cost_model_id_counter           = $15"
-      , ", redeemer_id_counter             = $16"
-      , ", collateral_tx_out_id_counter    = $17"
-      , ", epoch_sync_stats_id_counter     = $18"
-      , ", gov_action_proposal_id_counter  = $19"
-      , ", param_proposal_id_counter       = $20"
-      , ", committee_id_counter            = $21"
-      , ", constitution_id_counter         = $22"
-      , ", event_info_id_counter           = $23"
-      , ", schema_version_applied          = $24"
-      , ", ledger_enabled                  = $25"
-      , ", updated_at                      = now()"
-      , " WHERE id = 1"
+    sql = mconcat
+      [ "UPDATE ", table syncStateTableDef, " SET "
+      ,    col syncStateCols.sscLastCommittedSlot,           " = $1"
+      , ", ", col syncStateCols.sscLastCommittedBlockNo,     " = $2"
+      , ", ", col syncStateCols.sscLastCommittedBlockHash,   " = $3"
+      , ", ", col syncStateCols.sscBlockIdCounter,           " = $4"
+      , ", ", col syncStateCols.sscTxIdCounter,              " = $5"
+      , ", ", col syncStateCols.sscTxOutIdCounter,           " = $6"
+      , ", ", col syncStateCols.sscSlotLeaderIdCounter,      " = $7"
+      , ", ", col syncStateCols.sscAddressIdCounter,         " = $8"
+      , ", ", col syncStateCols.sscStakeAddressIdCounter,    " = $9"
+      , ", ", col syncStateCols.sscPoolHashIdCounter,        " = $10"
+      , ", ", col syncStateCols.sscMultiAssetIdCounter,      " = $11"
+      , ", ", col syncStateCols.sscScriptIdCounter,          " = $12"
+      , ", ", col syncStateCols.sscPoolUpdateIdCounter,      " = $13"
+      , ", ", col syncStateCols.sscPoolMetadataRefIdCounter, " = $14"
+      , ", ", col syncStateCols.sscCostModelIdCounter,       " = $15"
+      , ", ", col syncStateCols.sscRedeemerIdCounter,        " = $16"
+      , ", ", col syncStateCols.sscCollateralTxOutIdCounter, " = $17"
+      , ", ", col syncStateCols.sscEpochSyncStatsIdCounter,  " = $18"
+      , ", ", col syncStateCols.sscGovActionProposalIdCounter, " = $19"
+      , ", ", col syncStateCols.sscParamProposalIdCounter,   " = $20"
+      , ", ", col syncStateCols.sscCommitteeIdCounter,       " = $21"
+      , ", ", col syncStateCols.sscConstitutionIdCounter,    " = $22"
+      , ", ", col syncStateCols.sscEventInfoIdCounter,       " = $23"
+      , ", ", col syncStateCols.sscSchemaVersionApplied,     " = $24"
+      , ", ", col syncStateCols.sscLedgerEnabled,            " = $25"
+      , ", ", col syncStateCols.sscUpdatedAt,                " = now()"
+      , " WHERE ", col syncStateCols.sscId, " = 1"
       ]
 
--- | Advance only @last_committed_slot@, @last_committed_block_no@,
--- and @last_committed_block_hash@. Used by 'FollowingChainTip' inside
--- each per-block transaction — the counter columns aren't touched
--- because Follow allocates IDs through PG sequences via @nextval@
--- rather than IORef counters.
+-- | Advance only the @last_committed_slot/block_no/block_hash@ trio.
+-- Used by 'FollowingChainTip' inside each per-block transaction;
+-- counter columns aren't touched because Follow allocates IDs via PG
+-- sequences (@nextval@) rather than IORef counters.
 writeSyncStateSlotStmt :: Stmt.Statement (Word64, Word64, ByteString) Int64
 writeSyncStateSlotStmt =
   Stmt.preparable sql encoder D.rowsAffected
   where
-    sql = T.concat
-      [ "UPDATE dbsync_sync_state SET"
-      , "  last_committed_slot       = $1"
-      , ", last_committed_block_no   = $2"
-      , ", last_committed_block_hash = $3"
-      , ", updated_at                = now()"
-      , " WHERE id = 1"
+    sql = mconcat
+      [ "UPDATE ", table syncStateTableDef, " SET "
+      ,    col syncStateCols.sscLastCommittedSlot,         " = $1"
+      , ", ", col syncStateCols.sscLastCommittedBlockNo,   " = $2"
+      , ", ", col syncStateCols.sscLastCommittedBlockHash, " = $3"
+      , ", ", col syncStateCols.sscUpdatedAt,              " = now()"
+      , " WHERE ", col syncStateCols.sscId, " = 1"
       ]
     encoder =
          ((\(s, _, _) -> fromIntegral s) >$< E.param (E.nonNullable E.int8))
       <> ((\(_, b, _) -> fromIntegral b) >$< E.param (E.nonNullable E.int8))
       <> ((\(_, _, h) -> h)              >$< E.param (E.nonNullable E.bytea))
 
--- | Record a successful ledger-snapshot write at the given slot.
--- Owned exclusively by the snapshot-writer thread.
+-- | Record a successful ledger-snapshot write. Owned by the
+-- snapshot-writer thread.
 markSnapshotCompleteStmt :: Stmt.Statement Word64 Int64
 markSnapshotCompleteStmt =
   Stmt.preparable sql encoder D.rowsAffected
   where
-    sql = T.concat
-      [ "UPDATE dbsync_sync_state SET"
-      , "  last_snapshot_slot = $1"
-      , ", updated_at         = now()"
-      , " WHERE id = 1"
+    sql = mconcat
+      [ "UPDATE ", table syncStateTableDef, " SET "
+      ,    col syncStateCols.sscLastSnapshotSlot, " = $1"
+      , ", ", col syncStateCols.sscUpdatedAt,     " = now()"
+      , " WHERE ", col syncStateCols.sscId, " = 1"
       ]
     encoder = fromIntegral >$< E.param (E.nonNullable E.int8)
 
--- | Flip @sync_complete@ to true. Called once at the
--- 'IngestChainHistory' → 'FollowingChainTip' transition; subsequent
--- boots take the Follow-restart path.
+-- | Flip @sync_complete@ true at the Ingest → Follow transition.
 markSyncCompleteStmt :: Stmt.Statement () Int64
 markSyncCompleteStmt =
   Stmt.preparable sql E.noParams D.rowsAffected
   where
-    sql = T.concat
-      [ "UPDATE dbsync_sync_state SET"
-      , "  sync_complete = true"
-      , ", updated_at    = now()"
-      , " WHERE id = 1"
+    sql = mconcat
+      [ "UPDATE ", table syncStateTableDef, " SET "
+      ,    col syncStateCols.sscSyncComplete, " = true"
+      , ", ", col syncStateCols.sscUpdatedAt, " = now()"
+      , " WHERE ", col syncStateCols.sscId, " = 1"
       ]
 
--- | Read @pending_rollback_slot@. 'Nothing' means no rollback is
--- pending; @Just@ means the boot path should run a rollback to that
--- slot before normal resume.
+-- | 'Nothing' = no rollback pending; 'Just' = boot must run a
+-- rollback to that slot before normal resume.
 readPendingRollbackSlotStmt :: Stmt.Statement () (Maybe Word64)
 readPendingRollbackSlotStmt =
   Stmt.preparable
-    "SELECT pending_rollback_slot FROM dbsync_sync_state WHERE id = 1"
+    ( "SELECT " <> col syncStateCols.sscPendingRollbackSlot
+        <> " FROM " <> table syncStateTableDef
+        <> " WHERE " <> col syncStateCols.sscId <> " = 1"
+    )
     E.noParams
     (D.singleRow (fmap fromIntegral <$> D.column (D.nullable D.int8)))
 
--- | Persist a pending rollback target. Written by the ledger worker
--- on a deep rollback so the recovery survives the process restart.
--- Also written by the CLI @--rollback-to-slot@ path before the
--- cascade runs so a mid-rollback crash resumes cleanly.
+-- | Persist a pending rollback target so recovery survives a process
+-- restart. Written by the ledger worker on deep rollback, and by the
+-- @--rollback-to-slot@ CLI before the cascade runs (so a mid-rollback
+-- crash resumes cleanly).
 writePendingRollbackSlotStmt :: Stmt.Statement Word64 Int64
 writePendingRollbackSlotStmt =
   Stmt.preparable sql encoder D.rowsAffected
   where
-    sql = T.concat
-      [ "UPDATE dbsync_sync_state SET"
-      , "  pending_rollback_slot = $1"
-      , ", updated_at            = now()"
-      , " WHERE id = 1"
+    sql = mconcat
+      [ "UPDATE ", table syncStateTableDef, " SET "
+      ,    col syncStateCols.sscPendingRollbackSlot, " = $1"
+      , ", ", col syncStateCols.sscUpdatedAt,        " = now()"
+      , " WHERE ", col syncStateCols.sscId, " = 1"
       ]
     encoder = fromIntegral >$< E.param (E.nonNullable E.int8)
 
--- | Clear the pending-rollback marker. Called by the boot path after
--- the recovery rollback has completed and committed.
 clearPendingRollbackSlotStmt :: Stmt.Statement () Int64
 clearPendingRollbackSlotStmt =
   Stmt.preparable sql E.noParams D.rowsAffected
   where
-    sql = T.concat
-      [ "UPDATE dbsync_sync_state SET"
-      , "  pending_rollback_slot = NULL"
-      , ", updated_at            = now()"
-      , " WHERE id = 1"
+    sql = mconcat
+      [ "UPDATE ", table syncStateTableDef, " SET "
+      ,    col syncStateCols.sscPendingRollbackSlot, " = NULL"
+      , ", ", col syncStateCols.sscUpdatedAt,        " = now()"
+      , " WHERE ", col syncStateCols.sscId, " = 1"
       ]

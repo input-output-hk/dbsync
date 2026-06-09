@@ -28,6 +28,17 @@ module DbSync.Db.Schema.EpochBoundary
   , treasuryTableDef
   , reserveTableDef
 
+    -- * Column records (compile-time-safe column references)
+  , EpochParamCols (..), epochParamCols, epochParamColsList
+  , EpochStateCols (..), epochStateCols, epochStateColsList
+  , CostModelCols (..), costModelCols, costModelColsList
+  , PotTransferCols (..), potTransferCols, potTransferColsList
+  , TreasuryCols (..), treasuryCols, treasuryColsList
+  , ReserveCols (..), reserveCols, reserveColsList
+
+    -- * Per-module column-record registry
+  , epochBoundaryColumnRecords
+
     -- * COPY encoding
   , encodeEpochParamCopy
   , encodeEpochStateCopy
@@ -421,6 +432,336 @@ reserveTableDef = TableDef
       [ ForeignKey "tx_id" "tx" "id"
       ]
   }
+
+-- ---------------------------------------------------------------------------
+-- * Column records
+-- ---------------------------------------------------------------------------
+
+data EpochParamCols = EpochParamCols
+  { epcId                          :: !TableColumn
+  , epcEpochNo                     :: !TableColumn
+  , epcMinFeeA                     :: !TableColumn
+  , epcMinFeeB                     :: !TableColumn
+  , epcMaxBlockSize                :: !TableColumn
+  , epcMaxTxSize                   :: !TableColumn
+  , epcMaxBhSize                   :: !TableColumn
+  , epcKeyDeposit                  :: !TableColumn
+  , epcPoolDeposit                 :: !TableColumn
+  , epcMaxEpoch                    :: !TableColumn
+  , epcOptimalPoolCount            :: !TableColumn
+  , epcInfluence                   :: !TableColumn
+  , epcMonetaryExpandRate          :: !TableColumn
+  , epcTreasuryGrowthRate          :: !TableColumn
+  , epcDecentralisation            :: !TableColumn
+  , epcProtocolMajor               :: !TableColumn
+  , epcProtocolMinor               :: !TableColumn
+  , epcMinUtxoValue                :: !TableColumn
+  , epcMinPoolCost                 :: !TableColumn
+  , epcNonce                       :: !TableColumn
+  , epcCostModelId                 :: !TableColumn
+  , epcPriceMem                    :: !TableColumn
+  , epcPriceStep                   :: !TableColumn
+  , epcMaxTxExMem                  :: !TableColumn
+  , epcMaxTxExSteps                :: !TableColumn
+  , epcMaxBlockExMem               :: !TableColumn
+  , epcMaxBlockExSteps             :: !TableColumn
+  , epcMaxValSize                  :: !TableColumn
+  , epcCollateralPercent           :: !TableColumn
+  , epcMaxCollateralInputs         :: !TableColumn
+  , epcBlockId                     :: !TableColumn
+  , epcExtraEntropy                :: !TableColumn
+  , epcCoinsPerUtxoSize            :: !TableColumn
+  , epcPvtMotionNoConfidence       :: !TableColumn
+  , epcPvtCommitteeNormal          :: !TableColumn
+  , epcPvtCommitteeNoConfidence    :: !TableColumn
+  , epcPvtHardForkInitiation       :: !TableColumn
+  , epcDvtMotionNoConfidence       :: !TableColumn
+  , epcDvtCommitteeNormal          :: !TableColumn
+  , epcDvtCommitteeNoConfidence    :: !TableColumn
+  , epcDvtUpdateToConstitution     :: !TableColumn
+  , epcDvtHardForkInitiation       :: !TableColumn
+  , epcDvtPPNetworkGroup           :: !TableColumn
+  , epcDvtPPEconomicGroup          :: !TableColumn
+  , epcDvtPPTechnicalGroup         :: !TableColumn
+  , epcDvtPPGovGroup               :: !TableColumn
+  , epcDvtTreasuryWithdrawal       :: !TableColumn
+  , epcCommitteeMinSize            :: !TableColumn
+  , epcCommitteeMaxTermLength      :: !TableColumn
+  , epcGovActionLifetime           :: !TableColumn
+  , epcGovActionDeposit            :: !TableColumn
+  , epcDrepDeposit                 :: !TableColumn
+  , epcDrepActivity                :: !TableColumn
+  , epcPvtppSecurityGroup          :: !TableColumn
+  , epcMinFeeRefScriptCostPerByte  :: !TableColumn
+  }
+
+epochParamCols :: EpochParamCols
+epochParamCols =
+  let c = TableColumn epochParamTableDef
+  in EpochParamCols
+       { epcId                         = c "id"
+       , epcEpochNo                    = c "epoch_no"
+       , epcMinFeeA                    = c "min_fee_a"
+       , epcMinFeeB                    = c "min_fee_b"
+       , epcMaxBlockSize               = c "max_block_size"
+       , epcMaxTxSize                  = c "max_tx_size"
+       , epcMaxBhSize                  = c "max_bh_size"
+       , epcKeyDeposit                 = c "key_deposit"
+       , epcPoolDeposit                = c "pool_deposit"
+       , epcMaxEpoch                   = c "max_epoch"
+       , epcOptimalPoolCount           = c "optimal_pool_count"
+       , epcInfluence                  = c "influence"
+       , epcMonetaryExpandRate         = c "monetary_expand_rate"
+       , epcTreasuryGrowthRate         = c "treasury_growth_rate"
+       , epcDecentralisation           = c "decentralisation"
+       , epcProtocolMajor              = c "protocol_major"
+       , epcProtocolMinor              = c "protocol_minor"
+       , epcMinUtxoValue               = c "min_utxo_value"
+       , epcMinPoolCost                = c "min_pool_cost"
+       , epcNonce                      = c "nonce"
+       , epcCostModelId                = c "cost_model_id"
+       , epcPriceMem                   = c "price_mem"
+       , epcPriceStep                  = c "price_step"
+       , epcMaxTxExMem                 = c "max_tx_ex_mem"
+       , epcMaxTxExSteps               = c "max_tx_ex_steps"
+       , epcMaxBlockExMem              = c "max_block_ex_mem"
+       , epcMaxBlockExSteps            = c "max_block_ex_steps"
+       , epcMaxValSize                 = c "max_val_size"
+       , epcCollateralPercent          = c "collateral_percent"
+       , epcMaxCollateralInputs        = c "max_collateral_inputs"
+       , epcBlockId                    = c "block_id"
+       , epcExtraEntropy               = c "extra_entropy"
+       , epcCoinsPerUtxoSize           = c "coins_per_utxo_size"
+       , epcPvtMotionNoConfidence      = c "pvt_motion_no_confidence"
+       , epcPvtCommitteeNormal         = c "pvt_committee_normal"
+       , epcPvtCommitteeNoConfidence   = c "pvt_committee_no_confidence"
+       , epcPvtHardForkInitiation      = c "pvt_hard_fork_initiation"
+       , epcDvtMotionNoConfidence      = c "dvt_motion_no_confidence"
+       , epcDvtCommitteeNormal         = c "dvt_committee_normal"
+       , epcDvtCommitteeNoConfidence   = c "dvt_committee_no_confidence"
+       , epcDvtUpdateToConstitution    = c "dvt_update_to_constitution"
+       , epcDvtHardForkInitiation      = c "dvt_hard_fork_initiation"
+       , epcDvtPPNetworkGroup          = c "dvt_pp_network_group"
+       , epcDvtPPEconomicGroup         = c "dvt_pp_economic_group"
+       , epcDvtPPTechnicalGroup        = c "dvt_pp_technical_group"
+       , epcDvtPPGovGroup              = c "dvt_pp_gov_group"
+       , epcDvtTreasuryWithdrawal      = c "dvt_treasury_withdrawal"
+       , epcCommitteeMinSize           = c "committee_min_size"
+       , epcCommitteeMaxTermLength     = c "committee_max_term_length"
+       , epcGovActionLifetime          = c "gov_action_lifetime"
+       , epcGovActionDeposit           = c "gov_action_deposit"
+       , epcDrepDeposit                = c "drep_deposit"
+       , epcDrepActivity               = c "drep_activity"
+       , epcPvtppSecurityGroup         = c "pvtpp_security_group"
+       , epcMinFeeRefScriptCostPerByte = c "min_fee_ref_script_cost_per_byte"
+       }
+
+epochParamColsList :: [TableColumn]
+epochParamColsList =
+  [ epochParamCols.epcId
+  , epochParamCols.epcEpochNo
+  , epochParamCols.epcMinFeeA
+  , epochParamCols.epcMinFeeB
+  , epochParamCols.epcMaxBlockSize
+  , epochParamCols.epcMaxTxSize
+  , epochParamCols.epcMaxBhSize
+  , epochParamCols.epcKeyDeposit
+  , epochParamCols.epcPoolDeposit
+  , epochParamCols.epcMaxEpoch
+  , epochParamCols.epcOptimalPoolCount
+  , epochParamCols.epcInfluence
+  , epochParamCols.epcMonetaryExpandRate
+  , epochParamCols.epcTreasuryGrowthRate
+  , epochParamCols.epcDecentralisation
+  , epochParamCols.epcProtocolMajor
+  , epochParamCols.epcProtocolMinor
+  , epochParamCols.epcMinUtxoValue
+  , epochParamCols.epcMinPoolCost
+  , epochParamCols.epcNonce
+  , epochParamCols.epcCostModelId
+  , epochParamCols.epcPriceMem
+  , epochParamCols.epcPriceStep
+  , epochParamCols.epcMaxTxExMem
+  , epochParamCols.epcMaxTxExSteps
+  , epochParamCols.epcMaxBlockExMem
+  , epochParamCols.epcMaxBlockExSteps
+  , epochParamCols.epcMaxValSize
+  , epochParamCols.epcCollateralPercent
+  , epochParamCols.epcMaxCollateralInputs
+  , epochParamCols.epcBlockId
+  , epochParamCols.epcExtraEntropy
+  , epochParamCols.epcCoinsPerUtxoSize
+  , epochParamCols.epcPvtMotionNoConfidence
+  , epochParamCols.epcPvtCommitteeNormal
+  , epochParamCols.epcPvtCommitteeNoConfidence
+  , epochParamCols.epcPvtHardForkInitiation
+  , epochParamCols.epcDvtMotionNoConfidence
+  , epochParamCols.epcDvtCommitteeNormal
+  , epochParamCols.epcDvtCommitteeNoConfidence
+  , epochParamCols.epcDvtUpdateToConstitution
+  , epochParamCols.epcDvtHardForkInitiation
+  , epochParamCols.epcDvtPPNetworkGroup
+  , epochParamCols.epcDvtPPEconomicGroup
+  , epochParamCols.epcDvtPPTechnicalGroup
+  , epochParamCols.epcDvtPPGovGroup
+  , epochParamCols.epcDvtTreasuryWithdrawal
+  , epochParamCols.epcCommitteeMinSize
+  , epochParamCols.epcCommitteeMaxTermLength
+  , epochParamCols.epcGovActionLifetime
+  , epochParamCols.epcGovActionDeposit
+  , epochParamCols.epcDrepDeposit
+  , epochParamCols.epcDrepActivity
+  , epochParamCols.epcPvtppSecurityGroup
+  , epochParamCols.epcMinFeeRefScriptCostPerByte
+  ]
+
+data EpochStateCols = EpochStateCols
+  { esccId             :: !TableColumn
+  , esccCommitteeId    :: !TableColumn
+  , esccNoConfidenceId :: !TableColumn
+  , esccConstitutionId :: !TableColumn
+  , esccEpochNo        :: !TableColumn
+  }
+
+epochStateCols :: EpochStateCols
+epochStateCols =
+  let c = TableColumn epochStateTableDef
+  in EpochStateCols
+       { esccId             = c "id"
+       , esccCommitteeId    = c "committee_id"
+       , esccNoConfidenceId = c "no_confidence_id"
+       , esccConstitutionId = c "constitution_id"
+       , esccEpochNo        = c "epoch_no"
+       }
+
+epochStateColsList :: [TableColumn]
+epochStateColsList =
+  [ epochStateCols.esccId
+  , epochStateCols.esccCommitteeId
+  , epochStateCols.esccNoConfidenceId
+  , epochStateCols.esccConstitutionId
+  , epochStateCols.esccEpochNo
+  ]
+
+data CostModelCols = CostModelCols
+  { cmcId    :: !TableColumn
+  , cmcCosts :: !TableColumn
+  , cmcHash  :: !TableColumn
+  }
+
+costModelCols :: CostModelCols
+costModelCols =
+  let c = TableColumn costModelTableDef
+  in CostModelCols
+       { cmcId    = c "id"
+       , cmcCosts = c "costs"
+       , cmcHash  = c "hash"
+       }
+
+costModelColsList :: [TableColumn]
+costModelColsList =
+  [ costModelCols.cmcId
+  , costModelCols.cmcCosts
+  , costModelCols.cmcHash
+  ]
+
+data PotTransferCols = PotTransferCols
+  { ptcId        :: !TableColumn
+  , ptcCertIndex :: !TableColumn
+  , ptcTreasury  :: !TableColumn
+  , ptcReserves  :: !TableColumn
+  , ptcTxId      :: !TableColumn
+  }
+
+potTransferCols :: PotTransferCols
+potTransferCols =
+  let c = TableColumn potTransferTableDef
+  in PotTransferCols
+       { ptcId        = c "id"
+       , ptcCertIndex = c "cert_index"
+       , ptcTreasury  = c "treasury"
+       , ptcReserves  = c "reserves"
+       , ptcTxId      = c "tx_id"
+       }
+
+potTransferColsList :: [TableColumn]
+potTransferColsList =
+  [ potTransferCols.ptcId
+  , potTransferCols.ptcCertIndex
+  , potTransferCols.ptcTreasury
+  , potTransferCols.ptcReserves
+  , potTransferCols.ptcTxId
+  ]
+
+data TreasuryCols = TreasuryCols
+  { trcId        :: !TableColumn
+  , trcAddrId    :: !TableColumn
+  , trcCertIndex :: !TableColumn
+  , trcAmount    :: !TableColumn
+  , trcTxId      :: !TableColumn
+  }
+
+treasuryCols :: TreasuryCols
+treasuryCols =
+  let c = TableColumn treasuryTableDef
+  in TreasuryCols
+       { trcId        = c "id"
+       , trcAddrId    = c "addr_id"
+       , trcCertIndex = c "cert_index"
+       , trcAmount    = c "amount"
+       , trcTxId      = c "tx_id"
+       }
+
+treasuryColsList :: [TableColumn]
+treasuryColsList =
+  [ treasuryCols.trcId
+  , treasuryCols.trcAddrId
+  , treasuryCols.trcCertIndex
+  , treasuryCols.trcAmount
+  , treasuryCols.trcTxId
+  ]
+
+data ReserveCols = ReserveCols
+  { rscId        :: !TableColumn
+  , rscAddrId    :: !TableColumn
+  , rscCertIndex :: !TableColumn
+  , rscAmount    :: !TableColumn
+  , rscTxId      :: !TableColumn
+  }
+
+reserveCols :: ReserveCols
+reserveCols =
+  let c = TableColumn reserveTableDef
+  in ReserveCols
+       { rscId        = c "id"
+       , rscAddrId    = c "addr_id"
+       , rscCertIndex = c "cert_index"
+       , rscAmount    = c "amount"
+       , rscTxId      = c "tx_id"
+       }
+
+reserveColsList :: [TableColumn]
+reserveColsList =
+  [ reserveCols.rscId
+  , reserveCols.rscAddrId
+  , reserveCols.rscCertIndex
+  , reserveCols.rscAmount
+  , reserveCols.rscTxId
+  ]
+
+-- ---------------------------------------------------------------------------
+-- * Per-module column-record registry
+-- ---------------------------------------------------------------------------
+
+epochBoundaryColumnRecords :: [(TableDef, [TableColumn])]
+epochBoundaryColumnRecords =
+  [ (epochParamTableDef,  epochParamColsList)
+  , (epochStateTableDef,  epochStateColsList)
+  , (costModelTableDef,   costModelColsList)
+  , (potTransferTableDef, potTransferColsList)
+  , (treasuryTableDef,    treasuryColsList)
+  , (reserveTableDef,     reserveColsList)
+  ]
 
 -- ---------------------------------------------------------------------------
 -- * COPY encoding

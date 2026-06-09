@@ -29,7 +29,7 @@ import DbSync.Db.Schema.OffChainVote
   , OffChainVoteGovActionData
   , OffChainVoteReference
   )
-import DbSync.Db.Statement.OffChainVote
+import DbSync.Db.Statement.Worker.OffChainVote
   ( insertOffChainVoteAuthorRowStmt
   , insertOffChainVoteDataRowStmt
   , insertOffChainVoteDrepDataRowStmt

@@ -19,6 +19,14 @@ module DbSync.Db.Schema.Address
     -- * Table definitions
   , addressTableDef
 
+    -- * Column records (compile-time-safe column references)
+  , AddressCols (..)
+  , addressCols
+  , addressColsList
+
+    -- * Per-module column-record registry
+  , addressColumnRecords
+
     -- * COPY encoding
   , encodeAddressCopy
 
@@ -94,6 +102,53 @@ addressTableDef = TableDef
   , tdIdentityColumns = []
   , tdForeignKeys = []
   }
+
+-- ---------------------------------------------------------------------------
+-- * Column records
+-- ---------------------------------------------------------------------------
+
+data AddressCols = AddressCols
+  { acId             :: !TableColumn
+  , acAddress        :: !TableColumn
+  , acRaw            :: !TableColumn
+  , acHasScript      :: !TableColumn
+  , acPaymentCred    :: !TableColumn
+  , acStakeAddressId :: !TableColumn
+  , acRawHash        :: !TableColumn
+  }
+
+addressCols :: AddressCols
+addressCols =
+  let c = TableColumn addressTableDef
+  in AddressCols
+       { acId             = c "id"
+       , acAddress        = c "address"
+       , acRaw            = c "raw"
+       , acHasScript      = c "has_script"
+       , acPaymentCred    = c "payment_cred"
+       , acStakeAddressId = c "stake_address_id"
+       , acRawHash        = c "raw_hash"
+       }
+
+addressColsList :: [TableColumn]
+addressColsList =
+  [ addressCols.acId
+  , addressCols.acAddress
+  , addressCols.acRaw
+  , addressCols.acHasScript
+  , addressCols.acPaymentCred
+  , addressCols.acStakeAddressId
+  , addressCols.acRawHash
+  ]
+
+-- ---------------------------------------------------------------------------
+-- * Per-module column-record registry
+-- ---------------------------------------------------------------------------
+
+addressColumnRecords :: [(TableDef, [TableColumn])]
+addressColumnRecords =
+  [ (addressTableDef, addressColsList)
+  ]
 
 -- ---------------------------------------------------------------------------
 -- * COPY encoding

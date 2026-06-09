@@ -9,6 +9,14 @@ module DbSync.Db.Schema.Metadata
     -- * Table definitions
   , txMetadataTableDef
 
+    -- * Column records (compile-time-safe column references)
+  , TxMetadataCols (..)
+  , txMetadataCols
+  , txMetadataColsList
+
+    -- * Per-module column-record registry
+  , metadataColumnRecords
+
     -- * COPY encoding
   , encodeTxMetadataCopy
 
@@ -80,6 +88,47 @@ txMetadataTableDef = TableDef
       [ ForeignKey "tx_id" "tx" "id"
       ]
   }
+
+-- ---------------------------------------------------------------------------
+-- * Column records
+-- ---------------------------------------------------------------------------
+
+data TxMetadataCols = TxMetadataCols
+  { tmcId    :: !TableColumn
+  , tmcKey   :: !TableColumn
+  , tmcJson  :: !TableColumn
+  , tmcBytes :: !TableColumn
+  , tmcTxId  :: !TableColumn
+  }
+
+txMetadataCols :: TxMetadataCols
+txMetadataCols =
+  let c = TableColumn txMetadataTableDef
+  in TxMetadataCols
+       { tmcId    = c "id"
+       , tmcKey   = c "key"
+       , tmcJson  = c "json"
+       , tmcBytes = c "bytes"
+       , tmcTxId  = c "tx_id"
+       }
+
+txMetadataColsList :: [TableColumn]
+txMetadataColsList =
+  [ txMetadataCols.tmcId
+  , txMetadataCols.tmcKey
+  , txMetadataCols.tmcJson
+  , txMetadataCols.tmcBytes
+  , txMetadataCols.tmcTxId
+  ]
+
+-- ---------------------------------------------------------------------------
+-- * Per-module column-record registry
+-- ---------------------------------------------------------------------------
+
+metadataColumnRecords :: [(TableDef, [TableColumn])]
+metadataColumnRecords =
+  [ (txMetadataTableDef, txMetadataColsList)
+  ]
 
 -- ---------------------------------------------------------------------------
 -- * COPY encoding

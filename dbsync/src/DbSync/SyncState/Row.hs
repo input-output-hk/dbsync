@@ -63,9 +63,32 @@ import qualified Hasql.Statement as Stmt
 
 import Control.Tracer (traceWith)
 
+import DbSync.Db.Schema.Governance
+  ( committeeHashTableDef
+  , drepHashTableDef
+  , votingAnchorTableDef
+  )
+import DbSync.Db.Schema.MultiAsset (multiAssetTableDef)
+import DbSync.Db.Schema.Pool (PoolHashCols (..), poolHashCols, poolHashTableDef)
+import DbSync.Db.Schema.ScriptsDatums
+  ( DatumCols (..)
+  , RedeemerDataCols (..)
+  , ScriptCols (..)
+  , datumCols
+  , datumTableDef
+  , redeemerDataCols
+  , redeemerDataTableDef
+  , scriptCols
+  , scriptTableDef
+  )
+import DbSync.Db.Schema.StakeDelegation
+  ( StakeAddressCols (..)
+  , stakeAddressCols
+  , stakeAddressTableDef
+  )
 import DbSync.Db.Schema.SyncState (SyncStateRow (..))
-import DbSync.Db.Schema.Types (TableDef (..))
-import DbSync.Db.Statement.Resume
+import DbSync.Db.Schema.Types (TableColumn (..), TableDef (..))
+import DbSync.Db.Statement.Worker.Resume
   ( selectBlockHashAtSlotStmt
   , selectCommitteeByProposalStmt
   , selectCommitteeHashDedupStmt
@@ -311,23 +334,23 @@ rebuildDedupMaps tableDefs lsmSession = do
         when (name `elem` tableNames) action
   whenPresent "slot_leader" $
     populateSingle "slot_leader" "hash" (dstSlotLeader stores)
-  whenPresent "stake_address" $
-    populateSingle "stake_address" "hash_raw" (dstStakeAddress stores)
-  whenPresent "pool_hash" $
-    populateSingle "pool_hash" "hash_raw" (dstPoolHash stores)
-  whenPresent "multi_asset" $
+  whenPresent (tdName stakeAddressTableDef) $
+    populateSingle (tdName stakeAddressTableDef) stakeAddressCols.sacHashRaw.tcName (dstStakeAddress stores)
+  whenPresent (tdName poolHashTableDef) $
+    populateSingle (tdName poolHashTableDef) poolHashCols.phcHashRaw.tcName (dstPoolHash stores)
+  whenPresent (tdName multiAssetTableDef) $
     populateMultiAsset (dstMultiAsset stores)
-  whenPresent "script" $
-    populateSingle "script" "hash" (dstScriptHash stores)
-  whenPresent "datum" $
-    populateSingle "datum" "hash" (dstDatum stores)
-  whenPresent "redeemer_data" $
-    populateSingle "redeemer_data" "hash" (dstRedeemerData stores)
-  whenPresent "drep_hash" $
+  whenPresent (tdName scriptTableDef) $
+    populateSingle (tdName scriptTableDef) scriptCols.sccHash.tcName (dstScriptHash stores)
+  whenPresent (tdName datumTableDef) $
+    populateSingle (tdName datumTableDef) datumCols.dmcHash.tcName (dstDatum stores)
+  whenPresent (tdName redeemerDataTableDef) $
+    populateSingle (tdName redeemerDataTableDef) redeemerDataCols.rddcHash.tcName (dstRedeemerData stores)
+  whenPresent (tdName drepHashTableDef) $
     populateDrepHash (dstDrepHash stores)
-  whenPresent "committee_hash" $
+  whenPresent (tdName committeeHashTableDef) $
     populateCommitteeHash (dstCommitteeHash stores)
-  whenPresent "voting_anchor" $
+  whenPresent (tdName votingAnchorTableDef) $
     populateVotingAnchor (dstVotingAnchor stores)
   pure stores
 

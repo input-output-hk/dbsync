@@ -21,6 +21,12 @@ module DbSync.Db.Schema.AdaPots
     -- * Table definition
   , adaPotsTableDef
 
+    -- * Column records (compile-time-safe column references)
+  , AdaPotsCols (..), adaPotsCols, adaPotsColsList
+
+    -- * Per-module column-record registry
+  , adaPotsColumnRecords
+
     -- * COPY encoding
   , encodeAdaPotsCopy
 
@@ -120,6 +126,68 @@ adaPotsTableDef = TableDef
   }
 
 -- ---------------------------------------------------------------------------
+-- * Column records
+-- ---------------------------------------------------------------------------
+
+data AdaPotsCols = AdaPotsCols
+  { apcId               :: !TableColumn
+  , apcSlotNo           :: !TableColumn
+  , apcEpochNo          :: !TableColumn
+  , apcTreasury         :: !TableColumn
+  , apcReserves         :: !TableColumn
+  , apcRewards          :: !TableColumn
+  , apcUtxo             :: !TableColumn
+  , apcDepositsStake    :: !TableColumn
+  , apcFees             :: !TableColumn
+  , apcBlockId          :: !TableColumn
+  , apcDepositsDrep     :: !TableColumn
+  , apcDepositsProposal :: !TableColumn
+  }
+
+adaPotsCols :: AdaPotsCols
+adaPotsCols =
+  let c = TableColumn adaPotsTableDef
+  in AdaPotsCols
+       { apcId               = c "id"
+       , apcSlotNo           = c "slot_no"
+       , apcEpochNo          = c "epoch_no"
+       , apcTreasury         = c "treasury"
+       , apcReserves         = c "reserves"
+       , apcRewards          = c "rewards"
+       , apcUtxo             = c "utxo"
+       , apcDepositsStake    = c "deposits_stake"
+       , apcFees             = c "fees"
+       , apcBlockId          = c "block_id"
+       , apcDepositsDrep     = c "deposits_drep"
+       , apcDepositsProposal = c "deposits_proposal"
+       }
+
+adaPotsColsList :: [TableColumn]
+adaPotsColsList =
+  [ adaPotsCols.apcId
+  , adaPotsCols.apcSlotNo
+  , adaPotsCols.apcEpochNo
+  , adaPotsCols.apcTreasury
+  , adaPotsCols.apcReserves
+  , adaPotsCols.apcRewards
+  , adaPotsCols.apcUtxo
+  , adaPotsCols.apcDepositsStake
+  , adaPotsCols.apcFees
+  , adaPotsCols.apcBlockId
+  , adaPotsCols.apcDepositsDrep
+  , adaPotsCols.apcDepositsProposal
+  ]
+
+-- ---------------------------------------------------------------------------
+-- * Per-module column-record registry
+-- ---------------------------------------------------------------------------
+
+adaPotsColumnRecords :: [(TableDef, [TableColumn])]
+adaPotsColumnRecords =
+  [ (adaPotsTableDef, adaPotsColsList)
+  ]
+
+-- ---------------------------------------------------------------------------
 -- * COPY encoding
 -- ---------------------------------------------------------------------------
 
@@ -147,7 +215,7 @@ encodeAdaPotsCopy pots =
 -- ---------------------------------------------------------------------------
 
 -- | Parameter order matches the INSERT column list in
--- 'DbSync.Db.Statement.AdaPots.insertAdaPotsRowStmt'.
+-- 'DbSync.Db.Statement.EpochBoundary.insertAdaPotsRowStmt'.
 adaPotsEncoder :: E.Params AdaPots
 adaPotsEncoder = mconcat
   [ adaPotsSlotNo           >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
@@ -164,8 +232,8 @@ adaPotsEncoder = mconcat
   ]
 
 adaPotsDecoder :: D.Row AdaPots
-adaPotsDecoder = AdaPots
-  <$> (fromIntegral <$> D.column (D.nonNullable D.int8))
+adaPotsDecoder =
+  (AdaPots . fromIntegral <$> D.column (D.nonNullable D.int8))
   <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
   <*> D.column (D.nonNullable dbLovelaceValueDecoder)
   <*> D.column (D.nonNullable dbLovelaceValueDecoder)

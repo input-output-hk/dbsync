@@ -9,7 +9,7 @@ import Cardano.Prelude
 import qualified Hasql.Connection as Conn
 
 import DbSync.Db.Schema.CBOR (TxCbor)
-import DbSync.Db.Statement.TxCbor (insertTxCborRowStmt)
+import DbSync.Db.Statement.CBOR (insertTxCborRowStmt)
 import DbSync.Phase.Following.WriteBuffer (WriteBuffer)
 import DbSync.Phase.Following.Writer.Internal (queueBuf, runConn)
 

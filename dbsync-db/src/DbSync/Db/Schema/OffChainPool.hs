@@ -13,6 +13,13 @@ module DbSync.Db.Schema.OffChainPool
   , offChainPoolDataTableDef
   , offChainPoolFetchErrorTableDef
 
+    -- * Column records (compile-time-safe column references)
+  , OffChainPoolDataCols (..), offChainPoolDataCols, offChainPoolDataColsList
+  , OffChainPoolFetchErrorCols (..), offChainPoolFetchErrorCols, offChainPoolFetchErrorColsList
+
+    -- * Per-module column-record registry
+  , offChainPoolColumnRecords
+
     -- * COPY encoding
   , encodeOffChainPoolDataCopy
   , encodeOffChainPoolFetchErrorCopy
@@ -122,6 +129,85 @@ offChainPoolFetchErrorTableDef = TableDef
   , tdIdentityColumns   = ["id"]
   , tdForeignKeys       = []
   }
+
+-- ---------------------------------------------------------------------------
+-- * Column records
+-- ---------------------------------------------------------------------------
+
+data OffChainPoolDataCols = OffChainPoolDataCols
+  { ocpdcId         :: !TableColumn
+  , ocpdcPoolId     :: !TableColumn
+  , ocpdcTickerName :: !TableColumn
+  , ocpdcHash       :: !TableColumn
+  , ocpdcJson       :: !TableColumn
+  , ocpdcBytes      :: !TableColumn
+  , ocpdcPmrId      :: !TableColumn
+  }
+
+offChainPoolDataCols :: OffChainPoolDataCols
+offChainPoolDataCols =
+  let c = TableColumn offChainPoolDataTableDef
+  in OffChainPoolDataCols
+       { ocpdcId         = c "id"
+       , ocpdcPoolId     = c "pool_id"
+       , ocpdcTickerName = c "ticker_name"
+       , ocpdcHash       = c "hash"
+       , ocpdcJson       = c "json"
+       , ocpdcBytes      = c "bytes"
+       , ocpdcPmrId      = c "pmr_id"
+       }
+
+offChainPoolDataColsList :: [TableColumn]
+offChainPoolDataColsList =
+  [ offChainPoolDataCols.ocpdcId
+  , offChainPoolDataCols.ocpdcPoolId
+  , offChainPoolDataCols.ocpdcTickerName
+  , offChainPoolDataCols.ocpdcHash
+  , offChainPoolDataCols.ocpdcJson
+  , offChainPoolDataCols.ocpdcBytes
+  , offChainPoolDataCols.ocpdcPmrId
+  ]
+
+data OffChainPoolFetchErrorCols = OffChainPoolFetchErrorCols
+  { ocpfecId         :: !TableColumn
+  , ocpfecPoolId     :: !TableColumn
+  , ocpfecFetchTime  :: !TableColumn
+  , ocpfecPmrId      :: !TableColumn
+  , ocpfecFetchError :: !TableColumn
+  , ocpfecRetryCount :: !TableColumn
+  }
+
+offChainPoolFetchErrorCols :: OffChainPoolFetchErrorCols
+offChainPoolFetchErrorCols =
+  let c = TableColumn offChainPoolFetchErrorTableDef
+  in OffChainPoolFetchErrorCols
+       { ocpfecId         = c "id"
+       , ocpfecPoolId     = c "pool_id"
+       , ocpfecFetchTime  = c "fetch_time"
+       , ocpfecPmrId      = c "pmr_id"
+       , ocpfecFetchError = c "fetch_error"
+       , ocpfecRetryCount = c "retry_count"
+       }
+
+offChainPoolFetchErrorColsList :: [TableColumn]
+offChainPoolFetchErrorColsList =
+  [ offChainPoolFetchErrorCols.ocpfecId
+  , offChainPoolFetchErrorCols.ocpfecPoolId
+  , offChainPoolFetchErrorCols.ocpfecFetchTime
+  , offChainPoolFetchErrorCols.ocpfecPmrId
+  , offChainPoolFetchErrorCols.ocpfecFetchError
+  , offChainPoolFetchErrorCols.ocpfecRetryCount
+  ]
+
+-- ---------------------------------------------------------------------------
+-- * Per-module column-record registry
+-- ---------------------------------------------------------------------------
+
+offChainPoolColumnRecords :: [(TableDef, [TableColumn])]
+offChainPoolColumnRecords =
+  [ (offChainPoolDataTableDef,       offChainPoolDataColsList)
+  , (offChainPoolFetchErrorTableDef, offChainPoolFetchErrorColsList)
+  ]
 
 -- ---------------------------------------------------------------------------
 -- * COPY encoding

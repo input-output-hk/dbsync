@@ -12,6 +12,14 @@ module DbSync.Db.Schema.CBOR
     -- * Table definitions
   , txCborTableDef
 
+    -- * Column records (compile-time-safe column references)
+  , TxCborCols (..)
+  , txCborCols
+  , txCborColsList
+
+    -- * Per-module column-record registry
+  , cborColumnRecords
+
     -- * COPY encoding
   , encodeTxCborCopy
 
@@ -73,6 +81,41 @@ txCborTableDef = TableDef
       [ ForeignKey "tx_id" "tx" "id"
       ]
   }
+
+-- ---------------------------------------------------------------------------
+-- * Column records
+-- ---------------------------------------------------------------------------
+
+data TxCborCols = TxCborCols
+  { tcbId    :: !TableColumn
+  , tcbTxId  :: !TableColumn
+  , tcbBytes :: !TableColumn
+  }
+
+txCborCols :: TxCborCols
+txCborCols =
+  let c = TableColumn txCborTableDef
+  in TxCborCols
+       { tcbId    = c "id"
+       , tcbTxId  = c "tx_id"
+       , tcbBytes = c "bytes"
+       }
+
+txCborColsList :: [TableColumn]
+txCborColsList =
+  [ txCborCols.tcbId
+  , txCborCols.tcbTxId
+  , txCborCols.tcbBytes
+  ]
+
+-- ---------------------------------------------------------------------------
+-- * Per-module column-record registry
+-- ---------------------------------------------------------------------------
+
+cborColumnRecords :: [(TableDef, [TableColumn])]
+cborColumnRecords =
+  [ (txCborTableDef, txCborColsList)
+  ]
 
 -- ---------------------------------------------------------------------------
 -- * COPY encoding

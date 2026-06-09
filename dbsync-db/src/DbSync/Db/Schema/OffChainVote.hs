@@ -24,6 +24,18 @@ module DbSync.Db.Schema.OffChainVote
   , offChainVoteExternalUpdateTableDef
   , offChainVoteFetchErrorTableDef
 
+    -- * Column records (compile-time-safe column references)
+  , OffChainVoteDataCols (..), offChainVoteDataCols, offChainVoteDataColsList
+  , OffChainVoteGovActionDataCols (..), offChainVoteGovActionDataCols, offChainVoteGovActionDataColsList
+  , OffChainVoteDrepDataCols (..), offChainVoteDrepDataCols, offChainVoteDrepDataColsList
+  , OffChainVoteAuthorCols (..), offChainVoteAuthorCols, offChainVoteAuthorColsList
+  , OffChainVoteReferenceCols (..), offChainVoteReferenceCols, offChainVoteReferenceColsList
+  , OffChainVoteExternalUpdateCols (..), offChainVoteExternalUpdateCols, offChainVoteExternalUpdateColsList
+  , OffChainVoteFetchErrorCols (..), offChainVoteFetchErrorCols, offChainVoteFetchErrorColsList
+
+    -- * Per-module column-record registry
+  , offChainVoteColumnRecords
+
     -- * COPY encoding
   , encodeOffChainVoteDataCopy
   , encodeOffChainVoteGovActionDataCopy
@@ -326,6 +338,254 @@ offChainVoteFetchErrorTableDef = TableDef
   , tdIdentityColumns   = ["id"]
   , tdForeignKeys       = []
   }
+
+-- ---------------------------------------------------------------------------
+-- * Column records
+-- ---------------------------------------------------------------------------
+
+data OffChainVoteDataCols = OffChainVoteDataCols
+  { ocvdcId             :: !TableColumn
+  , ocvdcVotingAnchorId :: !TableColumn
+  , ocvdcHash           :: !TableColumn
+  , ocvdcJson           :: !TableColumn
+  , ocvdcBytes          :: !TableColumn
+  , ocvdcWarning        :: !TableColumn
+  , ocvdcLanguage       :: !TableColumn
+  , ocvdcComment        :: !TableColumn
+  , ocvdcIsValid        :: !TableColumn
+  }
+
+offChainVoteDataCols :: OffChainVoteDataCols
+offChainVoteDataCols =
+  let c = TableColumn offChainVoteDataTableDef
+  in OffChainVoteDataCols
+       { ocvdcId             = c "id"
+       , ocvdcVotingAnchorId = c "voting_anchor_id"
+       , ocvdcHash           = c "hash"
+       , ocvdcJson           = c "json"
+       , ocvdcBytes          = c "bytes"
+       , ocvdcWarning        = c "warning"
+       , ocvdcLanguage       = c "language"
+       , ocvdcComment        = c "comment"
+       , ocvdcIsValid        = c "is_valid"
+       }
+
+offChainVoteDataColsList :: [TableColumn]
+offChainVoteDataColsList =
+  [ offChainVoteDataCols.ocvdcId
+  , offChainVoteDataCols.ocvdcVotingAnchorId
+  , offChainVoteDataCols.ocvdcHash
+  , offChainVoteDataCols.ocvdcJson
+  , offChainVoteDataCols.ocvdcBytes
+  , offChainVoteDataCols.ocvdcWarning
+  , offChainVoteDataCols.ocvdcLanguage
+  , offChainVoteDataCols.ocvdcComment
+  , offChainVoteDataCols.ocvdcIsValid
+  ]
+
+data OffChainVoteGovActionDataCols = OffChainVoteGovActionDataCols
+  { ocvgadcId                 :: !TableColumn
+  , ocvgadcOffChainVoteDataId :: !TableColumn
+  , ocvgadcTitle              :: !TableColumn
+  , ocvgadcAbstract           :: !TableColumn
+  , ocvgadcMotivation         :: !TableColumn
+  , ocvgadcRationale          :: !TableColumn
+  }
+
+offChainVoteGovActionDataCols :: OffChainVoteGovActionDataCols
+offChainVoteGovActionDataCols =
+  let c = TableColumn offChainVoteGovActionDataTableDef
+  in OffChainVoteGovActionDataCols
+       { ocvgadcId                 = c "id"
+       , ocvgadcOffChainVoteDataId = c "off_chain_vote_data_id"
+       , ocvgadcTitle              = c "title"
+       , ocvgadcAbstract           = c "abstract"
+       , ocvgadcMotivation         = c "motivation"
+       , ocvgadcRationale          = c "rationale"
+       }
+
+offChainVoteGovActionDataColsList :: [TableColumn]
+offChainVoteGovActionDataColsList =
+  [ offChainVoteGovActionDataCols.ocvgadcId
+  , offChainVoteGovActionDataCols.ocvgadcOffChainVoteDataId
+  , offChainVoteGovActionDataCols.ocvgadcTitle
+  , offChainVoteGovActionDataCols.ocvgadcAbstract
+  , offChainVoteGovActionDataCols.ocvgadcMotivation
+  , offChainVoteGovActionDataCols.ocvgadcRationale
+  ]
+
+data OffChainVoteDrepDataCols = OffChainVoteDrepDataCols
+  { ocvddcId                 :: !TableColumn
+  , ocvddcOffChainVoteDataId :: !TableColumn
+  , ocvddcPaymentAddress     :: !TableColumn
+  , ocvddcGivenName          :: !TableColumn
+  , ocvddcObjectives         :: !TableColumn
+  , ocvddcMotivations        :: !TableColumn
+  , ocvddcQualifications     :: !TableColumn
+  , ocvddcImageUrl           :: !TableColumn
+  , ocvddcImageHash          :: !TableColumn
+  }
+
+offChainVoteDrepDataCols :: OffChainVoteDrepDataCols
+offChainVoteDrepDataCols =
+  let c = TableColumn offChainVoteDrepDataTableDef
+  in OffChainVoteDrepDataCols
+       { ocvddcId                 = c "id"
+       , ocvddcOffChainVoteDataId = c "off_chain_vote_data_id"
+       , ocvddcPaymentAddress     = c "payment_address"
+       , ocvddcGivenName          = c "given_name"
+       , ocvddcObjectives         = c "objectives"
+       , ocvddcMotivations        = c "motivations"
+       , ocvddcQualifications     = c "qualifications"
+       , ocvddcImageUrl           = c "image_url"
+       , ocvddcImageHash          = c "image_hash"
+       }
+
+offChainVoteDrepDataColsList :: [TableColumn]
+offChainVoteDrepDataColsList =
+  [ offChainVoteDrepDataCols.ocvddcId
+  , offChainVoteDrepDataCols.ocvddcOffChainVoteDataId
+  , offChainVoteDrepDataCols.ocvddcPaymentAddress
+  , offChainVoteDrepDataCols.ocvddcGivenName
+  , offChainVoteDrepDataCols.ocvddcObjectives
+  , offChainVoteDrepDataCols.ocvddcMotivations
+  , offChainVoteDrepDataCols.ocvddcQualifications
+  , offChainVoteDrepDataCols.ocvddcImageUrl
+  , offChainVoteDrepDataCols.ocvddcImageHash
+  ]
+
+data OffChainVoteAuthorCols = OffChainVoteAuthorCols
+  { ocvacId                 :: !TableColumn
+  , ocvacOffChainVoteDataId :: !TableColumn
+  , ocvacName               :: !TableColumn
+  , ocvacWitnessAlgorithm   :: !TableColumn
+  , ocvacPublicKey          :: !TableColumn
+  , ocvacSignature          :: !TableColumn
+  , ocvacWarning            :: !TableColumn
+  }
+
+offChainVoteAuthorCols :: OffChainVoteAuthorCols
+offChainVoteAuthorCols =
+  let c = TableColumn offChainVoteAuthorTableDef
+  in OffChainVoteAuthorCols
+       { ocvacId                 = c "id"
+       , ocvacOffChainVoteDataId = c "off_chain_vote_data_id"
+       , ocvacName               = c "name"
+       , ocvacWitnessAlgorithm   = c "witness_algorithm"
+       , ocvacPublicKey          = c "public_key"
+       , ocvacSignature          = c "signature"
+       , ocvacWarning            = c "warning"
+       }
+
+offChainVoteAuthorColsList :: [TableColumn]
+offChainVoteAuthorColsList =
+  [ offChainVoteAuthorCols.ocvacId
+  , offChainVoteAuthorCols.ocvacOffChainVoteDataId
+  , offChainVoteAuthorCols.ocvacName
+  , offChainVoteAuthorCols.ocvacWitnessAlgorithm
+  , offChainVoteAuthorCols.ocvacPublicKey
+  , offChainVoteAuthorCols.ocvacSignature
+  , offChainVoteAuthorCols.ocvacWarning
+  ]
+
+data OffChainVoteReferenceCols = OffChainVoteReferenceCols
+  { ocvrcId                 :: !TableColumn
+  , ocvrcOffChainVoteDataId :: !TableColumn
+  , ocvrcLabel              :: !TableColumn
+  , ocvrcUri                :: !TableColumn
+  , ocvrcHashDigest         :: !TableColumn
+  , ocvrcHashAlgorithm      :: !TableColumn
+  }
+
+offChainVoteReferenceCols :: OffChainVoteReferenceCols
+offChainVoteReferenceCols =
+  let c = TableColumn offChainVoteReferenceTableDef
+  in OffChainVoteReferenceCols
+       { ocvrcId                 = c "id"
+       , ocvrcOffChainVoteDataId = c "off_chain_vote_data_id"
+       , ocvrcLabel              = c "label"
+       , ocvrcUri                = c "uri"
+       , ocvrcHashDigest         = c "hash_digest"
+       , ocvrcHashAlgorithm      = c "hash_algorithm"
+       }
+
+offChainVoteReferenceColsList :: [TableColumn]
+offChainVoteReferenceColsList =
+  [ offChainVoteReferenceCols.ocvrcId
+  , offChainVoteReferenceCols.ocvrcOffChainVoteDataId
+  , offChainVoteReferenceCols.ocvrcLabel
+  , offChainVoteReferenceCols.ocvrcUri
+  , offChainVoteReferenceCols.ocvrcHashDigest
+  , offChainVoteReferenceCols.ocvrcHashAlgorithm
+  ]
+
+data OffChainVoteExternalUpdateCols = OffChainVoteExternalUpdateCols
+  { ocveucId                 :: !TableColumn
+  , ocveucOffChainVoteDataId :: !TableColumn
+  , ocveucTitle              :: !TableColumn
+  , ocveucUri                :: !TableColumn
+  }
+
+offChainVoteExternalUpdateCols :: OffChainVoteExternalUpdateCols
+offChainVoteExternalUpdateCols =
+  let c = TableColumn offChainVoteExternalUpdateTableDef
+  in OffChainVoteExternalUpdateCols
+       { ocveucId                 = c "id"
+       , ocveucOffChainVoteDataId = c "off_chain_vote_data_id"
+       , ocveucTitle              = c "title"
+       , ocveucUri                = c "uri"
+       }
+
+offChainVoteExternalUpdateColsList :: [TableColumn]
+offChainVoteExternalUpdateColsList =
+  [ offChainVoteExternalUpdateCols.ocveucId
+  , offChainVoteExternalUpdateCols.ocveucOffChainVoteDataId
+  , offChainVoteExternalUpdateCols.ocveucTitle
+  , offChainVoteExternalUpdateCols.ocveucUri
+  ]
+
+data OffChainVoteFetchErrorCols = OffChainVoteFetchErrorCols
+  { ocvfecId             :: !TableColumn
+  , ocvfecVotingAnchorId :: !TableColumn
+  , ocvfecFetchError     :: !TableColumn
+  , ocvfecFetchTime      :: !TableColumn
+  , ocvfecRetryCount     :: !TableColumn
+  }
+
+offChainVoteFetchErrorCols :: OffChainVoteFetchErrorCols
+offChainVoteFetchErrorCols =
+  let c = TableColumn offChainVoteFetchErrorTableDef
+  in OffChainVoteFetchErrorCols
+       { ocvfecId             = c "id"
+       , ocvfecVotingAnchorId = c "voting_anchor_id"
+       , ocvfecFetchError     = c "fetch_error"
+       , ocvfecFetchTime      = c "fetch_time"
+       , ocvfecRetryCount     = c "retry_count"
+       }
+
+offChainVoteFetchErrorColsList :: [TableColumn]
+offChainVoteFetchErrorColsList =
+  [ offChainVoteFetchErrorCols.ocvfecId
+  , offChainVoteFetchErrorCols.ocvfecVotingAnchorId
+  , offChainVoteFetchErrorCols.ocvfecFetchError
+  , offChainVoteFetchErrorCols.ocvfecFetchTime
+  , offChainVoteFetchErrorCols.ocvfecRetryCount
+  ]
+
+-- ---------------------------------------------------------------------------
+-- * Per-module column-record registry
+-- ---------------------------------------------------------------------------
+
+offChainVoteColumnRecords :: [(TableDef, [TableColumn])]
+offChainVoteColumnRecords =
+  [ (offChainVoteDataTableDef,           offChainVoteDataColsList)
+  , (offChainVoteGovActionDataTableDef,  offChainVoteGovActionDataColsList)
+  , (offChainVoteDrepDataTableDef,       offChainVoteDrepDataColsList)
+  , (offChainVoteAuthorTableDef,         offChainVoteAuthorColsList)
+  , (offChainVoteReferenceTableDef,      offChainVoteReferenceColsList)
+  , (offChainVoteExternalUpdateTableDef, offChainVoteExternalUpdateColsList)
+  , (offChainVoteFetchErrorTableDef,     offChainVoteFetchErrorColsList)
+  ]
 
 -- ---------------------------------------------------------------------------
 -- * COPY encoding

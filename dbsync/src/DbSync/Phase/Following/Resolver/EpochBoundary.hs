@@ -17,7 +17,7 @@ import qualified Hasql.Connection as Conn
 
 import DbSync.Db.Schema.EpochBoundary (CostModel)
 import DbSync.Db.Schema.Ids (CostModelId)
-import DbSync.Db.Statement.CostModel (nextCostModelIdStmt, queryCostModelIdStmt)
+import DbSync.Db.Statement.EpochBoundary (nextCostModelIdStmt, queryCostModelIdStmt)
 import DbSync.Phase.Following.Resolver.Internal
   ( BlockDedupCache (..)
   , resolveDedupSimple

@@ -31,12 +31,12 @@ import DbSync.Db.Schema.Pool
   , PoolRetire
   , PoolUpdate
   )
-import DbSync.Db.Statement.PoolHash (insertPoolHashRowStmt)
-import DbSync.Db.Statement.PoolMetadataRef (insertPoolMetadataRefRowStmt)
-import DbSync.Db.Statement.PoolOwner (insertPoolOwnerRowStmt)
-import DbSync.Db.Statement.PoolRelay (insertPoolRelayRowStmt)
-import DbSync.Db.Statement.PoolRetire (insertPoolRetireRowStmt)
-import DbSync.Db.Statement.PoolUpdate (insertPoolUpdateRowStmt)
+import DbSync.Db.Statement.Pool (insertPoolHashRowStmt)
+import DbSync.Db.Statement.Pool (insertPoolMetadataRefRowStmt)
+import DbSync.Db.Statement.Pool (insertPoolOwnerRowStmt)
+import DbSync.Db.Statement.Pool (insertPoolRelayRowStmt)
+import DbSync.Db.Statement.Pool (insertPoolRetireRowStmt)
+import DbSync.Db.Statement.Pool (insertPoolUpdateRowStmt)
 import DbSync.Phase.Following.WriteBuffer (WriteBuffer)
 import DbSync.Phase.Following.Writer.Internal (queueBuf, runConn)
 

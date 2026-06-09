@@ -30,6 +30,7 @@ common defaults
   default-language:   GHC2021
   default-extensions:
     NoImplicitPrelude
+    OverloadedRecordDot
     OverloadedStrings
     DerivingStrategies
     GeneralizedNewtypeDeriving
@@ -120,6 +121,7 @@ test-suite dbsync-test
     DbSync.Worker.TxOut.WorkerSpec
     DbSync.Schema.AdaPotsSpec
     DbSync.Schema.AddressSpec
+    DbSync.Schema.ColumnsConsistencySpec
     DbSync.Schema.CoreSpec
     DbSync.Schema.EpochBoundarySpec
     DbSync.Schema.EpochViewSpec

@@ -16,7 +16,7 @@ import qualified Hasql.Connection as Conn
 
 import DbSync.Db.Schema.OffChainPool (OffChainPoolData, OffChainPoolFetchError)
 import DbSync.Db.Schema.Pool (DelistedPool, ReservedPoolTicker)
-import DbSync.Db.Statement.OffChainPool
+import DbSync.Db.Statement.Worker.OffChainPool
   ( insertDelistedPoolRowStmt
   , insertOffChainPoolDataRowStmt
   , insertOffChainPoolFetchErrorRowStmt

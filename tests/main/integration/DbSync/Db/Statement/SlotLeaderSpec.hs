@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Statement-level tests for 'DbSync.Db.Statement.SlotLeader'.
+-- | Statement-level tests for 'DbSync.Db.Statement.Core'.
 module DbSync.Db.Statement.SlotLeaderSpec (spec) where
 
 import Cardano.Prelude
@@ -12,7 +12,7 @@ import Test.Hspec (Spec, afterAll_, beforeAll_, before_, describe, it, shouldBe)
 import DbSync.Db.Schema.Core (SlotLeader (..), slotLeaderTableDef)
 import DbSync.Db.Schema.Ids (SlotLeaderId (..), PoolHashId (..))
 import DbSync.Db.Schema.Types (TableDef (..))
-import DbSync.Db.Statement.SlotLeader
+import DbSync.Db.Statement.Core
   ( insertSlotLeaderStmt
   , querySlotLeaderCountStmt
   , querySlotLeaderIdStmt
@@ -30,7 +30,7 @@ tables :: [TableDef]
 tables = [slotLeaderTableDef]
 
 spec :: Spec
-spec = describe "DbSync.Db.Statement.SlotLeader" $
+spec = describe "DbSync.Db.Statement.Core" $
   beforeAll_ (setupFollowTipSchema tables [("core", 1)]) $
   afterAll_  (teardownSchema tables) $
   before_    (truncateAllTables (map tdName tables)) $ do

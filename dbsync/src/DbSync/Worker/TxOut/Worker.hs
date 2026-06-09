@@ -73,18 +73,18 @@ import DbSync.Db.Schema.Ids
   , TxId (..)
   , TxOutId (..)
   )
-import DbSync.Db.Statement.Address
+import DbSync.Db.Statement.UTxO
   ( BulkAddressInsert (..)
   , bulkInsertAddressesStmt
   , bulkSelectAddressIdsStmt
   )
-import DbSync.Db.Statement.CollateralTxOut
+import DbSync.Db.Statement.UTxO
   ( bulkUpdateCollateralTxOutAddressIdsStmt
   )
-import DbSync.Db.Statement.ConsumedBy
+import DbSync.Db.Statement.Worker.ConsumedBy
   ( bulkUpdateConsumedByTxIdStmt
   )
-import DbSync.Db.Statement.TxOut
+import DbSync.Db.Statement.UTxO
   ( bulkUpdateTxOutAddressIdsStmt
   )
 import DbSync.Error (throwDb)

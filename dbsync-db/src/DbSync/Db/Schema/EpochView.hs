@@ -26,6 +26,12 @@ module DbSync.Db.Schema.EpochView
   , epochFinalizedTableDef
   , epochFinalizedTableName
 
+    -- * Column records (compile-time-safe column references)
+  , EpochFinalizedCols (..), epochFinalizedCols, epochFinalizedColsList
+
+    -- * Per-module column-record registry
+  , epochViewColumnRecords
+
     -- * COPY encoding (unused at runtime; kept for symmetry)
   , encodeEpochFinalizedCopy
 
@@ -44,11 +50,13 @@ import qualified Data.Text as T
 import Data.Time.Clock (UTCTime)
 import Data.WideWord (Word128)
 
+import DbSync.Db.Schema.Core (BlockCols (..), blockCols)
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids (EpochId, getEpochId)
 import DbSync.Db.Schema.Types
   ( ColumnDef (..)
   , PgType (..)
+  , TableColumn (..)
   , TableDef (..)
   , TableMode (..)
   )
@@ -120,6 +128,56 @@ epochFinalizedTableDef = TableDef
   }
 
 -- ---------------------------------------------------------------------------
+-- * Column records
+-- ---------------------------------------------------------------------------
+
+data EpochFinalizedCols = EpochFinalizedCols
+  { efcId        :: !TableColumn
+  , efcOutSum    :: !TableColumn
+  , efcFees      :: !TableColumn
+  , efcTxCount   :: !TableColumn
+  , efcBlkCount  :: !TableColumn
+  , efcNo        :: !TableColumn
+  , efcStartTime :: !TableColumn
+  , efcEndTime   :: !TableColumn
+  }
+
+epochFinalizedCols :: EpochFinalizedCols
+epochFinalizedCols =
+  let c = TableColumn epochFinalizedTableDef
+  in EpochFinalizedCols
+       { efcId        = c "id"
+       , efcOutSum    = c "out_sum"
+       , efcFees      = c "fees"
+       , efcTxCount   = c "tx_count"
+       , efcBlkCount  = c "blk_count"
+       , efcNo        = c "no"
+       , efcStartTime = c "start_time"
+       , efcEndTime   = c "end_time"
+       }
+
+epochFinalizedColsList :: [TableColumn]
+epochFinalizedColsList =
+  [ epochFinalizedCols.efcId
+  , epochFinalizedCols.efcOutSum
+  , epochFinalizedCols.efcFees
+  , epochFinalizedCols.efcTxCount
+  , epochFinalizedCols.efcBlkCount
+  , epochFinalizedCols.efcNo
+  , epochFinalizedCols.efcStartTime
+  , epochFinalizedCols.efcEndTime
+  ]
+
+-- ---------------------------------------------------------------------------
+-- * Per-module column-record registry
+-- ---------------------------------------------------------------------------
+
+epochViewColumnRecords :: [(TableDef, [TableColumn])]
+epochViewColumnRecords =
+  [ (epochFinalizedTableDef, epochFinalizedColsList)
+  ]
+
+-- ---------------------------------------------------------------------------
 -- * COPY encoding (symmetry only)
 -- ---------------------------------------------------------------------------
 
@@ -166,28 +224,42 @@ createEpochViewsSql :: Text
 createEpochViewsSql = T.unlines
   [ "CREATE VIEW " <> epochCurrentViewName <> " AS"
   , "  SELECT"
-  , "    (b.epoch_no::bigint + 1)              AS id,"
-  , "    COALESCE(SUM(tx.out_sum), 0)::numeric AS out_sum,"
-  , "    COALESCE(SUM(tx.fee), 0)              AS fees,"
-  , "    COUNT(tx.id)::bigint                  AS tx_count,"
-  , "    COUNT(DISTINCT b.id)::bigint          AS blk_count,"
-  , "    b.epoch_no::bigint                    AS no,"
-  , "    MIN(b.time)                           AS start_time,"
-  , "    MAX(b.time)                           AS end_time"
+  , "    (b." <> epochNo <> "::bigint + 1)                AS " <> idCol <> ","
+  , "    COALESCE(SUM(tx.out_sum), 0)::numeric            AS " <> outSum <> ","
+  , "    COALESCE(SUM(tx.fee), 0)                         AS " <> fees <> ","
+  , "    COUNT(tx.id)::bigint                             AS " <> txCount <> ","
+  , "    COUNT(DISTINCT b." <> blkId <> ")::bigint        AS " <> blkCount <> ","
+  , "    b." <> epochNo <> "::bigint                      AS " <> noCol <> ","
+  , "    MIN(b." <> bTime <> ")                           AS " <> startTime <> ","
+  , "    MAX(b." <> bTime <> ")                           AS " <> endTime
   , "  FROM block b"
-  , "  LEFT JOIN tx ON tx.block_id = b.id"
-  , "  WHERE b.epoch_no IS NOT NULL"
-  , "    AND b.epoch_no > COALESCE("
-       <> "(SELECT MAX(no) FROM " <> epochFinalizedTableName <> "), -1)"
-  , "  GROUP BY b.epoch_no;"
+  , "  LEFT JOIN tx ON tx.block_id = b." <> blkId
+  , "  WHERE b." <> epochNo <> " IS NOT NULL"
+  , "    AND b." <> epochNo <> " > COALESCE("
+       <> "(SELECT MAX(" <> noCol <> ") FROM " <> epochFinalizedTableName <> "), -1)"
+  , "  GROUP BY b." <> epochNo <> ";"
   , ""
   , "CREATE VIEW " <> epochViewName <> " AS"
-  , "  SELECT id, out_sum, fees, tx_count, blk_count, no, start_time, end_time"
+  , "  SELECT " <> projection
   , "    FROM " <> epochFinalizedTableName
   , "  UNION ALL"
-  , "  SELECT id, out_sum, fees, tx_count, blk_count, no, start_time, end_time"
+  , "  SELECT " <> projection
   , "    FROM " <> epochCurrentViewName <> ";"
   ]
+  where
+    idCol     = epochFinalizedCols.efcId.tcName
+    outSum    = epochFinalizedCols.efcOutSum.tcName
+    fees      = epochFinalizedCols.efcFees.tcName
+    txCount   = epochFinalizedCols.efcTxCount.tcName
+    blkCount  = epochFinalizedCols.efcBlkCount.tcName
+    noCol     = epochFinalizedCols.efcNo.tcName
+    startTime = epochFinalizedCols.efcStartTime.tcName
+    endTime   = epochFinalizedCols.efcEndTime.tcName
+    epochNo   = blockCols.bcEpochNo.tcName
+    blkId     = blockCols.bcId.tcName
+    bTime     = blockCols.bcTime.tcName
+    projection = T.intercalate ", "
+      [ idCol, outSum, fees, txCount, blkCount, noCol, startTime, endTime ]
 
 -- | @DROP VIEW@ DDL emitted before the underlying table's @DROP
 -- TABLE@. Order matters: @epoch@ depends on @epoch_current@ /

@@ -25,6 +25,12 @@ module DbSync.Db.Schema.SyncState
   , syncStateColumns
   , syncStateCounterColumns
 
+    -- * Column records (compile-time-safe column references)
+  , SyncStateCols (..), syncStateCols, syncStateColsList
+
+    -- * Per-module column-record registry
+  , syncStateColumnRecords
+
     -- * Table-to-counter mapping
   , idCounterByTable
 
@@ -64,6 +70,7 @@ import DbSync.Db.Schema.StakeDelegation (stakeAddressTableDef)
 import DbSync.Db.Schema.Types
   ( ColumnDef (..)
   , PgType (..)
+  , TableColumn (..)
   , TableDef (..)
   , TableMode (..)
   )
@@ -216,6 +223,122 @@ idCounterByTable =
   , (tdName committeeTableDef,            ssrCommitteeIdCounter)
   , (tdName constitutionTableDef,         ssrConstitutionIdCounter)
   , (tdName eventInfoTableDef,            ssrEventInfoIdCounter)
+  ]
+
+-- ---------------------------------------------------------------------------
+-- * Column records
+-- ---------------------------------------------------------------------------
+
+data SyncStateCols = SyncStateCols
+  { sscId                          :: !TableColumn
+  , sscLastCommittedSlot           :: !TableColumn
+  , sscLastCommittedBlockNo        :: !TableColumn
+  , sscLastCommittedBlockHash      :: !TableColumn
+  , sscLastSnapshotSlot            :: !TableColumn
+  , sscBlockIdCounter              :: !TableColumn
+  , sscTxIdCounter                 :: !TableColumn
+  , sscTxOutIdCounter              :: !TableColumn
+  , sscSlotLeaderIdCounter         :: !TableColumn
+  , sscAddressIdCounter            :: !TableColumn
+  , sscStakeAddressIdCounter       :: !TableColumn
+  , sscPoolHashIdCounter           :: !TableColumn
+  , sscMultiAssetIdCounter         :: !TableColumn
+  , sscScriptIdCounter             :: !TableColumn
+  , sscPoolUpdateIdCounter         :: !TableColumn
+  , sscPoolMetadataRefIdCounter    :: !TableColumn
+  , sscCostModelIdCounter          :: !TableColumn
+  , sscRedeemerIdCounter           :: !TableColumn
+  , sscCollateralTxOutIdCounter    :: !TableColumn
+  , sscEpochSyncStatsIdCounter     :: !TableColumn
+  , sscGovActionProposalIdCounter  :: !TableColumn
+  , sscParamProposalIdCounter      :: !TableColumn
+  , sscCommitteeIdCounter          :: !TableColumn
+  , sscConstitutionIdCounter       :: !TableColumn
+  , sscEventInfoIdCounter          :: !TableColumn
+  , sscSchemaVersionApplied        :: !TableColumn
+  , sscLedgerEnabled               :: !TableColumn
+  , sscSyncComplete                :: !TableColumn
+  , sscPendingRollbackSlot         :: !TableColumn
+  , sscUpdatedAt                   :: !TableColumn
+  }
+
+syncStateCols :: SyncStateCols
+syncStateCols =
+  let c = TableColumn syncStateTableDef
+  in SyncStateCols
+       { sscId                         = c "id"
+       , sscLastCommittedSlot          = c "last_committed_slot"
+       , sscLastCommittedBlockNo       = c "last_committed_block_no"
+       , sscLastCommittedBlockHash     = c "last_committed_block_hash"
+       , sscLastSnapshotSlot           = c "last_snapshot_slot"
+       , sscBlockIdCounter             = c "block_id_counter"
+       , sscTxIdCounter                = c "tx_id_counter"
+       , sscTxOutIdCounter             = c "tx_out_id_counter"
+       , sscSlotLeaderIdCounter        = c "slot_leader_id_counter"
+       , sscAddressIdCounter           = c "address_id_counter"
+       , sscStakeAddressIdCounter      = c "stake_address_id_counter"
+       , sscPoolHashIdCounter          = c "pool_hash_id_counter"
+       , sscMultiAssetIdCounter        = c "multi_asset_id_counter"
+       , sscScriptIdCounter            = c "script_id_counter"
+       , sscPoolUpdateIdCounter        = c "pool_update_id_counter"
+       , sscPoolMetadataRefIdCounter   = c "pool_metadata_ref_id_counter"
+       , sscCostModelIdCounter         = c "cost_model_id_counter"
+       , sscRedeemerIdCounter          = c "redeemer_id_counter"
+       , sscCollateralTxOutIdCounter   = c "collateral_tx_out_id_counter"
+       , sscEpochSyncStatsIdCounter    = c "epoch_sync_stats_id_counter"
+       , sscGovActionProposalIdCounter = c "gov_action_proposal_id_counter"
+       , sscParamProposalIdCounter     = c "param_proposal_id_counter"
+       , sscCommitteeIdCounter         = c "committee_id_counter"
+       , sscConstitutionIdCounter      = c "constitution_id_counter"
+       , sscEventInfoIdCounter         = c "event_info_id_counter"
+       , sscSchemaVersionApplied       = c "schema_version_applied"
+       , sscLedgerEnabled              = c "ledger_enabled"
+       , sscSyncComplete               = c "sync_complete"
+       , sscPendingRollbackSlot        = c "pending_rollback_slot"
+       , sscUpdatedAt                  = c "updated_at"
+       }
+
+syncStateColsList :: [TableColumn]
+syncStateColsList =
+  [ syncStateCols.sscId
+  , syncStateCols.sscLastCommittedSlot
+  , syncStateCols.sscLastCommittedBlockNo
+  , syncStateCols.sscLastCommittedBlockHash
+  , syncStateCols.sscLastSnapshotSlot
+  , syncStateCols.sscBlockIdCounter
+  , syncStateCols.sscTxIdCounter
+  , syncStateCols.sscTxOutIdCounter
+  , syncStateCols.sscSlotLeaderIdCounter
+  , syncStateCols.sscAddressIdCounter
+  , syncStateCols.sscStakeAddressIdCounter
+  , syncStateCols.sscPoolHashIdCounter
+  , syncStateCols.sscMultiAssetIdCounter
+  , syncStateCols.sscScriptIdCounter
+  , syncStateCols.sscPoolUpdateIdCounter
+  , syncStateCols.sscPoolMetadataRefIdCounter
+  , syncStateCols.sscCostModelIdCounter
+  , syncStateCols.sscRedeemerIdCounter
+  , syncStateCols.sscCollateralTxOutIdCounter
+  , syncStateCols.sscEpochSyncStatsIdCounter
+  , syncStateCols.sscGovActionProposalIdCounter
+  , syncStateCols.sscParamProposalIdCounter
+  , syncStateCols.sscCommitteeIdCounter
+  , syncStateCols.sscConstitutionIdCounter
+  , syncStateCols.sscEventInfoIdCounter
+  , syncStateCols.sscSchemaVersionApplied
+  , syncStateCols.sscLedgerEnabled
+  , syncStateCols.sscSyncComplete
+  , syncStateCols.sscPendingRollbackSlot
+  , syncStateCols.sscUpdatedAt
+  ]
+
+-- ---------------------------------------------------------------------------
+-- * Per-module column-record registry
+-- ---------------------------------------------------------------------------
+
+syncStateColumnRecords :: [(TableDef, [TableColumn])]
+syncStateColumnRecords =
+  [ (syncStateTableDef, syncStateColsList)
   ]
 
 -- ---------------------------------------------------------------------------

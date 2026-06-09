@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Run the post-load FK resolution against an open hasql connection.
--- SQL lives in 'DbSync.Db.Statement.Resolve'.
+-- SQL lives in 'DbSync.Db.Statement.Worker.Resolve'.
 module DbSync.Phase.Preparing.Resolve
   ( resolveForeignKeys
   ) where
@@ -13,7 +13,7 @@ import qualified Hasql.Session as Sess
 import DbSync.AppM (LoggingM)
 import DbSync.App.Config.Types (SyncConfig (..), DbSyncOptions (..), UtxoOption (..))
 import DbSync.Db.Run (useConn)
-import DbSync.Db.Statement.Resolve
+import DbSync.Db.Statement.Worker.Resolve
   ( resolveCollateralTxInScript
   , resolveConsumedByTxIdStmt
   , resolveReferenceTxInScript

@@ -13,7 +13,7 @@ import qualified Hasql.Connection as Conn
 
 import DbSync.Db.Schema.Ids (StakeAddressId)
 import DbSync.Db.Schema.StakeDelegation (StakeAddress)
-import DbSync.Db.Statement.StakeAddress (nextStakeAddressIdStmt, queryStakeAddressIdStmt)
+import DbSync.Db.Statement.StakeDelegation (nextStakeAddressIdStmt, queryStakeAddressIdStmt)
 import DbSync.Phase.Following.Resolver.Internal
   ( BlockDedupCache (..)
   , resolveDedupSimple

@@ -57,6 +57,27 @@ module DbSync.Db.Schema.Governance
   , treasuryWithdrawalTableDef
   , eventInfoTableDef
 
+    -- * Column records (compile-time-safe column references)
+  , DrepHashCols (..), drepHashCols, drepHashColsList
+  , DrepRegistrationCols (..), drepRegistrationCols, drepRegistrationColsList
+  , DrepDistrCols (..), drepDistrCols, drepDistrColsList
+  , DelegationVoteCols (..), delegationVoteCols, delegationVoteColsList
+  , GovActionProposalCols (..), govActionProposalCols, govActionProposalColsList
+  , VotingProcedureCols (..), votingProcedureCols, votingProcedureColsList
+  , VotingAnchorCols (..), votingAnchorCols, votingAnchorColsList
+  , ConstitutionCols (..), constitutionCols, constitutionColsList
+  , CommitteeCols (..), committeeCols, committeeColsList
+  , CommitteeHashCols (..), committeeHashCols, committeeHashColsList
+  , CommitteeMemberCols (..), committeeMemberCols, committeeMemberColsList
+  , CommitteeRegistrationCols (..), committeeRegistrationCols, committeeRegistrationColsList
+  , CommitteeDeRegistrationCols (..), committeeDeRegistrationCols, committeeDeRegistrationColsList
+  , ParamProposalCols (..), paramProposalCols, paramProposalColsList
+  , TreasuryWithdrawalCols (..), treasuryWithdrawalCols, treasuryWithdrawalColsList
+  , EventInfoCols (..), eventInfoCols, eventInfoColsList
+
+    -- * Per-module column-record registry
+  , governanceColumnRecords
+
     -- * COPY encoding
   , encodeDrepHashCopy
   , encodeDrepRegistrationCopy
@@ -796,6 +817,665 @@ eventInfoTableDef = TableDef
   , tdIdentityColumns = []
   , tdForeignKeys = []
   }
+
+-- ---------------------------------------------------------------------------
+-- * Column records
+-- ---------------------------------------------------------------------------
+
+data DrepHashCols = DrepHashCols
+  { dhcId        :: !TableColumn
+  , dhcRaw       :: !TableColumn
+  , dhcView      :: !TableColumn
+  , dhcHasScript :: !TableColumn
+  }
+
+drepHashCols :: DrepHashCols
+drepHashCols =
+  let c = TableColumn drepHashTableDef
+  in DrepHashCols
+       { dhcId        = c "id"
+       , dhcRaw       = c "raw"
+       , dhcView      = c "view"
+       , dhcHasScript = c "has_script"
+       }
+
+drepHashColsList :: [TableColumn]
+drepHashColsList =
+  [ drepHashCols.dhcId
+  , drepHashCols.dhcRaw
+  , drepHashCols.dhcView
+  , drepHashCols.dhcHasScript
+  ]
+
+data DrepRegistrationCols = DrepRegistrationCols
+  { drcId             :: !TableColumn
+  , drcTxId           :: !TableColumn
+  , drcCertIndex      :: !TableColumn
+  , drcDeposit        :: !TableColumn
+  , drcDrepHashId     :: !TableColumn
+  , drcVotingAnchorId :: !TableColumn
+  }
+
+drepRegistrationCols :: DrepRegistrationCols
+drepRegistrationCols =
+  let c = TableColumn drepRegistrationTableDef
+  in DrepRegistrationCols
+       { drcId             = c "id"
+       , drcTxId           = c "tx_id"
+       , drcCertIndex      = c "cert_index"
+       , drcDeposit        = c "deposit"
+       , drcDrepHashId     = c "drep_hash_id"
+       , drcVotingAnchorId = c "voting_anchor_id"
+       }
+
+drepRegistrationColsList :: [TableColumn]
+drepRegistrationColsList =
+  [ drepRegistrationCols.drcId
+  , drepRegistrationCols.drcTxId
+  , drepRegistrationCols.drcCertIndex
+  , drepRegistrationCols.drcDeposit
+  , drepRegistrationCols.drcDrepHashId
+  , drepRegistrationCols.drcVotingAnchorId
+  ]
+
+data DrepDistrCols = DrepDistrCols
+  { ddcId          :: !TableColumn
+  , ddcHashId      :: !TableColumn
+  , ddcAmount      :: !TableColumn
+  , ddcEpochNo     :: !TableColumn
+  , ddcActiveUntil :: !TableColumn
+  }
+
+drepDistrCols :: DrepDistrCols
+drepDistrCols =
+  let c = TableColumn drepDistrTableDef
+  in DrepDistrCols
+       { ddcId          = c "id"
+       , ddcHashId      = c "hash_id"
+       , ddcAmount      = c "amount"
+       , ddcEpochNo     = c "epoch_no"
+       , ddcActiveUntil = c "active_until"
+       }
+
+drepDistrColsList :: [TableColumn]
+drepDistrColsList =
+  [ drepDistrCols.ddcId
+  , drepDistrCols.ddcHashId
+  , drepDistrCols.ddcAmount
+  , drepDistrCols.ddcEpochNo
+  , drepDistrCols.ddcActiveUntil
+  ]
+
+data DelegationVoteCols = DelegationVoteCols
+  { dvcId         :: !TableColumn
+  , dvcAddrId     :: !TableColumn
+  , dvcCertIndex  :: !TableColumn
+  , dvcDrepHashId :: !TableColumn
+  , dvcTxId       :: !TableColumn
+  , dvcRedeemerId :: !TableColumn
+  }
+
+delegationVoteCols :: DelegationVoteCols
+delegationVoteCols =
+  let c = TableColumn delegationVoteTableDef
+  in DelegationVoteCols
+       { dvcId         = c "id"
+       , dvcAddrId     = c "addr_id"
+       , dvcCertIndex  = c "cert_index"
+       , dvcDrepHashId = c "drep_hash_id"
+       , dvcTxId       = c "tx_id"
+       , dvcRedeemerId = c "redeemer_id"
+       }
+
+delegationVoteColsList :: [TableColumn]
+delegationVoteColsList =
+  [ delegationVoteCols.dvcId
+  , delegationVoteCols.dvcAddrId
+  , delegationVoteCols.dvcCertIndex
+  , delegationVoteCols.dvcDrepHashId
+  , delegationVoteCols.dvcTxId
+  , delegationVoteCols.dvcRedeemerId
+  ]
+
+data GovActionProposalCols = GovActionProposalCols
+  { gapcId                     :: !TableColumn
+  , gapcTxId                   :: !TableColumn
+  , gapcIndex                  :: !TableColumn
+  , gapcPrevGovActionProposal  :: !TableColumn
+  , gapcDeposit                :: !TableColumn
+  , gapcReturnAddress          :: !TableColumn
+  , gapcExpiration             :: !TableColumn
+  , gapcVotingAnchorId         :: !TableColumn
+  , gapcType                   :: !TableColumn
+  , gapcDescription            :: !TableColumn
+  , gapcParamProposal          :: !TableColumn
+  , gapcRatifiedEpoch          :: !TableColumn
+  , gapcEnactedEpoch           :: !TableColumn
+  , gapcDroppedEpoch           :: !TableColumn
+  , gapcExpiredEpoch           :: !TableColumn
+  }
+
+govActionProposalCols :: GovActionProposalCols
+govActionProposalCols =
+  let c = TableColumn govActionProposalTableDef
+  in GovActionProposalCols
+       { gapcId                    = c "id"
+       , gapcTxId                  = c "tx_id"
+       , gapcIndex                 = c "index"
+       , gapcPrevGovActionProposal = c "prev_gov_action_proposal"
+       , gapcDeposit               = c "deposit"
+       , gapcReturnAddress         = c "return_address"
+       , gapcExpiration            = c "expiration"
+       , gapcVotingAnchorId        = c "voting_anchor_id"
+       , gapcType                  = c "type"
+       , gapcDescription           = c "description"
+       , gapcParamProposal         = c "param_proposal"
+       , gapcRatifiedEpoch         = c "ratified_epoch"
+       , gapcEnactedEpoch          = c "enacted_epoch"
+       , gapcDroppedEpoch          = c "dropped_epoch"
+       , gapcExpiredEpoch          = c "expired_epoch"
+       }
+
+govActionProposalColsList :: [TableColumn]
+govActionProposalColsList =
+  [ govActionProposalCols.gapcId
+  , govActionProposalCols.gapcTxId
+  , govActionProposalCols.gapcIndex
+  , govActionProposalCols.gapcPrevGovActionProposal
+  , govActionProposalCols.gapcDeposit
+  , govActionProposalCols.gapcReturnAddress
+  , govActionProposalCols.gapcExpiration
+  , govActionProposalCols.gapcVotingAnchorId
+  , govActionProposalCols.gapcType
+  , govActionProposalCols.gapcDescription
+  , govActionProposalCols.gapcParamProposal
+  , govActionProposalCols.gapcRatifiedEpoch
+  , govActionProposalCols.gapcEnactedEpoch
+  , govActionProposalCols.gapcDroppedEpoch
+  , govActionProposalCols.gapcExpiredEpoch
+  ]
+
+data VotingProcedureCols = VotingProcedureCols
+  { vpcId                  :: !TableColumn
+  , vpcTxId                :: !TableColumn
+  , vpcIndex               :: !TableColumn
+  , vpcGovActionProposalId :: !TableColumn
+  , vpcVoterRole           :: !TableColumn
+  , vpcDrepVoter           :: !TableColumn
+  , vpcPoolVoter           :: !TableColumn
+  , vpcVote                :: !TableColumn
+  , vpcVotingAnchorId      :: !TableColumn
+  , vpcCommitteeVoter      :: !TableColumn
+  , vpcInvalid             :: !TableColumn
+  }
+
+votingProcedureCols :: VotingProcedureCols
+votingProcedureCols =
+  let c = TableColumn votingProcedureTableDef
+  in VotingProcedureCols
+       { vpcId                  = c "id"
+       , vpcTxId                = c "tx_id"
+       , vpcIndex               = c "index"
+       , vpcGovActionProposalId = c "gov_action_proposal_id"
+       , vpcVoterRole           = c "voter_role"
+       , vpcDrepVoter           = c "drep_voter"
+       , vpcPoolVoter           = c "pool_voter"
+       , vpcVote                = c "vote"
+       , vpcVotingAnchorId      = c "voting_anchor_id"
+       , vpcCommitteeVoter      = c "committee_voter"
+       , vpcInvalid             = c "invalid"
+       }
+
+votingProcedureColsList :: [TableColumn]
+votingProcedureColsList =
+  [ votingProcedureCols.vpcId
+  , votingProcedureCols.vpcTxId
+  , votingProcedureCols.vpcIndex
+  , votingProcedureCols.vpcGovActionProposalId
+  , votingProcedureCols.vpcVoterRole
+  , votingProcedureCols.vpcDrepVoter
+  , votingProcedureCols.vpcPoolVoter
+  , votingProcedureCols.vpcVote
+  , votingProcedureCols.vpcVotingAnchorId
+  , votingProcedureCols.vpcCommitteeVoter
+  , votingProcedureCols.vpcInvalid
+  ]
+
+data VotingAnchorCols = VotingAnchorCols
+  { vacId       :: !TableColumn
+  , vacUrl      :: !TableColumn
+  , vacDataHash :: !TableColumn
+  , vacType     :: !TableColumn
+  , vacBlockId  :: !TableColumn
+  }
+
+votingAnchorCols :: VotingAnchorCols
+votingAnchorCols =
+  let c = TableColumn votingAnchorTableDef
+  in VotingAnchorCols
+       { vacId       = c "id"
+       , vacUrl      = c "url"
+       , vacDataHash = c "data_hash"
+       , vacType     = c "type"
+       , vacBlockId  = c "block_id"
+       }
+
+votingAnchorColsList :: [TableColumn]
+votingAnchorColsList =
+  [ votingAnchorCols.vacId
+  , votingAnchorCols.vacUrl
+  , votingAnchorCols.vacDataHash
+  , votingAnchorCols.vacType
+  , votingAnchorCols.vacBlockId
+  ]
+
+data ConstitutionCols = ConstitutionCols
+  { cccId                  :: !TableColumn
+  , cccGovActionProposalId :: !TableColumn
+  , cccVotingAnchorId      :: !TableColumn
+  , cccScriptHash          :: !TableColumn
+  }
+
+constitutionCols :: ConstitutionCols
+constitutionCols =
+  let c = TableColumn constitutionTableDef
+  in ConstitutionCols
+       { cccId                  = c "id"
+       , cccGovActionProposalId = c "gov_action_proposal_id"
+       , cccVotingAnchorId      = c "voting_anchor_id"
+       , cccScriptHash          = c "script_hash"
+       }
+
+constitutionColsList :: [TableColumn]
+constitutionColsList =
+  [ constitutionCols.cccId
+  , constitutionCols.cccGovActionProposalId
+  , constitutionCols.cccVotingAnchorId
+  , constitutionCols.cccScriptHash
+  ]
+
+data CommitteeCols = CommitteeCols
+  { cmtcId                  :: !TableColumn
+  , cmtcGovActionProposalId :: !TableColumn
+  , cmtcQuorumNumerator     :: !TableColumn
+  , cmtcQuorumDenominator   :: !TableColumn
+  }
+
+committeeCols :: CommitteeCols
+committeeCols =
+  let c = TableColumn committeeTableDef
+  in CommitteeCols
+       { cmtcId                  = c "id"
+       , cmtcGovActionProposalId = c "gov_action_proposal_id"
+       , cmtcQuorumNumerator     = c "quorum_numerator"
+       , cmtcQuorumDenominator   = c "quorum_denominator"
+       }
+
+committeeColsList :: [TableColumn]
+committeeColsList =
+  [ committeeCols.cmtcId
+  , committeeCols.cmtcGovActionProposalId
+  , committeeCols.cmtcQuorumNumerator
+  , committeeCols.cmtcQuorumDenominator
+  ]
+
+data CommitteeHashCols = CommitteeHashCols
+  { chcId        :: !TableColumn
+  , chcRaw       :: !TableColumn
+  , chcHasScript :: !TableColumn
+  }
+
+committeeHashCols :: CommitteeHashCols
+committeeHashCols =
+  let c = TableColumn committeeHashTableDef
+  in CommitteeHashCols
+       { chcId        = c "id"
+       , chcRaw       = c "raw"
+       , chcHasScript = c "has_script"
+       }
+
+committeeHashColsList :: [TableColumn]
+committeeHashColsList =
+  [ committeeHashCols.chcId
+  , committeeHashCols.chcRaw
+  , committeeHashCols.chcHasScript
+  ]
+
+data CommitteeMemberCols = CommitteeMemberCols
+  { cmemcId              :: !TableColumn
+  , cmemcCommitteeId     :: !TableColumn
+  , cmemcCommitteeHashId :: !TableColumn
+  , cmemcExpirationEpoch :: !TableColumn
+  }
+
+committeeMemberCols :: CommitteeMemberCols
+committeeMemberCols =
+  let c = TableColumn committeeMemberTableDef
+  in CommitteeMemberCols
+       { cmemcId              = c "id"
+       , cmemcCommitteeId     = c "committee_id"
+       , cmemcCommitteeHashId = c "committee_hash_id"
+       , cmemcExpirationEpoch = c "expiration_epoch"
+       }
+
+committeeMemberColsList :: [TableColumn]
+committeeMemberColsList =
+  [ committeeMemberCols.cmemcId
+  , committeeMemberCols.cmemcCommitteeId
+  , committeeMemberCols.cmemcCommitteeHashId
+  , committeeMemberCols.cmemcExpirationEpoch
+  ]
+
+data CommitteeRegistrationCols = CommitteeRegistrationCols
+  { crcId        :: !TableColumn
+  , crcTxId      :: !TableColumn
+  , crcCertIndex :: !TableColumn
+  , crcColdKeyId :: !TableColumn
+  , crcHotKeyId  :: !TableColumn
+  }
+
+committeeRegistrationCols :: CommitteeRegistrationCols
+committeeRegistrationCols =
+  let c = TableColumn committeeRegistrationTableDef
+  in CommitteeRegistrationCols
+       { crcId        = c "id"
+       , crcTxId      = c "tx_id"
+       , crcCertIndex = c "cert_index"
+       , crcColdKeyId = c "cold_key_id"
+       , crcHotKeyId  = c "hot_key_id"
+       }
+
+committeeRegistrationColsList :: [TableColumn]
+committeeRegistrationColsList =
+  [ committeeRegistrationCols.crcId
+  , committeeRegistrationCols.crcTxId
+  , committeeRegistrationCols.crcCertIndex
+  , committeeRegistrationCols.crcColdKeyId
+  , committeeRegistrationCols.crcHotKeyId
+  ]
+
+data CommitteeDeRegistrationCols = CommitteeDeRegistrationCols
+  { cdrcId             :: !TableColumn
+  , cdrcTxId           :: !TableColumn
+  , cdrcCertIndex      :: !TableColumn
+  , cdrcVotingAnchorId :: !TableColumn
+  , cdrcColdKeyId      :: !TableColumn
+  }
+
+committeeDeRegistrationCols :: CommitteeDeRegistrationCols
+committeeDeRegistrationCols =
+  let c = TableColumn committeeDeRegistrationTableDef
+  in CommitteeDeRegistrationCols
+       { cdrcId             = c "id"
+       , cdrcTxId           = c "tx_id"
+       , cdrcCertIndex      = c "cert_index"
+       , cdrcVotingAnchorId = c "voting_anchor_id"
+       , cdrcColdKeyId      = c "cold_key_id"
+       }
+
+committeeDeRegistrationColsList :: [TableColumn]
+committeeDeRegistrationColsList =
+  [ committeeDeRegistrationCols.cdrcId
+  , committeeDeRegistrationCols.cdrcTxId
+  , committeeDeRegistrationCols.cdrcCertIndex
+  , committeeDeRegistrationCols.cdrcVotingAnchorId
+  , committeeDeRegistrationCols.cdrcColdKeyId
+  ]
+
+data ParamProposalCols = ParamProposalCols
+  { ppcId                          :: !TableColumn
+  , ppcEpochNo                     :: !TableColumn
+  , ppcKey                         :: !TableColumn
+  , ppcMinFeeA                     :: !TableColumn
+  , ppcMinFeeB                     :: !TableColumn
+  , ppcMaxBlockSize                :: !TableColumn
+  , ppcMaxTxSize                   :: !TableColumn
+  , ppcMaxBhSize                   :: !TableColumn
+  , ppcKeyDeposit                  :: !TableColumn
+  , ppcPoolDeposit                 :: !TableColumn
+  , ppcMaxEpoch                    :: !TableColumn
+  , ppcOptimalPoolCount            :: !TableColumn
+  , ppcInfluence                   :: !TableColumn
+  , ppcMonetaryExpandRate          :: !TableColumn
+  , ppcTreasuryGrowthRate          :: !TableColumn
+  , ppcDecentralisation            :: !TableColumn
+  , ppcEntropy                     :: !TableColumn
+  , ppcProtocolMajor               :: !TableColumn
+  , ppcProtocolMinor               :: !TableColumn
+  , ppcMinUtxoValue                :: !TableColumn
+  , ppcMinPoolCost                 :: !TableColumn
+  , ppcCostModelId                 :: !TableColumn
+  , ppcPriceMem                    :: !TableColumn
+  , ppcPriceStep                   :: !TableColumn
+  , ppcMaxTxExMem                  :: !TableColumn
+  , ppcMaxTxExSteps                :: !TableColumn
+  , ppcMaxBlockExMem               :: !TableColumn
+  , ppcMaxBlockExSteps             :: !TableColumn
+  , ppcMaxValSize                  :: !TableColumn
+  , ppcCollateralPercent           :: !TableColumn
+  , ppcMaxCollateralInputs         :: !TableColumn
+  , ppcRegisteredTxId              :: !TableColumn
+  , ppcCoinsPerUtxoSize            :: !TableColumn
+  , ppcPvtMotionNoConfidence       :: !TableColumn
+  , ppcPvtCommitteeNormal          :: !TableColumn
+  , ppcPvtCommitteeNoConfidence    :: !TableColumn
+  , ppcPvtHardForkInitiation       :: !TableColumn
+  , ppcPvtppSecurityGroup          :: !TableColumn
+  , ppcDvtMotionNoConfidence       :: !TableColumn
+  , ppcDvtCommitteeNormal          :: !TableColumn
+  , ppcDvtCommitteeNoConfidence    :: !TableColumn
+  , ppcDvtUpdateToConstitution     :: !TableColumn
+  , ppcDvtHardForkInitiation       :: !TableColumn
+  , ppcDvtPPNetworkGroup           :: !TableColumn
+  , ppcDvtPPEconomicGroup          :: !TableColumn
+  , ppcDvtPPTechnicalGroup         :: !TableColumn
+  , ppcDvtPPGovGroup               :: !TableColumn
+  , ppcDvtTreasuryWithdrawal       :: !TableColumn
+  , ppcCommitteeMinSize            :: !TableColumn
+  , ppcCommitteeMaxTermLength      :: !TableColumn
+  , ppcGovActionLifetime           :: !TableColumn
+  , ppcGovActionDeposit            :: !TableColumn
+  , ppcDrepDeposit                 :: !TableColumn
+  , ppcDrepActivity                :: !TableColumn
+  , ppcMinFeeRefScriptCostPerByte  :: !TableColumn
+  }
+
+paramProposalCols :: ParamProposalCols
+paramProposalCols =
+  let c = TableColumn paramProposalTableDef
+  in ParamProposalCols
+       { ppcId                         = c "id"
+       , ppcEpochNo                    = c "epoch_no"
+       , ppcKey                        = c "key"
+       , ppcMinFeeA                    = c "min_fee_a"
+       , ppcMinFeeB                    = c "min_fee_b"
+       , ppcMaxBlockSize               = c "max_block_size"
+       , ppcMaxTxSize                  = c "max_tx_size"
+       , ppcMaxBhSize                  = c "max_bh_size"
+       , ppcKeyDeposit                 = c "key_deposit"
+       , ppcPoolDeposit                = c "pool_deposit"
+       , ppcMaxEpoch                   = c "max_epoch"
+       , ppcOptimalPoolCount           = c "optimal_pool_count"
+       , ppcInfluence                  = c "influence"
+       , ppcMonetaryExpandRate         = c "monetary_expand_rate"
+       , ppcTreasuryGrowthRate         = c "treasury_growth_rate"
+       , ppcDecentralisation           = c "decentralisation"
+       , ppcEntropy                    = c "entropy"
+       , ppcProtocolMajor              = c "protocol_major"
+       , ppcProtocolMinor              = c "protocol_minor"
+       , ppcMinUtxoValue               = c "min_utxo_value"
+       , ppcMinPoolCost                = c "min_pool_cost"
+       , ppcCostModelId                = c "cost_model_id"
+       , ppcPriceMem                   = c "price_mem"
+       , ppcPriceStep                  = c "price_step"
+       , ppcMaxTxExMem                 = c "max_tx_ex_mem"
+       , ppcMaxTxExSteps               = c "max_tx_ex_steps"
+       , ppcMaxBlockExMem              = c "max_block_ex_mem"
+       , ppcMaxBlockExSteps            = c "max_block_ex_steps"
+       , ppcMaxValSize                 = c "max_val_size"
+       , ppcCollateralPercent          = c "collateral_percent"
+       , ppcMaxCollateralInputs        = c "max_collateral_inputs"
+       , ppcRegisteredTxId             = c "registered_tx_id"
+       , ppcCoinsPerUtxoSize           = c "coins_per_utxo_size"
+       , ppcPvtMotionNoConfidence      = c "pvt_motion_no_confidence"
+       , ppcPvtCommitteeNormal         = c "pvt_committee_normal"
+       , ppcPvtCommitteeNoConfidence   = c "pvt_committee_no_confidence"
+       , ppcPvtHardForkInitiation      = c "pvt_hard_fork_initiation"
+       , ppcPvtppSecurityGroup         = c "pvtpp_security_group"
+       , ppcDvtMotionNoConfidence      = c "dvt_motion_no_confidence"
+       , ppcDvtCommitteeNormal         = c "dvt_committee_normal"
+       , ppcDvtCommitteeNoConfidence   = c "dvt_committee_no_confidence"
+       , ppcDvtUpdateToConstitution    = c "dvt_update_to_constitution"
+       , ppcDvtHardForkInitiation      = c "dvt_hard_fork_initiation"
+       , ppcDvtPPNetworkGroup          = c "dvt_pp_network_group"
+       , ppcDvtPPEconomicGroup         = c "dvt_pp_economic_group"
+       , ppcDvtPPTechnicalGroup        = c "dvt_pp_technical_group"
+       , ppcDvtPPGovGroup              = c "dvt_pp_gov_group"
+       , ppcDvtTreasuryWithdrawal      = c "dvt_treasury_withdrawal"
+       , ppcCommitteeMinSize           = c "committee_min_size"
+       , ppcCommitteeMaxTermLength     = c "committee_max_term_length"
+       , ppcGovActionLifetime          = c "gov_action_lifetime"
+       , ppcGovActionDeposit           = c "gov_action_deposit"
+       , ppcDrepDeposit                = c "drep_deposit"
+       , ppcDrepActivity               = c "drep_activity"
+       , ppcMinFeeRefScriptCostPerByte = c "min_fee_ref_script_cost_per_byte"
+       }
+
+paramProposalColsList :: [TableColumn]
+paramProposalColsList =
+  [ paramProposalCols.ppcId
+  , paramProposalCols.ppcEpochNo
+  , paramProposalCols.ppcKey
+  , paramProposalCols.ppcMinFeeA
+  , paramProposalCols.ppcMinFeeB
+  , paramProposalCols.ppcMaxBlockSize
+  , paramProposalCols.ppcMaxTxSize
+  , paramProposalCols.ppcMaxBhSize
+  , paramProposalCols.ppcKeyDeposit
+  , paramProposalCols.ppcPoolDeposit
+  , paramProposalCols.ppcMaxEpoch
+  , paramProposalCols.ppcOptimalPoolCount
+  , paramProposalCols.ppcInfluence
+  , paramProposalCols.ppcMonetaryExpandRate
+  , paramProposalCols.ppcTreasuryGrowthRate
+  , paramProposalCols.ppcDecentralisation
+  , paramProposalCols.ppcEntropy
+  , paramProposalCols.ppcProtocolMajor
+  , paramProposalCols.ppcProtocolMinor
+  , paramProposalCols.ppcMinUtxoValue
+  , paramProposalCols.ppcMinPoolCost
+  , paramProposalCols.ppcCostModelId
+  , paramProposalCols.ppcPriceMem
+  , paramProposalCols.ppcPriceStep
+  , paramProposalCols.ppcMaxTxExMem
+  , paramProposalCols.ppcMaxTxExSteps
+  , paramProposalCols.ppcMaxBlockExMem
+  , paramProposalCols.ppcMaxBlockExSteps
+  , paramProposalCols.ppcMaxValSize
+  , paramProposalCols.ppcCollateralPercent
+  , paramProposalCols.ppcMaxCollateralInputs
+  , paramProposalCols.ppcRegisteredTxId
+  , paramProposalCols.ppcCoinsPerUtxoSize
+  , paramProposalCols.ppcPvtMotionNoConfidence
+  , paramProposalCols.ppcPvtCommitteeNormal
+  , paramProposalCols.ppcPvtCommitteeNoConfidence
+  , paramProposalCols.ppcPvtHardForkInitiation
+  , paramProposalCols.ppcPvtppSecurityGroup
+  , paramProposalCols.ppcDvtMotionNoConfidence
+  , paramProposalCols.ppcDvtCommitteeNormal
+  , paramProposalCols.ppcDvtCommitteeNoConfidence
+  , paramProposalCols.ppcDvtUpdateToConstitution
+  , paramProposalCols.ppcDvtHardForkInitiation
+  , paramProposalCols.ppcDvtPPNetworkGroup
+  , paramProposalCols.ppcDvtPPEconomicGroup
+  , paramProposalCols.ppcDvtPPTechnicalGroup
+  , paramProposalCols.ppcDvtPPGovGroup
+  , paramProposalCols.ppcDvtTreasuryWithdrawal
+  , paramProposalCols.ppcCommitteeMinSize
+  , paramProposalCols.ppcCommitteeMaxTermLength
+  , paramProposalCols.ppcGovActionLifetime
+  , paramProposalCols.ppcGovActionDeposit
+  , paramProposalCols.ppcDrepDeposit
+  , paramProposalCols.ppcDrepActivity
+  , paramProposalCols.ppcMinFeeRefScriptCostPerByte
+  ]
+
+data TreasuryWithdrawalCols = TreasuryWithdrawalCols
+  { twcId                  :: !TableColumn
+  , twcGovActionProposalId :: !TableColumn
+  , twcStakeAddressId      :: !TableColumn
+  , twcAmount              :: !TableColumn
+  }
+
+treasuryWithdrawalCols :: TreasuryWithdrawalCols
+treasuryWithdrawalCols =
+  let c = TableColumn treasuryWithdrawalTableDef
+  in TreasuryWithdrawalCols
+       { twcId                  = c "id"
+       , twcGovActionProposalId = c "gov_action_proposal_id"
+       , twcStakeAddressId      = c "stake_address_id"
+       , twcAmount              = c "amount"
+       }
+
+treasuryWithdrawalColsList :: [TableColumn]
+treasuryWithdrawalColsList =
+  [ treasuryWithdrawalCols.twcId
+  , treasuryWithdrawalCols.twcGovActionProposalId
+  , treasuryWithdrawalCols.twcStakeAddressId
+  , treasuryWithdrawalCols.twcAmount
+  ]
+
+data EventInfoCols = EventInfoCols
+  { eicId          :: !TableColumn
+  , eicTxId        :: !TableColumn
+  , eicEpoch       :: !TableColumn
+  , eicType        :: !TableColumn
+  , eicExplanation :: !TableColumn
+  }
+
+eventInfoCols :: EventInfoCols
+eventInfoCols =
+  let c = TableColumn eventInfoTableDef
+  in EventInfoCols
+       { eicId          = c "id"
+       , eicTxId        = c "tx_id"
+       , eicEpoch       = c "epoch"
+       , eicType        = c "type"
+       , eicExplanation = c "explanation"
+       }
+
+eventInfoColsList :: [TableColumn]
+eventInfoColsList =
+  [ eventInfoCols.eicId
+  , eventInfoCols.eicTxId
+  , eventInfoCols.eicEpoch
+  , eventInfoCols.eicType
+  , eventInfoCols.eicExplanation
+  ]
+
+-- ---------------------------------------------------------------------------
+-- * Per-module column-record registry
+-- ---------------------------------------------------------------------------
+
+governanceColumnRecords :: [(TableDef, [TableColumn])]
+governanceColumnRecords =
+  [ (drepHashTableDef,                drepHashColsList)
+  , (drepRegistrationTableDef,        drepRegistrationColsList)
+  , (drepDistrTableDef,               drepDistrColsList)
+  , (delegationVoteTableDef,          delegationVoteColsList)
+  , (govActionProposalTableDef,       govActionProposalColsList)
+  , (votingProcedureTableDef,         votingProcedureColsList)
+  , (votingAnchorTableDef,            votingAnchorColsList)
+  , (constitutionTableDef,            constitutionColsList)
+  , (committeeTableDef,               committeeColsList)
+  , (committeeHashTableDef,           committeeHashColsList)
+  , (committeeMemberTableDef,         committeeMemberColsList)
+  , (committeeRegistrationTableDef,   committeeRegistrationColsList)
+  , (committeeDeRegistrationTableDef, committeeDeRegistrationColsList)
+  , (paramProposalTableDef,           paramProposalColsList)
+  , (treasuryWithdrawalTableDef,      treasuryWithdrawalColsList)
+  , (eventInfoTableDef,               eventInfoColsList)
+  ]
 
 -- ---------------------------------------------------------------------------
 -- * COPY encoding

@@ -52,7 +52,7 @@ import DbSync.SyncState.Row
   )
 import DbSync.Db.Schema.SyncState (idCounterByTable)
 import DbSync.Db.Schema.Types (ColumnDef (..), TableDef (..))
-import DbSync.Db.Statement.Resume
+import DbSync.Db.Statement.Worker.Resume
   ( deleteByBlockSlotStmt
   , deleteByIdCounterStmt
   , deleteBySlotStmt

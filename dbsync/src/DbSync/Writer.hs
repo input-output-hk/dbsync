@@ -56,6 +56,15 @@ import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Metadata (TxMetadata)
 import DbSync.Db.Schema.MultiAsset (MultiAsset, MaTxMint, MaTxOut)
 import DbSync.Db.Schema.OffChainPool (OffChainPoolData, OffChainPoolFetchError)
+import DbSync.Db.Schema.OffChainVote
+  ( OffChainVoteAuthor
+  , OffChainVoteData
+  , OffChainVoteDrepData
+  , OffChainVoteExternalUpdate
+  , OffChainVoteFetchError
+  , OffChainVoteGovActionData
+  , OffChainVoteReference
+  )
 import DbSync.Db.Schema.Pool
   ( DelistedPool
   , PoolHash
@@ -152,6 +161,17 @@ data Writer m = Writer
   , writeOffChainPoolFetchError :: !(OffChainPoolFetchError -> m ())
   , writeDelistedPool           :: !(DelistedPool -> m ())
   , writeReservedPoolTicker     :: !(ReservedPoolTicker -> m ())
+
+    -- ---------------------------------------------------------------
+    -- OffChainVotes tables (all IDENTITY leaves)
+    -- ---------------------------------------------------------------
+  , writeOffChainVoteData           :: !(OffChainVoteData -> m ())
+  , writeOffChainVoteGovActionData  :: !(OffChainVoteGovActionData -> m ())
+  , writeOffChainVoteDrepData       :: !(OffChainVoteDrepData -> m ())
+  , writeOffChainVoteAuthor         :: !(OffChainVoteAuthor -> m ())
+  , writeOffChainVoteReference      :: !(OffChainVoteReference -> m ())
+  , writeOffChainVoteExternalUpdate :: !(OffChainVoteExternalUpdate -> m ())
+  , writeOffChainVoteFetchError     :: !(OffChainVoteFetchError -> m ())
 
     -- ---------------------------------------------------------------
     -- CBOR tables

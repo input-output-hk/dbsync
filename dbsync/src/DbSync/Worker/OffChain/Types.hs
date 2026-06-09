@@ -22,9 +22,15 @@ module DbSync.Worker.OffChain.Types
 
     -- * Errors
   , FetchError (..)
+  , renderFetchError
   ) where
 
 import Cardano.Prelude
+
+import qualified Data.Text as T
+
+import DbSync.Db.Types (AnchorType)
+import qualified DbSync.Worker.OffChain.Vote.Types as Vote
 
 -- ---------------------------------------------------------------------------
 -- * Fetcher interface
@@ -65,8 +71,9 @@ data PoolMetadataRef = PoolMetadataRef
 -- | Reference to a governance voting anchor.
 -- Contains the URL and expected hash from the on-chain proposal/vote.
 data VotingAnchorRef = VotingAnchorRef
-  { varUrl      :: !Text        -- ^ Anchor URL
-  , varMetaHash :: !ByteString  -- ^ Expected content hash
+  { varUrl        :: !Text        -- ^ Anchor URL
+  , varMetaHash   :: !ByteString  -- ^ Expected content hash
+  , varAnchorType :: !AnchorType  -- ^ Where the anchor was attached
   }
   deriving stock (Eq, Show)
 
@@ -75,20 +82,42 @@ data VotingAnchorRef = VotingAnchorRef
 -- ---------------------------------------------------------------------------
 
 -- | Successfully fetched pool metadata.
+--
+-- 'pmHash' is the Blake2b_256 digest of 'pmRawBytes' computed by the
+-- fetcher; it has already been verified against the expected hash on
+-- the on-chain @pool_metadata_ref@ row. 'pmCanonicalJson' is the
+-- aeson-roundtripped JSON encoding — PG's @jsonb@ parser is stricter
+-- than aeson's, so the round-trip avoids inserts failing on bytes
+-- aeson accepted.
 data PoolMetadata = PoolMetadata
-  { pmName        :: !Text            -- ^ Pool name
-  , pmDescription :: !Text            -- ^ Pool description
-  , pmTicker      :: !Text            -- ^ Pool ticker symbol
-  , pmHomepage    :: !Text            -- ^ Pool homepage URL
-  , pmRawJson     :: !ByteString      -- ^ Raw JSON content
+  { pmTicker        :: !Text          -- ^ Pool ticker symbol
+  , pmHash          :: !ByteString    -- ^ Verified content hash
+  , pmRawBytes      :: !ByteString    -- ^ Raw response body
+  , pmCanonicalJson :: !Text          -- ^ aeson-canonicalised JSON
   }
   deriving stock (Show)
 
--- | Successfully fetched governance vote/anchor metadata.
+-- | Result of a vote-anchor HTTP fetch.
+--
+-- The fetcher returns a 'VoteMetadata' on any HTTP success, including
+-- responses whose body isn't valid JSON or doesn't conform to a CIP
+-- schema — those cases still produce an @off_chain_vote_data@ row,
+-- with 'vmIsValidJson' / 'vmCipData' encoding the validation outcome.
+-- Network failures and hash mismatches surface as 'Left' 'FetchError'
+-- and become @off_chain_vote_fetch_error@ rows instead.
 data VoteMetadata = VoteMetadata
-  { vmTitle   :: !(Maybe Text)   -- ^ Optional title from the anchor
-  , vmAbstract :: !(Maybe Text)  -- ^ Optional abstract/summary
-  , vmRawJson :: !ByteString     -- ^ Raw JSON content
+  { vmHash          :: !ByteString          -- ^ Verified content hash
+  , vmRawBytes      :: !ByteString          -- ^ Raw response body
+  , vmCanonicalJson :: !Text                -- ^ aeson-canonicalised JSON (or a
+                                            --   JSON-wrapped error message if
+                                            --   the body wasn't parseable)
+  , vmIsValidJson   :: !Bool                -- ^ Maps to @is_valid = TRUE/FALSE@
+                                            --   vs 'Nothing' on the data row
+  , vmWarning       :: !(Maybe Text)        -- ^ Non-fatal CIP parse warning
+  , vmVoteData      :: !(Maybe Vote.OffChainVoteData)
+                                            -- ^ 'Just' when the body matched
+                                            --   the CIP schema for its anchor
+                                            --   type; drives subtable writes
   }
   deriving stock (Show)
 
@@ -97,6 +126,7 @@ data VoteMetadata = VoteMetadata
 -- ---------------------------------------------------------------------------
 
 -- | Errors that can occur during off-chain metadata fetching.
+-- 'renderFetchError' turns one into the @fetch_error@ column text.
 data FetchError
   = FetchErrorHttp !Text
       -- ^ HTTP request failure (timeout, DNS, connection refused, etc.)
@@ -106,4 +136,27 @@ data FetchError
       -- ^ JSON decoding failure
   | FetchErrorTooLarge !Int
       -- ^ Response body exceeded the size limit
+  | FetchErrorBadContentType !Text
+      -- ^ Server returned an unacceptable Content-Type
+  | FetchErrorBadUrl !Text
+      -- ^ URL validation rejected the ref (non-http(s), private IP, etc.)
+  | FetchErrorTimeout !Text
+      -- ^ Connection or response timeout
+  | FetchErrorConnectionFailure
+      -- ^ TCP-level connection failure
+  | FetchErrorIpfsAllGatewaysFailed ![Text]
+      -- ^ Every configured gateway returned an error for an @ipfs://@ url
   deriving stock (Eq, Show)
+
+renderFetchError :: FetchError -> Text
+renderFetchError = \case
+  FetchErrorHttp t                  -> "http: " <> t
+  FetchErrorHashMismatch _ _        -> "hash mismatch"
+  FetchErrorDecode t                -> "decode: " <> t
+  FetchErrorTooLarge n              -> "too large: " <> show n
+  FetchErrorBadContentType t        -> "bad content-type: " <> t
+  FetchErrorBadUrl t                -> "bad url: " <> t
+  FetchErrorTimeout t               -> "timeout: " <> t
+  FetchErrorConnectionFailure       -> "connection failed"
+  FetchErrorIpfsAllGatewaysFailed e ->
+    "ipfs gateways failed: " <> T.intercalate "; " e

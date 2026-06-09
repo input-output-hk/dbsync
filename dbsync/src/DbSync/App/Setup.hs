@@ -20,6 +20,7 @@ module DbSync.App.Setup
 
     -- * Worker setup
   , setupOffChainPoolWorker
+  , setupOffChainVoteWorker
   ) where
 
 import Cardano.Prelude
@@ -52,6 +53,7 @@ import DbSync.Extractor.UTxO (utxoExtractor)
 import DbSync.Extractor.Metadata (metadataExtractor)
 import DbSync.Extractor.MultiAsset (multiAssetExtractor)
 import DbSync.Extractor.OffChainPools (offChainPoolsExtractor)
+import DbSync.Extractor.OffChainVotes (offChainVotesExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Extractor.Pool (poolExtractor)
 import DbSync.Extractor.PoolStats (poolStatsExtractor)
@@ -64,11 +66,19 @@ import DbSync.Extractor.ScriptsDatums (scriptsDatumsExtractor)
 import DbSync.Extractor.StakeDelegationLedger (stakeDelegationLedgerExtractor)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..), severityFromText)
 import DbSync.AppM (CoreM)
+import DbSync.Worker.OffChain.Http (newRestrictedManager)
 import DbSync.Worker.OffChain.Pool
   ( OffChainPoolWorker
   , defaultOffChainPoolConfig
+  , httpPoolFetcher
   , mkOffChainPoolWorker
-  , stubPoolFetcher
+  )
+import DbSync.Worker.OffChain.Vote
+  ( OffChainVoteConfig (..)
+  , OffChainVoteWorker
+  , defaultOffChainVoteConfig
+  , httpVoteFetcher
+  , mkOffChainVoteWorker
   )
 
 -- ---------------------------------------------------------------------------
@@ -137,6 +147,7 @@ buildExtractors pc = do
     resolveExtractor "scripts_datums"          = scriptsDatumsExtractor
     resolveExtractor "governance"              = governanceExtractor
     resolveExtractor "off_chain_pools"         = offChainPoolsExtractor
+    resolveExtractor "off_chain_votes"         = offChainVotesExtractor
     resolveExtractor name                      = stubExtractor name
 
     -- | (extractor name, enabled?). 'utxo' reads from the structured
@@ -297,18 +308,38 @@ showExtractorList = mconcat . intersperse ", "
 -- ---------------------------------------------------------------------------
 
 -- | Spawn the off-chain pool worker iff @off_chain_pools@ is enabled.
--- Slice 6 mirrors this for @off_chain_votes@.
+-- Each worker owns its own 'Http.Manager' so the per-worker HTTP
+-- connection pool is isolated from the rest of the process.
 setupOffChainPoolWorker
   :: AppTracer
   -> HasqlSettings.Settings
   -> DbSyncOptions
   -> IO (Maybe OffChainPoolWorker)
 setupOffChainPoolWorker tracer hasqlSettings opts
-  | prEnabled (pcOffChainPools opts) =
+  | prEnabled (pcOffChainPools opts) = do
+      manager <- newRestrictedManager
       Just <$>
         mkOffChainPoolWorker
           tracer
           hasqlSettings
           defaultOffChainPoolConfig
-          stubPoolFetcher
+          (httpPoolFetcher manager)
+  | otherwise = pure Nothing
+
+-- | Spawn the off-chain vote worker iff @off_chain_votes@ is enabled.
+setupOffChainVoteWorker
+  :: AppTracer
+  -> HasqlSettings.Settings
+  -> DbSyncOptions
+  -> IO (Maybe OffChainVoteWorker)
+setupOffChainVoteWorker tracer hasqlSettings opts
+  | prEnabled (pcOffChainVotes opts) = do
+      manager <- newRestrictedManager
+      let cfg = defaultOffChainVoteConfig
+      Just <$>
+        mkOffChainVoteWorker
+          tracer
+          hasqlSettings
+          cfg
+          (httpVoteFetcher manager (ovcIpfsGateways cfg))
   | otherwise = pure Nothing

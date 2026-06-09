@@ -77,6 +77,7 @@ import DbSync.Metrics (HasMetrics (..), Metrics)
 import DbSync.Phase.Current (HasCurrentPhase (..), CurrentPhase, readCurrentPhase)
 import DbSync.Resolver (HasResolver (..), IdResolver)
 import DbSync.Worker.OffChain.Pool (OffChainPoolWorker)
+import DbSync.Worker.OffChain.Vote (OffChainVoteWorker)
 import DbSync.Worker.TxOut.AddressBuffer (AddressBufferRef)
 import DbSync.Worker.TxOut.ConsumedByBuffer (ConsumedByBufferRef)
 import DbSync.Worker.TxOut.Worker (TxOutWorker)
@@ -203,6 +204,12 @@ data IngestEnv = IngestEnv
     -- connection for @pool_metadata_ref@ rows lacking a result and
     -- writes either @off_chain_pool_data@ (success) or
     -- @off_chain_pool_fetch_error@ (failure).
+  , ieOffChainVoteWorker :: !(Maybe OffChainVoteWorker)
+    -- ^ Off-chain governance-anchor fetcher. 'Nothing' when the
+    -- @off_chain_votes@ option is disabled. Polls PG on its own
+    -- connection for @voting_anchor@ rows lacking a result and
+    -- writes either @off_chain_vote_data@ (success) or
+    -- @off_chain_vote_fetch_error@ (failure).
   , ieLsmSession :: !LsmSession
     -- ^ Shared LSM session backing the ingest-phase scratch
     -- tables. Owned by 'IngestEnv'; the App-level shutdown calls
@@ -348,6 +355,9 @@ data FollowEnv = FollowEnv
   , feOffChainPoolWorker  :: !(Maybe OffChainPoolWorker)
     -- ^ Carried over from 'IngestEnv' so the worker keeps polling
     -- across the phase boundary. 'Nothing' when disabled.
+  , feOffChainVoteWorker  :: !(Maybe OffChainVoteWorker)
+    -- ^ Carried over from 'IngestEnv' so the worker keeps polling
+    -- across the phase boundary. 'Nothing' when disabled.
   }
 
 -- ---------------------------------------------------------------------------
@@ -386,6 +396,7 @@ mkFollowEnvFromIngest ie conn resolver writer =
     , feReplayBootSlot      = Nothing
     , feReplayStartSlot     = Nothing
     , feOffChainPoolWorker  = ieOffChainPoolWorker ie
+    , feOffChainVoteWorker  = ieOffChainVoteWorker ie
     }
 
 -- ---------------------------------------------------------------------------

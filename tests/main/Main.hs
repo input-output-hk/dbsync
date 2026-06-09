@@ -36,6 +36,7 @@ import qualified DbSync.Extractor.CoreSpec as ExtractorCoreSpec
 import qualified DbSync.Extractor.EpochBoundarySpec as ExtractorEpochBoundarySpec
 import qualified DbSync.Extractor.EpochSpec as ExtractorEpochSpec
 import qualified DbSync.Extractor.OffChainPoolsSpec as ExtractorOffChainPoolsSpec
+import qualified DbSync.Extractor.OffChainVotesSpec as ExtractorOffChainVotesSpec
 import qualified DbSync.Extractor.PoolSpec as ExtractorPoolSpec
 import qualified DbSync.Extractor.ScriptsDatumsSpec as ExtractorScriptsDatumsSpec
 import qualified DbSync.Extractor.StakeDelegationSpec as ExtractorStakeDelegationSpec
@@ -59,6 +60,7 @@ import qualified DbSync.Schema.EpochViewSpec as SchemaEpochViewSpec
 import qualified DbSync.Schema.GenerateSpec as SchemaGenerateSpec
 import qualified DbSync.Schema.GovernanceSpec as SchemaGovernanceSpec
 import qualified DbSync.Schema.OffChainPoolSpec as SchemaOffChainPoolSpec
+import qualified DbSync.Schema.OffChainVoteSpec as SchemaOffChainVoteSpec
 import qualified DbSync.Schema.RewardSpec as SchemaRewardSpec
 import qualified DbSync.Schema.ScriptsDatumsSpec as SchemaScriptsDatumsSpec
 import qualified DbSync.Schema.SyncStateSpec as SchemaSyncStateSpec
@@ -78,6 +80,7 @@ import qualified DbSync.SyncState.ManagerSpec as SyncStateManagerSpec
 import qualified DbSync.SyncState.ResumeSpec as SyncStateResumeSpec
 import qualified DbSync.SyncState.RowSpec as SyncStateRowSpec
 import qualified DbSync.Worker.OffChain.PoolSpec as WorkerOffChainPoolSpec
+import qualified DbSync.Worker.OffChain.VoteSpec as WorkerOffChainVoteSpec
 import qualified DbSync.Db.LoaderSpec as LoaderSpec
 import qualified DbSync.Db.Statement.BackfillSpec as DbStatementBackfillSpec
 import qualified DbSync.Db.Statement.BlockSpec as DbStatementBlockSpec
@@ -143,6 +146,7 @@ main = hspec $ do
     ExtractorEpochBoundarySpec.spec
     ExtractorEpochSpec.spec
     ExtractorOffChainPoolsSpec.spec
+    ExtractorOffChainVotesSpec.spec
     ExtractorPoolSpec.spec
     ExtractorScriptsDatumsSpec.spec
     ExtractorStakeDelegationSpec.spec
@@ -166,6 +170,7 @@ main = hspec $ do
     SchemaGenerateSpec.spec
     SchemaGovernanceSpec.spec
     SchemaOffChainPoolSpec.spec
+    SchemaOffChainVoteSpec.spec
     SchemaRewardSpec.spec
     SchemaScriptsDatumsSpec.spec
     SchemaSyncStateSpec.spec
@@ -186,6 +191,7 @@ main = hspec $ do
     SyncStateResumeSpec.spec
     SyncStateRowSpec.spec
     WorkerOffChainPoolSpec.spec
+    WorkerOffChainVoteSpec.spec
     LoaderSpec.spec
     DbStatementBackfillSpec.spec
     DbStatementBlockSpec.spec

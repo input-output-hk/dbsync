@@ -39,6 +39,7 @@ import qualified DbSync.Phase.Following.Resolver.Governance as Governance
 import DbSync.Phase.Following.Resolver.Internal (newBlockDedupCache)
 import qualified DbSync.Phase.Following.Resolver.MultiAsset as MultiAsset
 import qualified DbSync.Phase.Following.Resolver.OffChainPools as OffChainPools
+import qualified DbSync.Phase.Following.Resolver.OffChainVotes as OffChainVotes
 import qualified DbSync.Phase.Following.Resolver.Pool as Pool
 import qualified DbSync.Phase.Following.Resolver.ScriptsDatums as ScriptsDatums
 import qualified DbSync.Phase.Following.Resolver.StakeDelegation as Stake
@@ -91,6 +92,9 @@ mkFollowResolver conn = do
 
       -- OffChainPools
     , enqueuePoolMetaFetch    = OffChainPools.enqueuePoolMetaFetchFollow
+
+      -- OffChainVotes
+    , enqueueVoteMetaFetch    = OffChainVotes.enqueueVoteMetaFetchFollow
 
       -- EpochSyncStats
     , assignEpochSyncStatsId = Epoch.assignEpochSyncStatsIdConn conn
@@ -180,6 +184,9 @@ mkBufferedFollowResolver conn preAlloc buf = do
 
       -- OffChainPools
     , enqueuePoolMetaFetch    = OffChainPools.enqueuePoolMetaFetchFollow
+
+      -- OffChainVotes
+    , enqueueVoteMetaFetch    = OffChainVotes.enqueueVoteMetaFetchFollow
 
       -- EpochSyncStats
     , assignEpochSyncStatsId = Epoch.assignEpochSyncStatsIdBuf conn

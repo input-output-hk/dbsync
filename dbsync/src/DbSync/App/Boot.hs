@@ -133,7 +133,8 @@ import DbSync.Worker.Ledger.State
 import DbSync.Worker.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..))
 import DbSync.Worker.Ledger.Worker (withLedgerThreads)
 import DbSync.Worker.OffChain.Pool (closeOffChainPoolWorker)
-import DbSync.App.Setup (setupOffChainPoolWorker)
+import DbSync.Worker.OffChain.Vote (closeOffChainVoteWorker)
+import DbSync.App.Setup (setupOffChainPoolWorker, setupOffChainVoteWorker)
 import DbSync.App.Config.Types (SyncConfig (..))
 
 -- ---------------------------------------------------------------------------
@@ -882,7 +883,10 @@ runBootFollowRestart
       withLedgerThreads hasLedgerEnv mReplayBoot stateQueryVar watchdog $
         bracket
           (setupOffChainPoolWorker tracer hasqlSettings (scOptions (ceConfig coreEnv)))
-          (mapM_ closeOffChainPoolWorker) $ \mPoolWorker -> do
+          (mapM_ closeOffChainPoolWorker) $ \mPoolWorker ->
+        bracket
+          (setupOffChainVoteWorker tracer hasqlSettings (scOptions (ceConfig coreEnv)))
+          (mapM_ closeOffChainVoteWorker) $ \mVoteWorker -> do
           -- A fresh receiver-side state. Ingest has been bypassed on this
           -- restart path, so none of it is inherited from an upstream env.
           blockQueue       <- newTBQueueIO 500
@@ -912,6 +916,7 @@ runBootFollowRestart
                   , feReplayBootSlot      = mReplayBoot
                   , feReplayStartSlot     = mReplayStart
                   , feOffChainPoolWorker  = mPoolWorker
+                  , feOffChainVoteWorker  = mVoteWorker
                   }
 
           let mLastBlock = ssrLastCommittedBlockNo (frcSyncState frc)

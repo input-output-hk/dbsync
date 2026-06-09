@@ -4,10 +4,8 @@
 --
 -- The worker discovers refs by polling PG via the work-queue
 -- statements in 'DbSync.Db.Statement.OffChainPool'. Each ref is
--- then fetched via a pluggable 'OffChainFetcher'. For this slice
--- the production fetcher is a stub that always returns an HTTP
--- error so the @off_chain_pool_fetch_error@ path is exercised
--- end-to-end.
+-- fetched via a pluggable 'OffChainFetcher': 'httpPoolFetcher' for
+-- the live HTTP path, 'stubPoolFetcher' for tests.
 module DbSync.Worker.OffChain.Pool
   ( OffChainPoolWorker
   , OffChainPoolConfig (..)
@@ -21,19 +19,20 @@ module DbSync.Worker.OffChain.Pool
   , runOnePoolCycle
   , poolHooks
 
-    -- * Stub fetcher (used in this slice)
+    -- * Fetchers
+  , httpPoolFetcher
   , stubPoolFetcher
   ) where
 
 import Cardano.Prelude
 
-import qualified Data.Text.Encoding as TE
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (POSIXTime, utcTimeToPOSIXSeconds)
 import qualified Hasql.Connection as Conn
 import qualified Hasql.Connection.Settings as Settings
 import qualified Hasql.Session as Sess
 import qualified Hasql.Statement as Stmt
+import qualified Network.HTTP.Client as Http
 
 import DbSync.Db.Schema.Ids (PoolHashId, PoolMetadataRefId)
 import DbSync.Db.Schema.OffChainPool
@@ -57,12 +56,14 @@ import DbSync.Worker.OffChain.Fetcher
   , mkOffChainWorker
   , runOneCycle
   )
+import qualified DbSync.Worker.OffChain.Http as Http
 import DbSync.Worker.OffChain.Retry (Retry (..), retryAgain)
 import DbSync.Worker.OffChain.Types
   ( FetchError (..)
   , OffChainFetcher (..)
   , PoolMetadata (..)
   , PoolMetadataRef (..)
+  , renderFetchError
   )
 
 -- ---------------------------------------------------------------------------
@@ -170,13 +171,6 @@ poolFetch fetcher ppf = do
     Right ok -> Right ok
     Left  e  -> Left (renderFetchError e)
 
-renderFetchError :: FetchError -> Text
-renderFetchError = \case
-  FetchErrorHttp t           -> "http: " <> t
-  FetchErrorHashMismatch _ _ -> "hash mismatch"
-  FetchErrorDecode t         -> "decode: " <> t
-  FetchErrorTooLarge n       -> "too large: " <> show n
-
 -- ---------------------------------------------------------------------------
 -- * Persistence
 -- ---------------------------------------------------------------------------
@@ -202,10 +196,9 @@ writeSuccess conn phId pmrId pm = do
   let row = OffChainPoolData
         { offChainPoolDataPoolId     = phId
         , offChainPoolDataTickerName = pmTicker pm
-        , offChainPoolDataHash       = pmRawJson pm
-        , offChainPoolDataJson       =
-            TE.decodeUtf8With (\_ _ -> Just '\xFFFD') (pmRawJson pm)
-        , offChainPoolDataBytes      = pmRawJson pm
+        , offChainPoolDataHash       = pmHash pm
+        , offChainPoolDataJson       = pmCanonicalJson pm
+        , offChainPoolDataBytes      = pmRawBytes pm
         , offChainPoolDataPmrId      = pmrId
         }
   runStmt conn row insertOffChainPoolDataRowStmt
@@ -242,11 +235,27 @@ nextRetryCount conn phId pmrId = do
     Nothing -> 0
 
 -- ---------------------------------------------------------------------------
--- * Stub fetcher
+-- * Fetchers
 -- ---------------------------------------------------------------------------
 
--- | Always returns an HTTP error. Exercises the @off_chain_pool_fetch_error@
--- path end-to-end without leaving PG.
+-- | Production fetcher: performs a real HTTP request via the shared
+-- restricted 'Http.Manager'. Only 'ofFetchPoolMetadata' is wired —
+-- the other hooks are inert because the work-queue + persistence
+-- live in this module, not in the fetcher record.
+httpPoolFetcher :: Http.Manager -> OffChainFetcher
+httpPoolFetcher manager = OffChainFetcher
+  { ofFetchPoolMetadata = \pmr ->
+      Http.fetchPoolMetadata manager (pmrUrl pmr) (pmrMetaHash pmr)
+  , ofFetchVoteMetadata = \_ ->
+      pure $ Left (FetchErrorHttp "pool fetcher: vote fetches not supported")
+  , ofGetPendingPools = pure []
+  , ofGetPendingVotes = pure []
+  , ofSavePoolResult  = \_ _ -> pure ()
+  , ofSaveVoteResult  = \_ _ -> pure ()
+  }
+
+-- | Always returns an HTTP error. Used by tests to exercise the
+-- @off_chain_pool_fetch_error@ path without network access.
 stubPoolFetcher :: OffChainFetcher
 stubPoolFetcher = OffChainFetcher
   { ofFetchPoolMetadata = \_ ->

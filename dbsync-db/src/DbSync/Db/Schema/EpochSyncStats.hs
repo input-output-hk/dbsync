@@ -18,6 +18,13 @@ module DbSync.Db.Schema.EpochSyncStats
   , epochSyncStatsTableDef
   , epochSyncTimeTableDef
 
+    -- * Column records (compile-time-safe column references)
+  , EpochSyncStatsCols (..), epochSyncStatsCols, epochSyncStatsColsList
+  , EpochSyncTimeCols (..), epochSyncTimeCols, epochSyncTimeColsList
+
+    -- * Per-module column-record registry
+  , epochSyncStatsColumnRecords
+
     -- * COPY encoding
   , encodeEpochSyncStatsCopy
   , encodeEpochSyncTimeCopy
@@ -131,6 +138,79 @@ epochSyncTimeTableDef = TableDef
   , tdIdentityColumns = []
   , tdForeignKeys = []
   }
+
+-- ---------------------------------------------------------------------------
+-- * Column records
+-- ---------------------------------------------------------------------------
+
+data EpochSyncStatsCols = EpochSyncStatsCols
+  { esscId               :: !TableColumn
+  , esscEpochNo          :: !TableColumn
+  , esscBlocksProcessed  :: !TableColumn
+  , esscBlocksPerSec     :: !TableColumn
+  , esscElapsedSec       :: !TableColumn
+  , esscSyncedAt         :: !TableColumn
+  , esscPhase            :: !TableColumn
+  }
+
+epochSyncStatsCols :: EpochSyncStatsCols
+epochSyncStatsCols =
+  let c = TableColumn epochSyncStatsTableDef
+  in EpochSyncStatsCols
+       { esscId              = c "id"
+       , esscEpochNo         = c "epoch_no"
+       , esscBlocksProcessed = c "blocks_processed"
+       , esscBlocksPerSec    = c "blocks_per_sec"
+       , esscElapsedSec      = c "elapsed_sec"
+       , esscSyncedAt        = c "synced_at"
+       , esscPhase           = c "phase"
+       }
+
+epochSyncStatsColsList :: [TableColumn]
+epochSyncStatsColsList =
+  [ epochSyncStatsCols.esscId
+  , epochSyncStatsCols.esscEpochNo
+  , epochSyncStatsCols.esscBlocksProcessed
+  , epochSyncStatsCols.esscBlocksPerSec
+  , epochSyncStatsCols.esscElapsedSec
+  , epochSyncStatsCols.esscSyncedAt
+  , epochSyncStatsCols.esscPhase
+  ]
+
+data EpochSyncTimeCols = EpochSyncTimeCols
+  { estcId      :: !TableColumn
+  , estcNo      :: !TableColumn
+  , estcSeconds :: !TableColumn
+  , estcState   :: !TableColumn
+  }
+
+epochSyncTimeCols :: EpochSyncTimeCols
+epochSyncTimeCols =
+  let c = TableColumn epochSyncTimeTableDef
+  in EpochSyncTimeCols
+       { estcId      = c "id"
+       , estcNo      = c "no"
+       , estcSeconds = c "seconds"
+       , estcState   = c "state"
+       }
+
+epochSyncTimeColsList :: [TableColumn]
+epochSyncTimeColsList =
+  [ epochSyncTimeCols.estcId
+  , epochSyncTimeCols.estcNo
+  , epochSyncTimeCols.estcSeconds
+  , epochSyncTimeCols.estcState
+  ]
+
+-- ---------------------------------------------------------------------------
+-- * Per-module column-record registry
+-- ---------------------------------------------------------------------------
+
+epochSyncStatsColumnRecords :: [(TableDef, [TableColumn])]
+epochSyncStatsColumnRecords =
+  [ (epochSyncStatsTableDef, epochSyncStatsColsList)
+  , (epochSyncTimeTableDef,  epochSyncTimeColsList)
+  ]
 
 -- ---------------------------------------------------------------------------
 -- * COPY encoding

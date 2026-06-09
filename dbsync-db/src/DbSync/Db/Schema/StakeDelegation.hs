@@ -36,6 +36,20 @@ module DbSync.Db.Schema.StakeDelegation
   , epochStakeTableDef
   , epochStakeProgressTableDef
 
+    -- * Column records (compile-time-safe column references)
+  , StakeAddressCols (..), stakeAddressCols, stakeAddressColsList
+  , StakeRegistrationCols (..), stakeRegistrationCols, stakeRegistrationColsList
+  , StakeDeregistrationCols (..), stakeDeregistrationCols, stakeDeregistrationColsList
+  , DelegationCols (..), delegationCols, delegationColsList
+  , WithdrawalCols (..), withdrawalCols, withdrawalColsList
+  , RewardCols (..), rewardCols, rewardColsList
+  , PotRewardCols (..), potRewardCols, potRewardColsList
+  , EpochStakeCols (..), epochStakeCols, epochStakeColsList
+  , EpochStakeProgressCols (..), epochStakeProgressCols, epochStakeProgressColsList
+
+    -- * Per-module column-record registry
+  , stakeDelegationColumnRecords
+
     -- * COPY encoding
   , encodeStakeAddressCopy
   , encodeStakeRegistrationCopy
@@ -456,6 +470,294 @@ epochStakeProgressTableDef = TableDef
   , tdIdentityColumns = ["id"]
   , tdForeignKeys = []
   }
+
+-- ---------------------------------------------------------------------------
+-- * Column records
+-- ---------------------------------------------------------------------------
+
+data StakeAddressCols = StakeAddressCols
+  { sacId         :: !TableColumn
+  , sacHashRaw    :: !TableColumn
+  , sacView       :: !TableColumn
+  , sacScriptHash :: !TableColumn
+  }
+
+stakeAddressCols :: StakeAddressCols
+stakeAddressCols =
+  let c = TableColumn stakeAddressTableDef
+  in StakeAddressCols
+       { sacId         = c "id"
+       , sacHashRaw    = c "hash_raw"
+       , sacView       = c "view"
+       , sacScriptHash = c "script_hash"
+       }
+
+stakeAddressColsList :: [TableColumn]
+stakeAddressColsList =
+  [ stakeAddressCols.sacId
+  , stakeAddressCols.sacHashRaw
+  , stakeAddressCols.sacView
+  , stakeAddressCols.sacScriptHash
+  ]
+
+data StakeRegistrationCols = StakeRegistrationCols
+  { srcId        :: !TableColumn
+  , srcAddrId    :: !TableColumn
+  , srcCertIndex :: !TableColumn
+  , srcEpochNo   :: !TableColumn
+  , srcTxId      :: !TableColumn
+  , srcDeposit   :: !TableColumn
+  }
+
+stakeRegistrationCols :: StakeRegistrationCols
+stakeRegistrationCols =
+  let c = TableColumn stakeRegistrationTableDef
+  in StakeRegistrationCols
+       { srcId        = c "id"
+       , srcAddrId    = c "addr_id"
+       , srcCertIndex = c "cert_index"
+       , srcEpochNo   = c "epoch_no"
+       , srcTxId      = c "tx_id"
+       , srcDeposit   = c "deposit"
+       }
+
+stakeRegistrationColsList :: [TableColumn]
+stakeRegistrationColsList =
+  [ stakeRegistrationCols.srcId
+  , stakeRegistrationCols.srcAddrId
+  , stakeRegistrationCols.srcCertIndex
+  , stakeRegistrationCols.srcEpochNo
+  , stakeRegistrationCols.srcTxId
+  , stakeRegistrationCols.srcDeposit
+  ]
+
+data StakeDeregistrationCols = StakeDeregistrationCols
+  { sdcId         :: !TableColumn
+  , sdcAddrId     :: !TableColumn
+  , sdcCertIndex  :: !TableColumn
+  , sdcEpochNo    :: !TableColumn
+  , sdcTxId       :: !TableColumn
+  , sdcRedeemerId :: !TableColumn
+  }
+
+stakeDeregistrationCols :: StakeDeregistrationCols
+stakeDeregistrationCols =
+  let c = TableColumn stakeDeregistrationTableDef
+  in StakeDeregistrationCols
+       { sdcId         = c "id"
+       , sdcAddrId     = c "addr_id"
+       , sdcCertIndex  = c "cert_index"
+       , sdcEpochNo    = c "epoch_no"
+       , sdcTxId       = c "tx_id"
+       , sdcRedeemerId = c "redeemer_id"
+       }
+
+stakeDeregistrationColsList :: [TableColumn]
+stakeDeregistrationColsList =
+  [ stakeDeregistrationCols.sdcId
+  , stakeDeregistrationCols.sdcAddrId
+  , stakeDeregistrationCols.sdcCertIndex
+  , stakeDeregistrationCols.sdcEpochNo
+  , stakeDeregistrationCols.sdcTxId
+  , stakeDeregistrationCols.sdcRedeemerId
+  ]
+
+data DelegationCols = DelegationCols
+  { dcId             :: !TableColumn
+  , dcAddrId         :: !TableColumn
+  , dcCertIndex      :: !TableColumn
+  , dcPoolHashId     :: !TableColumn
+  , dcActiveEpochNo  :: !TableColumn
+  , dcTxId           :: !TableColumn
+  , dcSlotNo         :: !TableColumn
+  , dcRedeemerId     :: !TableColumn
+  }
+
+delegationCols :: DelegationCols
+delegationCols =
+  let c = TableColumn delegationTableDef
+  in DelegationCols
+       { dcId             = c "id"
+       , dcAddrId         = c "addr_id"
+       , dcCertIndex      = c "cert_index"
+       , dcPoolHashId     = c "pool_hash_id"
+       , dcActiveEpochNo  = c "active_epoch_no"
+       , dcTxId           = c "tx_id"
+       , dcSlotNo         = c "slot_no"
+       , dcRedeemerId     = c "redeemer_id"
+       }
+
+delegationColsList :: [TableColumn]
+delegationColsList =
+  [ delegationCols.dcId
+  , delegationCols.dcAddrId
+  , delegationCols.dcCertIndex
+  , delegationCols.dcPoolHashId
+  , delegationCols.dcActiveEpochNo
+  , delegationCols.dcTxId
+  , delegationCols.dcSlotNo
+  , delegationCols.dcRedeemerId
+  ]
+
+data WithdrawalCols = WithdrawalCols
+  { wcId         :: !TableColumn
+  , wcAddrId     :: !TableColumn
+  , wcTxId       :: !TableColumn
+  , wcAmount     :: !TableColumn
+  , wcRedeemerId :: !TableColumn
+  }
+
+withdrawalCols :: WithdrawalCols
+withdrawalCols =
+  let c = TableColumn withdrawalTableDef
+  in WithdrawalCols
+       { wcId         = c "id"
+       , wcAddrId     = c "addr_id"
+       , wcTxId       = c "tx_id"
+       , wcAmount     = c "amount"
+       , wcRedeemerId = c "redeemer_id"
+       }
+
+withdrawalColsList :: [TableColumn]
+withdrawalColsList =
+  [ withdrawalCols.wcId
+  , withdrawalCols.wcAddrId
+  , withdrawalCols.wcTxId
+  , withdrawalCols.wcAmount
+  , withdrawalCols.wcRedeemerId
+  ]
+
+data RewardCols = RewardCols
+  { rcId              :: !TableColumn
+  , rcAddrId          :: !TableColumn
+  , rcType            :: !TableColumn
+  , rcAmount          :: !TableColumn
+  , rcSpendableEpoch  :: !TableColumn
+  , rcPoolId          :: !TableColumn
+  , rcEarnedEpoch     :: !TableColumn
+  }
+
+rewardCols :: RewardCols
+rewardCols =
+  let c = TableColumn rewardTableDef
+  in RewardCols
+       { rcId              = c "id"
+       , rcAddrId          = c "addr_id"
+       , rcType            = c "type"
+       , rcAmount          = c "amount"
+       , rcSpendableEpoch  = c "spendable_epoch"
+       , rcPoolId          = c "pool_id"
+       , rcEarnedEpoch     = c "earned_epoch"
+       }
+
+rewardColsList :: [TableColumn]
+rewardColsList =
+  [ rewardCols.rcId
+  , rewardCols.rcAddrId
+  , rewardCols.rcType
+  , rewardCols.rcAmount
+  , rewardCols.rcSpendableEpoch
+  , rewardCols.rcPoolId
+  , rewardCols.rcEarnedEpoch
+  ]
+
+data PotRewardCols = PotRewardCols
+  { prcId              :: !TableColumn
+  , prcAddrId          :: !TableColumn
+  , prcType            :: !TableColumn
+  , prcAmount          :: !TableColumn
+  , prcSpendableEpoch  :: !TableColumn
+  , prcEarnedEpoch     :: !TableColumn
+  }
+
+potRewardCols :: PotRewardCols
+potRewardCols =
+  let c = TableColumn potRewardTableDef
+  in PotRewardCols
+       { prcId              = c "id"
+       , prcAddrId          = c "addr_id"
+       , prcType            = c "type"
+       , prcAmount          = c "amount"
+       , prcSpendableEpoch  = c "spendable_epoch"
+       , prcEarnedEpoch     = c "earned_epoch"
+       }
+
+potRewardColsList :: [TableColumn]
+potRewardColsList =
+  [ potRewardCols.prcId
+  , potRewardCols.prcAddrId
+  , potRewardCols.prcType
+  , potRewardCols.prcAmount
+  , potRewardCols.prcSpendableEpoch
+  , potRewardCols.prcEarnedEpoch
+  ]
+
+data EpochStakeCols = EpochStakeCols
+  { escId      :: !TableColumn
+  , escAddrId  :: !TableColumn
+  , escPoolId  :: !TableColumn
+  , escAmount  :: !TableColumn
+  , escEpochNo :: !TableColumn
+  }
+
+epochStakeCols :: EpochStakeCols
+epochStakeCols =
+  let c = TableColumn epochStakeTableDef
+  in EpochStakeCols
+       { escId      = c "id"
+       , escAddrId  = c "addr_id"
+       , escPoolId  = c "pool_id"
+       , escAmount  = c "amount"
+       , escEpochNo = c "epoch_no"
+       }
+
+epochStakeColsList :: [TableColumn]
+epochStakeColsList =
+  [ epochStakeCols.escId
+  , epochStakeCols.escAddrId
+  , epochStakeCols.escPoolId
+  , epochStakeCols.escAmount
+  , epochStakeCols.escEpochNo
+  ]
+
+data EpochStakeProgressCols = EpochStakeProgressCols
+  { espcId        :: !TableColumn
+  , espcEpochNo   :: !TableColumn
+  , espcCompleted :: !TableColumn
+  }
+
+epochStakeProgressCols :: EpochStakeProgressCols
+epochStakeProgressCols =
+  let c = TableColumn epochStakeProgressTableDef
+  in EpochStakeProgressCols
+       { espcId        = c "id"
+       , espcEpochNo   = c "epoch_no"
+       , espcCompleted = c "completed"
+       }
+
+epochStakeProgressColsList :: [TableColumn]
+epochStakeProgressColsList =
+  [ epochStakeProgressCols.espcId
+  , epochStakeProgressCols.espcEpochNo
+  , epochStakeProgressCols.espcCompleted
+  ]
+
+-- ---------------------------------------------------------------------------
+-- * Per-module column-record registry
+-- ---------------------------------------------------------------------------
+
+stakeDelegationColumnRecords :: [(TableDef, [TableColumn])]
+stakeDelegationColumnRecords =
+  [ (stakeAddressTableDef,        stakeAddressColsList)
+  , (stakeRegistrationTableDef,   stakeRegistrationColsList)
+  , (stakeDeregistrationTableDef, stakeDeregistrationColsList)
+  , (delegationTableDef,          delegationColsList)
+  , (withdrawalTableDef,          withdrawalColsList)
+  , (rewardTableDef,              rewardColsList)
+  , (potRewardTableDef,           potRewardColsList)
+  , (epochStakeTableDef,          epochStakeColsList)
+  , (epochStakeProgressTableDef,  epochStakeProgressColsList)
+  ]
 
 -- ---------------------------------------------------------------------------
 -- * COPY encoding

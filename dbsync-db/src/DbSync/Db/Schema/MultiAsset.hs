@@ -14,6 +14,20 @@ module DbSync.Db.Schema.MultiAsset
   , maTxMintTableDef
   , maTxOutTableDef
 
+    -- * Column records (compile-time-safe column references)
+  , MultiAssetCols (..)
+  , multiAssetCols
+  , multiAssetColsList
+  , MaTxMintCols (..)
+  , maTxMintCols
+  , maTxMintColsList
+  , MaTxOutCols (..)
+  , maTxOutCols
+  , maTxOutColsList
+
+    -- * Per-module column-record registry
+  , multiAssetColumnRecords
+
     -- * COPY encoding
   , encodeMultiAssetCopy
   , encodeMaTxMintCopy
@@ -151,6 +165,96 @@ maTxOutTableDef = TableDef
       [ ForeignKey "tx_out_id" "tx_out" "id"
       ]
   }
+
+-- ---------------------------------------------------------------------------
+-- * Column records
+-- ---------------------------------------------------------------------------
+
+data MultiAssetCols = MultiAssetCols
+  { macId          :: !TableColumn
+  , macPolicy      :: !TableColumn
+  , macName        :: !TableColumn
+  , macFingerprint :: !TableColumn
+  }
+
+multiAssetCols :: MultiAssetCols
+multiAssetCols =
+  let c = TableColumn multiAssetTableDef
+  in MultiAssetCols
+       { macId          = c "id"
+       , macPolicy      = c "policy"
+       , macName        = c "name"
+       , macFingerprint = c "fingerprint"
+       }
+
+multiAssetColsList :: [TableColumn]
+multiAssetColsList =
+  [ multiAssetCols.macId
+  , multiAssetCols.macPolicy
+  , multiAssetCols.macName
+  , multiAssetCols.macFingerprint
+  ]
+
+data MaTxMintCols = MaTxMintCols
+  { mtmcId       :: !TableColumn
+  , mtmcQuantity :: !TableColumn
+  , mtmcTxId     :: !TableColumn
+  , mtmcIdent    :: !TableColumn
+  }
+
+maTxMintCols :: MaTxMintCols
+maTxMintCols =
+  let c = TableColumn maTxMintTableDef
+  in MaTxMintCols
+       { mtmcId       = c "id"
+       , mtmcQuantity = c "quantity"
+       , mtmcTxId     = c "tx_id"
+       , mtmcIdent    = c "ident"
+       }
+
+maTxMintColsList :: [TableColumn]
+maTxMintColsList =
+  [ maTxMintCols.mtmcId
+  , maTxMintCols.mtmcQuantity
+  , maTxMintCols.mtmcTxId
+  , maTxMintCols.mtmcIdent
+  ]
+
+data MaTxOutCols = MaTxOutCols
+  { mtocId       :: !TableColumn
+  , mtocQuantity :: !TableColumn
+  , mtocTxOutId  :: !TableColumn
+  , mtocIdent    :: !TableColumn
+  }
+
+maTxOutCols :: MaTxOutCols
+maTxOutCols =
+  let c = TableColumn maTxOutTableDef
+  in MaTxOutCols
+       { mtocId       = c "id"
+       , mtocQuantity = c "quantity"
+       , mtocTxOutId  = c "tx_out_id"
+       , mtocIdent    = c "ident"
+       }
+
+maTxOutColsList :: [TableColumn]
+maTxOutColsList =
+  [ maTxOutCols.mtocId
+  , maTxOutCols.mtocQuantity
+  , maTxOutCols.mtocTxOutId
+  , maTxOutCols.mtocIdent
+  ]
+
+-- ---------------------------------------------------------------------------
+-- * Per-module column-record registry
+-- ---------------------------------------------------------------------------
+
+multiAssetColumnRecords :: [(TableDef, [TableColumn])]
+multiAssetColumnRecords =
+  [ (multiAssetTableDef, multiAssetColsList)
+  , (maTxMintTableDef,   maTxMintColsList)
+  , (maTxOutTableDef,    maTxOutColsList)
+  ]
 
 -- ---------------------------------------------------------------------------
 -- * COPY encoding

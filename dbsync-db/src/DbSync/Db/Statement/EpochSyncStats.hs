@@ -1,4 +1,5 @@
--- | Hasql 'Statement' bindings for the @epoch_sync_stats@ table.
+-- | Hasql 'Statement' bindings for the @epoch_sync_stats@ extractor
+-- table: @epoch_sync_stats@.
 module DbSync.Db.Statement.EpochSyncStats
   ( insertEpochSyncStatsRowStmt
   , nextEpochSyncStatsIdStmt
@@ -17,6 +18,10 @@ import DbSync.Db.Schema.EpochSyncStats
   )
 import DbSync.Db.Schema.Ids (EpochSyncStatsId (..), idEncoder)
 import DbSync.Db.Statement.Common (insertRowSql, nextIdStmt)
+
+-- ---------------------------------------------------------------------------
+-- * epoch_sync_stats
+-- ---------------------------------------------------------------------------
 
 insertEpochSyncStatsRowStmt :: Stmt.Statement (EpochSyncStatsId, EpochSyncStats) ()
 insertEpochSyncStatsRowStmt =

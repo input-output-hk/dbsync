@@ -75,7 +75,7 @@ import DbSync.Db.Schema.UTxO
   , txInTableDef
   , txOutTableDef
   )
-import DbSync.Db.Statement.Backfill
+import DbSync.Db.Statement.Worker.Backfill
   ( backfillByronFeeSql
   , backfillPhaseTwoDepositSql
   , backfillPhaseTwoFeeSql
@@ -253,7 +253,7 @@ shouldNotMention plan fragment =
   plan `shouldNotSatisfy` (fragment `T.isInfixOf`)
 
 spec :: Spec
-spec = describe "DbSync.Db.Statement.Backfill" $
+spec = describe "DbSync.Db.Statement.Worker.Backfill" $
   beforeAll_ setUp $
   afterAll_  tearDown $ do
 

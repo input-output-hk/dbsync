@@ -53,7 +53,7 @@ import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 
 import DbSync.SyncState.Row (ControlConnection (..), HasControlConnection (..))
-import DbSync.Db.Statement.EpochParamPending (insertEpochParamPendingStmt)
+import DbSync.Db.Statement.Worker.EpochParamPending (insertEpochParamPendingStmt)
 import DbSync.Db.Types (DbLovelace (..))
 import DbSync.Error (throwDb)
 

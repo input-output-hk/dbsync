@@ -31,13 +31,13 @@ import qualified Hasql.Pipeline as Pipeline
 import DbSync.Db.Schema.Address (Address)
 import DbSync.Db.Schema.Ids (AddressId, CollateralTxOutId, TxId, TxOutId)
 import DbSync.Db.Types (DbLovelace)
-import DbSync.Db.Statement.Address
+import DbSync.Db.Statement.UTxO
   ( insertAddressRowStmt
   , nextAddressIdStmt
   , queryAddressIdStmt
   )
-import DbSync.Db.Statement.CollateralTxOut (nextCollateralTxOutIdStmt)
-import DbSync.Db.Statement.TxOut
+import DbSync.Db.Statement.UTxO (nextCollateralTxOutIdStmt)
+import DbSync.Db.Statement.UTxO
   ( nextTxOutIdStmt
   , queryInputUtxoStmt
   , queryOutputValueStmt

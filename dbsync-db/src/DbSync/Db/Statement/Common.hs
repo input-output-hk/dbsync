@@ -1,15 +1,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Shared 'Hasql' helpers used by every per-table @DbSync.Db.Statement.*@
--- module. Every helper is parameterised by a 'TableDef' so the table
--- name lives in one place (the schema module) and never has to be
--- hand-typed in a statement module.
+-- | Shared 'Hasql' helpers used by every @DbSync.Db.Statement.*@
+-- module. Each helper is parameterised by a 'TableDef' so the table
+-- name lives in one place — the schema module — and never has to be
+-- hand-typed in a statement.
 module DbSync.Db.Statement.Common
   ( -- * ID allocation
     nextIdStmt
 
     -- * SQL builders
   , insertRowSql
+  , insertReturningIdSql
   , insertableColumns
 
     -- * Lookups
@@ -41,7 +42,7 @@ import DbSync.Db.Schema.Types (ColumnDef (..), PgType (..), TableDef (..))
 -- * ID allocation
 -- ---------------------------------------------------------------------------
 
--- | @SELECT nextval(\'\<table\>_id_seq\')@ returning a typed id.
+-- | @SELECT nextval('<table>_id_seq')@ returning a typed id.
 nextIdStmt :: TableDef -> (Int64 -> a) -> Stmt.Statement () a
 nextIdStmt td ctor =
   Stmt.preparable
@@ -53,9 +54,9 @@ nextIdStmt td ctor =
 -- * SQL builders
 -- ---------------------------------------------------------------------------
 
--- | Columns appearing in an @INSERT@ for the table. Drops any
--- IDENTITY-allocated columns (PostgreSQL fills them from the backing
--- sequence) and any generated columns (PostgreSQL computes them).
+-- | The columns an @INSERT@ should mention: 'tdColumns' minus the
+-- IDENTITY columns (PG fills from the sequence) and generated columns
+-- (PG computes them).
 insertableColumns :: TableDef -> [ColumnDef]
 insertableColumns td =
   [ c | c <- tdColumns td
@@ -66,16 +67,11 @@ insertableColumns td =
     generated = map fst (tdGeneratedColumns td)
     identCols = tdIdentityColumns td
 
--- | @INSERT INTO \<table\> (col1, col2, …) VALUES ($1, $2, …, $N)@,
--- with the column list and placeholder count both derived from
--- 'insertableColumns'. The caller's hasql encoder must produce
--- values in the same order as the columns appear in 'tdColumns'
--- (minus any skipped IDENTITY \/ generated entries).
+-- | @INSERT INTO <table> (col1, …) VALUES ($1, …)@. The caller's
+-- encoder must emit values in the same order as 'insertableColumns'.
 --
--- 'PgJsonb' columns are emitted as @$N::jsonb@. Hasql's text encoder
--- is the canonical way to send a JSONB payload through the wire, but
--- PostgreSQL refuses implicit @text -> jsonb@ coercion in
--- parameterised INSERTs so the cast is required.
+-- 'PgJsonb' columns get a @::jsonb@ cast because PG refuses implicit
+-- @text -> jsonb@ coercion on parameterised INSERTs.
 insertRowSql :: TableDef -> Text
 insertRowSql td =
   T.concat
@@ -94,20 +90,36 @@ insertRowSql td =
       PgJsonb -> "::jsonb"
       _       -> ""
 
+-- | @INSERT INTO <table> (…) VALUES (…) RETURNING id@, with @id@
+-- omitted from both the column list and the placeholders. Used when
+-- PG allocates the id from the backing sequence.
+insertReturningIdSql :: TableDef -> Text
+insertReturningIdSql td =
+  T.concat
+    [ "INSERT INTO ", tdName td
+    , " (", T.intercalate ", " (map cdName cols), ")"
+    , " VALUES (", T.intercalate ", " placeholders, ")"
+    , " RETURNING id"
+    ]
+  where
+    cols = filter ((/= "id") . cdName) (insertableColumns td)
+    placeholders =
+      [ "$" <> T.pack (show n) <> castFor c
+      | (n, c) <- zip [1 :: Int ..] cols
+      ]
+    castFor c = case cdType c of
+      PgJsonb -> "::jsonb"
+      _       -> ""
+
 -- ---------------------------------------------------------------------------
 -- * Lookups
 -- ---------------------------------------------------------------------------
 
--- | The column used by 'queryIdByColumnStmt' to look up a row's
--- primary key from its natural-key bytes.
---
--- Closed set of the three column-naming conventions our hash-keyed
--- lookup tables use today. Add a constructor when a new convention
--- lands; that single point of edit makes the convention visible at
--- compile time and rules out a stringly-typed column-name typo.
+-- | Column naming conventions for 'queryIdByColumnStmt'. Closed set;
+-- add a constructor here when a new convention lands.
 data LookupColumn
-  = ByHash      -- ^ The @hash@ column (block, tx, slot_leader).
-  | ByHashRaw   -- ^ The @hash_raw@ column (pool_hash, stake_address).
+  = ByHash      -- ^ @hash@ (block, tx, slot_leader).
+  | ByHashRaw   -- ^ @hash_raw@ (pool_hash, stake_address).
   deriving stock (Eq, Show)
 
 lookupColumnName :: LookupColumn -> Text
@@ -115,13 +127,11 @@ lookupColumnName = \case
   ByHash    -> "hash"
   ByHashRaw -> "hash_raw"
 
--- | @SELECT id FROM \<table\> WHERE \<column\> = $1@ for a 'ByteString'
--- key. Used by every \"look up the id of a previously-inserted row\"
--- statement that keys on a single bytea column.
+-- | @SELECT id FROM <table> WHERE <column> = $1@ for a 'ByteString' key.
 queryIdByColumnStmt
   :: TableDef
   -> LookupColumn
-  -> (Int64 -> a)        -- ^ id constructor
+  -> (Int64 -> a)
   -> Stmt.Statement ByteString (Maybe a)
 queryIdByColumnStmt td col ctor =
   Stmt.preparable
@@ -129,7 +139,6 @@ queryIdByColumnStmt td col ctor =
     (E.param (E.nonNullable E.bytea))
     (D.rowMaybe (idDecoder ctor))
 
--- | @SELECT COUNT(*) FROM \<table\>@ as an 'Int64'.
 countRowsStmt :: TableDef -> Stmt.Statement () Int64
 countRowsStmt td =
   Stmt.preparable
@@ -141,14 +150,14 @@ countRowsStmt td =
 -- * Reusable codecs
 -- ---------------------------------------------------------------------------
 
--- | A single-column 'Int64' row decoder. Shared by @COUNT(*)@,
+-- | Single-column 'Int64' row decoder. Shared by @COUNT(*)@,
 -- @MAX(id)@, and similar aggregate-shape statements.
 int8RowDecoder :: D.Result Int64
 int8RowDecoder = D.singleRow (D.column (D.nonNullable D.int8))
 
--- | Encode a 'Word64' through a PostgreSQL @int8@ column. Cardano
--- slot numbers and similar are widened from 'Word64' to 'Int64' at
--- the boundary — this codifies that decision in one place.
+-- | 'Word64' through a PG @int8@ column. Cardano slot numbers and
+-- similar are widened to 'Int64' at the boundary; this codifies that
+-- decision in one place.
 word64Param :: E.Params Word64
 word64Param = fromIntegral >$< E.param (E.nonNullable E.int8)
 
@@ -156,12 +165,10 @@ word64Param = fromIntegral >$< E.param (E.nonNullable E.int8)
 -- * Array parameter helpers
 -- ---------------------------------------------------------------------------
 
--- | A @\<type\>[]@ array of non-null values. Wraps the
--- @nonNullable . foldableArray . nonNullable@ triple that callers
--- otherwise spell out by hand.
+-- | A @<type>[]@ array of non-null values.
 arrayParam :: E.Value a -> E.Params [a]
 arrayParam v = E.param (E.nonNullable (E.foldableArray (E.nonNullable v)))
 
--- | A @\<type\>[]@ array of nullable values.
+-- | A @<type>[]@ array of nullable values.
 nullArrayParam :: E.Value a -> E.Params [Maybe a]
 nullArrayParam v = E.param (E.nonNullable (E.foldableArray (E.nullable v)))

@@ -67,20 +67,20 @@ import DbSync.Db.Schema.Ids
   , ParamProposalId
   , VotingAnchorId
   )
-import DbSync.Db.Statement.Committee (nextCommitteeIdStmt)
-import DbSync.Db.Statement.CommitteeHash
+import DbSync.Db.Statement.Governance (nextCommitteeIdStmt)
+import DbSync.Db.Statement.Governance
   ( nextCommitteeHashIdStmt
   , queryCommitteeHashIdStmt
   )
-import DbSync.Db.Statement.Constitution (nextConstitutionIdStmt)
-import DbSync.Db.Statement.DrepHash (nextDrepHashIdStmt, queryDrepHashIdStmt)
-import DbSync.Db.Statement.EventInfo (nextEventInfoIdStmt)
-import DbSync.Db.Statement.GovActionProposal
+import DbSync.Db.Statement.Governance (nextConstitutionIdStmt)
+import DbSync.Db.Statement.Governance (nextDrepHashIdStmt, queryDrepHashIdStmt)
+import DbSync.Db.Statement.Governance (nextEventInfoIdStmt)
+import DbSync.Db.Statement.Governance
   ( nextGovActionProposalIdStmt
   , queryGovActionProposalByTxHashStmt
   )
-import DbSync.Db.Statement.ParamProposal (nextParamProposalIdStmt)
-import DbSync.Db.Statement.VotingAnchor
+import DbSync.Db.Statement.Governance (nextParamProposalIdStmt)
+import DbSync.Db.Statement.Governance
   ( nextVotingAnchorIdStmt
   , queryVotingAnchorIdStmt
   )

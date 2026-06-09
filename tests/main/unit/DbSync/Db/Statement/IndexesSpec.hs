@@ -1,14 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Unit tests for 'tableIndexStatements', 'preResolveIndexStatements',
--- and the helpers they share ('columnRef', 'uniqueConstraintIndexName').
+-- and 'uniqueConstraintIndexName'.
 module DbSync.Db.Statement.IndexesSpec (spec) where
 
 import Cardano.Prelude
 
 import qualified Data.List.NonEmpty as NE
 
-import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldThrow)
+import Test.Hspec (Spec, describe, it, shouldBe)
 
 import DbSync.Db.Schema.Address (addressTableDef)
 import DbSync.Db.Schema.Core (txTableDef)
@@ -20,7 +20,6 @@ import DbSync.Db.Schema.Types
   )
 import DbSync.Db.Statement.Indexes
   ( Concurrency (..)
-  , columnRef
   , ingestResolveIndexStatements
   , postResolveIndexStatements
   , preResolveIndexStatements
@@ -142,16 +141,6 @@ spec = describe "DbSync.Db.Statement.Indexes" $ do
     it "uses 1-based indexing across multiple constraints" $ do
       uniqueConstraintIndexName pkAndUniques 1 `shouldBe` "many_unique_1_idx"
       uniqueConstraintIndexName pkAndUniques 2 `shouldBe` "many_unique_2_idx"
-
-  describe "columnRef" $ do
-    it "returns the column name when declared on the table" $
-      columnRef pkAndUniques "id" `shouldBe` "id"
-
-    it "panics at evaluation time on an unknown column" $
-      -- 'panic' from cardano-prelude raises FatalError; any exception
-      -- from the eval is enough to confirm the guard fires.
-      evaluate (columnRef pkAndUniques "not_a_column" :: Text)
-        `shouldThrow` anyException
 
   describe "ingestResolveIndexStatements" $ do
     it "indexes the columns the per-epoch resolver matches on" $

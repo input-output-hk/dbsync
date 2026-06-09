@@ -38,14 +38,14 @@ import DbSync.Db.Schema.StakeDelegation
   , StakeRegistration
   , Withdrawal
   )
-import DbSync.Db.Statement.Delegation (insertDelegationRowStmt)
-import DbSync.Db.Statement.PotTransfer (insertPotTransferRowStmt)
-import DbSync.Db.Statement.Reserve (insertReserveRowStmt)
-import DbSync.Db.Statement.StakeAddress (insertStakeAddressRowStmt)
-import DbSync.Db.Statement.StakeDeregistration (insertStakeDeregistrationRowStmt)
-import DbSync.Db.Statement.StakeRegistration (insertStakeRegistrationRowStmt)
-import DbSync.Db.Statement.Treasury (insertTreasuryRowStmt)
-import DbSync.Db.Statement.Withdrawal (insertWithdrawalRowStmt)
+import DbSync.Db.Statement.StakeDelegation (insertDelegationRowStmt)
+import DbSync.Db.Statement.StakeDelegation (insertPotTransferRowStmt)
+import DbSync.Db.Statement.StakeDelegation (insertReserveRowStmt)
+import DbSync.Db.Statement.StakeDelegation (insertStakeAddressRowStmt)
+import DbSync.Db.Statement.StakeDelegation (insertStakeDeregistrationRowStmt)
+import DbSync.Db.Statement.StakeDelegation (insertStakeRegistrationRowStmt)
+import DbSync.Db.Statement.StakeDelegation (insertTreasuryRowStmt)
+import DbSync.Db.Statement.StakeDelegation (insertWithdrawalRowStmt)
 import DbSync.Phase.Following.WriteBuffer (WriteBuffer)
 import DbSync.Phase.Following.Writer.Internal (queueBuf, runConn)
 

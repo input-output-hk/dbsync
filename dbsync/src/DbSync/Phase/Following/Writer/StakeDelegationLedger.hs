@@ -21,10 +21,10 @@ import DbSync.Db.Schema.StakeDelegation
   , PotReward
   , Reward
   )
-import DbSync.Db.Statement.EpochStake (insertEpochStakeRowStmt)
-import DbSync.Db.Statement.EpochStakeProgress (insertEpochStakeProgressRowStmt)
-import DbSync.Db.Statement.PotReward (insertPotRewardRowStmt)
-import DbSync.Db.Statement.Reward (insertRewardRowStmt)
+import DbSync.Db.Statement.StakeDelegationLedger (insertEpochStakeRowStmt)
+import DbSync.Db.Statement.StakeDelegationLedger (insertEpochStakeProgressRowStmt)
+import DbSync.Db.Statement.StakeDelegationLedger (insertPotRewardRowStmt)
+import DbSync.Db.Statement.StakeDelegationLedger (insertRewardRowStmt)
 import DbSync.Phase.Following.WriteBuffer (WriteBuffer)
 import DbSync.Phase.Following.Writer.Internal (queueBuf, runConn)
 

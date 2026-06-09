@@ -17,9 +17,9 @@ import qualified Hasql.Connection as Conn
 
 import DbSync.Db.Schema.Core (Block, SlotLeader, Tx)
 import DbSync.Db.Schema.Ids (BlockId, SlotLeaderId, TxId)
-import DbSync.Db.Statement.Block (insertBlockRowStmt)
-import DbSync.Db.Statement.SlotLeader (insertSlotLeaderRowStmt)
-import DbSync.Db.Statement.Tx (insertTxRowStmt)
+import DbSync.Db.Statement.Core (insertBlockRowStmt)
+import DbSync.Db.Statement.Core (insertSlotLeaderRowStmt)
+import DbSync.Db.Statement.Core (insertTxRowStmt)
 import DbSync.Phase.Following.WriteBuffer (WriteBuffer)
 import DbSync.Phase.Following.Writer.Internal (queueBuf, runConn)
 

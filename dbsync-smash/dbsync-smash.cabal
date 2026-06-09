@@ -28,6 +28,7 @@ common defaults
   default-language:   GHC2021
   default-extensions:
     NoImplicitPrelude
+    OverloadedRecordDot
     OverloadedStrings
     DerivingStrategies
     GeneralizedNewtypeDeriving

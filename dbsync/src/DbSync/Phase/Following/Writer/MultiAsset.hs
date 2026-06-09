@@ -14,8 +14,8 @@ import qualified Hasql.Connection as Conn
 
 import DbSync.Db.Schema.Ids (MultiAssetId)
 import DbSync.Db.Schema.MultiAsset (MaTxMint, MaTxOut, MultiAsset)
-import DbSync.Db.Statement.MaTxMint (insertMaTxMintRowStmt)
-import DbSync.Db.Statement.MaTxOut (insertMaTxOutRowStmt)
+import DbSync.Db.Statement.MultiAsset (insertMaTxMintRowStmt)
+import DbSync.Db.Statement.MultiAsset (insertMaTxOutRowStmt)
 import DbSync.Db.Statement.MultiAsset (insertMultiAssetRowStmt)
 import DbSync.Phase.Following.WriteBuffer (WriteBuffer)
 import DbSync.Phase.Following.Writer.Internal (queueBuf, runConn)

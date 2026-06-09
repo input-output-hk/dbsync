@@ -23,6 +23,26 @@ module DbSync.Db.Schema.UTxO
   , collateralTxOutTableDef
   , referenceTxInTableDef
 
+    -- * Column records (compile-time-safe column references)
+  , TxOutCols (..)
+  , txOutCols
+  , txOutColsList
+  , TxInCols (..)
+  , txInCols
+  , txInColsList
+  , CollateralTxInCols (..)
+  , collateralTxInCols
+  , collateralTxInColsList
+  , CollateralTxOutCols (..)
+  , collateralTxOutCols
+  , collateralTxOutColsList
+  , ReferenceTxInCols (..)
+  , referenceTxInCols
+  , referenceTxInColsList
+
+    -- * Per-module column-record registry
+  , utxoColumnRecords
+
     -- * COPY encoding
   , encodeTxOutCopy
   , encodeTxInCopy
@@ -282,6 +302,196 @@ collateralTxOutTableDef = TableDef
       [ ForeignKey "tx_id" "tx" "id"
       ]
   }
+
+-- ---------------------------------------------------------------------------
+-- * Column records
+-- ---------------------------------------------------------------------------
+
+data TxOutCols = TxOutCols
+  { tocId                :: !TableColumn
+  , tocTxId              :: !TableColumn
+  , tocIndex             :: !TableColumn
+  , tocAddressId         :: !TableColumn
+  , tocStakeAddressId    :: !TableColumn
+  , tocValue             :: !TableColumn
+  , tocDataHash          :: !TableColumn
+  , tocInlineDatumId     :: !TableColumn
+  , tocReferenceScriptId :: !TableColumn
+  , tocConsumedByTxId    :: !TableColumn
+  }
+
+txOutCols :: TxOutCols
+txOutCols =
+  let c = TableColumn txOutTableDef
+  in TxOutCols
+       { tocId                = c "id"
+       , tocTxId              = c "tx_id"
+       , tocIndex             = c "index"
+       , tocAddressId         = c "address_id"
+       , tocStakeAddressId    = c "stake_address_id"
+       , tocValue             = c "value"
+       , tocDataHash          = c "data_hash"
+       , tocInlineDatumId     = c "inline_datum_id"
+       , tocReferenceScriptId = c "reference_script_id"
+       , tocConsumedByTxId    = c "consumed_by_tx_id"
+       }
+
+txOutColsList :: [TableColumn]
+txOutColsList =
+  [ txOutCols.tocId
+  , txOutCols.tocTxId
+  , txOutCols.tocIndex
+  , txOutCols.tocAddressId
+  , txOutCols.tocStakeAddressId
+  , txOutCols.tocValue
+  , txOutCols.tocDataHash
+  , txOutCols.tocInlineDatumId
+  , txOutCols.tocReferenceScriptId
+  , txOutCols.tocConsumedByTxId
+  ]
+
+data TxInCols = TxInCols
+  { ticId          :: !TableColumn
+  , ticTxInId      :: !TableColumn
+  , ticTxOutId     :: !TableColumn
+  , ticTxOutIndex  :: !TableColumn
+  , ticTxOutHash   :: !TableColumn
+  , ticRedeemerId  :: !TableColumn
+  }
+
+txInCols :: TxInCols
+txInCols =
+  let c = TableColumn txInTableDef
+  in TxInCols
+       { ticId          = c "id"
+       , ticTxInId      = c "tx_in_id"
+       , ticTxOutId     = c "tx_out_id"
+       , ticTxOutIndex  = c "tx_out_index"
+       , ticTxOutHash   = c "tx_out_hash"
+       , ticRedeemerId  = c "redeemer_id"
+       }
+
+txInColsList :: [TableColumn]
+txInColsList =
+  [ txInCols.ticId
+  , txInCols.ticTxInId
+  , txInCols.ticTxOutId
+  , txInCols.ticTxOutIndex
+  , txInCols.ticTxOutHash
+  , txInCols.ticRedeemerId
+  ]
+
+data CollateralTxInCols = CollateralTxInCols
+  { cticId          :: !TableColumn
+  , cticTxInId      :: !TableColumn
+  , cticTxOutId     :: !TableColumn
+  , cticTxOutIndex  :: !TableColumn
+  , cticTxOutHash   :: !TableColumn
+  }
+
+collateralTxInCols :: CollateralTxInCols
+collateralTxInCols =
+  let c = TableColumn collateralTxInTableDef
+  in CollateralTxInCols
+       { cticId          = c "id"
+       , cticTxInId      = c "tx_in_id"
+       , cticTxOutId     = c "tx_out_id"
+       , cticTxOutIndex  = c "tx_out_index"
+       , cticTxOutHash   = c "tx_out_hash"
+       }
+
+collateralTxInColsList :: [TableColumn]
+collateralTxInColsList =
+  [ collateralTxInCols.cticId
+  , collateralTxInCols.cticTxInId
+  , collateralTxInCols.cticTxOutId
+  , collateralTxInCols.cticTxOutIndex
+  , collateralTxInCols.cticTxOutHash
+  ]
+
+data ReferenceTxInCols = ReferenceTxInCols
+  { rticId          :: !TableColumn
+  , rticTxInId      :: !TableColumn
+  , rticTxOutId     :: !TableColumn
+  , rticTxOutIndex  :: !TableColumn
+  , rticTxOutHash   :: !TableColumn
+  }
+
+referenceTxInCols :: ReferenceTxInCols
+referenceTxInCols =
+  let c = TableColumn referenceTxInTableDef
+  in ReferenceTxInCols
+       { rticId          = c "id"
+       , rticTxInId      = c "tx_in_id"
+       , rticTxOutId     = c "tx_out_id"
+       , rticTxOutIndex  = c "tx_out_index"
+       , rticTxOutHash   = c "tx_out_hash"
+       }
+
+referenceTxInColsList :: [TableColumn]
+referenceTxInColsList =
+  [ referenceTxInCols.rticId
+  , referenceTxInCols.rticTxInId
+  , referenceTxInCols.rticTxOutId
+  , referenceTxInCols.rticTxOutIndex
+  , referenceTxInCols.rticTxOutHash
+  ]
+
+data CollateralTxOutCols = CollateralTxOutCols
+  { ctocId                :: !TableColumn
+  , ctocTxId              :: !TableColumn
+  , ctocIndex             :: !TableColumn
+  , ctocAddressId         :: !TableColumn
+  , ctocStakeAddressId    :: !TableColumn
+  , ctocValue             :: !TableColumn
+  , ctocDataHash          :: !TableColumn
+  , ctocMultiAssetsDescr  :: !TableColumn
+  , ctocInlineDatumId     :: !TableColumn
+  , ctocReferenceScriptId :: !TableColumn
+  }
+
+collateralTxOutCols :: CollateralTxOutCols
+collateralTxOutCols =
+  let c = TableColumn collateralTxOutTableDef
+  in CollateralTxOutCols
+       { ctocId                = c "id"
+       , ctocTxId              = c "tx_id"
+       , ctocIndex             = c "index"
+       , ctocAddressId         = c "address_id"
+       , ctocStakeAddressId    = c "stake_address_id"
+       , ctocValue             = c "value"
+       , ctocDataHash          = c "data_hash"
+       , ctocMultiAssetsDescr  = c "multi_assets_descr"
+       , ctocInlineDatumId     = c "inline_datum_id"
+       , ctocReferenceScriptId = c "reference_script_id"
+       }
+
+collateralTxOutColsList :: [TableColumn]
+collateralTxOutColsList =
+  [ collateralTxOutCols.ctocId
+  , collateralTxOutCols.ctocTxId
+  , collateralTxOutCols.ctocIndex
+  , collateralTxOutCols.ctocAddressId
+  , collateralTxOutCols.ctocStakeAddressId
+  , collateralTxOutCols.ctocValue
+  , collateralTxOutCols.ctocDataHash
+  , collateralTxOutCols.ctocMultiAssetsDescr
+  , collateralTxOutCols.ctocInlineDatumId
+  , collateralTxOutCols.ctocReferenceScriptId
+  ]
+
+-- ---------------------------------------------------------------------------
+-- * Per-module column-record registry
+-- ---------------------------------------------------------------------------
+
+utxoColumnRecords :: [(TableDef, [TableColumn])]
+utxoColumnRecords =
+  [ (txOutTableDef,            txOutColsList)
+  , (txInTableDef,             txInColsList)
+  , (collateralTxInTableDef,   collateralTxInColsList)
+  , (collateralTxOutTableDef,  collateralTxOutColsList)
+  , (referenceTxInTableDef,    referenceTxInColsList)
+  ]
 
 -- ---------------------------------------------------------------------------
 -- * COPY encoding

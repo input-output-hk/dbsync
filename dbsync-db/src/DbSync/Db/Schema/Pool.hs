@@ -33,6 +33,20 @@ module DbSync.Db.Schema.Pool
   , delistedPoolTableDef
   , reservedPoolTickerTableDef
 
+    -- * Column records (compile-time-safe column references)
+  , PoolHashCols (..), poolHashCols, poolHashColsList
+  , PoolUpdateCols (..), poolUpdateCols, poolUpdateColsList
+  , PoolMetadataRefCols (..), poolMetadataRefCols, poolMetadataRefColsList
+  , PoolOwnerCols (..), poolOwnerCols, poolOwnerColsList
+  , PoolRetireCols (..), poolRetireCols, poolRetireColsList
+  , PoolRelayCols (..), poolRelayCols, poolRelayColsList
+  , PoolStatCols (..), poolStatCols, poolStatColsList
+  , DelistedPoolCols (..), delistedPoolCols, delistedPoolColsList
+  , ReservedPoolTickerCols (..), reservedPoolTickerCols, reservedPoolTickerColsList
+
+    -- * Per-module column-record registry
+  , poolColumnRecords
+
     -- * COPY encoding
   , encodePoolHashCopy
   , encodePoolUpdateCopy
@@ -399,6 +413,285 @@ reservedPoolTickerTableDef = TableDef
   , tdIdentityColumns = ["id"]
   , tdForeignKeys = []
   }
+
+-- ---------------------------------------------------------------------------
+-- * Column records
+-- ---------------------------------------------------------------------------
+
+data PoolHashCols = PoolHashCols
+  { phcId      :: !TableColumn
+  , phcHashRaw :: !TableColumn
+  , phcView    :: !TableColumn
+  }
+
+poolHashCols :: PoolHashCols
+poolHashCols =
+  let c = TableColumn poolHashTableDef
+  in PoolHashCols
+       { phcId      = c "id"
+       , phcHashRaw = c "hash_raw"
+       , phcView    = c "view"
+       }
+
+poolHashColsList :: [TableColumn]
+poolHashColsList =
+  [ poolHashCols.phcId
+  , poolHashCols.phcHashRaw
+  , poolHashCols.phcView
+  ]
+
+data PoolUpdateCols = PoolUpdateCols
+  { pucId             :: !TableColumn
+  , pucHashId         :: !TableColumn
+  , pucCertIndex      :: !TableColumn
+  , pucVrfKeyHash     :: !TableColumn
+  , pucPledge         :: !TableColumn
+  , pucActiveEpochNo  :: !TableColumn
+  , pucMetaId         :: !TableColumn
+  , pucMargin         :: !TableColumn
+  , pucFixedCost      :: !TableColumn
+  , pucRegisteredTxId :: !TableColumn
+  , pucRewardAddrId   :: !TableColumn
+  , pucDeposit        :: !TableColumn
+  }
+
+poolUpdateCols :: PoolUpdateCols
+poolUpdateCols =
+  let c = TableColumn poolUpdateTableDef
+  in PoolUpdateCols
+       { pucId             = c "id"
+       , pucHashId         = c "hash_id"
+       , pucCertIndex      = c "cert_index"
+       , pucVrfKeyHash     = c "vrf_key_hash"
+       , pucPledge         = c "pledge"
+       , pucActiveEpochNo  = c "active_epoch_no"
+       , pucMetaId         = c "meta_id"
+       , pucMargin         = c "margin"
+       , pucFixedCost      = c "fixed_cost"
+       , pucRegisteredTxId = c "registered_tx_id"
+       , pucRewardAddrId   = c "reward_addr_id"
+       , pucDeposit        = c "deposit"
+       }
+
+poolUpdateColsList :: [TableColumn]
+poolUpdateColsList =
+  [ poolUpdateCols.pucId
+  , poolUpdateCols.pucHashId
+  , poolUpdateCols.pucCertIndex
+  , poolUpdateCols.pucVrfKeyHash
+  , poolUpdateCols.pucPledge
+  , poolUpdateCols.pucActiveEpochNo
+  , poolUpdateCols.pucMetaId
+  , poolUpdateCols.pucMargin
+  , poolUpdateCols.pucFixedCost
+  , poolUpdateCols.pucRegisteredTxId
+  , poolUpdateCols.pucRewardAddrId
+  , poolUpdateCols.pucDeposit
+  ]
+
+data PoolMetadataRefCols = PoolMetadataRefCols
+  { pmrcId             :: !TableColumn
+  , pmrcPoolId         :: !TableColumn
+  , pmrcUrl            :: !TableColumn
+  , pmrcHash           :: !TableColumn
+  , pmrcRegisteredTxId :: !TableColumn
+  }
+
+poolMetadataRefCols :: PoolMetadataRefCols
+poolMetadataRefCols =
+  let c = TableColumn poolMetadataRefTableDef
+  in PoolMetadataRefCols
+       { pmrcId             = c "id"
+       , pmrcPoolId         = c "pool_id"
+       , pmrcUrl            = c "url"
+       , pmrcHash           = c "hash"
+       , pmrcRegisteredTxId = c "registered_tx_id"
+       }
+
+poolMetadataRefColsList :: [TableColumn]
+poolMetadataRefColsList =
+  [ poolMetadataRefCols.pmrcId
+  , poolMetadataRefCols.pmrcPoolId
+  , poolMetadataRefCols.pmrcUrl
+  , poolMetadataRefCols.pmrcHash
+  , poolMetadataRefCols.pmrcRegisteredTxId
+  ]
+
+data PoolOwnerCols = PoolOwnerCols
+  { pocId           :: !TableColumn
+  , pocAddrId       :: !TableColumn
+  , pocPoolUpdateId :: !TableColumn
+  }
+
+poolOwnerCols :: PoolOwnerCols
+poolOwnerCols =
+  let c = TableColumn poolOwnerTableDef
+  in PoolOwnerCols
+       { pocId           = c "id"
+       , pocAddrId       = c "addr_id"
+       , pocPoolUpdateId = c "pool_update_id"
+       }
+
+poolOwnerColsList :: [TableColumn]
+poolOwnerColsList =
+  [ poolOwnerCols.pocId
+  , poolOwnerCols.pocAddrId
+  , poolOwnerCols.pocPoolUpdateId
+  ]
+
+data PoolRetireCols = PoolRetireCols
+  { prcId            :: !TableColumn
+  , prcHashId        :: !TableColumn
+  , prcCertIndex     :: !TableColumn
+  , prcAnnouncedTxId :: !TableColumn
+  , prcRetiringEpoch :: !TableColumn
+  }
+
+poolRetireCols :: PoolRetireCols
+poolRetireCols =
+  let c = TableColumn poolRetireTableDef
+  in PoolRetireCols
+       { prcId            = c "id"
+       , prcHashId        = c "hash_id"
+       , prcCertIndex     = c "cert_index"
+       , prcAnnouncedTxId = c "announced_tx_id"
+       , prcRetiringEpoch = c "retiring_epoch"
+       }
+
+poolRetireColsList :: [TableColumn]
+poolRetireColsList =
+  [ poolRetireCols.prcId
+  , poolRetireCols.prcHashId
+  , poolRetireCols.prcCertIndex
+  , poolRetireCols.prcAnnouncedTxId
+  , poolRetireCols.prcRetiringEpoch
+  ]
+
+data PoolRelayCols = PoolRelayCols
+  { prlcId         :: !TableColumn
+  , prlcUpdateId   :: !TableColumn
+  , prlcIpv4       :: !TableColumn
+  , prlcIpv6       :: !TableColumn
+  , prlcDnsName    :: !TableColumn
+  , prlcDnsSrvName :: !TableColumn
+  , prlcPort       :: !TableColumn
+  }
+
+poolRelayCols :: PoolRelayCols
+poolRelayCols =
+  let c = TableColumn poolRelayTableDef
+  in PoolRelayCols
+       { prlcId         = c "id"
+       , prlcUpdateId   = c "update_id"
+       , prlcIpv4       = c "ipv4"
+       , prlcIpv6       = c "ipv6"
+       , prlcDnsName    = c "dns_name"
+       , prlcDnsSrvName = c "dns_srv_name"
+       , prlcPort       = c "port"
+       }
+
+poolRelayColsList :: [TableColumn]
+poolRelayColsList =
+  [ poolRelayCols.prlcId
+  , poolRelayCols.prlcUpdateId
+  , poolRelayCols.prlcIpv4
+  , poolRelayCols.prlcIpv6
+  , poolRelayCols.prlcDnsName
+  , poolRelayCols.prlcDnsSrvName
+  , poolRelayCols.prlcPort
+  ]
+
+data PoolStatCols = PoolStatCols
+  { pstcId                 :: !TableColumn
+  , pstcPoolHashId         :: !TableColumn
+  , pstcEpochNo            :: !TableColumn
+  , pstcNumberOfBlocks     :: !TableColumn
+  , pstcNumberOfDelegators :: !TableColumn
+  , pstcStake              :: !TableColumn
+  , pstcVotingPower        :: !TableColumn
+  }
+
+poolStatCols :: PoolStatCols
+poolStatCols =
+  let c = TableColumn poolStatTableDef
+  in PoolStatCols
+       { pstcId                 = c "id"
+       , pstcPoolHashId         = c "pool_hash_id"
+       , pstcEpochNo            = c "epoch_no"
+       , pstcNumberOfBlocks     = c "number_of_blocks"
+       , pstcNumberOfDelegators = c "number_of_delegators"
+       , pstcStake              = c "stake"
+       , pstcVotingPower        = c "voting_power"
+       }
+
+poolStatColsList :: [TableColumn]
+poolStatColsList =
+  [ poolStatCols.pstcId
+  , poolStatCols.pstcPoolHashId
+  , poolStatCols.pstcEpochNo
+  , poolStatCols.pstcNumberOfBlocks
+  , poolStatCols.pstcNumberOfDelegators
+  , poolStatCols.pstcStake
+  , poolStatCols.pstcVotingPower
+  ]
+
+data DelistedPoolCols = DelistedPoolCols
+  { dpcId      :: !TableColumn
+  , dpcHashRaw :: !TableColumn
+  }
+
+delistedPoolCols :: DelistedPoolCols
+delistedPoolCols =
+  let c = TableColumn delistedPoolTableDef
+  in DelistedPoolCols
+       { dpcId      = c "id"
+       , dpcHashRaw = c "hash_raw"
+       }
+
+delistedPoolColsList :: [TableColumn]
+delistedPoolColsList =
+  [ delistedPoolCols.dpcId
+  , delistedPoolCols.dpcHashRaw
+  ]
+
+data ReservedPoolTickerCols = ReservedPoolTickerCols
+  { rptcId       :: !TableColumn
+  , rptcName     :: !TableColumn
+  , rptcPoolHash :: !TableColumn
+  }
+
+reservedPoolTickerCols :: ReservedPoolTickerCols
+reservedPoolTickerCols =
+  let c = TableColumn reservedPoolTickerTableDef
+  in ReservedPoolTickerCols
+       { rptcId       = c "id"
+       , rptcName     = c "name"
+       , rptcPoolHash = c "pool_hash"
+       }
+
+reservedPoolTickerColsList :: [TableColumn]
+reservedPoolTickerColsList =
+  [ reservedPoolTickerCols.rptcId
+  , reservedPoolTickerCols.rptcName
+  , reservedPoolTickerCols.rptcPoolHash
+  ]
+
+-- ---------------------------------------------------------------------------
+-- * Per-module column-record registry
+-- ---------------------------------------------------------------------------
+
+poolColumnRecords :: [(TableDef, [TableColumn])]
+poolColumnRecords =
+  [ (poolHashTableDef,           poolHashColsList)
+  , (poolUpdateTableDef,         poolUpdateColsList)
+  , (poolMetadataRefTableDef,    poolMetadataRefColsList)
+  , (poolOwnerTableDef,          poolOwnerColsList)
+  , (poolRetireTableDef,         poolRetireColsList)
+  , (poolRelayTableDef,          poolRelayColsList)
+  , (poolStatTableDef,           poolStatColsList)
+  , (delistedPoolTableDef,       delistedPoolColsList)
+  , (reservedPoolTickerTableDef, reservedPoolTickerColsList)
+  ]
 
 -- ---------------------------------------------------------------------------
 -- * COPY encoding

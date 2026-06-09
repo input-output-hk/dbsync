@@ -9,7 +9,7 @@ import Cardano.Prelude
 import qualified Hasql.Connection as Conn
 
 import DbSync.Db.Schema.Metadata (TxMetadata)
-import DbSync.Db.Statement.TxMetadata (insertTxMetadataRowStmt)
+import DbSync.Db.Statement.Metadata (insertTxMetadataRowStmt)
 import DbSync.Phase.Following.WriteBuffer (WriteBuffer)
 import DbSync.Phase.Following.Writer.Internal (queueBuf, runConn)
 

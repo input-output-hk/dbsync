@@ -12,6 +12,7 @@ module DbSync.Db.Schema.Types
   , ForeignKey (..)
   , PgType (..)
   , TableMode (..)
+  , TableColumn (..)
   ) where
 
 import Cardano.Prelude
@@ -127,5 +128,16 @@ data TableDef = TableDef
       -- 'FollowingChainTip' rollback cascade to compute per-FK-family
       -- delete lists. Empty for tables with no incoming references to
       -- the rollback's parent tables (block, tx, tx_out, pool_update).
+  }
+  deriving stock (Eq, Show)
+
+-- | A column reference that carries its owning 'TableDef'. Built
+-- from the per-table column records (e.g. @poolHashCols.phcHashRaw@)
+-- and consumed by the SQL-builder helpers in 'DbSync.Db.Sql.Refs'.
+-- Pairing the table with the name makes mismatched references a
+-- type error rather than a runtime panic.
+data TableColumn = TableColumn
+  { tcTable :: !TableDef
+  , tcName  :: !Text
   }
   deriving stock (Eq, Show)

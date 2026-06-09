@@ -31,12 +31,12 @@ import DbSync.Db.Schema.UTxO
   , TxIn
   , TxOut
   )
-import DbSync.Db.Statement.Address (insertAddressRowStmt)
-import DbSync.Db.Statement.CollateralTxIn (insertCollateralTxInRowStmt)
-import DbSync.Db.Statement.CollateralTxOut (insertCollateralTxOutRowStmt)
-import DbSync.Db.Statement.ReferenceTxIn (insertReferenceTxInRowStmt)
-import DbSync.Db.Statement.TxIn (insertTxInRowStmt)
-import DbSync.Db.Statement.TxOut (insertTxOutRowStmt)
+import DbSync.Db.Statement.UTxO (insertAddressRowStmt)
+import DbSync.Db.Statement.UTxO (insertCollateralTxInRowStmt)
+import DbSync.Db.Statement.UTxO (insertCollateralTxOutRowStmt)
+import DbSync.Db.Statement.UTxO (insertReferenceTxInRowStmt)
+import DbSync.Db.Statement.UTxO (insertTxInRowStmt)
+import DbSync.Db.Statement.UTxO (insertTxOutRowStmt)
 import DbSync.Phase.Following.WriteBuffer (WriteBuffer)
 import DbSync.Phase.Following.Writer.Internal (queueBuf, runConn)
 

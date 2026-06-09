@@ -28,13 +28,13 @@ import DbSync.Db.Schema.Ids
   , ScriptId
   )
 import DbSync.Db.Schema.ScriptsDatums (Datum, RedeemerData, Script)
-import DbSync.Db.Statement.Datum (nextDatumIdStmt, queryDatumIdStmt)
-import DbSync.Db.Statement.Redeemer (nextRedeemerIdStmt)
-import DbSync.Db.Statement.RedeemerData
+import DbSync.Db.Statement.ScriptsDatums (nextDatumIdStmt, queryDatumIdStmt)
+import DbSync.Db.Statement.ScriptsDatums (nextRedeemerIdStmt)
+import DbSync.Db.Statement.ScriptsDatums
   ( nextRedeemerDataIdStmt
   , queryRedeemerDataIdStmt
   )
-import DbSync.Db.Statement.Script (nextScriptIdStmt, queryScriptIdStmt)
+import DbSync.Db.Statement.ScriptsDatums (nextScriptIdStmt, queryScriptIdStmt)
 import DbSync.Phase.Following.IdAllocator (PreAllocatedIds (..), popHead)
 import DbSync.Phase.Following.Resolver.Internal
   ( BlockDedupCache (..)

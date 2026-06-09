@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Statement-level tests for 'DbSync.Db.Statement.Block'.
+-- | Statement-level tests for 'DbSync.Db.Statement.Core'.
 --
 -- See 'DbSync.Db.Statement.SyncStateSpec' for the convention this
 -- module follows.
@@ -29,7 +29,7 @@ import DbSync.Db.Schema.Core
   )
 import DbSync.Db.Schema.Ids (BlockId (..), SlotLeaderId (..))
 import DbSync.Db.Schema.Types (TableDef (..))
-import DbSync.Db.Statement.Block
+import DbSync.Db.Statement.Core
   ( insertBlockStmt
   , queryBlockCountStmt
   , queryBlockIdByHashStmt
@@ -37,7 +37,7 @@ import DbSync.Db.Statement.Block
   , queryLatestBlockNoStmt
   , queryLatestSlotNoStmt
   )
-import DbSync.Db.Statement.SlotLeader (insertSlotLeaderStmt)
+import DbSync.Db.Statement.Core (insertSlotLeaderStmt)
 import DbSync.Test.Database
   ( setupFollowTipSchema
   , teardownSchema
@@ -49,7 +49,7 @@ tables :: [TableDef]
 tables = [blockTableDef, slotLeaderTableDef]
 
 spec :: Spec
-spec = describe "DbSync.Db.Statement.Block" $
+spec = describe "DbSync.Db.Statement.Core" $
   beforeAll_ (setupFollowTipSchema tables [("core", 1)]) $
   afterAll_  (teardownSchema tables) $
   before_    (truncateAllTables (map tdName tables)) $ do

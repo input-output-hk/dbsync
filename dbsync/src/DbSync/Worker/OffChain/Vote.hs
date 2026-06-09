@@ -3,7 +3,7 @@
 -- | Vote-specific glue for the off-chain fetch worker.
 --
 -- The worker discovers anchors by polling PG via the work-queue
--- statements in 'DbSync.Db.Statement.OffChainVote'. Each anchor is
+-- statements in 'DbSync.Db.Statement.Worker.OffChainVote'. Each anchor is
 -- fetched via a pluggable 'OffChainFetcher': 'httpVoteFetcher' for
 -- the live HTTP path, 'stubVoteFetcher' for tests.
 --
@@ -56,7 +56,7 @@ import DbSync.Db.Schema.OffChainVote
   , OffChainVoteGovActionData (..)
   , OffChainVoteReference (..)
   )
-import DbSync.Db.Statement.OffChainVote
+import DbSync.Db.Statement.Worker.OffChainVote
   ( PendingVoteFetch (..)
   , insertOffChainVoteAuthorRowStmt
   , insertOffChainVoteDataReturningIdStmt

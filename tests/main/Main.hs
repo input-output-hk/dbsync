@@ -54,6 +54,7 @@ import qualified DbSync.App.BootSpec as AppBootSpec
 import qualified DbSync.Phase.CurrentSpec as PhaseCurrentSpec
 import qualified DbSync.Schema.AdaPotsSpec as SchemaAdaPotsSpec
 import qualified DbSync.Schema.AddressSpec as SchemaAddressSpec
+import qualified DbSync.Schema.ColumnsConsistencySpec as SchemaColumnsConsistencySpec
 import qualified DbSync.Schema.CoreSpec as SchemaCoreSpec
 import qualified DbSync.Schema.EpochBoundarySpec as SchemaEpochBoundarySpec
 import qualified DbSync.Schema.EpochViewSpec as SchemaEpochViewSpec
@@ -164,6 +165,7 @@ main = hspec $ do
     PhaseCurrentSpec.spec
     SchemaAdaPotsSpec.spec
     SchemaAddressSpec.spec
+    SchemaColumnsConsistencySpec.spec
     SchemaCoreSpec.spec
     SchemaEpochBoundarySpec.spec
     SchemaEpochViewSpec.spec

@@ -42,8 +42,8 @@ import qualified DbSync.Db.Schema.Pool as Pool
 import DbSync.Db.Schema.Types (ForeignKey (..), TableDef (..))
 import qualified DbSync.Db.Schema.UTxO as UTxO
 import DbSync.Db.Schema.EpochView (epochFinalizedTableName)
-import DbSync.Db.Statement.EpochFinalized (deleteEpochFinalizedFromEpochStmt)
-import DbSync.Db.Statement.Rollback
+import DbSync.Db.Statement.EpochView (deleteEpochFinalizedFromEpochStmt)
+import DbSync.Db.Statement.Worker.Rollback
   ( deleteBlockAfterIdStmt
   , deleteWhereGteStmt
   , queryBlockAtOrAfterSlotStmt

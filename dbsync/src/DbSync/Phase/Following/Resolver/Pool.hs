@@ -17,9 +17,9 @@ import qualified Hasql.Connection as Conn
 
 import DbSync.Db.Schema.Ids (PoolHashId, PoolMetadataRefId, PoolUpdateId)
 import DbSync.Db.Schema.Pool (PoolHash)
-import DbSync.Db.Statement.PoolHash (nextPoolHashIdStmt, queryPoolHashIdStmt)
-import DbSync.Db.Statement.PoolMetadataRef (nextPoolMetadataRefIdStmt)
-import DbSync.Db.Statement.PoolUpdate (nextPoolUpdateIdStmt)
+import DbSync.Db.Statement.Pool (nextPoolHashIdStmt, queryPoolHashIdStmt)
+import DbSync.Db.Statement.Pool (nextPoolMetadataRefIdStmt)
+import DbSync.Db.Statement.Pool (nextPoolUpdateIdStmt)
 import DbSync.Phase.Following.IdAllocator (PreAllocatedIds (..), popHead)
 import DbSync.Phase.Following.Resolver.Internal
   ( BlockDedupCache (..)

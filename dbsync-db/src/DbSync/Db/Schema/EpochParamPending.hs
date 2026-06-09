@@ -24,6 +24,12 @@ module DbSync.Db.Schema.EpochParamPending
     -- * Table definition
   , epochParamPendingTableDef
   , epochParamPendingTableName
+
+    -- * Column records (compile-time-safe column references)
+  , EpochParamPendingCols (..), epochParamPendingCols, epochParamPendingColsList
+
+    -- * Per-module column-record registry
+  , epochParamPendingColumnRecords
   ) where
 
 import Cardano.Prelude
@@ -31,6 +37,7 @@ import Cardano.Prelude
 import DbSync.Db.Schema.Types
   ( ColumnDef (..)
   , PgType (..)
+  , TableColumn (..)
   , TableDef (..)
   , TableMode (..)
   )
@@ -78,3 +85,38 @@ epochParamPendingTableDef = TableDef
   , tdIdentityColumns = []
   , tdForeignKeys = []
   }
+
+-- ---------------------------------------------------------------------------
+-- * Column records
+-- ---------------------------------------------------------------------------
+
+data EpochParamPendingCols = EpochParamPendingCols
+  { eppcEpochNo         :: !TableColumn
+  , eppcStakeKeyDeposit :: !TableColumn
+  , eppcPoolDeposit     :: !TableColumn
+  }
+
+epochParamPendingCols :: EpochParamPendingCols
+epochParamPendingCols =
+  let c = TableColumn epochParamPendingTableDef
+  in EpochParamPendingCols
+       { eppcEpochNo         = c "epoch_no"
+       , eppcStakeKeyDeposit = c "stake_key_deposit"
+       , eppcPoolDeposit     = c "pool_deposit"
+       }
+
+epochParamPendingColsList :: [TableColumn]
+epochParamPendingColsList =
+  [ epochParamPendingCols.eppcEpochNo
+  , epochParamPendingCols.eppcStakeKeyDeposit
+  , epochParamPendingCols.eppcPoolDeposit
+  ]
+
+-- ---------------------------------------------------------------------------
+-- * Per-module column-record registry
+-- ---------------------------------------------------------------------------
+
+epochParamPendingColumnRecords :: [(TableDef, [TableColumn])]
+epochParamPendingColumnRecords =
+  [ (epochParamPendingTableDef, epochParamPendingColsList)
+  ]

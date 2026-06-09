@@ -3,7 +3,7 @@
 -- | Pool-specific glue for the off-chain fetch worker.
 --
 -- The worker discovers refs by polling PG via the work-queue
--- statements in 'DbSync.Db.Statement.OffChainPool'. Each ref is
+-- statements in 'DbSync.Db.Statement.Worker.OffChainPool'. Each ref is
 -- fetched via a pluggable 'OffChainFetcher': 'httpPoolFetcher' for
 -- the live HTTP path, 'stubPoolFetcher' for tests.
 module DbSync.Worker.OffChain.Pool
@@ -39,7 +39,7 @@ import DbSync.Db.Schema.OffChainPool
   ( OffChainPoolData (..)
   , OffChainPoolFetchError (..)
   )
-import DbSync.Db.Statement.OffChainPool
+import DbSync.Db.Statement.Worker.OffChainPool
   ( PendingPoolFetch (..)
   , insertOffChainPoolDataRowStmt
   , insertOffChainPoolFetchErrorRowStmt

@@ -1,8 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Post-load tx-column backfill UPDATEs and deposit-pending flush.
--- SQL lives in 'DbSync.Db.Statement.Backfill' /
--- 'DbSync.Db.Statement.EpochParamPending'.
+-- SQL lives in 'DbSync.Db.Statement.Worker.Backfill' /
+-- 'DbSync.Db.Statement.Worker.EpochParamPending'.
 module DbSync.Phase.Preparing.Backfill
   ( backfillTxColumns
   , applyDepositPending
@@ -17,14 +17,14 @@ import qualified Hasql.Statement as Stmt
 
 import DbSync.AppM (LoggingM)
 import DbSync.Db.Run (useConn)
-import DbSync.Db.Statement.Backfill
+import DbSync.Db.Statement.Worker.Backfill
   ( backfillByronFeeStmt
   , backfillPhaseTwoDepositStmt
   , backfillPhaseTwoFeeStmt
   , backfillValidContractDepositStmt
   )
-import DbSync.Db.Statement.EpochFinalized (backfillEpochFinalizedStmt)
-import DbSync.Db.Statement.EpochParamPending
+import DbSync.Db.Statement.EpochView (backfillEpochFinalizedStmt)
+import DbSync.Db.Statement.Worker.EpochParamPending
   ( applyPoolUpdateDepositStmt
   , applyStakeRegistrationDepositStmt
   , truncateEpochParamPendingStmt

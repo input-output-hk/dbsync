@@ -32,6 +32,26 @@ module DbSync.Db.Schema.Core
   , metaTableDef
   , reverseIndexTableDef
 
+    -- * Column records (compile-time-safe column references)
+  , BlockCols (..)
+  , blockCols
+  , blockColsList
+  , TxCols (..)
+  , txCols
+  , txColsList
+  , SlotLeaderCols (..)
+  , slotLeaderCols
+  , slotLeaderColsList
+  , MetaCols (..)
+  , metaCols
+  , metaColsList
+  , ReverseIndexCols (..)
+  , reverseIndexCols
+  , reverseIndexColsList
+
+    -- * Per-module column-record registry
+  , coreColumnRecords
+
     -- * COPY encoding
   , encodeBlockCopy
   , encodeTxCopy
@@ -92,6 +112,7 @@ import DbSync.Db.Schema.Types
   ( ColumnDef (..)
   , ForeignKey (..)
   , PgType (..)
+  , TableColumn (..)
   , TableDef (..)
   , TableMode (..)
   )
@@ -321,6 +342,208 @@ reverseIndexTableDef = TableDef
   }
 
 -- ---------------------------------------------------------------------------
+-- * Column records
+-- ---------------------------------------------------------------------------
+
+data BlockCols = BlockCols
+  { bcId             :: !TableColumn
+  , bcHash           :: !TableColumn
+  , bcEpochNo        :: !TableColumn
+  , bcSlotNo         :: !TableColumn
+  , bcEpochSlotNo    :: !TableColumn
+  , bcBlockNo        :: !TableColumn
+  , bcPreviousId     :: !TableColumn
+  , bcSlotLeaderId   :: !TableColumn
+  , bcSize           :: !TableColumn
+  , bcTime           :: !TableColumn
+  , bcTxCount        :: !TableColumn
+  , bcProtoMajor     :: !TableColumn
+  , bcProtoMinor     :: !TableColumn
+  , bcVrfKey         :: !TableColumn
+  , bcOpCert         :: !TableColumn
+  , bcOpCertCounter  :: !TableColumn
+  }
+
+blockCols :: BlockCols
+blockCols =
+  let c = TableColumn blockTableDef
+  in BlockCols
+       { bcId             = c "id"
+       , bcHash           = c "hash"
+       , bcEpochNo        = c "epoch_no"
+       , bcSlotNo         = c "slot_no"
+       , bcEpochSlotNo    = c "epoch_slot_no"
+       , bcBlockNo        = c "block_no"
+       , bcPreviousId     = c "previous_id"
+       , bcSlotLeaderId   = c "slot_leader_id"
+       , bcSize           = c "size"
+       , bcTime           = c "time"
+       , bcTxCount        = c "tx_count"
+       , bcProtoMajor     = c "proto_major"
+       , bcProtoMinor     = c "proto_minor"
+       , bcVrfKey         = c "vrf_key"
+       , bcOpCert         = c "op_cert"
+       , bcOpCertCounter  = c "op_cert_counter"
+       }
+
+blockColsList :: [TableColumn]
+blockColsList =
+  [ blockCols.bcId
+  , blockCols.bcHash
+  , blockCols.bcEpochNo
+  , blockCols.bcSlotNo
+  , blockCols.bcEpochSlotNo
+  , blockCols.bcBlockNo
+  , blockCols.bcPreviousId
+  , blockCols.bcSlotLeaderId
+  , blockCols.bcSize
+  , blockCols.bcTime
+  , blockCols.bcTxCount
+  , blockCols.bcProtoMajor
+  , blockCols.bcProtoMinor
+  , blockCols.bcVrfKey
+  , blockCols.bcOpCert
+  , blockCols.bcOpCertCounter
+  ]
+
+data TxCols = TxCols
+  { tcId               :: !TableColumn
+  , tcHash             :: !TableColumn
+  , tcBlockId          :: !TableColumn
+  , tcBlockIndex       :: !TableColumn
+  , tcOutSum           :: !TableColumn
+  , tcFee              :: !TableColumn
+  , tcDeposit          :: !TableColumn
+  , tcSize             :: !TableColumn
+  , tcInvalidBefore    :: !TableColumn
+  , tcInvalidHereafter :: !TableColumn
+  , tcValidContract    :: !TableColumn
+  , tcScriptSize       :: !TableColumn
+  , tcTreasuryDonation :: !TableColumn
+  }
+
+txCols :: TxCols
+txCols =
+  let c = TableColumn txTableDef
+  in TxCols
+       { tcId               = c "id"
+       , tcHash             = c "hash"
+       , tcBlockId          = c "block_id"
+       , tcBlockIndex       = c "block_index"
+       , tcOutSum           = c "out_sum"
+       , tcFee              = c "fee"
+       , tcDeposit          = c "deposit"
+       , tcSize             = c "size"
+       , tcInvalidBefore    = c "invalid_before"
+       , tcInvalidHereafter = c "invalid_hereafter"
+       , tcValidContract    = c "valid_contract"
+       , tcScriptSize       = c "script_size"
+       , tcTreasuryDonation = c "treasury_donation"
+       }
+
+txColsList :: [TableColumn]
+txColsList =
+  [ txCols.tcId
+  , txCols.tcHash
+  , txCols.tcBlockId
+  , txCols.tcBlockIndex
+  , txCols.tcOutSum
+  , txCols.tcFee
+  , txCols.tcDeposit
+  , txCols.tcSize
+  , txCols.tcInvalidBefore
+  , txCols.tcInvalidHereafter
+  , txCols.tcValidContract
+  , txCols.tcScriptSize
+  , txCols.tcTreasuryDonation
+  ]
+
+data SlotLeaderCols = SlotLeaderCols
+  { slcId          :: !TableColumn
+  , slcHash        :: !TableColumn
+  , slcPoolHashId  :: !TableColumn
+  , slcDescription :: !TableColumn
+  }
+
+slotLeaderCols :: SlotLeaderCols
+slotLeaderCols =
+  let c = TableColumn slotLeaderTableDef
+  in SlotLeaderCols
+       { slcId          = c "id"
+       , slcHash        = c "hash"
+       , slcPoolHashId  = c "pool_hash_id"
+       , slcDescription = c "description"
+       }
+
+slotLeaderColsList :: [TableColumn]
+slotLeaderColsList =
+  [ slotLeaderCols.slcId
+  , slotLeaderCols.slcHash
+  , slotLeaderCols.slcPoolHashId
+  , slotLeaderCols.slcDescription
+  ]
+
+data MetaCols = MetaCols
+  { mcId          :: !TableColumn
+  , mcStartTime   :: !TableColumn
+  , mcNetworkName :: !TableColumn
+  , mcVersion     :: !TableColumn
+  }
+
+metaCols :: MetaCols
+metaCols =
+  let c = TableColumn metaTableDef
+  in MetaCols
+       { mcId          = c "id"
+       , mcStartTime   = c "start_time"
+       , mcNetworkName = c "network_name"
+       , mcVersion     = c "version"
+       }
+
+metaColsList :: [TableColumn]
+metaColsList =
+  [ metaCols.mcId
+  , metaCols.mcStartTime
+  , metaCols.mcNetworkName
+  , metaCols.mcVersion
+  ]
+
+data ReverseIndexCols = ReverseIndexCols
+  { ricId      :: !TableColumn
+  , ricBlockId :: !TableColumn
+  , ricMinIds  :: !TableColumn
+  }
+
+reverseIndexCols :: ReverseIndexCols
+reverseIndexCols =
+  let c = TableColumn reverseIndexTableDef
+  in ReverseIndexCols
+       { ricId      = c "id"
+       , ricBlockId = c "block_id"
+       , ricMinIds  = c "min_ids"
+       }
+
+reverseIndexColsList :: [TableColumn]
+reverseIndexColsList =
+  [ reverseIndexCols.ricId
+  , reverseIndexCols.ricBlockId
+  , reverseIndexCols.ricMinIds
+  ]
+
+-- ---------------------------------------------------------------------------
+-- * Per-module column-record registry
+-- ---------------------------------------------------------------------------
+
+coreColumnRecords :: [(TableDef, [TableColumn])]
+coreColumnRecords =
+  [ (blockTableDef,        blockColsList)
+  , (txTableDef,           txColsList)
+  , (slotLeaderTableDef,   slotLeaderColsList)
+  , (metaTableDef,         metaColsList)
+  , (reverseIndexTableDef, reverseIndexColsList)
+  ]
+
+-- ---------------------------------------------------------------------------
 -- * COPY encoding
 -- ---------------------------------------------------------------------------
 
@@ -418,7 +641,7 @@ encodeHex :: ByteString -> ByteString
 encodeHex bs = "\\x" <> toHex bs
   where
     toHex :: ByteString -> ByteString
-    toHex = BS8.concatMap (\w -> BS8.pack (hexByte w))
+    toHex = BS8.concatMap (BS8.pack . hexByte)
 
     hexByte :: Char -> [Char]
     hexByte c =

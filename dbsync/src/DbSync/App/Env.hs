@@ -122,6 +122,7 @@ class HasReceiverChannels env where
   getWatchdog         :: env -> Watchdog
   getLatestPoint      :: env -> IORef (Maybe CardanoPoint)
   getRollbackBoundary :: env -> TVar (Maybe BlockNo)
+  getLatestTipBlock   :: env -> TVar (Maybe BlockNo)
 
 -- ---------------------------------------------------------------------------
 -- * Environment types
@@ -296,6 +297,10 @@ data IngestEnv = IngestEnv
     -- exits 'IngestChainHistory' cleanly once it crosses, so the
     -- caller can run 'PreparingForVolatileTail' before handing off to
     -- 'FollowingChainTip'.
+  , ieLatestTipBlock          :: !(TVar (Maybe BlockNo))
+    -- ^ Server tip block number from every chainsync roll message.
+    -- The Follow flip predicate reads this directly so it does not
+    -- depend on the security parameter agreeing across two sources.
   }
 
 -- | Environment for the Follow loop ('FollowingVolatileTail' and
@@ -339,6 +344,9 @@ data FollowEnv = FollowEnv
     -- receiver. Unused by the Follow consumer (every block in
     -- Follow is volatile by definition); held only so the receiver
     -- has somewhere to publish it.
+  , feLatestTipBlock      :: !(TVar (Maybe BlockNo))
+    -- ^ Server tip block number from every chainsync roll message.
+    -- Drives the 'FollowingVolatileTail' -> 'FollowingChainTip' flip.
   , feReplayBootSlot      :: !(Maybe SlotNo)
     -- ^ Upper edge of the Follow replay window:
     -- @dbsync_sync_state.last_committed_slot@ when a ledger-enabled
@@ -393,6 +401,7 @@ mkFollowEnvFromIngest ie conn resolver writer =
     , feWriter              = writer
     , feControlConnection   = ieControlConnection ie
     , feRollbackBoundary    = ieRollbackBoundary ie
+    , feLatestTipBlock      = ieLatestTipBlock ie
     , feReplayBootSlot      = Nothing
     , feReplayStartSlot     = Nothing
     , feOffChainPoolWorker  = ieOffChainPoolWorker ie
@@ -473,6 +482,7 @@ instance HasReceiverChannels IngestEnv where
   getWatchdog         = ieWatchdog
   getLatestPoint      = ieLatestReceivedPoint
   getRollbackBoundary = ieRollbackBoundary
+  getLatestTipBlock   = ieLatestTipBlock
 
 instance HasReceiverChannels FollowEnv where
   getBlockQueue       = feBlockQueue
@@ -484,6 +494,7 @@ instance HasReceiverChannels FollowEnv where
   getWatchdog         = feWatchdog
   getLatestPoint      = feLatestReceivedPoint
   getRollbackBoundary = feRollbackBoundary
+  getLatestTipBlock   = feLatestTipBlock
 
 -- ---------------------------------------------------------------------------
 -- * HasExtractors instances (orphan — class defined in DbSync.Extractor)

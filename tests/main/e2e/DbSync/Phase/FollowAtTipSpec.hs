@@ -5,19 +5,18 @@
 -- | End-to-end tests for the at-tip behaviour of
 -- 'FollowingChainTip': the phase flip after the consumer drains the
 -- queue, forward progress after an idle period, rollback handling at
--- tip, and the per-block log cadence.
+-- tip, the per-block log cadence, and the flip under a continuous
+-- block stream where the receiver consistently has the next block
+-- staged.
 --
--- The four scenarios exercise the same orchestration code as
--- production through 'runApp' against the mock chainsync server.
--- They guard against the silent-hang failure mode where the receiver
--- doesn't wake from 'SendMsgRequestNext' once the consumer has
--- caught up.
+-- Every scenario drives the same orchestration code as production
+-- through 'runApp' against the mock chainsync server.
 module DbSync.Phase.FollowAtTipSpec (spec) where
 
 import Cardano.Prelude
 
 import qualified Data.Text as T
-import Data.IORef (IORef, newIORef, readIORef)
+import Data.IORef (IORef, atomicWriteIORef, newIORef, readIORef)
 import qualified Ouroboros.Network.Block as Network
 
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
@@ -147,15 +146,49 @@ spec = describe "FollowingChainTip at-tip behaviour" $ do
       -- The phase didn't oscillate: same count before and after.
       phaseAfter `shouldBe` phaseBefore
 
+  it "flips to FollowingChainTip while a continuous block stream keeps the receiver ahead" $
+    withMockNode conwayConfigDir $ \mn ->
+      withTempDir "dbsync-test-tip-stream" $ \ledgerDir -> do
+        logsRef <- newIORef []
+        let tracer = mkTestTracer logsRef :: AppTracer
+
+        -- Ingest seed. 'runApp' drives Ingest -> Prep -> Follow.
+        _ <- forgeAndPushBlocks mn 150
+
+        withAppSession tracer defaultTestProfile mn ledgerDir $ \_app -> do
+          waitForSyncComplete 90
+
+          -- Continuous forge stream, started before the flip can be
+          -- observed. The cadence is tight enough that the receive
+          -- queue rarely empties between the consumer's block
+          -- commits.
+          stopVar <- newIORef False
+          let forgeLoop = do
+                stop <- readIORef stopVar
+                unless stop $ do
+                  _ <- forgeAndPushBlocks mn 1
+                  threadDelay 5_000
+                  forgeLoop
+          forgeAsync <- async forgeLoop
+          link forgeAsync
+
+          let stopForging = do
+                atomicWriteIORef stopVar True
+                void (waitCatch forgeAsync)
+
+          waitForLogMatch logsRef
+            "flip to FollowingChainTip under continuous forge stream"
+            isFlipToChainTip
+            60
+            `finally` stopForging
+
 -- ---------------------------------------------------------------------------
 -- * Shared at-tip bracket
 -- ---------------------------------------------------------------------------
 
 -- | Drive Ingest → Prep → Follow, wait for the first
 -- 'FollowingVolatileTail -> FollowingChainTip' transition, then hand
--- control to @body@. Every scenario in this spec needs the same
--- preamble; centralising it keeps each @it@ focused on the
--- scenario-specific assertions.
+-- control to @body@.
 runAtTipScenario :: (MockNode -> IORef [LogMsg] -> IO ()) -> IO ()
 runAtTipScenario body =
   withMockNode conwayConfigDir $ \mn ->

@@ -893,6 +893,7 @@ runBootFollowRestart
           receiverStats    <- newReceiverStats
           latestPointRef   <- newIORef Nothing
           rollbackBoundary <- newTVarIO Nothing
+          latestTipBlock   <- newTVarIO Nothing
 
           let mLedgerQueue = case hasLedgerEnv of
                 LedgerEnabled lenv -> Just (leLedgerQueue lenv)
@@ -913,6 +914,7 @@ runBootFollowRestart
                   , feWriter              = writer
                   , feControlConnection   = consumerCtrlConn
                   , feRollbackBoundary    = rollbackBoundary
+                  , feLatestTipBlock      = latestTipBlock
                   , feReplayBootSlot      = mReplayBoot
                   , feReplayStartSlot     = mReplayStart
                   , feOffChainPoolWorker  = mPoolWorker

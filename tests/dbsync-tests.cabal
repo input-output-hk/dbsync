@@ -164,6 +164,7 @@ test-suite dbsync-test
     DbSync.App.BootSpec
     DbSync.Phase.CurrentSpec
     DbSync.Phase.Following.BufferedDiffSpec
+    DbSync.Phase.Following.FlipPredicateSpec
     DbSync.Phase.Following.RollbackSpec
     DbSync.Phase.Following.RunSpec
     DbSync.Phase.FollowAtTipSpec

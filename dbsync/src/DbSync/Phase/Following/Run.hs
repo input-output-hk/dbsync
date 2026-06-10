@@ -1,7 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE NumericUnderscores #-}
-{-# LANGUAGE PatternSynonyms #-}
 
 -- | The Follow loop: per-block INSERT against PG with rollback
 -- support. Drives both the 'FollowingVolatileTail' and
@@ -17,6 +16,7 @@
 -- so a quiet chain doesn't look like a stalled app at Info level.
 module DbSync.Phase.Following.Run
   ( run
+  , shouldFlipToTip
   ) where
 
 import Cardano.Prelude
@@ -34,9 +34,8 @@ import qualified Hasql.Pipeline as Pipeline
 import qualified Hasql.Session as Sess
 
 
-import Ouroboros.Consensus.Block (blockSlot)
+import Ouroboros.Consensus.Block (blockNo, blockSlot)
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
-import Ouroboros.Network.Block (pattern BlockPoint)
 
 import DbSync.AppM (FollowM, runAppM)
 import DbSync.Db.Schema.EpochSyncStats (EpochSyncStats (..))
@@ -247,16 +246,13 @@ processForward progressRef replayRef cardanoBlock = do
     advanceAndLogReplay tracer replayRef feReplayStartSlot feReplayBootSlot slot
   case feReplayBootSlot of
     Just bootSlot | slot <= bootSlot -> do
-      -- Replay window: the row is already in PG and the ledger
-      -- worker is re-applying the block via 'leLedgerQueue'. Skip
-      -- the INSERT + sync_state advance; 'maybeFlipToTip' runs
-      -- unchanged (it gates on the queue + latest received point,
-      -- not on PG writes).
+      -- Replay window: PG already has the row and the ledger worker
+      -- re-applies the block. Skip the INSERT + sync_state advance.
       liftIO $ setConsumerNote feWatchdog "follow: replay-skip"
       -- The worker still enqueues a per-block ApplyResult for the
       -- replayed block; drain and discard so the queue stays empty.
       liftIO $ void $ takeBlockLedgerData feHasLedgerEnv
-      maybeFlipToTip slot
+      maybeFlipToTip slot (blockNo cardanoBlock)
     _ -> do
       liftIO $ void $ atomically $ observeBlockSTM feStateQueryVar cardanoBlock
       sd <- getSlotDetails slot
@@ -291,7 +287,7 @@ processForward progressRef replayRef cardanoBlock = do
         let flushAndAdvance =
               writes *> void (Pipeline.statement triple writeSyncStateSlotStmt)
         runFollowBlockTx feHasqlConnection feWatchdog flushAndAdvance
-      maybeFlipToTip (blkSlotNo genBlock)
+      maybeFlipToTip (blkSlotNo genBlock) (blkBlockNo genBlock)
       maybeLogProgress progressRef now genBlock
 
 -- | Drain the ledger worker's next boundary 'ApplyResult' and run
@@ -381,29 +377,45 @@ rollbackQuiet conn =
   void (Conn.use conn (Sess.script rollbackSql))
     `catch` \(_ :: SomeException) -> pure ()
 
+-- | Steady-state lag at chain tip: the receiver stages the next
+-- block while the consumer applies the current one.
+tipFollowMargin :: Word64
+tipFollowMargin = 1
+
+-- | Pure predicate driving the 'FollowingVolatileTail' ->
+-- 'FollowingChainTip' transition. Lifted out of 'maybeFlipToTip' so
+-- the wiring can be unit-tested directly.
+--
+-- 'Nothing' means the receiver has not yet observed a server tip
+-- (no roll message has arrived); there is nothing to flip against.
+shouldFlipToTip
+  :: Bool          -- ^ inside the replay window
+  -> SyncPhase     -- ^ current phase
+  -> Maybe BlockNo -- ^ server tip block number
+  -> BlockNo       -- ^ just-applied block number
+  -> Bool
+shouldFlipToTip inReplay phase mTip (BlockNo applied) =
+  not inReplay
+    && phase == FollowingVolatileTail
+    && case mTip of
+         Just (BlockNo t) -> applied + tipFollowMargin >= t
+         Nothing          -> False
+
 -- | Flip the phase from 'FollowingVolatileTail' to
--- 'FollowingChainTip' once the consumer has caught the receiver's
--- latest received slot and the block queue is empty. One-way:
--- a subsequent 'MsgRollback' is the only path back.
+-- 'FollowingChainTip' once 'shouldFlipToTip' agrees. One-way: a
+-- subsequent 'MsgRollback' is the only path back.
 --
 -- Suppressed inside the replay window: the skip-only consumer
 -- outpaces the receiver, so the predicate fires spuriously.
-maybeFlipToTip :: SlotNo -> FollowM ()
-maybeFlipToTip appliedSlot = do
-  FollowEnv{feCore, feBlockQueue, feLatestReceivedPoint, feReplayBootSlot} <- ask
+maybeFlipToTip :: SlotNo -> BlockNo -> FollowM ()
+maybeFlipToTip appliedSlot appliedBlock = do
+  FollowEnv{feCore, feLatestTipBlock, feReplayBootSlot} <- ask
   let phaseRef = ceCurrentPhase feCore
       inReplay = maybe False (appliedSlot <=) feReplayBootSlot
-  unless inReplay $ do
-    phase <- liftIO $ readCurrentPhase phaseRef
-    when (phase == FollowingVolatileTail) $ do
-      qLen <- liftIO $ atomically (STM.lengthTBQueue feBlockQueue)
-      when (qLen == 0) $ do
-        mLatest <- liftIO $ readIORef feLatestReceivedPoint
-        case mLatest of
-          Just (BlockPoint latestSlot _)
-            | appliedSlot >= latestSlot ->
-                setCurrentPhase phaseRef FollowingChainTip
-          _ -> pure ()
+  phase <- liftIO $ readCurrentPhase phaseRef
+  mTip  <- liftIO $ STM.readTVarIO feLatestTipBlock
+  when (shouldFlipToTip inReplay phase mTip appliedBlock) $
+    setCurrentPhase phaseRef FollowingChainTip
 
 -- | Write the @epoch_sync_stats@ row for the just-finished epoch.
 -- Block count and elapsed window come from the pre-block

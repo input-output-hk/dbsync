@@ -174,6 +174,7 @@ connectToNode iomgr topLevelCfg networkMagic socketPath intersect = do
   watchdog          <- asks getWatchdog
   latestPointRef    <- asks getLatestPoint
   rollbackBoundary  <- asks getRollbackBoundary
+  latestTipBlock    <- asks getLatestTipBlock
   liftIO $ do
     traceWith tracer $ LogMsg Info "Connection" ("Connecting to node via " <> toS socketPath) Nothing
     void $
@@ -183,7 +184,7 @@ connectToNode iomgr topLevelCfg networkMagic socketPath intersect = do
         (supportedNodeToClientVersions (Proxy @(CardanoBlock StandardCrypto)))
         (subscriptionTracers tracer)
         subscriptionParams
-        (nodeProtocols tracer codecConfig blockQueue mLedgerQueue receiverStats watchdog stateQueryVar latestPointRef rollbackBoundary kBlocks intersect)
+        (nodeProtocols tracer codecConfig blockQueue mLedgerQueue receiverStats watchdog stateQueryVar latestPointRef rollbackBoundary latestTipBlock kBlocks intersect)
   where
     codecConfig :: CodecConfig (CardanoBlock StandardCrypto)
     codecConfig = configCodec topLevelCfg
@@ -268,12 +269,13 @@ nodeProtocols
   -> StateQueryVar
   -> IORef (Maybe CardanoPoint)
   -> TVar (Maybe BlockNo)
+  -> TVar (Maybe BlockNo)
   -> Word64
   -> IntersectionRequirement
   -> Network.NodeToClientVersion
   -> BlockNodeToClientVersion (CardanoBlock StandardCrypto)
   -> NodeToClientProtocols 'Mux.InitiatorMode LocalAddress BSL.ByteString IO () Void
-nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats watchdog stateQueryVar latestPointRef rollbackBoundary kBlocks intersect version blockVersion =
+nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats watchdog stateQueryVar latestPointRef rollbackBoundary latestTipBlock kBlocks intersect version blockVersion =
   NodeToClientProtocols
     { localChainSyncProtocol = chainSyncProtocol
     , localTxSubmissionProtocol = dummyTxSubmit
@@ -292,7 +294,7 @@ nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats watchd
             (cChainSyncCodec codecs)
             channel
             ( chainSyncClientPeerPipelined $
-                blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latestPointRef rollbackBoundary kBlocks intersect
+                blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latestPointRef rollbackBoundary latestTipBlock kBlocks intersect
             )
         pure ((), Nothing)
 
@@ -390,6 +392,7 @@ blockFetchClient
   -> Watchdog
   -> IORef (Maybe CardanoPoint)                       -- ^ Latest received point, updated on each forward / rollback
   -> TVar (Maybe BlockNo)                             -- ^ Rollback boundary, updated on every tip observation
+  -> TVar (Maybe BlockNo)                             -- ^ Latest server tip block number, updated on every tip observation
   -> Word64                                           -- ^ Protocol security parameter @k@
   -> IntersectionRequirement                          -- ^ Boot-time fallback intersection
   -> ChainSyncClientPipelined
@@ -398,7 +401,7 @@ blockFetchClient
        (Tip (CardanoBlock StandardCrypto))
        IO
        ()
-blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latestPointRef rollbackBoundary kBlocks intersect =
+blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latestPointRef rollbackBoundary latestTipBlock kBlocks intersect =
   ChainSyncClientPipelined $ do
     -- Per-session mutable bookkeeping. Bundled so callbacks pass one
     -- record instead of N independent IORefs.
@@ -524,7 +527,7 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
             -- The rollback boundary moves with the node tip; publish
             -- it before enqueuing so a slow consumer never sees a
             -- block whose ancestor has already passed the boundary.
-            publishRollbackBoundary tip
+            publishTipMarkers tip
             let msg = MsgForward blk
             enqueueWithBackpressure receiverStats blockQueue msg
             -- Fan-out to the ledger worker (when enabled). The
@@ -562,7 +565,7 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
                       "Rollback to " <> show point
             traceWith appTracer $ LogMsg sev "ChainSync" logText Nothing
             atomicWriteIORef latestPointRef (Just point)
-            publishRollbackBoundary tip
+            publishTipMarkers tip
             unless isConfirmingRollback $ do
               let msg = MsgRollback point
               atomically $ writeTBQueue blockQueue msg
@@ -571,17 +574,23 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
             pure $ goTip ss mkDecision n Origin tip
         }
 
-    -- Compute @tipBlock − k@ from a server tip and publish it on the
-    -- shared boundary TVar. 'Nothing' while the chain is still shorter
-    -- than @k@ blocks — everything is volatile in that case.
-    publishRollbackBoundary :: Tip (CardanoBlock StandardCrypto) -> IO ()
-    publishRollbackBoundary tip = do
-      let boundary = case getTipBlockNo tip of
+    -- Publish both the server's tip block number and the rollback
+    -- boundary (@tipBlock − k@) on every tip observation. 'Nothing'
+    -- on the boundary while the chain is still shorter than @k@
+    -- blocks — everything is volatile in that case.
+    publishTipMarkers :: Tip (CardanoBlock StandardCrypto) -> IO ()
+    publishTipMarkers tip = do
+      let mTip = case getTipBlockNo tip of
             Origin -> Nothing
-            At (BlockNo n)
+            At bn  -> Just bn
+          boundary = case mTip of
+            Just (BlockNo n)
               | n >= kBlocks -> Just (BlockNo (n - kBlocks))
               | otherwise    -> Nothing
-      atomically $ writeTVar rollbackBoundary boundary
+            Nothing -> Nothing
+      atomically $ do
+        writeTVar latestTipBlock mTip
+        writeTVar rollbackBoundary boundary
 
 -- | Enqueue a 'ChainSyncMsg' on the consumer's block queue, counting
 -- the moment-of-arrival fullness so 'ReceiverStats' can distinguish

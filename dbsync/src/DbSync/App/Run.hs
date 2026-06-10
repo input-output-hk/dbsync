@@ -523,6 +523,7 @@ runIngestThenFollow
       if consumedByOn then Just <$> newConsumedByBufferRef else pure Nothing
     latestPointRef   <- newIORef Nothing
     rollbackBoundary <- newTVarIO Nothing
+    latestTipBlock   <- newTVarIO Nothing
 
     let resolver = mkIngestResolver extractStateRef dedupStores addrBuffer utxoStore mConsumedByBuf
         writer   = IngestWriter.mkWriter loaderStream
@@ -554,6 +555,7 @@ runIngestThenFollow
           , iePulse                   = pulse
           , ieLatestReceivedPoint     = latestPointRef
           , ieRollbackBoundary        = rollbackBoundary
+          , ieLatestTipBlock          = latestTipBlock
           }
 
     logInfoIO tracer "App" "Starting block ingestion..."

@@ -89,6 +89,7 @@ import qualified DbSync.Db.Statement.RoundTripSpec as DbStatementRoundTripSpec
 import qualified DbSync.Db.Statement.SlotLeaderSpec as DbStatementSlotLeaderSpec
 import qualified DbSync.Db.Statement.SyncStateSpec as DbStatementSyncStateSpec
 import qualified DbSync.Phase.Following.BufferedDiffSpec as PhaseFollowBufferedDiffSpec
+import qualified DbSync.Phase.Following.FlipPredicateSpec as PhaseFollowFlipPredicateSpec
 import qualified DbSync.Phase.Following.RollbackSpec as PhaseRollbackSpec
 import qualified DbSync.Phase.Following.RunSpec as PhaseFollowRunSpec
 import qualified DbSync.Phase.Preparing.RunSpec as PhasePrepSpec
@@ -163,6 +164,7 @@ main = hspec $ do
     LedgerWorkerSpec.spec
     AppBootSpec.spec
     PhaseCurrentSpec.spec
+    PhaseFollowFlipPredicateSpec.spec
     SchemaAdaPotsSpec.spec
     SchemaAddressSpec.spec
     SchemaColumnsConsistencySpec.spec

@@ -85,7 +85,7 @@ plutusDataList :: forall era. Era era => Data era
 plutusDataList = Data $ Plutus.List []
 
 alwaysMintPlutusBinary :: PlutusBinary
-alwaysMintPlutusBinary = PlutusBinary $ Plutus.alwaysFailingNAryFunction 1
+alwaysMintPlutusBinary = PlutusBinary $ Plutus.alwaysSucceedingNAryFunction 1
 
 alwaysMintScript :: AlonzoEraScript era => Script era
 alwaysMintScript = mkPlutusV1ScriptEra alwaysMintPlutusBinary

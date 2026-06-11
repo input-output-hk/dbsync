@@ -442,8 +442,8 @@ mkMultiAssetsScriptTx inputIx colInputIx outputIx refInput minted succeeds fees 
           (StrictSeq.fromList outputs)
           SNothing
           (Coin fees)
+          minted
           mempty
-          mempty -- TODO[sgillespie]: minted?
           (Withdrawals mempty)
           (Coin 0)
   where

@@ -207,16 +207,19 @@ handleRollback env wd p = do
       let SlotNo targetSlot = pointSlotNo p
       runAppM env (writePendingRollbackSlot targetSlot)
       traceWith (leTracer env) $ LogMsg Error "LedgerWorker"
-        ( "rollback target " <> show p
-            <> " is past the in-memory buffer; marker written to "
-            <> "dbsync_sync_state.pending_rollback_slot = "
+        ( "chain rollback to " <> show p
+            <> " crosses the k-safe rollback boundary "
+            <> "(target precedes the oldest state in the in-memory ledger buffer). "
+            <> "Recorded in dbsync_sync_state.pending_rollback_slot = "
             <> show targetSlot
-            <> ". Restarting dbsync will replay the rollback from a "
-            <> "disk snapshot."
+            <> "; the next dbsync restart will replay the rollback from a disk snapshot."
         ) Nothing
       throwLedger $
-        "rollback to slot " <> show targetSlot
-          <> " is past the in-memory buffer; recovery deferred to next boot"
+        "chain rollback to slot " <> show targetSlot
+          <> " crosses the k-safe rollback boundary "
+          <> "(target precedes the oldest state in the in-memory ledger buffer); "
+          <> "recorded in dbsync_sync_state.pending_rollback_slot; "
+          <> "the next dbsync restart will replay it from a disk snapshot"
 
 -- | Generic ChainSyncMsg dispatch loop. Production wires real
 -- handlers ('applyForward', 'handleRollback') around this; tests

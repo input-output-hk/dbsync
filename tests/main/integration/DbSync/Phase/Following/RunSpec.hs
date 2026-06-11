@@ -439,6 +439,120 @@ spec = describe "DbSync.Phase.Following.Run" $
         n <- countOf txCborTableDef
         n `shouldBe` "0"
 
+    describe "block with a treasury donation" $
+      it "tx.treasury_donation round-trips" $ do
+        runFollow [blockWithDonation]
+        result <- T.strip <$> queryTestDb
+          ("SELECT treasury_donation FROM " <> tdName txTableDef <> ";")
+        result `shouldBe` "250000000"
+
+    describe "four stake reg/dereg txs in one block" $
+      it "writes 2 stake_registration, 2 stake_deregistration, 2 stake_address rows" $ do
+        runFollow [blockWithFourRegistrations]
+        srN <- countOf stakeRegistrationTableDef
+        sdN <- countOf stakeDeregistrationTableDef
+        saN <- countOf stakeAddressTableDef
+        srN `shouldBe` "2"
+        sdN `shouldBe` "2"
+        saN `shouldBe` "2"
+
+    describe "multiple reg/dereg certs in one tx" $
+      it "writes 2 stake_registration, 1 stake_deregistration, 2 stake_address rows" $ do
+        runFollow [blockWithMultiRegCerts]
+        srN <- countOf stakeRegistrationTableDef
+        sdN <- countOf stakeDeregistrationTableDef
+        saN <- countOf stakeAddressTableDef
+        srN `shouldBe` "2"
+        sdN `shouldBe` "1"
+        saN `shouldBe` "2"
+
+    describe "tx_out with a pointer-style address" $
+      it "writes a tx_out with NULL stake_address_id and no stake_address row" $ do
+        runFollow [blockWithPointerOut]
+        n  <- countOf stakeAddressTableDef
+        sid <- T.strip <$> queryTestDb
+          ( "SELECT coalesce(stake_address_id::text, 'NULL') FROM "
+              <> tdName txOutTableDef <> ";"
+          )
+        n   `shouldBe` "0"
+        sid `shouldBe` "NULL"
+
+    describe "metadata extractor disabled" $
+      it "writes no tx_metadata rows for a block carrying aux data" $ do
+        runFollowWith extractorsNoMetadata [blockWithMetadata]
+        n <- countOf txMetadataTableDef
+        n `shouldBe` "0"
+
+    describe "two payment txs chained in one block" $ do
+      it "writes 2 txs, 1 tx_in, and 2 tx_outs" $ do
+        runFollow [blockWithChainedTxs]
+        txN  <- countOf txTableDef
+        inN  <- countOf txInTableDef
+        outN <- countOf txOutTableDef
+        txN  `shouldBe` "2"
+        inN  `shouldBe` "1"
+        outN `shouldBe` "2"
+
+      it "tx_in.tx_out_id resolves to tx1's output within the same block" $ do
+        runFollow [blockWithChainedTxs]
+        result <- T.strip <$> queryTestDb
+          ( "SELECT tx_in_id, tx_out_id, tx_out_index FROM "
+              <> tdName txInTableDef <> ";"
+          )
+        -- tx_in_id = tx2 (id=2); tx_out_id = tx1's first output (id=1); index = 0
+        result `shouldBe` "2|1|0"
+
+    describe "per-era block ingestion" $ do
+      it "Byron block lands with proto_major 1" $ do
+        runFollow [byronEmptyBlock]
+        result <- T.strip <$> queryTestDb
+          ("SELECT proto_major FROM " <> tdName blockTableDef <> ";")
+        result `shouldBe` "1"
+
+      it "Shelley block lands with proto_major 2" $ do
+        runFollow [shelleyEmptyBlock]
+        result <- T.strip <$> queryTestDb
+          ("SELECT proto_major FROM " <> tdName blockTableDef <> ";")
+        result `shouldBe` "2"
+
+      it "Allegra block lands with proto_major 3" $ do
+        runFollow [allegraEmptyBlock]
+        result <- T.strip <$> queryTestDb
+          ("SELECT proto_major FROM " <> tdName blockTableDef <> ";")
+        result `shouldBe` "3"
+
+      it "Mary block lands with proto_major 4" $ do
+        runFollow [maryEmptyBlock]
+        result <- T.strip <$> queryTestDb
+          ("SELECT proto_major FROM " <> tdName blockTableDef <> ";")
+        result `shouldBe` "4"
+
+      it "Alonzo block lands with proto_major 6" $ do
+        runFollow [alonzoEmptyBlock]
+        result <- T.strip <$> queryTestDb
+          ("SELECT proto_major FROM " <> tdName blockTableDef <> ";")
+        result `shouldBe` "6"
+
+      it "Babbage block lands with proto_major 8" $ do
+        runFollow [babbageEmptyBlock]
+        result <- T.strip <$> queryTestDb
+          ("SELECT proto_major FROM " <> tdName blockTableDef <> ";")
+        result `shouldBe` "8"
+
+      it "Alonzo phase-2 failure marks tx valid_contract=false" $ do
+        runFollow [alonzoPhase2FailBlock]
+        result <- T.strip <$> queryTestDb
+          ("SELECT valid_contract FROM " <> tdName txTableDef <> ";")
+        result `shouldBe` "f"
+
+      it "Allegra tx_invalid_before/hereafter columns round-trip" $ do
+        runFollow [allegraTxWithBounds]
+        result <- T.strip <$> queryTestDb
+          ( "SELECT invalid_before, invalid_hereafter FROM "
+              <> tdName txTableDef <> ";"
+          )
+        result `shouldBe` "100|200"
+
 -- | Bare row-count via @psql@. Returns the count as 'Text' so callers
 -- compare directly against the numeric literals they already use.
 countOf :: TableDef -> IO Text
@@ -449,8 +563,8 @@ countOf td = T.strip <$>
 -- Runner
 -- ---------------------------------------------------------------------------
 
-runFollow :: [GenericBlock] -> IO ()
-runFollow blocks =
+runFollowWith :: [ExtractorDef] -> [GenericBlock] -> IO ()
+runFollowWith ex blocks =
   withTestConnection $ \conn -> do
     resolver <- mkFollowResolver conn
     let writer = FollowingWriter.mkWriter conn
@@ -459,10 +573,24 @@ runFollow blocks =
             Mainnet
             resolver
             writer
-            extractors
+            ex
             (\_ -> pure emptyBlockLedgerData)
             FollowingChainTip
     for_ blocks $ \blk -> runReaderT (processBlock blk) env
+
+runFollow :: [GenericBlock] -> IO ()
+runFollow = runFollowWith extractors
+
+-- | Extractor list without metadata, for the metadata-disabled spec.
+extractorsNoMetadata :: [ExtractorDef]
+extractorsNoMetadata =
+  [ coreExtractor
+  , utxoExtractor
+  , multiAssetExtractor
+  , stakeDelegationExtractor
+  , poolExtractor
+  , cborExtractor
+  ]
 
 -- ---------------------------------------------------------------------------
 -- Fixtures (same shape as Db.LoaderSpec)
@@ -497,6 +625,39 @@ emptyBlock2 = emptyBlock
   { blkHash    = BS.replicate 32 1
   , blkBlockNo = BlockNo 2
   , blkSlotNo  = SlotNo 120
+  }
+
+byronEmptyBlock :: GenericBlock
+byronEmptyBlock = emptyBlock { blkEra = Byron, blkProtoMajor = 1 }
+
+shelleyEmptyBlock :: GenericBlock
+shelleyEmptyBlock = emptyBlock { blkEra = Shelley, blkProtoMajor = 2 }
+
+allegraEmptyBlock :: GenericBlock
+allegraEmptyBlock = emptyBlock { blkEra = Allegra, blkProtoMajor = 3 }
+
+maryEmptyBlock :: GenericBlock
+maryEmptyBlock = emptyBlock { blkEra = Mary, blkProtoMajor = 4 }
+
+alonzoEmptyBlock :: GenericBlock
+alonzoEmptyBlock = emptyBlock { blkEra = Alonzo, blkProtoMajor = 6 }
+
+babbageEmptyBlock :: GenericBlock
+babbageEmptyBlock = emptyBlock { blkEra = Babbage, blkProtoMajor = 8 }
+
+alonzoPhase2FailBlock :: GenericBlock
+alonzoPhase2FailBlock = alonzoEmptyBlock
+  { blkTxs = [sampleTx { txValidContract = False }]
+  }
+
+allegraTxWithBounds :: GenericBlock
+allegraTxWithBounds = allegraEmptyBlock
+  { blkTxs =
+      [ sampleTx
+          { txInvalidBefore    = Just 100
+          , txInvalidHereafter = Just 200
+          }
+      ]
   }
 
 blockWith1Tx :: GenericBlock
@@ -749,4 +910,92 @@ blockWithDelegation = emptyBlock
 blockWithCbor :: GenericBlock
 blockWithCbor = emptyBlock
   { blkTxs = [sampleTx { txCborRaw = Just "tx-cbor-payload" }]
+  }
+
+-- | A tx with a non-zero treasury donation.
+blockWithDonation :: GenericBlock
+blockWithDonation = emptyBlock
+  { blkTxs = [sampleTx { txTreasuryDonation = 250000000 }]
+  }
+
+-- | A second 28-byte stake credential, distinct from 'sampleStakeCred'.
+sampleStakeCredB :: ByteString
+sampleStakeCredB = "stake_cred_28b_B" <> BS.replicate (28 - 16) 0
+
+-- | Four reg/dereg txs in one block: reg A, dereg A, reg B, dereg B.
+blockWithFourRegistrations :: GenericBlock
+blockWithFourRegistrations = emptyBlock
+  { blkTxs =
+      [ sampleTx
+          { txHash = BS.replicate 32 0xaa
+          , txCertificates =
+              [ GenericTxCertificate 0 (CertStakeRegistration sampleStakeCred Nothing) ]
+          }
+      , sampleTx
+          { txHash = BS.replicate 32 0xab
+          , txCertificates =
+              [ GenericTxCertificate 0 (CertStakeDeregistration sampleStakeCred) ]
+          }
+      , sampleTx
+          { txHash = BS.replicate 32 0xac
+          , txCertificates =
+              [ GenericTxCertificate 0 (CertStakeRegistration sampleStakeCredB Nothing) ]
+          }
+      , sampleTx
+          { txHash = BS.replicate 32 0xad
+          , txCertificates =
+              [ GenericTxCertificate 0 (CertStakeDeregistration sampleStakeCredB) ]
+          }
+      ]
+  }
+
+-- | One tx carrying three reg/dereg certs: reg A, dereg A, reg B.
+blockWithMultiRegCerts :: GenericBlock
+blockWithMultiRegCerts = emptyBlock
+  { blkTxs =
+      [ sampleTx
+          { txCertificates =
+              [ GenericTxCertificate 0 (CertStakeRegistration sampleStakeCred  Nothing)
+              , GenericTxCertificate 1 (CertStakeDeregistration sampleStakeCred)
+              , GenericTxCertificate 2 (CertStakeRegistration sampleStakeCredB Nothing)
+              ]
+          }
+      ]
+  }
+
+-- | Pointer-style raw address. Header 0x40 + 28-byte payment cred + a
+-- minimal 3-byte pointer triple. 'extractStakeCred' returns 'Nothing'
+-- for any non-base header, so the stake_address pipeline writes no row.
+samplePointerAddrRaw :: ByteString
+samplePointerAddrRaw =
+  BS.pack [0x40]
+    <> BS.replicate 28 0x22
+    <> BS.pack [0x00, 0x00, 0x00]
+
+blockWithPointerOut :: GenericBlock
+blockWithPointerOut = emptyBlock
+  { blkTxs =
+      [ sampleTx
+          { txOutputs =
+              [ (sampleOut 0 5000000) { txOutAddressRaw = samplePointerAddrRaw } ]
+          }
+      ]
+  }
+
+-- | Two payment txs chained in one block: tx1 produces an output,
+-- tx2 spends it. Exercises in-block tx_out resolution.
+blockWithChainedTxs :: GenericBlock
+blockWithChainedTxs = emptyBlock
+  { blkTxs =
+      [ sampleTx
+          { txHash    = BS.replicate 32 0xaa
+          , txOutputs = [sampleOut 0 4000000]
+          }
+      , sampleTx
+          { txHash       = BS.replicate 32 0xbb
+          , txBlockIndex = 1
+          , txInputs     = [GenericTxIn (BS.replicate 32 0xaa) 0]
+          , txOutputs    = [sampleOut 0 3500000]
+          }
+      ]
   }

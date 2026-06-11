@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- | End-to-end coverage of the boundary-triggered writers under
@@ -22,8 +23,11 @@ module DbSync.Phase.FollowEpochBoundarySpec (spec) where
 import Cardano.Prelude
 
 import qualified Data.Text as T
+import qualified Ouroboros.Network.Block as Network
 
 import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe, shouldSatisfy)
+
+import Ouroboros.Network.Block (pattern BlockPoint)
 
 import DbSync.Db.Schema.AdaPots (adaPotsTableDef)
 import DbSync.Db.Schema.Core (blockTableDef)
@@ -46,7 +50,13 @@ import DbSync.Test.E2E
   , withAppSession
   )
 import DbSync.Test.Helpers (waitFor)
-import DbSync.Test.MockNode (forgeAndPushBlocks, withMockNode)
+import DbSync.Test.MockNode
+  ( currentTip
+  , forgeAndPushBlocks
+  , forgeAndPushUntilNextEpoch
+  , rollbackMockNode
+  , withMockNode
+  )
 import DbSync.Test.PgAssertions (countRows)
 
 -- ---------------------------------------------------------------------------
@@ -54,7 +64,7 @@ import DbSync.Test.PgAssertions (countRows)
 -- ---------------------------------------------------------------------------
 
 spec :: Spec
-spec = describe "Follow boundary writes" $
+spec = describe "Follow boundary writes" $ do
   it "lands ada_pots, epoch_param, epoch_state, cost_model when an epoch crosses at tip" $
     withMockNode conwayConfigDir $ \mn ->
       withTempDir "dbsync-test-follow-boundary" $ \ledgerDir -> do
@@ -120,3 +130,100 @@ spec = describe "Follow boundary writes" $
                 <> " ORDER BY id DESC LIMIT 1"
             )
           mostRecentCommitteeId `shouldBe` ""
+
+  it "tolerates a within-window rollback after crossing the boundary without disturbing ada_pots" $
+    withMockNode conwayConfigDir $ \mn ->
+      withTempDir "dbsync-test-follow-boundary-rollback" $ \ledgerDir -> do
+        tracer <- quietTracer
+        _ <- forgeAndPushBlocks mn 250
+        withAppSession tracer ledgerEnabledTestProfile mn ledgerDir $ \_ -> do
+          waitForSyncComplete 120
+
+          baselineAdaPots <- countRows (tdName adaPotsTableDef)
+          baselineEpochParam <- countRows (tdName epochParamTableDef)
+
+          -- Cross the next boundary in Follow.
+          _ <- forgeAndPushUntilNextEpoch mn
+          waitFor
+            (tdName adaPotsTableDef <> " count grows after boundary")
+            (do n <- countRows (tdName adaPotsTableDef); pure (n > baselineAdaPots))
+            60
+
+          afterBoundaryAdaPots <- countRows (tdName adaPotsTableDef)
+          afterBoundaryEpochParam <- countRows (tdName epochParamTableDef)
+          (afterBoundaryEpochParam - baselineEpochParam) `shouldSatisfy` (>= 1)
+          postBoundaryBlocks <- countRows (tdName blockTableDef)
+
+          -- Capture the post-boundary tip and forge a few more blocks
+          -- on top, well within the ledger's in-memory rollback window.
+          tipAfterBoundary <- currentTip mn
+          forkPoint <- case tipAfterBoundary of
+            Network.TipGenesis ->
+              panic "rollback scenario: server tip at genesis (no blocks)"
+            Network.Tip slot hash _bn ->
+              pure (BlockPoint slot hash)
+
+          forgeAndWaitForBlocks mn 5 (postBoundaryBlocks + 5) 60
+
+          -- Roll back the five extra blocks within the new epoch. The
+          -- boundary row must survive the rewind without being undone
+          -- or duplicated.
+          rollbackMockNode mn forkPoint
+          waitFor (tdName blockTableDef <> " returns to post-boundary value")
+            (do n <- countRows (tdName blockTableDef); pure (n == postBoundaryBlocks))
+            60
+
+          afterRollbackAdaPots <- countRows (tdName adaPotsTableDef)
+          afterRollbackEpochParam <- countRows (tdName epochParamTableDef)
+          afterRollbackAdaPots `shouldBe` afterBoundaryAdaPots
+          afterRollbackEpochParam `shouldBe` afterBoundaryEpochParam
+
+          -- Re-forge within the same epoch; boundary writes must not
+          -- duplicate.
+          forgeAndWaitForBlocks mn 10 (postBoundaryBlocks + 10) 60
+
+          finalAdaPots <- countRows (tdName adaPotsTableDef)
+          finalEpochParam <- countRows (tdName epochParamTableDef)
+          finalAdaPots `shouldBe` afterBoundaryAdaPots
+          finalEpochParam `shouldBe` afterBoundaryEpochParam
+
+  it "epoch_current.blk_count grows live within the unfinalized epoch" $
+    withMockNode conwayConfigDir $ \mn ->
+      withTempDir "dbsync-test-epoch-current-live" $ \ledgerDir -> do
+        tracer <- quietTracer
+        _ <- forgeAndPushBlocks mn 250
+        withAppSession tracer ledgerEnabledTestProfile mn ledgerDir $ \_ -> do
+          waitForSyncComplete 120
+
+          baselineBlocks <- countRows (tdName blockTableDef)
+
+          -- Capture the current epoch before forging more blocks so
+          -- the assertion can skip if a boundary lands in between.
+          let currentEpochQuery =
+                "SELECT epoch_no FROM " <> tdName blockTableDef
+                  <> " WHERE epoch_no IS NOT NULL ORDER BY id DESC LIMIT 1"
+              blkCountQuery =
+                "SELECT blk_count FROM epoch_current ORDER BY no DESC LIMIT 1"
+
+          epoch0 <- T.strip <$> queryTestDb currentEpochQuery
+          blkCount0 <- T.strip <$> queryTestDb blkCountQuery
+
+          -- Forge a small window of blocks well inside the current
+          -- epoch (Conway test config has ~100 blocks per epoch).
+          forgeAndWaitForBlocks mn 5 (baselineBlocks + 5) 30
+          epoch1 <- T.strip <$> queryTestDb currentEpochQuery
+          blkCount1 <- T.strip <$> queryTestDb blkCountQuery
+
+          forgeAndWaitForBlocks mn 5 (baselineBlocks + 10) 30
+          epoch2 <- T.strip <$> queryTestDb currentEpochQuery
+          blkCount2 <- T.strip <$> queryTestDb blkCountQuery
+
+          -- Only assert if the whole window stayed in one epoch; a
+          -- boundary crossing would reset blk_count.
+          when (epoch0 == epoch1 && epoch1 == epoch2) $ do
+            readBlk blkCount1 `shouldSatisfy` (> readBlk blkCount0)
+            readBlk blkCount2 `shouldSatisfy` (> readBlk blkCount1)
+
+-- | Parse a 'blk_count' string into 'Int' for ordering comparisons.
+readBlk :: Text -> Int
+readBlk = fromMaybe 0 . readMaybe . T.unpack

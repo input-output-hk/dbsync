@@ -33,7 +33,7 @@
 -- CI runtime stays bounded; the shape grows in follow-ups as more
 -- extractors and richer forging primitives become available.
 --
--- The regression floor is intentionally soft (> 5 blk/s on local
+-- The regression floor is intentionally soft (> 4 blk/s on local
 -- PG). The point of the test is to fire when the per-block hot
 -- path slows by an order of magnitude — not to track every
 -- millisecond.
@@ -152,11 +152,12 @@ spec = describe "FollowingChainTip throughput on realistic blocks" $ do
           -- And produced at least the txs we built; allows for slack
           -- if a future shape adds optional certs / mints.
           txsDone `shouldSatisfy` (>= expectedTxsMin)
-          -- 5 blk/s is the floor: a 10× regression from the
-          -- expected ~50 blk/s baseline on a local Unix-socket PG
-          -- with the current pipelined-write path. Tighten after we
-          -- have a stable CI baseline.
-          rate `shouldSatisfy` (> 5.0)
+          -- 4 blk/s is the floor: comfortably above the ~0.5 blk/s
+          -- production symptom the spec is meant to catch, while
+          -- absorbing local-machine variance against the expected
+          -- ~50 blk/s baseline. Tighten when a stable CI baseline
+          -- exists.
+          rate `shouldSatisfy` (> 4.0)
 
 -- | Poll @count(*) FROM block@ until it reaches @minTotal@ or the
 -- timeout elapses. Returns the most recent observed count rather

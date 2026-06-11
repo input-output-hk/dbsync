@@ -32,7 +32,7 @@ import Cardano.Prelude
 import qualified Data.Text as T
 
 import Cardano.Ledger.Address (AccountAddress (..), AccountId (..), Withdrawals (..))
-import Cardano.Ledger.BaseTypes (Network (..), StrictMaybe (..))
+import Cardano.Ledger.BaseTypes (Network (..), StrictMaybe (..), textToUrl)
 import Cardano.Ledger.Coin (Coin (..))
 import qualified Cardano.Ledger.Conway.Governance as Governance
 import Cardano.Ledger.Conway.Tx (AlonzoTx (..), Tx (..))
@@ -54,9 +54,12 @@ import DbSync.App.Config.Types
   , DbSyncOptions (..)
   )
 import DbSync.Db.Schema.Core (blockTableDef)
+import DbSync.Db.Schema.EpochBoundary (epochParamTableDef)
 import DbSync.Db.Schema.Governance
   ( committeeHashTableDef
   , committeeRegistrationTableDef
+  , committeeTableDef
+  , constitutionTableDef
   , drepHashTableDef
   , drepRegistrationTableDef
   , govActionProposalTableDef
@@ -76,8 +79,14 @@ import DbSync.Test.Database (queryTestDb)
 import DbSync.Test.E2E (conwayConfigDir, withAppSession)
 import DbSync.Test.Helpers (waitFor)
 import DbSync.Test.MockNode
-  ( forgeAndPush
+  ( MockNode
+  , forgeAndPush
   , forgeAndPushBlocks
+  , forgeAndPushCommitteeCreds
+  , forgeAndPushDRepsAndDelegateVotes
+  , forgeAndPushUntilNextEpoch
+  , forgeAndPushWithStakeCreds
+  , voteAllOnAction
   , withMockNode
   )
 import DbSync.Test.PgAssertions (countRows)
@@ -229,6 +238,197 @@ spec = describe "Follow governance writes" $ do
               abstractFollow `shouldBe` "2"
           _ -> panic "unregisteredStakeCredentials has fewer than 3 entries"
 
+  it "lands constitution and committee rows after enactment at tip" $
+    withMockNode conwayConfigDir $ \mn ->
+      withTempDir "dbsync-test-follow-gov-enact-cc" $ \ledgerDir -> do
+        tracer <- quietTracer
+        _ <- forgeAndPushBlocks mn 250
+        withAppSession tracer governanceTestProfile mn ledgerDir $ \_ -> do
+          waitForSyncComplete 120
+
+          baselineConst <- countRows (tdName constitutionTableDef)
+          baselineComm  <- countRows (tdName committeeTableDef)
+          baselineProp  <- countRows (tdName govActionProposalTableDef)
+
+          bootstrapGovernance mn
+
+          let constTx = Conway.mkNewConstitutionTx newConstitutionAnchor
+              commCred = case Generic.unregisteredCommitteeCreds of
+                c : _ -> c
+                [] -> panic "unregisteredCommitteeCreds is empty"
+              commTx = Conway.mkAddCommitteeTx Nothing commCred
+              constGaid = govActionIdFor constTx 0
+              commGaid  = govActionIdFor commTx 0
+          voteConst <- voteAllOnAction mn constGaid
+          voteComm  <- voteAllOnAction mn commGaid
+          _ <- forgeAndPush mn
+            [ Mock.TxConway constTx
+            , Mock.TxConway commTx
+            , voteConst
+            , voteComm
+            ]
+
+          crossEnactmentBoundaries mn
+
+          waitFor
+            (tdName constitutionTableDef <> " count grows")
+            (do n <- countRows (tdName constitutionTableDef); pure (n > baselineConst))
+            120
+
+          followConst <- countRows (tdName constitutionTableDef)
+          followComm  <- countRows (tdName committeeTableDef)
+          followProp  <- countRows (tdName govActionProposalTableDef)
+          (followConst - baselineConst) `shouldSatisfy` (>= 1)
+          (followComm  - baselineComm)  `shouldSatisfy` (>= 1)
+          (followProp  - baselineProp)  `shouldSatisfy` (>= 2)
+
+  it "links chained committee proposals via prev_gov_action_proposal" $
+    withMockNode conwayConfigDir $ \mn ->
+      withTempDir "dbsync-test-follow-gov-chained" $ \ledgerDir -> do
+        tracer <- quietTracer
+        _ <- forgeAndPushBlocks mn 250
+        withAppSession tracer governanceTestProfile mn ledgerDir $ \_ -> do
+          waitForSyncComplete 120
+
+          baselineComm <- countRows (tdName committeeTableDef)
+          baselineProp <- countRows (tdName govActionProposalTableDef)
+
+          bootstrapGovernance mn
+
+          let (cred1, cred2) = case Generic.unregisteredCommitteeCreds of
+                a : b : _ -> (a, b)
+                _ -> panic "unregisteredCommitteeCreds has fewer than 2 entries"
+              p1     = Conway.mkAddCommitteeTx Nothing cred1
+              p1Gaid = govActionIdFor p1 0
+          voteP1 <- voteAllOnAction mn p1Gaid
+          _ <- forgeAndPush mn [Mock.TxConway p1, voteP1]
+          crossEnactmentBoundaries mn
+
+          let p2     = Conway.mkAddCommitteeTx
+                         (Just (Governance.GovPurposeId p1Gaid))
+                         cred2
+              p2Gaid = govActionIdFor p2 0
+          voteP2 <- voteAllOnAction mn p2Gaid
+          _ <- forgeAndPush mn [Mock.TxConway p2, voteP2]
+          crossEnactmentBoundaries mn
+
+          waitFor
+            (tdName committeeTableDef <> " count reaches baseline+2")
+            (do n <- countRows (tdName committeeTableDef); pure (n >= baselineComm + 2))
+            120
+
+          followComm <- countRows (tdName committeeTableDef)
+          followProp <- countRows (tdName govActionProposalTableDef)
+          (followComm - baselineComm) `shouldSatisfy` (>= 2)
+          (followProp - baselineProp) `shouldSatisfy` (>= 2)
+
+  it "lands epoch_param row reflecting parameterChange enactment at tip" $
+    withMockNode conwayConfigDir $ \mn ->
+      withTempDir "dbsync-test-follow-gov-paramchange" $ \ledgerDir -> do
+        tracer <- quietTracer
+        _ <- forgeAndPushBlocks mn 250
+        withAppSession tracer governanceTestProfile mn ledgerDir $ \_ -> do
+          waitForSyncComplete 120
+
+          bootstrapGovernance mn
+
+          let proposalTx = Conway.mkParamChangeTx
+              gaid = govActionIdFor proposalTx 0
+          vote <- voteAllOnAction mn gaid
+          _ <- forgeAndPush mn [Mock.TxConway proposalTx, vote]
+          crossEnactmentBoundaries mn
+          _ <- forgeAndPushUntilNextEpoch mn
+          _ <- forgeAndPushUntilNextEpoch mn
+
+          let latestMaxTxSizeQuery =
+                "SELECT max_tx_size FROM " <> tdName epochParamTableDef
+                  <> " ORDER BY id DESC LIMIT 1"
+          -- 'mkParamChangeTx' flips max_tx_size to 32_000.
+          waitFor
+            "max_tx_size flips to 32000"
+            (do v <- T.strip <$> queryTestDb latestMaxTxSizeQuery; pure (v == "32000"))
+            120
+
+          latestMaxTxSize <- T.strip <$> queryTestDb latestMaxTxSizeQuery
+          latestMaxTxSize `shouldBe` "32000"
+
+  it "flips epoch_param.protocol_major after HardForkInitiation enactment at tip" $
+    withMockNode conwayConfigDir $ \mn ->
+      withTempDir "dbsync-test-follow-gov-hardfork" $ \ledgerDir -> do
+        tracer <- quietTracer
+        _ <- forgeAndPushBlocks mn 250
+        withAppSession tracer governanceTestProfile mn ledgerDir $ \_ -> do
+          waitForSyncComplete 120
+
+          bootstrapGovernance mn
+
+          let proposalTx = Conway.mkHardForkInitTx
+              gaid = govActionIdFor proposalTx 0
+          vote <- voteAllOnAction mn gaid
+          _ <- forgeAndPush mn [Mock.TxConway proposalTx, vote]
+          crossEnactmentBoundaries mn
+          _ <- forgeAndPushUntilNextEpoch mn
+          _ <- forgeAndPushUntilNextEpoch mn
+
+          let latestMajorQuery =
+                "SELECT protocol_major FROM " <> tdName epochParamTableDef
+                  <> " ORDER BY id DESC LIMIT 1"
+          -- 'mkHardForkInitTx' targets ProtVer 11.
+          waitFor
+            "protocol_major flips to 11"
+            (do v <- T.strip <$> queryTestDb latestMajorQuery; pure (v == "11"))
+            120
+
+          latestMajor <- T.strip <$> queryTestDb latestMajorQuery
+          latestMajor `shouldBe` "11"
+
+  it "records InfoAction proposal and votes but never enacts" $
+    withMockNode conwayConfigDir $ \mn ->
+      withTempDir "dbsync-test-follow-gov-info" $ \ledgerDir -> do
+        tracer <- quietTracer
+        _ <- forgeAndPushBlocks mn 250
+        withAppSession tracer governanceTestProfile mn ledgerDir $ \_ -> do
+          waitForSyncComplete 120
+
+          baselineProp  <- countRows (tdName govActionProposalTableDef)
+          baselineVote  <- countRows (tdName votingProcedureTableDef)
+          baselineConst <- countRows (tdName constitutionTableDef)
+          baselineComm  <- countRows (tdName committeeTableDef)
+
+          bootstrapGovernance mn
+
+          let proposalTx = Conway.mkInfoTx
+              gaid = govActionIdFor proposalTx 0
+          vote <- voteAllOnAction mn gaid
+          _ <- forgeAndPush mn [Mock.TxConway proposalTx, vote]
+
+          -- InfoAction never enacts; a few boundary crossings are
+          -- enough to assert no side-effect tables fired.
+          replicateM_ 3 $ do
+            _ <- forgeAndPushUntilNextEpoch mn
+            pure ()
+
+          waitFor
+            (tdName votingProcedureTableDef <> " count grows")
+            (do n <- countRows (tdName votingProcedureTableDef); pure (n > baselineVote))
+            120
+
+          followProp  <- countRows (tdName govActionProposalTableDef)
+          followVote  <- countRows (tdName votingProcedureTableDef)
+          followConst <- countRows (tdName constitutionTableDef)
+          followComm  <- countRows (tdName committeeTableDef)
+
+          infoCount <- T.strip <$> queryTestDb
+            ( "SELECT count(*) FROM " <> tdName govActionProposalTableDef
+                <> " WHERE type = 'InfoAction'"
+            )
+          infoCount `shouldSatisfy` (/= "0")
+
+          (followProp - baselineProp) `shouldSatisfy` (>= 1)
+          (followVote - baselineVote) `shouldSatisfy` (>= 1)
+          (followConst - baselineConst) `shouldBe` 0
+          (followComm  - baselineComm)  `shouldBe` 0
+
 -- ---------------------------------------------------------------------------
 -- * Profile
 -- ---------------------------------------------------------------------------
@@ -316,3 +516,37 @@ govActionIdFor
   :: Core.Tx Core.TopTx ConwayEra -> Word16 -> Governance.GovActionId
 govActionIdFor (MkConwayTx atx) ix =
   Governance.GovActionId (Core.txIdTxBody (atBody atx)) (Governance.GovActionIx ix)
+
+-- ---------------------------------------------------------------------------
+-- * Enactment helpers
+-- ---------------------------------------------------------------------------
+
+-- | Register pool stake creds, register DReps and delegate stake votes,
+-- settle one epoch, then authorize committee hot keys.
+bootstrapGovernance :: MockNode -> IO ()
+bootstrapGovernance mn = do
+  _ <- forgeAndPushWithStakeCreds mn
+  _ <- forgeAndPushDRepsAndDelegateVotes mn
+  _ <- forgeAndPushUntilNextEpoch mn
+  _ <- forgeAndPushCommitteeCreds mn
+  pure ()
+
+-- | Force three epoch boundaries so a submitted proposal can finalise
+-- votes, ratify, and enact.
+crossEnactmentBoundaries :: MockNode -> IO ()
+crossEnactmentBoundaries mn = do
+  _ <- forgeAndPushUntilNextEpoch mn
+  _ <- forgeAndPushUntilNextEpoch mn
+  _ <- forgeAndPushUntilNextEpoch mn
+  pure ()
+
+-- | Anchor stamped on the proposals used in the enactment tests.
+newConstitutionAnchor :: Governance.Anchor
+newConstitutionAnchor =
+  Governance.Anchor
+    { Governance.anchorUrl =
+        fromMaybe (panic "newConstitutionAnchor: textToUrl failed")
+                  (textToUrl 64 "best.cc")
+    , Governance.anchorDataHash =
+        Core.hashAnnotated (Governance.AnchorData mempty)
+    }

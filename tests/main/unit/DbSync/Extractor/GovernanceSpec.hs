@@ -8,6 +8,7 @@ module DbSync.Extractor.GovernanceSpec (spec) where
 
 import Cardano.Prelude
 
+import qualified Cardano.Ledger.BaseTypes as Ledger
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), EpochSize (..), SlotNo (..))
 import qualified Data.ByteString as BS
@@ -382,7 +383,7 @@ mkNewEpoch epoch _ = Generic.NewEpoch
   , Generic.neAdaPots     = Strict.Nothing
   , Generic.neEpochUpdate = Generic.EpochUpdate
       { Generic.euProtoParams = Strict.Nothing
-      , Generic.euNonce       = panic "neutral nonce unused"
+      , Generic.euNonce       = Ledger.NeutralNonce
       }
   , Generic.neDRepState   = Strict.Nothing
   , Generic.neEnacted     = Strict.Nothing

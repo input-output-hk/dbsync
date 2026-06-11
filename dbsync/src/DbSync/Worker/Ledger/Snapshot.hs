@@ -210,64 +210,80 @@ runLedgerStateWriteThread = \case
     tenMinutesMicros :: Int
     tenMinutesMicros = 10 * 60 * 1_000_000
 
--- | The drain loop: read a 'DbSyncStateRef' off the queue, hand it to
--- the consensus 'SnapshotManager', and clear the @srCanClose@ flag
--- so the pruner is free to close the handle once no other reference
--- holds it.
+-- | Catch synchronous exceptions only. Asynchronous exceptions
+-- (e.g. 'AsyncCancelled' from a cancelled 'Async' during shutdown)
+-- propagate so the surrounding thread exits cleanly instead of
+-- logging them as recoverable errors and continuing.
+trySync :: IO a -> IO (Either Exception.SomeException a)
+trySync action =
+  (Right <$> action) `Exception.catch` \e ->
+    case Exception.fromException e :: Maybe Exception.SomeAsyncException of
+      Just _  -> Exception.throwIO e
+      Nothing -> pure (Left e)
+
+-- | The drain loop: read a 'DbSyncStateRef' off the queue, hand it
+-- to the consensus 'SnapshotManager', and clear the @srCanClose@
+-- flag so the pruner is free to close the handle.
 --
--- Per-snapshot failures during 'takeSnapshot' are caught and traced
--- (one bad snapshot must not bring the whole sync down). Failures
--- elsewhere in the loop bubble up and are reported by the
--- 'runLedgerStateWriteThread' wrapper.
+-- Each per-step failure is treated as recoverable: log Warning and
+-- continue. The snapshot directory plus boot-time discovery is the
+-- durable record, so a missed 'markSnapshotComplete' or 'trimSnapshots'
+-- does not warrant taking the whole sync down. Asynchronous exceptions
+-- still propagate (via 'trySync'), letting the 'runLedgerStateWriteThread'
+-- wrapper report a clean shutdown.
 snapshotWriteLoop :: LedgerM ()
 snapshotWriteLoop = do
   env <- ask
-  liftIO $ traceWith (leTracer env) $ LogMsg Info "LedgerSnapshot"
-    "snapshot-writer starting (draining snapshot queue)" Nothing
-  forever $ do
-    sref <- liftIO $ atomically $ readTBQueue (leSnapshotQueue env)
-    result <- liftIO $
-      Exception.try @Exception.SomeException $
+  liftIO $ do
+    traceWith (leTracer env) $
+      LogMsg Info "LedgerSnapshot"
+        "snapshot-writer starting (draining snapshot queue)" Nothing
+    forever $ do
+      sref <- atomically $ readTBQueue (leSnapshotQueue env)
+      processOneSnapshot env sref
+        `Exception.finally` atomically (writeTVar (srCanClose sref) True)
+  where
+    logMsg :: LedgerEnv -> Severity -> Text -> IO ()
+    logMsg env sev msg =
+      traceWith (leTracer env) (LogMsg sev "LedgerSnapshot" msg Nothing)
+
+    processOneSnapshot :: LedgerEnv -> DbSyncStateRef -> IO ()
+    processOneSnapshot env sref = do
+      result <- trySync $
         takeSnapshot
           (leSnapshotManager env)
           Nothing                             -- temporary snapshot, no suffix
           (toConsensusStateRef sref)
-    case result of
-      Right (Just (ds, _rp)) -> do
-        -- Record the completion in PG so a subsequent boot has a
-        -- deterministic anchor. If this UPDATE fails (DB hiccup,
-        -- connection lost), the snapshot file is still on disk and
-        -- a re-scan via 'listSnapshots' will discover it.
-        markResult <- liftIO $
-          Exception.try @Exception.SomeException $
-            runAppM env (markSnapshotComplete (dsNumber ds))
-        case markResult of
-          Right () ->
-            logMsg env Info $
-              "Wrote snapshot at slot " <> show (dsNumber ds)
-          Left ex ->
-            logMsg env Warning $
-              "Snapshot at slot " <> show (dsNumber ds)
-                <> " written but markSnapshotComplete failed: "
-                <> Text.pack (Exception.displayException ex)
-        trimRetention env
-      Right Nothing ->
-        logMsg env Info "takeSnapshot returned Nothing — backend declined to write"
-      Left ex ->
-        logMsg env Warning $
-          "Snapshot write failed: " <> Text.pack (Exception.displayException ex)
-    -- I3: writer is done with the handle, pruner is now free to close.
-    liftIO $ atomically $ writeTVar (srCanClose sref) True
-  where
-    logMsg :: LedgerEnv -> Severity -> Text -> LedgerM ()
-    logMsg env sev msg =
-      liftIO $ traceWith (leTracer env) (LogMsg sev "LedgerSnapshot" msg Nothing)
+      case result of
+        Right (Just (ds, _rp)) -> do
+          -- Record the completion in PG so a subsequent boot has a
+          -- deterministic anchor. If the UPDATE fails the snapshot
+          -- file is still on disk; boot-time 'listSnapshots' will
+          -- rediscover it.
+          markResult <- trySync $ runAppM env (markSnapshotComplete (dsNumber ds))
+          case markResult of
+            Right () ->
+              logMsg env Info $
+                "Wrote snapshot at slot " <> show (dsNumber ds)
+            Left ex ->
+              logMsg env Warning $
+                "Snapshot at slot " <> show (dsNumber ds)
+                  <> " written but markSnapshotComplete failed ("
+                  <> Text.pack (Exception.displayException ex)
+                  <> "); snapshot file remains on disk and will be rediscovered on boot."
+          trimRetention env
+        Right Nothing ->
+          logMsg env Info "takeSnapshot returned Nothing — backend declined to write"
+        Left ex ->
+          logMsg env Warning $
+            "Snapshot write failed ("
+              <> Text.pack (Exception.displayException ex)
+              <> "); the next epoch's snapshot attempt will retry."
 
-    trimRetention :: LedgerEnv -> LedgerM ()
+    trimRetention :: LedgerEnv -> IO ()
     trimRetention env = do
-      result <- liftIO $
-        Exception.try @Exception.SomeException $
-          trimSnapshots (leSnapshotManager env) retentionPolicy
+      result <- trySync $
+        trimSnapshots (leSnapshotManager env) retentionPolicy
       case result of
         Right deleted
           | not (null deleted) ->
@@ -277,8 +293,9 @@ snapshotWriteLoop = do
           | otherwise -> pure ()
         Left ex ->
           logMsg env Warning $
-            "Snapshot retention trim failed: "
+            "Snapshot retention trim failed ("
               <> Text.pack (Exception.displayException ex)
+              <> "); retention will be re-checked after the next snapshot write."
 
     -- 'trimSnapshots' ignores 'onDiskShouldTakeSnapshot'; only the
     -- count is consulted.

@@ -62,6 +62,7 @@ library dbsync-testlib
       base
     , bytestring
     , cardano-crypto-class
+    , cardano-ledger-conway
     , cardano-ledger-core
     , cardano-ledger-mary
     , cardano-node
@@ -206,6 +207,7 @@ test-suite dbsync-test
     , cardano-ledger-binary
     , cardano-ledger-conway
     , cardano-ledger-core
+    , cardano-ledger-mary
     , cardano-prelude
     , cardano-slotting
     , cardano-strict-containers

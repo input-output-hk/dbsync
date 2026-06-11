@@ -20,15 +20,21 @@ module DbSync.Phase.FollowScriptsDatumsSpec (spec) where
 import Cardano.Prelude
 
 import Data.List ((!!))
+import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Text as T
 
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
+import Cardano.Ledger.BaseTypes (TxIx (..))
+import Cardano.Ledger.Binary (sizedValue)
+import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway.Tx (AlonzoTx (..), Tx (..))
 import Cardano.Ledger.Conway.TxBody (TxBody (..))
 import qualified Cardano.Ledger.Core as Core
 import Cardano.Ledger.Keys (KeyHash, KeyRole (Witness), coerceKeyRole)
+import qualified Cardano.Ledger.Mary.Value as Mary
+import Cardano.Ledger.TxIn (TxIn (..))
 import Ouroboros.Consensus.Shelley.Eras (ConwayEra)
 
 import qualified Cardano.Mock.Forging.Interpreter as Mock
@@ -43,7 +49,8 @@ import DbSync.App.Config.Types
   , OptionFlag (..)
   , DbSyncOptions (..)
   )
-import DbSync.Db.Schema.Core (blockTableDef)
+import DbSync.Db.Schema.Core (blockTableDef, txTableDef)
+import DbSync.Db.Schema.MultiAsset (maTxMintTableDef)
 import DbSync.Db.Schema.ScriptsDatums
   ( datumTableDef
   , extraKeyWitnessTableDef
@@ -52,6 +59,7 @@ import DbSync.Db.Schema.ScriptsDatums
   , scriptTableDef
   )
 import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Schema.UTxO (collateralTxOutTableDef)
 import DbSync.Test.AppHarness
   ( ledgerEnabledTestProfile
   , quietTracer
@@ -75,7 +83,7 @@ import DbSync.Test.PgAssertions (countRows)
 -- ---------------------------------------------------------------------------
 
 spec :: Spec
-spec = describe "Follow scripts/datums writes" $
+spec = describe "Follow scripts/datums writes" $ do
   it "lands script, datum, redeemer, redeemer_data, extra_key_witness rows for a Plutus tx at tip" $
     withMockNode conwayConfigDir $ \mn ->
       withTempDir "dbsync-test-follow-scripts-datums" $ \ledgerDir -> do
@@ -131,6 +139,124 @@ spec = describe "Follow scripts/datums writes" $
             )
           nullFkRows `shouldBe` "0"
 
+  it "lands one redeemer when lock and unlock share a block" $
+    withScriptsDatumsSession "dbsync-test-scripts-same-block" $ \mn -> do
+      baselineBlocks    <- countRows (tdName blockTableDef)
+      baselineRedeemers <- countRows (tdName redeemerTableDef)
+      baselineDatums    <- countRows (tdName datumTableDef)
+
+      txs <- buildSameBlockLockUnlock mn
+      _ <- forgeAndPush mn txs
+
+      let expectedBlocks = baselineBlocks + 1
+      waitFor
+        (tdName blockTableDef <> " count reaches " <> show expectedBlocks)
+        (do n <- countRows (tdName blockTableDef); pure (n >= expectedBlocks))
+        60
+      waitFor
+        (tdName redeemerTableDef <> " count grows")
+        (do n <- countRows (tdName redeemerTableDef); pure (n > baselineRedeemers))
+        30
+
+      followRedeemers <- countRows (tdName redeemerTableDef)
+      followDatums    <- countRows (tdName datumTableDef)
+      (followRedeemers - baselineRedeemers) `shouldBe` 1
+      (followDatums    - baselineDatums)    `shouldSatisfy` (>= 1)
+
+  it "records a phase-2 failure with valid_contract=false and a collateral return" $
+    withScriptsDatumsSession "dbsync-test-scripts-failed" $ \mn -> do
+      baselineBlocks <- countRows (tdName blockTableDef)
+      baselineColOut <- countRows (tdName collateralTxOutTableDef)
+
+      lockTxs <- buildLockTxs mn
+      _ <- forgeAndPush mn lockTxs
+      failTxs <- buildFailingUnlockTxs mn
+      _ <- forgeAndPush mn failTxs
+
+      let expectedBlocks = baselineBlocks + 2
+      waitFor
+        (tdName blockTableDef <> " count reaches " <> show expectedBlocks)
+        (do n <- countRows (tdName blockTableDef); pure (n >= expectedBlocks))
+        60
+      waitFor
+        (tdName collateralTxOutTableDef <> " count grows")
+        (do n <- countRows (tdName collateralTxOutTableDef); pure (n > baselineColOut))
+        30
+
+      latestValid <- T.strip <$> queryTestDb
+        ( "SELECT valid_contract::text FROM " <> tdName txTableDef
+            <> " ORDER BY id DESC LIMIT 1"
+        )
+      latestValid `shouldBe` "false"
+
+  it "writes one redeemer per spent script when several are unlocked together" $
+    withScriptsDatumsSession "dbsync-test-scripts-multi" $ \mn -> do
+      baselineBlocks    <- countRows (tdName blockTableDef)
+      baselineRedeemers <- countRows (tdName redeemerTableDef)
+
+      txs <- buildMultipleScriptsTxs mn
+      _ <- forgeAndPush mn txs
+
+      let expectedBlocks = baselineBlocks + 1
+      waitFor
+        (tdName blockTableDef <> " count reaches " <> show expectedBlocks)
+        (do n <- countRows (tdName blockTableDef); pure (n >= expectedBlocks))
+        60
+      waitFor
+        (tdName redeemerTableDef <> " reaches +2")
+        (do n <- countRows (tdName redeemerTableDef); pure (n >= baselineRedeemers + 2))
+        30
+
+      followRedeemers <- countRows (tdName redeemerTableDef)
+      (followRedeemers - baselineRedeemers) `shouldBe` 2
+
+  it "writes a collateral_tx_out row keyed to the failing tx" $
+    withScriptsDatumsSession "dbsync-test-scripts-col" $ \mn -> do
+      baselineBlocks <- countRows (tdName blockTableDef)
+      baselineColOut <- countRows (tdName collateralTxOutTableDef)
+
+      lockTxs <- buildLockTxs mn
+      _ <- forgeAndPush mn lockTxs
+      failTxs <- buildFailingUnlockTxs mn
+      _ <- forgeAndPush mn failTxs
+
+      let expectedBlocks = baselineBlocks + 2
+      waitFor
+        (tdName blockTableDef <> " count reaches " <> show expectedBlocks)
+        (do n <- countRows (tdName blockTableDef); pure (n >= expectedBlocks))
+        60
+      waitFor
+        (tdName collateralTxOutTableDef <> " count grows")
+        (do n <- countRows (tdName collateralTxOutTableDef); pure (n > baselineColOut))
+        30
+
+      nullTxIds <- T.strip <$> queryTestDb
+        ( "SELECT COUNT(*)::text FROM " <> tdName collateralTxOutTableDef
+            <> " WHERE tx_id IS NULL"
+        )
+      nullTxIds `shouldBe` "0"
+
+  it "lands a ma_tx_mint row when a Plutus minting policy mints a token" $
+    withScriptsDatumsSession "dbsync-test-scripts-mint" $ \mn -> do
+      baselineBlocks <- countRows (tdName blockTableDef)
+      baselineMint   <- countRows (tdName maTxMintTableDef)
+
+      txs <- buildMintTxs mn
+      _ <- forgeAndPush mn txs
+
+      let expectedBlocks = baselineBlocks + 1
+      waitFor
+        (tdName blockTableDef <> " count reaches " <> show expectedBlocks)
+        (do n <- countRows (tdName blockTableDef); pure (n >= expectedBlocks))
+        60
+      waitFor
+        (tdName maTxMintTableDef <> " count grows")
+        (do n <- countRows (tdName maTxMintTableDef); pure (n > baselineMint))
+        30
+
+      followMint <- countRows (tdName maTxMintTableDef)
+      (followMint - baselineMint) `shouldSatisfy` (>= 1)
+
 -- ---------------------------------------------------------------------------
 -- * Profile
 -- ---------------------------------------------------------------------------
@@ -177,10 +303,8 @@ buildUnlockTxs mn =
            499_000
            1_000
            state' of
-      Right tx -> pure [Mock.TxConway (withRequiredSigner reqSigner tx)]
-      Left err -> panic $ "buildUnlockTxs: " <> show err
-  where
-    reqSigner = Generic.unregisteredWitnessKey !! 0
+       Right tx -> pure [Mock.TxConway (withRequiredSigner reqSigner tx)]
+       Left err -> panic $ "buildUnlockTxs: " <> show err
 
 -- | Inject a required-signer key hash into the Conway txbody's
 -- @ctbReqSignerHashes@. The mock's 'consTxBody' hard-codes 'mempty';
@@ -198,3 +322,149 @@ withRequiredSigner h (MkConwayTx atx) =
             Set.insert (coerceKeyRole h) (ctbReqSignerHashes (atBody atx))
         }
     }
+
+-- | Shared bootstrap for every scripts/datums Follow scenario.
+withScriptsDatumsSession :: Text -> (MockNode -> IO ()) -> IO ()
+withScriptsDatumsSession tag body =
+  withMockNode conwayConfigDir $ \mn ->
+    withTempDir tag $ \ledgerDir -> do
+      tracer <- quietTracer
+      _ <- forgeAndPushBlocks mn 250
+      withAppSession tracer scriptsDatumsTestProfile mn ledgerDir $ \_ -> do
+        waitForSyncComplete 120
+        body mn
+
+-- | Reference an output of a forged Conway tx as a 'UTxOPair' so the
+-- next tx can spend it without round-tripping through the ledger.
+outputAsPair :: Core.Tx Core.TopTx ConwayEra -> Int -> Mock.UTxOIndex ConwayEra
+outputAsPair (MkConwayTx atx) ix =
+  let body = atBody atx
+      txId = Core.txIdTxBody body
+      out  = sizedValue (toList (ctbOutputs body) !! ix)
+   in Mock.UTxOPair (TxIn txId (TxIx (fromIntegral ix)), out)
+
+-- | The first required-signer key used by every unlock builder.
+reqSigner :: KeyHash Witness
+reqSigner = Generic.unregisteredWitnessKey !! 0
+
+-- | Build a lock+unlock pair that share a single block via 'UTxOPair'.
+buildSameBlockLockUnlock :: MockNode -> IO [Mock.TxEra]
+buildSameBlockLockUnlock mn =
+  Mock.withConwayLedgerState (mcInterpreter (mnChain mn)) $ \state' -> do
+    lockTx <- Conway.mkLockByScriptTx
+      (Mock.UTxOIndex 0)
+      [Babbage.TxOutNoInline True]
+      500_000 1_000 state'
+    unlockTx <- Conway.mkUnlockScriptTx
+      [outputAsPair lockTx 0]
+      (Mock.UTxOIndex 1)
+      (Mock.UTxOAddressNew 0)
+      True 499_000 1_000 state'
+    Right [Mock.TxConway lockTx, Mock.TxConway (withRequiredSigner reqSigner unlockTx)]
+
+-- | Lock three script outputs, then in the same block spend two of them.
+buildMultipleScriptsTxs :: MockNode -> IO [Mock.TxEra]
+buildMultipleScriptsTxs mn =
+  Mock.withConwayLedgerState (mcInterpreter (mnChain mn)) $ \state' -> do
+    lockTx <- Conway.mkLockByScriptTx
+      (Mock.UTxOIndex 0)
+      [ Babbage.TxOutNoInline True
+      , Babbage.TxOutNoInline True
+      , Babbage.TxOutNoInline True
+      ]
+      100_000 1_000 state'
+    unlockTx <- Conway.mkUnlockScriptTx
+      [outputAsPair lockTx 0, outputAsPair lockTx 1]
+      (Mock.UTxOIndex 1)
+      (Mock.UTxOAddressNew 0)
+      True 199_000 1_000 state'
+    Right [Mock.TxConway lockTx, Mock.TxConway (withRequiredSigner reqSigner unlockTx)]
+
+{-
+-- | Lock a UTxO whose datum is inlined into the output.
+buildInlineDatumLockTxs :: MockNode -> IO [Mock.TxEra]
+buildInlineDatumLockTxs mn =
+  Mock.withConwayLedgerState (mcInterpreter (mnChain mn)) $ \state' -> do
+    tx <- Conway.mkLockByScriptTx
+      (Mock.UTxOIndex 0)
+      [Babbage.TxOutInline True Babbage.InlineDatum Babbage.NoReferenceScript]
+      500_000 1_000 state'
+    Right [Mock.TxConway tx]
+
+-- | Indefinite-length CBOR encoding of @[1, 2]@. Distinct from the
+-- canonical encoding so the round-trip assertion is meaningful.
+nonCanonicalDatumBytes :: SBS.ShortByteString
+nonCanonicalDatumBytes = SBS.pack [0x9f, 0x01, 0x02, 0xff]
+
+-- | Lock a UTxO whose inline datum carries raw, non-canonical CBOR.
+buildInlineDatumCBORLockTxs :: MockNode -> IO [Mock.TxEra]
+buildInlineDatumCBORLockTxs mn =
+  Mock.withConwayLedgerState (mcInterpreter (mnChain mn)) $ \state' -> do
+    tx <- Conway.mkLockByScriptTx
+      (Mock.UTxOIndex 0)
+      [ Babbage.TxOutInline True
+          (Babbage.InlineDatumCBOR nonCanonicalDatumBytes)
+          Babbage.NoReferenceScript
+      ]
+      500_000 1_000 state'
+    Right [Mock.TxConway tx]
+-}
+
+-- | Unlock a script-locked UTxO with the IsValid flag forced to False
+-- and a collateral-return output emitted.
+buildFailingUnlockTxs :: MockNode -> IO [Mock.TxEra]
+buildFailingUnlockTxs mn =
+  Mock.withConwayLedgerState (mcInterpreter (mnChain mn)) $ \state' -> do
+    tx <- Conway.mkUnlockScriptTxBabbage
+      [Mock.UTxOAddress Scripts.alwaysSucceedsScriptAddr]
+      (Mock.UTxOIndex 0)
+      (Mock.UTxOAddressNew 0)
+      []
+      True
+      False
+      499_000 1_000 state'
+    Right [Mock.TxConway (withRequiredSigner reqSigner tx)]
+
+{-
+-- | Lock a UTxO whose output carries the always-succeeds script as a
+-- reference script, then spend a separately-locked UTxO that points at
+-- the reference output as its witness source.
+buildSpendRefScriptTxs :: MockNode -> IO [Mock.TxEra]
+buildSpendRefScriptTxs mn =
+  Mock.withConwayLedgerState (mcInterpreter (mnChain mn)) $ \state' -> do
+    lockTx <- Conway.mkLockByScriptTx
+      (Mock.UTxOIndex 0)
+      [ Babbage.TxOutNoInline True
+      , Babbage.TxOutInline True Babbage.InlineDatum (Babbage.ReferenceScript True)
+      ]
+      300_000 1_000 state'
+    unlockTx <- Conway.mkUnlockScriptTxBabbage
+      [outputAsPair lockTx 0]
+      (Mock.UTxOIndex 1)
+      (Mock.UTxOAddressNew 0)
+      [outputAsPair lockTx 1]
+      False
+      True
+      299_000 1_000 state'
+    Right [Mock.TxConway lockTx, Mock.TxConway (withRequiredSigner reqSigner unlockTx)]
+-}
+
+-- | Mint one token through the always-mint Plutus policy. The policy
+-- script is supplied via the witness set.
+buildMintTxs :: MockNode -> IO [Mock.TxEra]
+buildMintTxs mn =
+  Mock.withConwayLedgerState (mcInterpreter (mnChain mn)) $ \state' -> do
+    let policyId  = Mary.PolicyID Scripts.alwaysMintScriptHash
+        assetName = Scripts.assetNames !! 0
+        minted    = Mary.MultiAsset (Map.singleton policyId (Map.singleton assetName 1))
+        outValue  = Mary.MaryValue (Coin 800_000) minted
+    tx <- Conway.mkMultiAssetsScriptTx
+      [Mock.UTxOIndex 0]
+      (Mock.UTxOIndex 1)
+      [(Mock.UTxOAddressNew 0, outValue)]
+      []
+      minted
+      True 1_000 state'
+    Right [Mock.TxConway tx]
+
+

@@ -22,6 +22,7 @@ module DbSync.Test.MockNode
   , forgeAndPushDRepsAndDelegateVotes
   , forgeAndPushCommitteeCreds
   , forgeAndPushUntilNextEpoch
+  , voteAllOnAction
   , rollbackMockNode
 
     -- * Inspection
@@ -45,6 +46,7 @@ import System.IO.Unsafe (unsafePerformIO)
 import Cardano.Ledger.Address (Addr (..))
 import Cardano.Ledger.BaseTypes (Network (..))
 import Cardano.Ledger.Coin (Coin (..))
+import qualified Cardano.Ledger.Conway.Governance as Governance
 import Cardano.Ledger.Credential (StakeReference (..))
 import Cardano.Ledger.Mary.Value (valueFromList)
 import Ouroboros.Consensus.Block.Abstract (blockHash, blockNo, blockSlot)
@@ -63,6 +65,7 @@ import qualified Cardano.Mock.ChainSync.Server as MockServer
 import qualified Cardano.Mock.Forging.Interpreter as Mock
 import qualified Cardano.Mock.Forging.Tx.Conway as Conway
 import qualified Cardano.Mock.Forging.Tx.Conway.Scenarios as Scenarios
+import qualified Cardano.Mock.Forging.Tx.Generic as Generic
 import qualified Cardano.Mock.Forging.Types as Mock
 
 import DbSync.Test.MockChain
@@ -262,14 +265,35 @@ forgeAndPushUntilNextEpoch mn = do
   reseedStateQueryFromLedger (mnChain mn)
   pure blks
 
--- | Roll back the server-side chain DB to a point. A connected
--- dbsync receiver sees a @MsgRollBackward@ on its next poll.
+-- | Build a Conway @Yes@ vote tx on @gaId@ from every DRep, every
+-- committee hot key, and every stake-pool that already holds stake in
+-- the live ledger. Needed to satisfy ratification quorum for any
+-- non-Info gov action — ParameterChange / HardForkInitiation /
+-- UpdateCommittee all require SPO consent on top of DRep + committee.
+voteAllOnAction :: MockNode -> Governance.GovActionId -> IO Mock.TxEra
+voteAllOnAction mn gaId =
+  Mock.withConwayLedgerState (mcInterpreter (mnChain mn)) $ \ledger ->
+    Right $
+      Mock.TxConway
+        ( Conway.mkGovVoteYesTx
+            gaId
+            ( Generic.drepVoters
+                ++ Generic.committeeVoters
+                ++ Generic.resolveStakePoolVoters ledger
+            )
+        )
+
+-- | Roll back both the server-side chain DB and the interpreter to a
+-- point. The connected dbsync receiver sees a @MsgRollBackward@ on
+-- its next poll; subsequent 'forgeNextBlock' calls then extend the
+-- chain from the rolled-back tip rather than the pre-rollback one.
 rollbackMockNode
   :: MockNode
   -> Network.Point (CardanoBlock StandardCrypto)
   -> IO ()
-rollbackMockNode mn point =
+rollbackMockNode mn point = do
   atomically $ MockServer.rollback (mnServer mn) point
+  Mock.rollbackInterpreter (mcInterpreter (mnChain mn)) point
 
 -- ---------------------------------------------------------------------------
 -- * Inspection

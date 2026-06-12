@@ -26,7 +26,6 @@ import qualified Cardano.Ledger.Alonzo.Scripts as Alonzo
 import Cardano.Ledger.Plutus.Language (Language)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import qualified Data.Map.Strict as Map
-import qualified Data.Set as Set
 import qualified Data.Strict.Maybe as Strict
 import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 
@@ -160,7 +159,6 @@ mkApplyResult mNewEpoch =
   ApplyResult
     { apPrices          = Strict.Nothing
     , apGovExpiresAfter = Strict.Nothing
-    , apPoolsRegistered = Set.empty
     , apNewEpoch        = mNewEpoch
     , apDeposits        = Strict.Nothing
     , apSlotDetails     = dummySlotDetails

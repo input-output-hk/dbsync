@@ -119,7 +119,7 @@ import qualified Data.ByteString.Lazy as LBS
 
 import qualified DbSync.Parser.Metadata as Metadata
 import qualified DbSync.Parser.ParamProposal as PP
-import DbSync.Util (coinToWord64, rewardAddrCred)
+import DbSync.Util (coinToWord64, jsonValueContainsNul, rewardAddrCred)
 import DbSync.Util.Bech32 (serialiseShelleyAddrToBech32)
 
 import Ouroboros.Consensus.Cardano.Block
@@ -207,10 +207,12 @@ mkTxOutCoin txBody = zipWith fromCoinTxOut [0 ..] $ toList (txBody ^. Core.outpu
   where
     fromCoinTxOut :: Word16 -> Core.TxOut era -> GenericTxOut
     fromCoinTxOut idx txOut =
-      GenericTxOut
+      let addr = txOut ^. Core.addrTxOutL
+          !raw = Ledger.serialiseAddr addr
+      in GenericTxOut
         { txOutIndex       = idx
-        , txOutAddress     = addrToText (txOut ^. Core.addrTxOutL)
-        , txOutAddressRaw  = Ledger.serialiseAddr (txOut ^. Core.addrTxOutL)
+        , txOutAddress     = addrToText addr raw
+        , txOutAddressRaw  = raw
         , txOutValue       = fromIntegral (unCoin (txOut ^. Core.valueTxOutL))
         , txOutDataHash    = Nothing
         , txOutInlineDatum = Nothing
@@ -245,10 +247,12 @@ mkMaryTxOut ::
   GenericTxOut
 mkMaryTxOut dataHash idx txOut =
   let MaryValue ada multiAsset = txOut ^. Core.valueTxOutL
+      addr = txOut ^. Core.addrTxOutL
+      !raw = Ledger.serialiseAddr addr
   in GenericTxOut
     { txOutIndex       = idx
-    , txOutAddress     = addrToText (txOut ^. Core.addrTxOutL)
-    , txOutAddressRaw  = Ledger.serialiseAddr (txOut ^. Core.addrTxOutL)
+    , txOutAddress     = addrToText addr raw
+    , txOutAddressRaw  = raw
     , txOutValue       = fromIntegral (unCoin ada)
     , txOutDataHash    = dataHash txOut
     , txOutInlineDatum = Nothing
@@ -604,12 +608,13 @@ getCollateralOutput txBody =
 -- Shelley/Allegra/… addresses go through Bech32 (HRP @addr@ on
 -- mainnet, @addr_test@ on testnet); Byron-shaped bootstrap addresses
 -- (which can still appear as outputs in Shelley+ blocks) round-trip
--- through Base58.
-addrToText :: Ledger.Addr -> Text
-addrToText (Ledger.AddrBootstrap (Ledger.BootstrapAddress byronAddr)) =
+-- through Base58. Takes the already-serialised address bytes so the
+-- per-output 'Ledger.serialiseAddr' isn't run twice.
+addrToText :: Ledger.Addr -> ByteString -> Text
+addrToText (Ledger.AddrBootstrap (Ledger.BootstrapAddress byronAddr)) _raw =
   Text.decodeUtf8 (Byron.addrToBase58 byronAddr)
-addrToText addr@Ledger.Addr{} =
-  serialiseShelleyAddrToBech32 (Ledger.serialiseAddr addr)
+addrToText Ledger.Addr{} raw =
+  serialiseShelleyAddrToBech32 raw
 
 -- ---------------------------------------------------------------------------
 -- * Scripts, datums, redeemers
@@ -1235,9 +1240,25 @@ conwayProposals txBody =
       , ggapDeposit         = coinToWord64 (pProcDeposit pp)
       , ggapAnchor          = anchorData (pProcAnchor pp)
       , ggapAction          = convertGovAction (pProcGovAction pp)
-      , ggapDescriptionJson =
-          Text.decodeUtf8 . LBS.toStrict . Aeson.encode $ pProcGovAction pp
+      , ggapDescriptionJson = renderGovActionJson (pProcGovAction pp)
       }
+
+    -- The description column is NOT NULL jsonb, and PostgreSQL
+    -- rejects a Unicode NUL anywhere in a jsonb value. The only
+    -- free-text the ledger encoding can carry is anchor URLs, which
+    -- the ledger does not character-validate, so a hostile proposal
+    -- could otherwise kill the sync. Substitute a placeholder; the
+    -- action's structured form survives in 'ggapAction' and the tx
+    -- CBOR keeps ground truth.
+    renderGovActionJson :: GovAction ConwayEra -> Text
+    renderGovActionJson ga
+      | jsonValueContainsNul json = encodeText nulPlaceholder
+      | otherwise                 = encodeText json
+      where
+        json = Aeson.toJSON ga
+        encodeText = Text.decodeUtf8 . LBS.toStrict . Aeson.encode
+        nulPlaceholder = Aeson.object
+          [ ("error", Aeson.String "Gov action description contains a Unicode NUL (\\u0000), which PostgreSQL cannot store.") ]
 
 -- | Project a Conway-era 'GovAction' into our 'GenericGovAction' ADT.
 -- Conway's @ParameterChange@ embeds a 'PParamsUpdate ConwayEra' that

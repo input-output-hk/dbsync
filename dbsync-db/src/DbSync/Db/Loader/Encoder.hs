@@ -41,9 +41,16 @@ import Cardano.Prelude
 import Data.ByteString.Builder
   ( Builder
   , byteString
+  , byteStringHex
   , char7
-  , toLazyByteString
-  , word8
+  , int64Dec
+  , word16Dec
+  , word64Dec
+  )
+import Data.ByteString.Builder.Extra
+  ( smallChunkSize
+  , toLazyByteStringWith
+  , untrimmedStrategy
   )
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
@@ -67,9 +74,18 @@ type CopyField = Maybe Builder
 --
 -- Tab-separated, newline-terminated. 'Nothing' → @\\N@.
 -- The entire row is built as a single 'Builder' and materialised once.
+--
+-- The allocation strategy matters here: the default
+-- 'Data.ByteString.Builder.toLazyByteString' starts with a ~4KB
+-- buffer and trim-copies it, which for a typical 100-300B row is a
+-- ~15-40x allocation amplification per row. A 512-byte untrimmed
+-- first chunk fits most rows exactly once; 'LBS.toStrict' then does
+-- the single copy of the bytes actually used.
 buildCopyRow :: [CopyField] -> ByteString
 buildCopyRow fields =
-  LBS.toStrict . toLazyByteString $ go fields
+  LBS.toStrict
+    . toLazyByteStringWith (untrimmedStrategy 512 smallChunkSize) LBS.empty
+    $ go fields
   where
     go []     = char7 '\n'
     go [f]    = field f <> char7 '\n'
@@ -86,17 +102,17 @@ buildCopyRow fields =
 -- | Encode an 'Int64' as decimal ASCII.
 {-# INLINE bInt64 #-}
 bInt64 :: Int64 -> Builder
-bInt64 = byteString . BS8.pack . show
+bInt64 = int64Dec
 
 -- | Encode a 'Word64' as decimal ASCII.
 {-# INLINE bWord64 #-}
 bWord64 :: Word64 -> Builder
-bWord64 = byteString . BS8.pack . show
+bWord64 = word64Dec
 
 -- | Encode a 'Word16' as decimal ASCII.
 {-# INLINE bWord16 #-}
 bWord16 :: Word16 -> Builder
-bWord16 = byteString . BS8.pack . show
+bWord16 = word16Dec
 
 -- | Encode a 'Bool' as @t@ or @f@ (PostgreSQL COPY boolean format).
 {-# INLINE bBool #-}
@@ -107,23 +123,15 @@ bBool False = char7 'f'
 -- | Encode a 'ByteString' as hex with @\\\\x@ prefix for PostgreSQL
 -- bytea COPY format.
 --
--- Zero intermediate ByteStrings: each byte is emitted as two hex
--- nibbles directly into the Builder buffer.
+-- 'byteStringHex' is a fused fixed-size-primitive loop that writes
+-- nibble pairs straight into the output buffer — no per-byte
+-- 'Builder' closures (which for a 50KB @tx_cbor@ row used to mean
+-- megabytes of transient heap per row).
 {-# INLINE bHex #-}
 bHex :: ByteString -> Builder
 bHex bs =
   -- \\x prefix (two backslashes for COPY escaping + 'x')
-  word8 0x5C <> word8 0x5C <> word8 0x78 <> BS.foldl' step mempty bs
-  where
-    step :: Builder -> Word8 -> Builder
-    step acc w =
-      acc <> word8 (hexNibble (w `shiftR` 4))
-          <> word8 (hexNibble (w .&. 0x0F))
-
-    hexNibble :: Word8 -> Word8
-    hexNibble n
-      | n < 10    = n + 0x30  -- '0'
-      | otherwise = n - 10 + 0x61  -- 'a'
+  byteString "\\\\x" <> byteStringHex bs
 
 -- | Encode a 'UTCTime' as @YYYY-MM-DD HH:MM:SS@ (PostgreSQL timestamp).
 {-# INLINE bUTCTime #-}
@@ -135,19 +143,28 @@ bUTCTime = byteString . BS8.pack . formatTime defaultTimeLocale "%F %T"
 bText :: Text -> Builder
 bText = bEscapeText . TE.encodeUtf8
 
--- | Escape a UTF-8 'ByteString' for COPY text format in a single pass.
+-- | Escape a UTF-8 'ByteString' for COPY text format.
 --
--- Backslash → @\\\\@, tab → @\\t@, newline → @\\n@, all others pass through.
-{-# INLINE bEscapeText #-}
+-- Backslash → @\\\\@, tab → @\\t@, newline → @\\n@, carriage return
+-- → @\\r@ (the server rejects a bare CR in text-format COPY data),
+-- all others pass through. Clean spans are emitted as whole slices,
+-- so the common no-escapes case is one scan with zero per-byte work.
 bEscapeText :: ByteString -> Builder
-bEscapeText = BS.foldl' step mempty
+bEscapeText bs =
+  case BS.uncons rest of
+    Nothing         -> byteString clean
+    Just (w, rest') -> byteString clean <> escaped w <> bEscapeText rest'
   where
-    step :: Builder -> Word8 -> Builder
-    step acc w = acc <> case w of
-      0x5C -> word8 0x5C <> word8 0x5C  -- backslash → \\
-      0x09 -> word8 0x5C <> word8 0x74  -- tab → \t
-      0x0A -> word8 0x5C <> word8 0x6E  -- newline → \n
-      _    -> word8 w
+    (clean, rest) = BS.break needsEscape bs
+
+    needsEscape :: Word8 -> Bool
+    needsEscape w = w == 0x5C || w == 0x09 || w == 0x0A || w == 0x0D
+
+    escaped :: Word8 -> Builder
+    escaped 0x5C = byteString "\\\\"
+    escaped 0x09 = byteString "\\t"
+    escaped 0x0A = byteString "\\n"
+    escaped _    = byteString "\\r"
 
 -- ---------------------------------------------------------------------------
 -- * Legacy API (for test compatibility)

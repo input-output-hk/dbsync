@@ -366,7 +366,6 @@ mkApplyResult :: Strict.Maybe Generic.NewEpoch -> ApplyResult
 mkApplyResult mNewEpoch = ApplyResult
   { apPrices          = Strict.Nothing
   , apGovExpiresAfter = Strict.Nothing
-  , apPoolsRegistered = Set.empty
   , apNewEpoch        = mNewEpoch
   , apDeposits        = Strict.Nothing
   , apSlotDetails     = dummySlotDetails

@@ -889,7 +889,10 @@ runBootFollowRestart
           (mapM_ closeOffChainVoteWorker) $ \mVoteWorker -> do
           -- A fresh receiver-side state. Ingest has been bypassed on this
           -- restart path, so none of it is inherited from an upstream env.
-          blockQueue       <- newTBQueueIO 500
+          -- Queue depth matches the Ingest path in App.Run: deep
+          -- enough for scheduling jitter, shallow enough that a full
+          -- queue of decoded blocks doesn't pin hundreds of MB.
+          blockQueue       <- newTBQueueIO 150
           receiverStats    <- newReceiverStats
           latestPointRef   <- newIORef Nothing
           rollbackBoundary <- newTVarIO Nothing

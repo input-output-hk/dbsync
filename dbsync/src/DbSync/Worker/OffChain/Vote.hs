@@ -227,7 +227,9 @@ writeSuccess conn vaId vm = do
       mIsValid   = case (vmIsValidJson vm, mVote) of
                      (True,  Just _ ) -> Just True   -- valid JSON + CIP match
                      (True,  Nothing) -> Just False  -- valid JSON, schema mismatch
-                     (False, _      ) -> Nothing     -- body wasn't JSON at all
+                     (False, _      ) -> Nothing     -- body wasn't JSON at all,
+                                                     -- or contains a Unicode NUL
+                                                     -- PostgreSQL can't store
       language   = maybe "" Vote.getLanguage mVote
       mMinimal   = Vote.getMinimalBody <$> mVote
       mComment   = mMinimal >>= (fmap Vote.textValue . Vote.comment)

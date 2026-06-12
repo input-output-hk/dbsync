@@ -45,7 +45,6 @@ import DbSync.Worker.Ledger.Worker
 import DbSync.ChainSync.Msg (ChainSyncMsg (..))
 import DbSync.StateQuery (SlotDetails (..))
 
-import qualified Data.Set as Set
 
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn)
 
@@ -193,7 +192,6 @@ mkApplyResult ne =
   ApplyResult
     { apPrices          = SMaybe.Nothing
     , apGovExpiresAfter = SMaybe.Nothing
-    , apPoolsRegistered = Set.empty
     , apNewEpoch        = ne
     , apDeposits        = SMaybe.Nothing
     , apSlotDetails     = dummySlotDetails

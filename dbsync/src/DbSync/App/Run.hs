@@ -506,7 +506,12 @@ runIngestThenFollow
     -- were opened by the caller.
     extractStateRef  <- newIORef initialExtractState
     loaderStream     <- mkLoaderStream connStr tableDefs
-    blockQueue       <- newTBQueueIO 500
+    -- 150 ≈ 1.5 consumer drain batches of headroom. Deliberately not
+    -- deeper: each slot can pin a fully-decoded block (several
+    -- hundred KB of heap for a dense Conway block), and during bulk
+    -- sync the consumer is the bottleneck so a deep queue just sits
+    -- full — at 500 that was a few hundred MB of standing heap.
+    blockQueue       <- newTBQueueIO 150
     receiverStats    <- newReceiverStats
     pipelineStats    <- newIORef emptyPipelineStats
     watchdog         <- newWatchdog (ceMinSeverity coreEnv)

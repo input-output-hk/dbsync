@@ -31,7 +31,7 @@ import Control.Concurrent.STM (TBQueue, TVar, writeTBQueue, writeTVar)
 import Control.Concurrent.STM.TBQueue (isFullTBQueue)
 import Control.Tracer (contramap, nullTracer, traceWith)
 import qualified Data.ByteString.Lazy as BSL
-import Data.IORef (IORef, atomicModifyIORef', atomicWriteIORef, newIORef, readIORef)
+import Data.IORef (IORef, atomicModifyIORef', atomicWriteIORef, newIORef, readIORef, writeIORef)
 import qualified Data.Text as Text
 import System.IO.Error (IOError, ioeGetErrorType, isDoesNotExistErrorType)
 import qualified Network.Mux as Mux
@@ -505,16 +505,19 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
         { recvMsgRollForward = \blk tip -> do
             let bn = blockNo blk
                 blkSlot = blockSlot blk
-            -- Debug per-block trace. The first three blocks of every
-            -- session also log at Info so the operator can confirm
-            -- the post-intersect stream is producing — important on
-            -- reconnect / handoff where the first block has a large
-            -- BlockNo that the historical "block 1" trigger missed.
-            traceWith appTracer $ LogMsg Debug "ChainSync"
-              ("Block " <> show bn) Nothing
-            remaining <- atomicModifyIORef' (ssBlocksLeftToLog ss) $ \r ->
-              if r > 0 then (r - 1, r) else (0, 0)
-            when (remaining > 0) $
+            -- The first three blocks of every session log at Info so
+            -- the operator can confirm the post-intersect stream is
+            -- producing — important on reconnect / handoff where the
+            -- first block has a large BlockNo that the historical
+            -- "block 1" trigger missed. No per-block Debug trace:
+            -- the message Text would be built (then dropped by the
+            -- phase filter) on every block of the bulk sync, and
+            -- liveness is already visible via 'bumpReceiver'. The
+            -- counter is only touched on this thread, so the plain
+            -- read costs nothing once it reaches zero.
+            remaining <- readIORef (ssBlocksLeftToLog ss)
+            when (remaining > 0) $ do
+              writeIORef (ssBlocksLeftToLog ss) (remaining - 1)
               traceWith appTracer $ LogMsg Info "ChainSync"
                 ( "First post-intersect block at slot " <> show blkSlot
                     <> ", block " <> show bn

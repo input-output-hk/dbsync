@@ -100,10 +100,12 @@ beginStream bc = do
   result <- PQ.exec (bcConnection bc) sql
   checkResult bc "beginStream" result
 
--- | Write a single encoded row to the stream.
+-- | Write a chunk of one or more encoded rows to the stream.
 --
--- The row must be tab-separated and newline-terminated (produced by
--- the encoder helpers in @DbSync.Db.Loader.Encoder@).
+-- Rows are tab-separated and newline-terminated (produced by the
+-- encoder helpers in @DbSync.Db.Loader.Encoder@); the protocol does
+-- not require chunks to be row-aligned, so any concatenation of
+-- complete rows is valid.
 writeStreamRow :: HasCallStack => LoaderConnection -> ByteString -> IO ()
 writeStreamRow bc rowBytes = do
   copyResult <- PQ.putCopyData (bcConnection bc) rowBytes
@@ -122,14 +124,19 @@ writeStreamRow bc rowBytes = do
 --
 -- Must be called before 'commitTransaction'. After this, the
 -- connection is back in normal SQL mode.
+--
+-- This is where a /server-side/ COPY failure surfaces: @libpq@
+-- buffers rows locally, so a row the server rejects is only
+-- reported in the final result after the stream ends. If that
+-- result were not checked, the subsequent COMMIT would run inside
+-- an aborted transaction — which PostgreSQL executes as ROLLBACK
+-- while still reporting success — silently dropping every row of
+-- the stream.
 endStream :: HasCallStack => LoaderConnection -> IO ()
 endStream bc = do
   copyResult <- PQ.putCopyEnd (bcConnection bc) mempty
   case copyResult of
-    PQ.CopyInOk -> do
-      -- Must consume the result from putCopyEnd
-      _result <- PQ.getResult (bcConnection bc)
-      pure ()
+    PQ.CopyInOk -> drainResults
     PQ.CopyInError -> do
       errMsg <- PQ.errorMessage (bcConnection bc)
       throwDb $
@@ -137,6 +144,23 @@ endStream bc = do
         <> ": " <> maybe "(no error)" (toS . BS8.unpack) errMsg
     PQ.CopyInWouldBlock ->
       endStream bc
+  where
+    -- Consume every pending result. The COPY command's final status
+    -- must be CommandOk; anything else means the server rejected the
+    -- stream and the transaction is already aborted.
+    drainResults :: IO ()
+    drainResults = do
+      mResult <- PQ.getResult (bcConnection bc)
+      for_ mResult $ \result -> do
+        status <- PQ.resultStatus result
+        case status of
+          PQ.CommandOk -> drainResults
+          _ -> do
+            errMsg <- PQ.resultErrorMessage result
+            throwDb $
+              "COPY stream for table " <> bcTableName bc
+              <> " failed server-side (status: " <> show status <> "): "
+              <> maybe "(no error)" (toS . BS8.unpack) errMsg
 
 -- ---------------------------------------------------------------------------
 -- * Transaction control

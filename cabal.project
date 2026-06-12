@@ -28,6 +28,16 @@ packages:
 -- Package flags
 -- ---------------------------------------------------------------------------
 
+-- Local packages build with full optimisation. cabal's default is
+-- -O1; the per-row encoder / parser / extractor loops benefit from
+-- -O2's SpecConstr and deeper unboxing. Note: all measurements in
+-- measurements/ taken before 2026-06-12 are of -O1 builds.
+package dbsync
+  optimization: 2
+
+package dbsync-db
+  optimization: 2
+
 package postgresql-libpq
   flags: +use-pkg-config
 

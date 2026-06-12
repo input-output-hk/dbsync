@@ -12,7 +12,10 @@
 -- where the COPY pipeline isn't running.
 --
 -- The per-sample line traces at 'Debug'. When a thread fails to
--- advance for 'stallWarnThreshold' consecutive intervals the sampler
+-- advance for a phase-dependent number of consecutive intervals
+-- ('stallWarnThreshold' in Follow, 'ingestStallWarnThreshold' in
+-- Ingest, where epoch-boundary commits and LSM maintenance
+-- legitimately pause all threads for tens of seconds) the sampler
 -- escalates to one 'Warning' line per stuck thread so the alert is
 -- visible against the surrounding Debug noise.
 --
@@ -43,6 +46,7 @@ module DbSync.Trace.Watchdog
   , runWatchdogIO
   , watchdogInterval
   , stallWarnThreshold
+  , ingestStallWarnThreshold
   ) where
 
 import Cardano.Prelude
@@ -179,9 +183,22 @@ watchdogInterval = 5
 -- | How many consecutive zero-delta samples count as a stall worth
 -- a 'Warning'. Three intervals at 'watchdogInterval' = 5s is 15s of
 -- no progress on a thread — long enough to be confident it isn't
--- just a slow block.
+-- just a slow block. Used on the Follow path, where blocks arrive
+-- one at a time and nothing legitimately pauses the threads.
 stallWarnThreshold :: Int
 stallWarnThreshold = 3
+
+-- | Ingest-phase stall threshold: 24 intervals at 'watchdogInterval'
+-- = 5s is two minutes. Epoch boundaries legitimately stop all three
+-- threads at once (final COPY flush + transaction commit + LSM
+-- persist, and a full snapshot-reopen compaction on the coarse
+-- cadence), so the Follow threshold would fire a spurious 'Warning'
+-- at every boundary. Two minutes keeps routine boundary work quiet
+-- while still catching genuine hangs; if a boundary does cross it,
+-- the warning carries the consumer note (e.g. @boundary: ...@) so
+-- the line is self-describing rather than alarming.
+ingestStallWarnThreshold :: Int
+ingestStallWarnThreshold = 24
 
 -- | Per-thread sampler iteration state: previous block count plus
 -- the current streak of consecutive zero-delta samples.
@@ -196,19 +213,18 @@ data ThreadAdvance = ThreadAdvance
   , taDelta   :: !Word64
   , taCrossed :: !Bool
     -- ^ 'True' on the iteration that pushes the streak from below to
-    -- at-or-above 'stallWarnThreshold'. Only this iteration emits a
-    -- 'Warning'; later iterations on the same stuck-streak stay
-    -- silent so the operator gets one alert per stuck-period, not a
-    -- repeating flood.
+    -- at-or-above the active stall threshold. Only this iteration
+    -- emits a 'Warning'; later iterations on the same stuck-streak
+    -- stay silent so the operator gets one alert per stuck-period,
+    -- not a repeating flood.
   }
 
-advanceThread :: ThreadSample -> Word64 -> ThreadAdvance
-advanceThread ts curBlocks =
+advanceThread :: Int -> ThreadSample -> Word64 -> ThreadAdvance
+advanceThread threshold ts curBlocks =
   ThreadAdvance
     { taNext    = ThreadSample { tsPrevBlocks = curBlocks, tsStreak = streak' }
     , taDelta   = delta
-    , taCrossed = tsStreak ts < stallWarnThreshold
-                    && streak' >= stallWarnThreshold
+    , taCrossed = tsStreak ts < threshold && streak' >= threshold
     }
   where
     !delta   = monotonicDelta (tsPrevBlocks ts) curBlocks
@@ -242,7 +258,9 @@ monotonicDelta prev cur
 
 -- | Background loop: every 'watchdogInterval' seconds, sample every
 -- counter and log one Debug context line. Per-thread stall streaks
--- escalate to a 'Warning' once they cross 'stallWarnThreshold'.
+-- escalate to a 'Warning' once they cross the phase-appropriate
+-- threshold ('ingestStallWarnThreshold' when Ingest samples are
+-- wired, 'stallWarnThreshold' otherwise).
 --
 -- When the watchdog is 'WatchdogDisabled' this returns immediately;
 -- the caller's surrounding 'withAsync' then has a child that exits
@@ -281,6 +299,12 @@ runWatchdogIO tracer (WatchdogEnabled s) blockQ mLedgerQ mSamples = do
   loop (seed initConsumerB) (seed initWorkerB) (seed initReceiverB)
        emptyPipelineSample
   where
+    -- Ingest samples are wired only on the Ingest path, so their
+    -- presence doubles as the phase signal for the stall threshold.
+    activeStallThreshold :: Int
+    activeStallThreshold = case mSamples of
+      Just _  -> ingestStallWarnThreshold
+      Nothing -> stallWarnThreshold
     loop !consumerPrev !workerPrev !receiverPrev !pipelinePrev = do
       threadDelay (watchdogInterval * 1_000_000)
 
@@ -302,9 +326,9 @@ runWatchdogIO tracer (WatchdogEnabled s) blockQ mLedgerQ mSamples = do
       -- fields.
       mPipelineNow <- traverse readPipeline mSamples
 
-      let consumerAdv = advanceThread consumerPrev consumerB
-          workerAdv   = advanceThread workerPrev   workerB
-          receiverAdv = advanceThread receiverPrev receiverB
+      let consumerAdv = advanceThread activeStallThreshold consumerPrev consumerB
+          workerAdv   = advanceThread activeStallThreshold workerPrev   workerB
+          receiverAdv = advanceThread activeStallThreshold receiverPrev receiverB
 
           dConsumer = taDelta consumerAdv
           dWorker   = taDelta workerAdv
@@ -443,7 +467,7 @@ runWatchdogIO tracer (WatchdogEnabled s) blockQ mLedgerQ mSamples = do
     emitStallWarning threadName slot note =
       traceWith tracer $ LogMsg Warning "Watchdog"
         ( threadName <> " has not advanced in "
-            <> show (stallWarnThreshold * watchdogInterval) <> "s"
+            <> show (activeStallThreshold * watchdogInterval) <> "s"
             <> " (last slot " <> show slot
             <> ", note=" <> note <> ")"
         ) Nothing

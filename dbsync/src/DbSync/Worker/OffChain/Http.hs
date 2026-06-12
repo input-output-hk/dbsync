@@ -50,6 +50,7 @@ import qualified Network.HTTP.Types as Http
 import qualified Network.Socket as Socket
 
 import DbSync.Db.Types (AnchorType)
+import DbSync.Util (jsonValueContainsNul)
 import DbSync.Worker.OffChain.Types
   ( FetchError (..)
   , PoolMetadata (..)
@@ -255,15 +256,22 @@ fetchPoolMetadata manager url expectedHash = runExceptT $ do
   when (computedHash /= expectedHash) $
     ExceptT . pure $ Left (FetchErrorHashMismatch expectedHash computedHash)
   case Aeson.eitherDecode' @Aeson.Value respLBS of
-    Left e  -> ExceptT . pure $ Left (FetchErrorDecode (Text.pack e))
-    Right v -> case extractTicker v of
-      Nothing     -> ExceptT . pure $ Left (FetchErrorDecode "missing 'ticker' field")
-      Just ticker -> pure PoolMetadata
-        { pmTicker        = ticker
-        , pmHash          = computedHash
-        , pmRawBytes      = respBS
-        , pmCanonicalJson = Text.decodeUtf8 (LBS.toStrict (Aeson.encode v))
-        }
+    Left e -> ExceptT . pure $ Left (FetchErrorDecode (Text.pack e))
+    -- A Unicode NUL anywhere in the document poisons both the
+    -- NOT NULL jsonb column and the text columns (ticker, …)
+    -- derived from it — PostgreSQL rejects NUL in both. Treat
+    -- it like any other undecodable body.
+    Right v
+      | jsonValueContainsNul v ->
+          ExceptT . pure $ Left (FetchErrorDecode "metadata contains a Unicode NUL (\\u0000), which PostgreSQL cannot store")
+      | otherwise -> case extractTicker v of
+          Nothing     -> ExceptT . pure $ Left (FetchErrorDecode "missing 'ticker' field")
+          Just ticker -> pure PoolMetadata
+            { pmTicker        = ticker
+            , pmHash          = computedHash
+            , pmRawBytes      = respBS
+            , pmCanonicalJson = Text.decodeUtf8 (LBS.toStrict (Aeson.encode v))
+            }
 
 extractTicker :: Aeson.Value -> Maybe Text
 extractTicker (Aeson.Object o) = case KeyMap.lookup "ticker" o of
@@ -330,7 +338,14 @@ buildVoteMetadata respBS respLBS expectedHash anchorType = do
     Left (FetchErrorHashMismatch expectedHash computedHash)
   let (decodedValue, isValidJson) = case Aeson.eitherDecode' @Aeson.Value respLBS of
         Left err -> (jsonParseErrorPayload (Text.pack err), False)
-        Right v  -> (v, True)
+        -- Valid JSON, but PostgreSQL rejects a Unicode NUL anywhere
+        -- in a jsonb value (and in the text columns the CIP decode
+        -- would feed), so the document cannot be stored as-is.
+        -- Substitute the placeholder and skip the CIP decode; the
+        -- bytes column keeps the original document.
+        Right v
+          | jsonValueContainsNul v -> (unicodeNulErrorPayload, False)
+          | otherwise              -> (v, True)
       (mVote, mWarning)
         | isValidJson = case Vote.eitherDecodeOffChainVoteData respLBS anchorType of
             Left e  -> (Nothing, Just (Text.pack e))
@@ -349,4 +364,9 @@ jsonParseErrorPayload :: Text -> Aeson.Value
 jsonParseErrorPayload err = Aeson.object
   [ ("error",       Aeson.String "Content is not valid JSON. See bytes column for raw data.")
   , ("parse_error", Aeson.String err)
+  ]
+
+unicodeNulErrorPayload :: Aeson.Value
+unicodeNulErrorPayload = Aeson.object
+  [ ("error", Aeson.String "Content contains a Unicode NUL (\\u0000), which PostgreSQL cannot store. See bytes column for raw data.")
   ]

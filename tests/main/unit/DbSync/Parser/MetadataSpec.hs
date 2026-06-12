@@ -20,6 +20,7 @@ import Test.Hspec (Spec, describe, it, shouldBe)
 import DbSync.Parser.Metadata
   ( Metadatum (..)
   , metadataValueToJson
+  , renderMetadataJson
   , serialiseSingleton
   )
 
@@ -65,6 +66,27 @@ spec = do
     it "integer key 1 and text key '1' collide and one is dropped" $
       jsonText (Map [(I 1, S "i"), (S "1", S "t")])
         `shouldBe` "{\"1\":\"t\"}"
+
+  describe "renderMetadataJson / PostgreSQL NUL guard" $ do
+    -- PostgreSQL rejects \u0000 in jsonb, so values whose JSON
+    -- rendering would contain one map to SQL NULL (the bytes
+    -- column keeps the original CBOR). Mirrors the original
+    -- db-sync (IntersectMBO/cardano-db-sync#297).
+    it "renders NUL-free values as JSON text" $
+      renderMetadataJson (S "hello") `shouldBe` Just "\"hello\""
+
+    it "maps a text value containing U+0000 to Nothing" $
+      renderMetadataJson (S "a\NULb") `shouldBe` Nothing
+
+    it "maps a map key containing U+0000 to Nothing" $
+      renderMetadataJson (Map [(S "\NULkey", I 1)]) `shouldBe` Nothing
+
+    it "maps a NUL nested deep inside containers to Nothing" $
+      renderMetadataJson (List [I 1, Map [(I 0, S "\NUL")]])
+        `shouldBe` Nothing
+
+    it "keeps byte values containing 0x00 (they render as hex)" $
+      renderMetadataJson (B (BS.pack [0x00])) `shouldBe` Just "\"0x00\""
 
 -- ---------------------------------------------------------------------------
 -- Helpers

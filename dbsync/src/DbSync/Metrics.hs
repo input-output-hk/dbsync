@@ -1,9 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Prometheus metrics for monitoring sync progress.
---
--- Separate from tracing — metrics are quantitative counters/gauges
--- exposed via Prometheus HTTP endpoint.
+-- | Prometheus counters and gauges exposed via the metrics HTTP endpoint.
 module DbSync.Metrics
   ( -- * Types
     Metrics (..)
@@ -21,15 +18,11 @@ import Cardano.Prelude
 
 import Cardano.Slotting.Slot (EpochNo (..))
 
--- | Access metrics from any environment. Implemented per-env.
-class HasMetrics env where
-  getMetrics :: env -> Metrics
-
+-- ---------------------------------------------------------------------------
 -- * Types
+-- ---------------------------------------------------------------------------
 
 -- | Prometheus counters and gauges exposed to the metrics endpoint.
--- Updated throughout the sync lifecycle; readers come via
--- 'HasMetrics'.
 data Metrics = Metrics
   { mBlocksProcessed :: !Int64
   , mCurrentEpoch    :: !Int64
@@ -43,21 +36,28 @@ data Metrics = Metrics
   }
   deriving stock (Show)
 
--- * Convenience functions
+-- ---------------------------------------------------------------------------
+-- * Accessor class
+-- ---------------------------------------------------------------------------
 
--- | Increment the blocks processed counter.
+-- | Access metrics from any environment.
+class HasMetrics env where
+  getMetrics :: env -> Metrics
+
+-- ---------------------------------------------------------------------------
+-- * Convenience
+-- ---------------------------------------------------------------------------
+
 incBlocksProcessed :: (MonadReader env m, HasMetrics env) => m ()
 incBlocksProcessed = do
   _metrics <- asks getMetrics
   pure ()
 
--- | Set the current epoch gauge.
 setCurrentEpoch :: (MonadReader env m, HasMetrics env) => EpochNo -> m ()
 setCurrentEpoch _epochNo = do
   _metrics <- asks getMetrics
   pure ()
 
--- | Add to the COPY rows written counter.
 addCopyRows :: (MonadReader env m, HasMetrics env) => Int -> m ()
 addCopyRows _n = do
   _metrics <- asks getMetrics

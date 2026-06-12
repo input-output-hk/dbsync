@@ -43,9 +43,6 @@ import DbSync.Worker.OffChain.Types (PoolMetadataRef, VotingAnchorRef)
 -- ---------------------------------------------------------------------------
 
 -- | How to obtain database IDs during block processing.
---
--- The @m@ parameter is the effect monad — 'IO' in production,
--- potentially a test monad in tests.
 data IdResolver m = IdResolver
   { -- ---------------------------------------------------------------
     -- Core (shared IDs — used by processBlock centrally)
@@ -293,11 +290,8 @@ data IdResolver m = IdResolver
 -- * Accessor class
 -- ---------------------------------------------------------------------------
 
--- | Access the (IO-effecting) ID resolver from any environment.
---
--- The resolver is fixed to 'IO' here because the production resolvers
--- ('mkIngestResolver', and the future 'FollowingChainTip' SELECT/INSERT
--- resolver) both run in 'IO'. Test environments can store an 'IO'-backed
--- mock; nothing in the codebase needs an arbitrary @m@ at the env layer.
+-- | Access the ID resolver from any environment. Fixed to 'IO'
+-- because every production resolver runs in 'IO'; tests can store
+-- an 'IO'-backed mock.
 class HasResolver env where
   getResolver :: env -> IdResolver IO

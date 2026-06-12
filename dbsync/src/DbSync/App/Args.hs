@@ -23,11 +23,19 @@ import DbSync.StateQuery.Types (StateQueryVar)
 -- executable passes 'Nothing' for both.
 data AppArgs = AppArgs
   { aaProfile           :: !SyncConfig
+    -- ^ Resolved sync profile (enabled extractors, ledger flags,
+    --   batch sizes).
   , aaNodeConfig        :: !NodeConfig
+    -- ^ Parsed cardano-node configuration.
   , aaGenesisConfig     :: !GenesisConfig
+    -- ^ Per-era genesis configs (Byron, Shelley, Alonzo, Conway).
   , aaSocketPath        :: !FilePath
+    -- ^ Path to the local cardano-node IPC socket.
   , aaLedgerStateDir    :: !FilePath
+    -- ^ Parent directory under which @dbsync-ledger\/@ holds ledger
+    --   snapshots and the LSM session.
   , aaResyncFromGenesis :: !Bool
+    -- ^ When 'True', wipe persistent state and re-sync from origin.
   , aaRollbackToSlot    :: !(Maybe Word64)
     -- ^ Explicit CLI rollback request. Takes precedence over the
     --   'pending_rollback_slot' marker when both are set.

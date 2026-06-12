@@ -1,13 +1,9 @@
 -- | Application monad stack.
 --
--- 'AppM' is a thin @ReaderT env IO@ newtype used throughout db-sync.
--- The phase-specific aliases ('CoreM', 'IngestM', 'FollowM',
--- 'LedgerM') name the env each phase uses; everything else carries
--- 'HasXxx' constraints and works in any matching env.
---
--- 'AppM' derives 'MonadUnliftIO' so 'bracket', 'catch',
--- 'withAsync', and friends work directly without manual @runAppM@
--- ceremony.
+-- 'AppM' is a thin @ReaderT env IO@ newtype. The phase-specific
+-- aliases ('CoreM', 'IngestM', 'FollowM', 'LedgerM') name the env
+-- each phase uses; everything else carries 'HasXxx' constraints
+-- and works in any matching env.
 module DbSync.AppM
   ( AppM (..)
   , runAppM
@@ -27,14 +23,13 @@ import Cardano.Prelude
 
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 
-import DbSync.SyncState.Row (HasControlConnection)
+import DbSync.App.Env (CoreEnv, FollowEnv, HasNetwork, IngestEnv)
 import DbSync.Db.Transaction (HasHasqlConnection)
-import DbSync.App.Env (CoreEnv, FollowEnv, IngestEnv)
 import DbSync.Extractor (HasExtractors)
-import DbSync.Worker.Ledger.Types (LedgerEnv)
 import DbSync.Resolver (HasResolver)
+import DbSync.SyncState.Row (HasControlConnection)
 import DbSync.Trace (HasTracer)
-import DbSync.App.Env (HasNetwork)
+import DbSync.Worker.Ledger.Types (LedgerEnv)
 import DbSync.Writer (HasWriter)
 
 -- | The core application monad: @ReaderT env IO@.
@@ -48,24 +43,18 @@ runAppM env (AppM m) = runReaderT m env
 -- | Core phase: shared configuration + tracer + metrics.
 type CoreM = AppM CoreEnv
 
--- | IngestChainHistory phase: bulk-load env with COPY writer, dedup
--- maps, ledger subsystem handle, etc.
+-- | IngestChainHistory phase: bulk-load env (COPY writer, dedup maps, ledger subsystem handle).
 type IngestM = AppM IngestEnv
 
 -- | FollowingChainTip phase: lighter env for steady-state INSERTs.
 type FollowM = AppM FollowEnv
 
--- | LedgerWorker / snapshot subsystem: only valid when the ledger
--- feature is enabled (callers pattern-match on 'HasLedgerEnv' at the
--- boundary, then run the action via @runAppM lenv@).
+-- | LedgerWorker / snapshot subsystem. Only valid when the ledger
+-- feature is enabled.
 type LedgerM = AppM LedgerEnv
 
 -- ---------------------------------------------------------------------------
--- Constraint synonyms
---
--- Bundles of constraints used together repeatedly. Keep the set
--- small — only collapse when the same combination shows up more
--- than a handful of times.
+-- * Constraint synonyms
 -- ---------------------------------------------------------------------------
 
 -- | Anything that needs an env-bound tracer plus 'MonadIO'.

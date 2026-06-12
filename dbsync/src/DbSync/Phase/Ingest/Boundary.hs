@@ -10,7 +10,7 @@
 -- 'handleEpochBoundary' runs a pipelined cascade — flush COPY,
 -- snapshot per-epoch buffers, await the tx-out worker, advance
 -- @sync_state@ for the /previous/ pending epoch, enqueue the
--- just-finished one, reopen the loader stream, compact the LSM
+-- just-finished one, reopen the loader stream, persist the LSM
 -- tables, and emit the per-epoch summary line. The pipelining means
 -- @sync_state@ always lags by one epoch behind the consumer.
 module DbSync.Phase.Ingest.Boundary
@@ -166,7 +166,8 @@ newConsumerLoopState bootSlot = do
 --   6. Enqueue the just-finished epoch's resolve job to the worker.
 --   7. Stash the snapshot for the /next/ boundary's @sync_state@ write.
 --   8. Reopen the loader stream for the next epoch.
---   9. Compact the LSM tables (caps active runs + warms restart).
+--   9. Persist the LSM tables (snapshot refresh; full
+--      reopen-compaction every 'ingestCompactEveryEpochs').
 --
 -- Followed by the per-epoch summary log, optional dedup-debug log,
 -- and a major GC on epochs above 10s wall-clock.
@@ -256,10 +257,11 @@ handleEpochBoundary cls prev slot = do
     lsReopen loaderStream
     setConsumerNote watchdog "consumer: post-commit"
 
-  -- Step 9: compact the LSM-backed Ingest tables. Caps active run
-  -- count (and open fds) and produces the warm-up state for a
-  -- resumed boot.
-  liftIO $ compactIngestStores watchdog utxoStore dedupStores lsm
+  -- Step 9: persist the LSM-backed Ingest tables (snapshot refresh
+  -- for restart-resume); every 'ingestCompactEveryEpochs' the cycle
+  -- also reopens each table from its snapshot to cap active runs
+  -- and open fds.
+  liftIO $ compactIngestStores watchdog utxoStore dedupStores lsm prev
 
   -- Per-epoch stats row + summary log.
   epochEnd <- liftIO getCurrentTime
@@ -355,24 +357,41 @@ flushPendingDeposits hasLedger prev slot ctrl = case hasLedger of
 -- * Helpers
 -- ---------------------------------------------------------------------------
 
--- | Snapshot each LSM-backed Ingest table and reopen it from the
--- snapshot. Bounds active run count and seeds the warm-up state for
--- a resumed boot.
+-- | Epoch cadence for the full snapshot+reopen cycle in
+-- 'compactIngestStores'. Reopening a table from its snapshot
+-- re-reads and CRC-checks every run file, so its cost grows
+-- linearly with store size; a coarse cadence bounds active-run/fd
+-- growth while amortising that stall. Snapshots themselves are
+-- refreshed at every boundary regardless, so the restart-resume
+-- anchor is always at most one epoch old and lookup contents (and
+-- hence the UTxO hit rate that keeps Prep's backfill small) are
+-- identical either way.
+ingestCompactEveryEpochs :: Word64
+ingestCompactEveryEpochs = 20
+
+-- | Persist every LSM-backed Ingest table (cheap snapshot refresh);
+-- on every 'ingestCompactEveryEpochs'-th epoch also reopen each
+-- table from its snapshot to collapse the active run set and cap
+-- open fds.
 compactIngestStores
   :: Watchdog
   -> UtxoStore.UtxoStore
   -> DedupStores
   -> LsmSession
+  -> EpochNo          -- ^ epoch just completed
   -> IO ()
-compactIngestStores watchdog utxoStore dedupStores lsm = do
-  setConsumerNote watchdog "consumer: utxoStore compact"
-  UtxoStore.compactUtxoStore utxoStore lsm
-  setConsumerNote watchdog "consumer: dedupStore compact"
-  DedupStore.compactDedupStore (DedupStore.dstPoolHash     dedupStores) lsm
-  DedupStore.compactDedupStore (DedupStore.dstStakeAddress dedupStores) lsm
-  DedupStore.compactDedupStore (DedupStore.dstSlotLeader   dedupStores) lsm
-  DedupStore.compactDedupStore (DedupStore.dstMultiAsset   dedupStores) lsm
-  DedupStore.compactDedupStore (DedupStore.dstScriptHash   dedupStores) lsm
+compactIngestStores watchdog utxoStore dedupStores lsm prev = do
+  let fullCycle = unEpochNo prev `mod` ingestCompactEveryEpochs == 0
+      note      = if fullCycle then "compact" else "persist" :: Text
+  setConsumerNote watchdog ("consumer: utxoStore " <> note)
+  if fullCycle
+    then UtxoStore.compactUtxoStore utxoStore lsm
+    else UtxoStore.persistUtxoStore utxoStore lsm
+  setConsumerNote watchdog ("consumer: dedupStore " <> note)
+  for_ (DedupStore.allDedupStores dedupStores) $ \store ->
+    if fullCycle
+      then DedupStore.compactDedupStore store lsm
+      else DedupStore.persistDedupStore store lsm
 
 -- | Build the operator-facing per-epoch summary line:
 -- @"Epoch N | M blk in Ts (R blk/s) [| utxo HR=…%] [| (~P%)]"@.

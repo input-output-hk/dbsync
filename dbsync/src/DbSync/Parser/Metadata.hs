@@ -16,6 +16,7 @@ module DbSync.Parser.Metadata
     -- * Encoding helpers
   , serialiseSingleton
   , metadataValueToJson
+  , renderMetadataJson
   ) where
 
 import Cardano.Prelude
@@ -28,11 +29,14 @@ import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Key as Aeson.Key
 import qualified Data.Aeson.Text as Aeson.Text
 import qualified Data.ByteString.Base16 as Base16
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Strict as Map
 import qualified Data.Text.Encoding as Text
 import qualified Data.Text.Lazy as Text.Lazy
 import qualified Data.Vector as Vector
 import Lens.Micro ((^.))
+
+import DbSync.Util (jsonValueContainsNul)
 
 -- ---------------------------------------------------------------------------
 -- * Extraction
@@ -84,3 +88,25 @@ metadataValueToJson = go
 
     bytesPrefix :: Text
     bytesPrefix = "0x"
+
+-- | Render a 'Metadatum' to the JSON text stored in
+-- @tx_metadata.json@, or 'Nothing' when PostgreSQL cannot store it.
+--
+-- On-chain metadata does contain text with embedded NUL (@U+0000@) —
+-- e.g. UTF-16 pasted into a metadata string — and PostgreSQL rejects
+-- @\\u0000@ anywhere in a @jsonb@ value. The original db-sync stores
+-- SQL @NULL@ in the @json@ column for those rows, keeping the raw
+-- CBOR in @bytes@ as ground truth (see
+-- IntersectMBO\/cardano-db-sync#297); we do the same.
+--
+-- 'Aeson.encode' yields valid UTF-8 by construction, so the
+-- 'Text.decodeUtf8'' fallback to 'Nothing' is defensive only.
+renderMetadataJson :: Metadatum -> Maybe Text
+renderMetadataJson value
+  | jsonValueContainsNul json = Nothing
+  | otherwise =
+      case Text.decodeUtf8' (LBS.toStrict (Aeson.encode json)) of
+        Right t -> Just t
+        Left _  -> Nothing
+  where
+    json = metadataValueToJson value

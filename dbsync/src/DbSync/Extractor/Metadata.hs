@@ -5,19 +5,17 @@
 -- Emits one @tx_metadata@ row per metadata key in a transaction.
 -- Each row stores the single-key CBOR encoding of that pair (matching
 -- what the original @cardano-db-sync@ writes) plus the no-schema JSON
--- rendering of the value.
+-- rendering of the value — SQL @NULL@ when the value contains a
+-- Unicode NUL that PostgreSQL cannot store (see 'renderMetadataJson').
 module DbSync.Extractor.Metadata
   ( metadataExtractor
   ) where
 
 import Cardano.Prelude
 
-import qualified Data.Aeson as Aeson
-import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Strict as Map
-import qualified Data.Text.Encoding as Text
 
-import DbSync.Parser.Metadata (metadataValueToJson, serialiseSingleton)
+import DbSync.Parser.Metadata (renderMetadataJson, serialiseSingleton)
 import DbSync.Parser.Types (GenericTx (..))
 import DbSync.Db.Schema.Metadata
 import DbSync.Db.Types (DbWord64 (..))
@@ -57,15 +55,7 @@ processMetadata ctx = do
     writeOne w txId (key, value) =
       writeTxMetadata w TxMetadata
         { txMetadataKey   = DbWord64 key
-        , txMetadataJson  = renderJson value
+        , txMetadataJson  = renderMetadataJson value
         , txMetadataBytes = serialiseSingleton key value
         , txMetadataTxId  = txId
         }
-
-    -- 'Aeson.encode' yields valid UTF-8 by construction, so
-    -- 'Text.decodeUtf8'' should never fail here; the 'Nothing'
-    -- fallback is defensive.
-    renderJson value =
-      case Text.decodeUtf8' (LBS.toStrict (Aeson.encode (metadataValueToJson value))) of
-        Right t -> Just t
-        Left _  -> Nothing

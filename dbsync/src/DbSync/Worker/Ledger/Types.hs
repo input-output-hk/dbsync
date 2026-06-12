@@ -116,7 +116,6 @@ import qualified DbSync.Worker.Ledger.EpochUpdate as Generic
 import qualified DbSync.Worker.Ledger.ProtoParams as Generic
 import qualified DbSync.Worker.Ledger.StakeDist as Generic
 import DbSync.Worker.Ledger.Event (LedgerEvent, RewardsCapture)
-import DbSync.Worker.Ledger.Keys (PoolKeyHash)
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock)
 import Ouroboros.Consensus.Shelley.HFEras ()                -- per-era HFC instances
 import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()  -- 'LedgerSupportsProtocol' orphans
@@ -431,8 +430,6 @@ emptyDepositsMap = DepositsMap Map.empty
 data ApplyResult = ApplyResult
   { apPrices          :: !(Strict.Maybe Prices)
   , apGovExpiresAfter :: !(Strict.Maybe Ledger.EpochInterval)
-  , apPoolsRegistered :: !(Set.Set PoolKeyHash)
-    -- ^ Pool registrations observed __before__ the block was applied.
   , apNewEpoch        :: !(Strict.Maybe Generic.NewEpoch)
     -- ^ Only 'Just' for the first block of a new epoch.
   , apDeposits        :: !(Strict.Maybe Generic.Deposits)
@@ -450,7 +447,6 @@ defaultApplyResult slotDetails =
   ApplyResult
     { apPrices          = Strict.Nothing
     , apGovExpiresAfter = Strict.Nothing
-    , apPoolsRegistered = Set.empty
     , apNewEpoch        = Strict.Nothing
     , apDeposits        = Strict.Nothing
     , apSlotDetails     = slotDetails

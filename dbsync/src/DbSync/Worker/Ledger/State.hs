@@ -28,10 +28,9 @@ sync engine. Owns:
     buffer first, then falls back to a disk-snapshot load when the
     target is older than the buffer can reach.
 
-Small ledger projections (@getPrices@, @getRegisteredPools@,
-@findAdaPots@, @findProposedCommittee@, @getStakeSlice@) live here
-because each pulls one value out of a 'CardanoLedgerState' or event
-stream.
+Small ledger projections (@getPrices@, @findAdaPots@,
+@findProposedCommittee@, @getStakeSlice@) live here because each
+pulls one value out of a 'CardanoLedgerState' or event stream.
 -}
 module DbSync.Worker.Ledger.State
   ( -- * LedgerDB management
@@ -39,6 +38,7 @@ module DbSync.Worker.Ledger.State
   , pruneLedgerDb
   , pruneStrictSeq
   , ledgerDbCheckpointBufferSize
+  , ingestLedgerDbCheckpointBufferSize
   , ledgerDbCurrent
   , writeLedgerState
   , readCurrentStateUnsafe
@@ -73,7 +73,6 @@ module DbSync.Worker.Ledger.State
   , getGovExpiration
   , getGovState
   , getPrices
-  , getRegisteredPools
 
     -- * Miscellaneous helpers
   , getHeaderHash
@@ -103,9 +102,7 @@ import Control.Concurrent.Class.MonadSTM.Strict
 import qualified Control.Concurrent.Class.MonadSTM.Strict as STM
 import Control.Concurrent.STM.TBQueue (newTBQueueIO, writeTBQueue)
 import qualified Data.ByteString.Short as SBS
-import qualified Data.Map.Strict as Map
 import qualified Data.Sequence.Strict as StrictSeq
-import qualified Data.Set as Set
 import qualified Data.Strict.Maybe as Strict
 import qualified Data.Time.Clock as Time
 import GHC.IO.Exception (userError)
@@ -122,7 +119,6 @@ import Ouroboros.Consensus.Ledger.Basics (EmptyMK)
 import Ouroboros.Consensus.Ledger.Extended (ExtLedgerCfg (..), ExtLedgerState (..))
 import Ouroboros.Consensus.Ledger.Tables.Utils (forgetLedgerTables)
 import qualified Ouroboros.Consensus.Node.ProtocolInfo as Consensus
-import Ouroboros.Consensus.Shelley.Ledger.Block (ShelleyBlock)
 import qualified Ouroboros.Consensus.Shelley.Ledger.Ledger as Consensus
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot)
 import Ouroboros.Consensus.Storage.LedgerDB.V2.Backend hiding (Trace)
@@ -160,7 +156,6 @@ import DbSync.Worker.Ledger.Event
   , convertAuxLedgerEvent
   , splitDeposits
   )
-import DbSync.Worker.Ledger.Keys (PoolKeyHash)
 import DbSync.Worker.Ledger.Types
   ( ApplyResult (..)
   , CardanoLedgerState (..)
@@ -189,7 +184,7 @@ import DbSync.Parser.Types
   , classifyEra
   )
 import DbSync.StateQuery (SlotDetails (..))
-import DbSync.Phase.Current (CurrentPhase)
+import DbSync.Phase.Current (CurrentPhase, readCurrentPhase)
 import DbSync.Phase.Type (SyncPhase, isFollowPath)
 import DbSync.Trace.Types (AppTracer)
 import DbSync.Util (maybeToStrictMaybe)
@@ -199,24 +194,34 @@ import DbSync.Util (maybeToStrictMaybe)
 -- ---------------------------------------------------------------------------
 
 -- | Hard cap on how many recent 'DbSyncStateRef' values the in-memory
--- buffer retains. Matching this against @k=2160@ would be ideal, but
--- keeping 2160 full state references in RAM is not cheap; 100 gives
--- fast rollback within a tenth of a security-parameter window and
--- forces deeper rollbacks through the disk-snapshot path.
+-- buffer retains once a Follow path is live. Matching this against
+-- @k=2160@ would be ideal, but keeping 2160 full state references in
+-- RAM is not cheap; 100 gives fast rollback within a tenth of a
+-- security-parameter window and forces deeper rollbacks through the
+-- disk-snapshot path.
 ledgerDbCheckpointBufferSize :: Int
 ledgerDbCheckpointBufferSize = 100
 
+-- | Buffer cap during 'IngestChainHistory'. Rollbacks are impossible
+-- below @nodeTip − k@ (the consumer panics on one), so the buffer is
+-- pure overhead during ingest — and each retained ref pins an open
+-- LSM tables handle. A small cushion is kept rather than none; the
+-- buffer grows to 'ledgerDbCheckpointBufferSize' naturally within
+-- ~100 blocks of the Follow handoff.
+ingestLedgerDbCheckpointBufferSize :: Int
+ingestLedgerDbCheckpointBufferSize = 10
+
 -- | Push a new 'DbSyncStateRef' onto the newest end of the
--- 'LedgerDB', then prune any entries that fall outside the
--- 'ledgerDbCheckpointBufferSize' window.
+-- 'LedgerDB', then prune any entries that fall outside the supplied
+-- cap.
 --
 -- Returns the new 'LedgerDB' along with any pruned refs whose
 -- 'LedgerTablesHandle' the caller is responsible for closing
 -- (subject to invariant I3 — the snapshot writer must release
 -- 'srCanClose' before the close is permitted).
-pushLedgerDB :: LedgerDB -> DbSyncStateRef -> (LedgerDB, [DbSyncStateRef])
-pushLedgerDB db sref =
-  pruneLedgerDb ledgerDbCheckpointBufferSize $
+pushLedgerDB :: Int -> LedgerDB -> DbSyncStateRef -> (LedgerDB, [DbSyncStateRef])
+pushLedgerDB cap db sref =
+  pruneLedgerDb cap $
     LedgerDB (sref StrictSeq.<| ledgerDbCheckpoints db)
 
 -- | Split the buffer at @k@ entries, keeping the @k@ newest and
@@ -554,13 +559,20 @@ tickThenReapplyCheckHash cfg block = do
             oldExt
             (Consensus.lrResult newLedgerResult)
         canClose <- newTVarIO True
-        let !newRef =
+        -- Rollbacks are impossible during ingest, so the checkpoint
+        -- buffer (and the open LSM handles it pins) stays small
+        -- until a Follow path is live.
+        phase <- readCurrentPhase (leCurrentPhase env)
+        let bufferCap
+              | isFollowPath phase = ledgerDbCheckpointBufferSize
+              | otherwise          = ingestLedgerDbCheckpointBufferSize
+            !newRef =
               DbSyncStateRef
                 { srState    = Consensus.lrResult newCls
                 , srTables   = newHandle
                 , srCanClose = canClose
                 }
-            (!ledgerDB', !pruned) = pushLedgerDB ledgerDB newRef
+            (!ledgerDB', !pruned) = pushLedgerDB bufferCap ledgerDB newRef
         atomically $ writeTVar (leStateVar env) (Strict.Just ledgerDB')
         pure $ Right (oldRef, newCls, pruned)
       else
@@ -617,7 +629,6 @@ applyBlock blk slotDetails = do
             ApplyResult
               { apPrices          = getPrices newCls'
               , apGovExpiresAfter = getGovExpiration newCls'
-              , apPoolsRegistered = getRegisteredPools oldCls
               , apNewEpoch        = maybeToStrictMaybe newEpoch
               , apDeposits        = maybeToStrictMaybe (Generic.getDeposits finalState)
               , apSlotDetails     = slotDetails
@@ -1043,33 +1054,6 @@ getPrices st = case ledgerState $ clsState st of
            . Alonzo.ppPricesL
       )
   _ -> Strict.Nothing
-
--- | Every currently-registered pool, as a set of pool key hashes.
--- Byron returns the empty set (no pools pre-Shelley).
-getRegisteredPools :: CardanoLedgerState -> Set PoolKeyHash
-getRegisteredPools st =
-  case ledgerState (clsState st) of
-    LedgerStateByron _      -> Set.empty
-    LedgerStateShelley sls  -> getRegisteredPoolShelley sls
-    LedgerStateAllegra als  -> getRegisteredPoolShelley als
-    LedgerStateMary mls     -> getRegisteredPoolShelley mls
-    LedgerStateAlonzo als   -> getRegisteredPoolShelley als
-    LedgerStateBabbage bls  -> getRegisteredPoolShelley bls
-    LedgerStateConway cls   -> getRegisteredPoolShelley cls
-    LedgerStateDijkstra dls -> getRegisteredPoolShelley dls
-
-getRegisteredPoolShelley
-  :: Shelley.EraCertState era
-  => Consensus.LedgerState (ShelleyBlock p era) mk
-  -> Set PoolKeyHash
-getRegisteredPoolShelley lState =
-  Map.keysSet $
-    let certState =
-          Shelley.lsCertState $
-            Shelley.esLState $
-              Shelley.nesEs $
-                Consensus.shelleyLedgerState lState
-     in certState ^. Shelley.certPStateL . Shelley.psStakePoolsL
 
 -- ---------------------------------------------------------------------------
 -- * Miscellaneous helpers

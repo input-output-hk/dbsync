@@ -47,6 +47,7 @@ module DbSync.Phase.Ingest.DedupStore
   , closeDedupStore
   , newStores
   , closeStores
+  , allDedupStores
 
     -- * Hot path
   , lookupOrInsert
@@ -57,17 +58,17 @@ module DbSync.Phase.Ingest.DedupStore
   , dedupStoreSizes
 
     -- * Epoch boundary
+  , persistDedupStore
   , compactDedupStore
   ) where
 
 import Cardano.Prelude
 
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Builder as BB
-import qualified Data.ByteString.Lazy as LBS
+import qualified Data.ByteString.Internal as BSI
 import Data.ByteString.Short (ShortByteString)
 import qualified Data.ByteString.Short as SBS
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import Foreign.Storable (pokeByteOff)
 import qualified Database.LSMTree as LSMTree
 
 import DbSync.Phase.Ingest.LsmSession
@@ -188,19 +189,25 @@ newStores lsm = DedupStores
   <*> openDedupStore lsm (LSMTree.SnapshotLabel "dedup-voting-anchor")
                          (LSMTree.toSnapshotName "current-voting-anchor")
 
+-- | Every store in the aggregate, for callers that apply a uniform
+-- lifecycle step (close \/ persist \/ compact) across all of them.
+allDedupStores :: DedupStores -> [DedupStore]
+allDedupStores ds =
+  [ dstPoolHash      ds
+  , dstStakeAddress  ds
+  , dstSlotLeader    ds
+  , dstMultiAsset    ds
+  , dstScriptHash    ds
+  , dstDatum         ds
+  , dstRedeemerData  ds
+  , dstDrepHash      ds
+  , dstCommitteeHash ds
+  , dstVotingAnchor  ds
+  ]
+
 -- | Close every store in the aggregate. The session stays open.
 closeStores :: DedupStores -> IO ()
-closeStores ds = do
-  closeDedupStore (dstPoolHash      ds)
-  closeDedupStore (dstStakeAddress  ds)
-  closeDedupStore (dstSlotLeader    ds)
-  closeDedupStore (dstMultiAsset    ds)
-  closeDedupStore (dstScriptHash    ds)
-  closeDedupStore (dstDatum         ds)
-  closeDedupStore (dstRedeemerData  ds)
-  closeDedupStore (dstDrepHash      ds)
-  closeDedupStore (dstCommitteeHash ds)
-  closeDedupStore (dstVotingAnchor  ds)
+closeStores = traverse_ closeDedupStore . allDedupStores
 
 -- ---------------------------------------------------------------------------
 -- Hot path
@@ -280,25 +287,37 @@ dedupStoreSizes ds = do
 -- Epoch boundary
 -- ---------------------------------------------------------------------------
 
--- | Snapshot the store's current table, then close it and reopen
--- from the new snapshot, swapping the active handle in 'dstTable'.
---
--- Same shape as 'DbSync.Phase.Ingest.UtxoStore.compactUtxoStore':
--- caps the active LSM run count (and hence open file descriptors)
--- and durabilises a restart-resume anchor.
-compactDedupStore :: DedupStore -> LsmSession -> IO ()
-compactDedupStore store lsm = mask_ $ do
+-- | Flush the write buffer and atomically replace the store's
+-- on-disk snapshot. Cheap (run files are hard-linked); runs at
+-- every epoch boundary as the warm-restart anchor. Resume
+-- correctness never depends on it — 'rebuildDedupMaps' repopulates
+-- every store from PostgreSQL at boot.
+persistDedupStore :: DedupStore -> LsmSession -> IO ()
+persistDedupStore store lsm = mask_ $ do
   -- delete-then-save would lose this table's snapshot if interrupted
   -- between the two calls; mask covers the whole cycle so cancel
   -- either lands before any work or after a fresh snapshot exists.
   let session = lsmHandle lsm
-      name    = dstSnapshotName store
-      label   = dstLabel        store
+  table <- readIORef (dstTable store)
+  hasSnap <- LSMTree.doesSnapshotExist session (dstSnapshotName store)
+  when hasSnap $ LSMTree.deleteSnapshot session (dstSnapshotName store)
+  LSMTree.saveSnapshot (dstSnapshotName store) (dstLabel store) table
+
+-- | 'persistDedupStore', then close the active table and reopen it
+-- from the snapshot, swapping the handle in 'dstTable'.
+--
+-- Same shape and rationale as
+-- 'DbSync.Phase.Ingest.UtxoStore.compactUtxoStore': caps the active
+-- LSM run count (and hence open file descriptors) at the price of a
+-- full re-read of the table's run files, so the boundary handler
+-- runs it on a coarse epoch cadence only.
+compactDedupStore :: DedupStore -> LsmSession -> IO ()
+compactDedupStore store lsm = mask_ $ do
+  persistDedupStore store lsm
+  let session = lsmHandle lsm
   oldTable <- readIORef (dstTable store)
-  hasSnap  <- LSMTree.doesSnapshotExist session name
-  when hasSnap $ LSMTree.deleteSnapshot session name
-  LSMTree.saveSnapshot name label oldTable
-  newTable <- LSMTree.openTableFromSnapshot session name label
+  newTable <-
+    LSMTree.openTableFromSnapshot session (dstSnapshotName store) (dstLabel store)
   writeIORef (dstTable store) newTable
   LSMTree.closeTable oldTable
 
@@ -306,35 +325,39 @@ compactDedupStore store lsm = mask_ $ do
 -- Internal: wire format
 -- ---------------------------------------------------------------------------
 
--- | Encode an 'Int64' as 8 big-endian bytes.
+-- | Encode an 'Int64' as 8 big-endian bytes. Built directly — a
+-- 'Data.ByteString.Builder' round-trip allocates a ~4KB pinned
+-- chunk per call, and this runs once per new dedup entity plus once
+-- per existing row during the boot-time 'insertExisting' rebuild.
 encodeInt64 :: Int64 -> DedupIdBytes
 encodeInt64 i =
-  DedupIdBytes
-    . SBS.toShort
-    . LBS.toStrict
-    . BB.toLazyByteString
-    $ BB.int64BE i
+  DedupIdBytes . SBS.toShort $
+    BSI.unsafeCreate 8 $ \p -> pokeWord64BE p 0 (fromIntegral i)
+
+pokeWord64BE :: Ptr Word8 -> Int -> Word64 -> IO ()
+pokeWord64BE p off w =
+  for_ [0 .. 7] $ \i ->
+    pokeByteOff p (off + i)
+      (fromIntegral (w `shiftR` ((7 - i) * 8)) :: Word8)
 
 -- | Inverse of 'encodeInt64'. 'Nothing' on a length mismatch —
 -- should never happen for a value the store itself produced, so
 -- the call site treats 'Nothing' as a cache miss.
 decodeInt64 :: DedupIdBytes -> Maybe Int64
 decodeInt64 (DedupIdBytes sbs)
-  | BS.length bs /= 8 = Nothing
-  | otherwise         = Just (readInt64BE bs 0)
-  where
-    bs = SBS.fromShort sbs
+  | SBS.length sbs /= 8 = Nothing
+  | otherwise           = Just (readInt64BE sbs 0)
 
-readInt64BE :: ByteString -> Int -> Int64
-readInt64BE bs off = fromIntegral (readWord64BE bs off)
+readInt64BE :: ShortByteString -> Int -> Int64
+readInt64BE sbs off = fromIntegral (readWord64BE sbs off)
 
-readWord64BE :: ByteString -> Int -> Word64
-readWord64BE bs off =
-    fromIntegral (BS.index bs (off + 0)) `shiftL` 56
-  + fromIntegral (BS.index bs (off + 1)) `shiftL` 48
-  + fromIntegral (BS.index bs (off + 2)) `shiftL` 40
-  + fromIntegral (BS.index bs (off + 3)) `shiftL` 32
-  + fromIntegral (BS.index bs (off + 4)) `shiftL` 24
-  + fromIntegral (BS.index bs (off + 5)) `shiftL` 16
-  + fromIntegral (BS.index bs (off + 6)) `shiftL` 8
-  + fromIntegral (BS.index bs (off + 7))
+readWord64BE :: ShortByteString -> Int -> Word64
+readWord64BE sbs off =
+    fromIntegral (SBS.index sbs (off + 0)) `shiftL` 56
+  + fromIntegral (SBS.index sbs (off + 1)) `shiftL` 48
+  + fromIntegral (SBS.index sbs (off + 2)) `shiftL` 40
+  + fromIntegral (SBS.index sbs (off + 3)) `shiftL` 32
+  + fromIntegral (SBS.index sbs (off + 4)) `shiftL` 24
+  + fromIntegral (SBS.index sbs (off + 5)) `shiftL` 16
+  + fromIntegral (SBS.index sbs (off + 6)) `shiftL` 8
+  + fromIntegral (SBS.index sbs (off + 7))

@@ -14,7 +14,6 @@ module DbSync.Worker.Ledger.StateSpec
 import Cardano.Prelude
 
 import qualified Data.Sequence.Strict as Seq
-import qualified Data.Set as Set
 import qualified Data.Strict.Maybe as Strict
 
 import qualified Cardano.Ledger.BaseTypes as Ledger
@@ -66,7 +65,6 @@ spec = do
           ApplyResult
             { apPrices          = Strict.Nothing
             , apGovExpiresAfter = Strict.Nothing
-            , apPoolsRegistered = Set.empty
             , apNewEpoch        = mEpoch
             , apDeposits        = Strict.Nothing
             , apSlotDetails     = dummySlotDetails

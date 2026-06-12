@@ -16,6 +16,9 @@ module DbSync.Util
 
     -- * Reward address
   , rewardAddrCred
+
+    -- * JSON / PostgreSQL interop
+  , jsonValueContainsNul
   ) where
 
 import Cardano.Prelude
@@ -24,8 +27,12 @@ import qualified Cardano.Crypto.Hash as Crypto
 import qualified Cardano.Ledger.BaseTypes as Ledger
 import Cardano.Ledger.Coin (Coin (..))
 
+import qualified Data.Aeson as Aeson
+import qualified Data.Aeson.Key as Aeson.Key
+import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.ByteString as BS
 import qualified Data.Strict.Maybe as Strict
+import qualified Data.Text as Text
 
 import DbSync.Db.Types (DbLovelace (..))
 
@@ -85,3 +92,29 @@ rewardAddrCred :: ByteString -> ByteString
 rewardAddrCred bs
   | BS.length bs > 1 = BS.drop 1 bs
   | otherwise        = bs
+
+-- ---------------------------------------------------------------------------
+-- * JSON / PostgreSQL interop
+-- ---------------------------------------------------------------------------
+
+-- | Whether any string in the value — object keys included — contains
+-- a Unicode NUL (@U+0000@). PostgreSQL rejects @\\u0000@ in @jsonb@
+-- values (and NUL bytes in @text@), so such a value cannot be stored
+-- as-is: callers store SQL @NULL@ or a placeholder object instead and
+-- rely on the raw-bytes column as ground truth.
+jsonValueContainsNul :: Aeson.Value -> Bool
+jsonValueContainsNul = go
+  where
+    go :: Aeson.Value -> Bool
+    go = \case
+      Aeson.String t -> hasNul t
+      Aeson.Array xs -> any go xs
+      Aeson.Object o ->
+        KeyMap.foldrWithKey
+          (\k v acc -> hasNul (Aeson.Key.toText k) || go v || acc)
+          False
+          o
+      _ -> False
+
+    hasNul :: Text -> Bool
+    hasNul = Text.any (== '\NUL')

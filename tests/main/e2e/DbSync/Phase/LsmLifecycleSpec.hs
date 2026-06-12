@@ -8,13 +8,14 @@
 -- these tests:
 --
 --   * The directory is created when @IngestChainHistory@ opens the
---     session and receives one compaction per epoch boundary.
---   * 'DbSync.Phase.Ingest.UtxoStore.compactUtxoStore' and
---     'DbSync.Phase.Ingest.DedupStore.compactDedupStore' are
---     delete-then-save-then-reopen, so @snapshots/@ holds exactly
---     one entry per table (UtxoStore + five DedupStores = six)
---     once any compaction has run, and the @active/@ run count
---     stays bounded across many boundaries.
+--     session and receives one snapshot refresh per epoch boundary
+--     (plus a full reopen-compaction on a coarse epoch cadence).
+--   * 'DbSync.Phase.Ingest.UtxoStore.persistUtxoStore' and
+--     'DbSync.Phase.Ingest.DedupStore.persistDedupStore' are
+--     delete-then-save, so @snapshots/@ holds exactly one entry per
+--     table (UtxoStore + ten DedupStores = eleven) once any
+--     boundary has run, and the @active/@ run count stays bounded
+--     across many boundaries.
 --   * 'DbSync.Phase.Ingest.LsmSession.closeAndDeleteLsmSession'
 --     removes the whole directory at the end of
 --     @PreparingForVolatileTail@.
@@ -64,14 +65,14 @@ import DbSync.Test.MockNode.Workload
 import DbSync.Test.PgAssertions (countRows, tableColumn, waitForTableQueryable)
 import DbSync.Trace.Types (AppTracer)
 
--- | Upper bound on @active/@ run count after at least one
--- compaction across the six ingest tables (UtxoStore + five
--- DedupStores). Each compaction collapses its table to the
--- snapshot's run shape (a handful of runs for the toy Conway test
--- workload); the headroom covers in-flight merges started in the
--- subsequent epoch on top of all six.
+-- | Upper bound on @active/@ run count across the eleven ingest
+-- tables (UtxoStore + ten DedupStores). A guard against unbounded
+-- growth rather than a precise bound: persist-only boundaries flush
+-- one write-buffer run per table with new data, and the periodic
+-- full compaction collapses each table back to its snapshot's run
+-- shape (a handful of runs for the toy Conway test workload).
 maxActiveRunsAfterCompact :: Int
-maxActiveRunsAfterCompact = 128
+maxActiveRunsAfterCompact = 256
 
 spec :: Spec
 spec = describe "Ingest LSM session lifecycle" $ do
@@ -97,15 +98,15 @@ spec = describe "Ingest LSM session lifecycle" $ do
           present <- ingestLsmExists ledgerDir
           present `shouldBe` False
 
-  -- Covers invariant 3: every per-table compaction is
+  -- Covers invariant 3: every per-table snapshot refresh is
   -- delete-then-save, so the @snapshots/@ subdirectory holds exactly
-  -- one entry per LSM table once at least one compaction has run.
-  -- Six tables live on the ingest session — 'UtxoStore' plus the
-  -- five 'DedupStores' — so the assertion is six. The same
-  -- compaction also reopens each active table from its snapshot, so
-  -- the @active/@ run count stays small even across many boundaries
-  -- — pinned here at a generous ceiling to give the merge schedule
-  -- headroom.
+  -- one entry per LSM table once at least one boundary has run.
+  -- Eleven tables live on the ingest session — 'UtxoStore' plus the
+  -- ten 'DedupStores' — so the assertion is eleven. The periodic
+  -- full compaction also reopens each active table from its
+  -- snapshot, so the @active/@ run count stays small even across
+  -- many boundaries — pinned here at a generous ceiling to give the
+  -- merge schedule headroom.
   it "keeps one snapshot per table and bounded active run count across boundaries" $
     withMockNode conwayConfigDir $ \mn ->
       withTempDir "dbsync-test-lsm-keep-one" $ \ledgerDir -> do
@@ -114,7 +115,7 @@ spec = describe "Ingest LSM session lifecycle" $ do
         tracer <- quietTracer
         runUntilTwoBoundariesThenCancel tracer mn ledgerDir
         snaps <- listIngestLsmSnapshots ledgerDir
-        length snaps `shouldBe` 6
+        length snaps `shouldBe` 11
         activeRuns <- countIngestLsmActiveRuns ledgerDir
         activeRuns `shouldSatisfy` (<= maxActiveRunsAfterCompact)
 
@@ -123,9 +124,9 @@ spec = describe "Ingest LSM session lifecycle" $ do
   -- UTxO set from the genesis-default 10 entries up past 100 so
   -- 'stressWorkload' (which spends 100 distinct inputs per block)
   -- has room to operate. The subsequent stress run produces ~10K
-  -- distinct tx hashes, exercising 'recordTx' on every one;
-  -- 'compactUtxoStore' at each epoch boundary still has to keep
-  -- the active run count bounded.
+  -- distinct tx hashes, exercising 'recordTx' on every one; the
+  -- boundary persist/compact cycle still has to keep the active
+  -- run count bounded.
   --
   -- Block count is sized to stay well within the genesis lovelace
   -- supply once minimum fees are deducted on every spend.
@@ -190,7 +191,7 @@ runUntilLsmDirExistsThenCancel tracer mn ledgerDir = do
     cancel app
 
 -- | Start a sync, wait until @sync_state@ records two completed
--- epoch boundaries and all six per-table snapshots are on disk,
+-- epoch boundaries and all eleven per-table snapshots are on disk,
 -- then cancel.
 runUntilTwoBoundariesThenCancel :: AppTracer -> MockNode -> FilePath -> IO ()
 runUntilTwoBoundariesThenCancel tracer mn ledgerDir = do
@@ -202,8 +203,8 @@ runUntilTwoBoundariesThenCancel tracer mn ledgerDir = do
       ((&&) <$> twoEpochSyncStatsRows <*> lastCommittedSlotSet)
       60
     waitForTableQueryable (tdName epochSyncStatsTableDef) 30
-    waitFor "six per-table LSM snapshots"
-      ((>= 6) . length <$> listIngestLsmSnapshots ledgerDir)
+    waitFor "eleven per-table LSM snapshots"
+      ((>= 11) . length <$> listIngestLsmSnapshots ledgerDir)
       30
     cancel app
 

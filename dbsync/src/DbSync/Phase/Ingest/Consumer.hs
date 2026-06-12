@@ -91,7 +91,7 @@ import DbSync.Trace.Pulse (bumpPulse)
 import DbSync.Trace.Replay
   ( ReplayAdvance (..)
   , ReplayLog (..)
-  , ReplayLogState
+  , ReplayLogState (..)
   , advanceReplay
   , renderReplayPercent
   )
@@ -305,25 +305,38 @@ advanceReplayLog
   -> Maybe SlotNo
   -> Maybe SlotNo
   -> IngestM ()
-advanceReplayLog tracer replayRef slot bootSlot replayStart = do
-  now <- liftIO getCurrentTime
-  logEvent <- liftIO $ atomicModifyIORef' replayRef $ \prev ->
-    let adv = advanceReplay slot bootSlot now prev
-    in (raNewState adv, raLog adv)
-  let traceReplay msg =
-        liftIO $ traceWith tracer $ LogMsg Info "LedgerReplay" msg Nothing
-  case logEvent of
-    ReplayLogNothing -> pure ()
-    ReplayLogProgress n ->
-      traceReplay $
-        "applied " <> fmtCount n <> " blocks; current slot "
-          <> show (unSlotNo slot)
-          <> renderReplayPercent replayStart bootSlot slot
-    ReplayLogComplete n elapsed ->
-      traceReplay $
-        "replay complete; applied " <> fmtCount n
-          <> " blocks in " <> fmtF2 (realToFrac elapsed :: Double)
-          <> "s, resuming loader stream at slot " <> show (unSlotNo slot)
+advanceReplayLog tracer replayRef slot bootSlot replayStart =
+  -- Early-out before any IO: a fresh sync has no replay window at
+  -- all, and on a resume the window closes permanently once the
+  -- machine reaches 'NoReplay'. Without this the clock read +
+  -- atomic CAS run on every block of the entire sync. The ref is
+  -- only written by this thread, so the plain read is exact.
+  when (isJust bootSlot) $ do
+    st <- liftIO $ readIORef replayRef
+    case st of
+      NoReplay -> pure ()
+      _        -> step
+  where
+    step :: IngestM ()
+    step = do
+      now <- liftIO getCurrentTime
+      logEvent <- liftIO $ atomicModifyIORef' replayRef $ \prev ->
+        let adv = advanceReplay slot bootSlot now prev
+        in (raNewState adv, raLog adv)
+      let traceReplay msg =
+            liftIO $ traceWith tracer $ LogMsg Info "LedgerReplay" msg Nothing
+      case logEvent of
+        ReplayLogNothing -> pure ()
+        ReplayLogProgress n ->
+          traceReplay $
+            "applied " <> fmtCount n <> " blocks; current slot "
+              <> show (unSlotNo slot)
+              <> renderReplayPercent replayStart bootSlot slot
+        ReplayLogComplete n elapsed ->
+          traceReplay $
+            "replay complete; applied " <> fmtCount n
+              <> " blocks in " <> fmtF2 (realToFrac elapsed :: Double)
+              <> "s, resuming loader stream at slot " <> show (unSlotNo slot)
 
 -- | Trace any era transition observed by 'observeBlockSTM'. Skips
 -- the "falling back to node" warning when the interpreter is

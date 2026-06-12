@@ -1,15 +1,9 @@
 {-# LANGUAGE RankNTypes #-}
 
-{- |
-Module      : DbSync.Extractor
-Description : Extractor definition types for modular data extraction.
-
-An extractor is a self-contained unit of extraction logic that reads
-'GenericBlock' values, resolves foreign key IDs via an 'IdResolver',
-and writes rows via a 'Writer'. The same extraction code works in
-both 'IngestChainHistory' (COPY + DedupStores) and 'FollowingChainTip'
-(INSERT + DB queries).
--}
+-- | Extractor definition types. An extractor reads 'GenericBlock'
+-- values, resolves FK ids via an 'IdResolver', and writes rows via
+-- a 'Writer'; the same body runs in both 'IngestChainHistory' and
+-- 'FollowingChainTip'.
 module DbSync.Extractor
   ( -- * Types
     ExtractorDef (..)
@@ -35,7 +29,7 @@ module DbSync.Extractor
   , HasLedgerData (..)
   , HasNetwork (..)
 
-    -- * Re-exports (for ExtractState used by IngestResolver)
+    -- * ExtractState
   , ExtractState (..)
   , freshExtractState
   ) where
@@ -63,17 +57,9 @@ import DbSync.Phase.Type (SyncPhase)
 import DbSync.Resolver (HasResolver)
 import DbSync.Writer (HasWriter)
 
--- ---------------------------------------------------------------------------
--- * HasNetwork
--- ---------------------------------------------------------------------------
-
--- | Access the chain's 'Network' (mainnet vs testnet) from any
--- environment. Read once at startup from the Shelley genesis and
--- never changes for the lifetime of a sync.
---
--- Lives here (rather than in "DbSync.App.Env") because 'ProcessBlockFn'
--- needs the constraint and the env definitions in "DbSync.App.Env"
--- already depend on this module via 'HasExtractors'\/'HasLedgerData'.
+-- | Access the chain's 'Network' from any environment. Read once
+-- at startup from the Shelley genesis and stable for the lifetime
+-- of a sync.
 class HasNetwork env where
   getNetwork :: env -> Network
 
@@ -127,14 +113,20 @@ type ProcessBlockFn =
 -- without needing to know about each other's execution order.
 data BlockContext = BlockContext
   { bcBlockId      :: !BlockId
+      -- ^ Pre-assigned id of this block.
   , bcSlotLeaderId :: !SlotLeaderId
+      -- ^ Pre-assigned id of this block's slot leader.
   , bcSlotLeaderNew :: !Bool
-      -- ^ 'True' when this slot leader was seen for the first time
+      -- ^ 'True' when this slot leader was seen for the first time.
   , bcSlotLeaderPoolHashId :: !(Maybe PoolHashId)
       -- ^ Pool-hash FK for Shelley+ blocks; 'Nothing' for Byron and EBBs.
   , bcPrevBlockId  :: !(Maybe BlockId)
+      -- ^ Id of the previous block; 'Nothing' for the first block of
+      -- the current session.
   , bcGenBlock     :: !GenericBlock
+      -- ^ Parsed block payload.
   , bcTxs          :: ![TxContext]
+      -- ^ One entry per transaction, in block order.
   , bcNetwork      :: !Network
       -- ^ Chain network ID; drives the HRP on Bech32 stake / reward
       -- encodings produced by extractors.
@@ -147,7 +139,9 @@ data BlockContext = BlockContext
 -- | A transaction with pre-assigned shared IDs.
 data TxContext = TxContext
   { tcTxId   :: !TxId
+      -- ^ Pre-assigned id of this transaction.
   , tcGenTx  :: !GenericTx
+      -- ^ Parsed transaction payload.
   , tcOutIds :: ![TxOutId]
       -- ^ One TxOutId per output, same length and order as @txOutputs gtx@.
   , tcOutStakeIds :: ![Maybe StakeAddressId]
@@ -250,7 +244,7 @@ class HasLedgerData env where
   getLedgerData :: env -> GenericBlock -> IO BlockLedgerData
 
 -- ---------------------------------------------------------------------------
--- * ExtractState (used by IngestResolver)
+-- * ExtractState
 -- ---------------------------------------------------------------------------
 
 -- | Mutable state threaded during 'IngestChainHistory'.

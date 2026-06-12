@@ -78,15 +78,13 @@ data ShelleyConfig = ShelleyConfig
   }
 
 -- ---------------------------------------------------------------------------
--- * Reading genesis configs
+-- * Reading
 -- ---------------------------------------------------------------------------
 
 -- | Read all four genesis files and combine into a 'GenesisConfig'.
--- The @FilePath@ is the directory containing the genesis files
--- (derived from the db-sync-config.json / node config location).
 readCardanoGenesisConfig
   :: NodeConfig
-  -> FilePath       -- ^ Directory containing genesis files
+  -> FilePath       -- ^ Directory containing the genesis files
   -> IO (Either ConfigError GenesisConfig)
 readCardanoGenesisConfig nc genesisDir = runExceptT $
   GenesisCardano
@@ -116,11 +114,8 @@ mkProtocolInfoCardano nc gc =
 
 -- | Build the 'ProtocolInfo' /and/ resolve the matching
 -- 'BlockForging' actions, given a list of Shelley leader
--- credentials.
---
--- Used by the test harness ('DbSync.Test.MockChain') to drive the
--- vendored chain-gen interpreter. Production sync uses the
--- credential-free 'mkProtocolInfoCardano' path above.
+-- credentials. Test-only; production sync uses the
+-- credential-free 'mkProtocolInfoCardano'.
 mkProtocolInfoCardanoForging
   :: NodeConfig
   -> GenesisConfig
@@ -130,17 +125,15 @@ mkProtocolInfoCardanoForging
         )
 mkProtocolInfoCardanoForging nc gc creds = do
   let (pinfo, mkForgings) = protocolInfoCardano (cardanoProtocolParams nc gc creds)
-  -- 'mkForgings' yields one 'MkBlockForging' per credential set;
-  -- each one is an action allocating a 'BlockForging' (and any
-  -- per-key resources like KES HotKeys). Tests are short-lived so
-  -- we don't bother finalising on teardown — the OS reclaims on exit.
+  -- Each 'MkBlockForging' allocates per-key resources (KES HotKeys).
+  -- Tests are short-lived so we skip teardown; the OS reclaims on exit.
   mkForgingActions <- mkForgings (nullTracer :: Tracer IO KESAgentClientTrace)
   forgings <- traverse mkBlockForging mkForgingActions
   pure (pinfo, forgings)
 
 -- | Shared 'CardanoProtocolParams' construction. The credentials
--- argument is what distinguishes the sync-only path (empty) from the
--- forging-test path (populated from a bulk credentials file).
+-- argument distinguishes the sync-only path (empty) from the
+-- forging-test path (populated).
 cardanoProtocolParams
   :: NodeConfig
   -> GenesisConfig
@@ -176,8 +169,8 @@ cardanoProtocolParams nc gc creds =
 -- * Internal: per-era genesis readers
 -- ---------------------------------------------------------------------------
 
--- | Read Byron genesis. Uses cardano-crypto's 'decodeAbstractHash' to parse
--- the hash from the text in our NodeConfig, then 'Byron.mkConfigFromFile'.
+-- | Byron is special — it parses its own hash via 'decodeAbstractHash'
+-- and goes through 'Byron.mkConfigFromFile', not a plain JSON decode.
 readByronGenesis :: NodeConfig -> FilePath -> ExceptT ConfigError IO Byron.Config
 readByronGenesis nc genesisDir = do
   let file = genesisDir </> ncByronGenesisFile nc
@@ -189,7 +182,8 @@ readByronGenesis nc genesisDir = do
   firstExceptT (\e -> ConfigParseError $ "Byron genesis error in " <> toS file <> ": " <> show e)
     $ Byron.mkConfigFromFile requiresMagic file genHash
 
--- | Read Shelley genesis — read bytes, hash, decode JSON.
+-- | Read Shelley genesis. The file contents are hashed (Blake2b_256)
+-- and the digest seeds the PRAOS initial nonce.
 readShelleyGenesis :: NodeConfig -> FilePath -> ExceptT ConfigError IO ShelleyConfig
 readShelleyGenesis nc genesisDir = do
   let file = genesisDir </> ncShelleyGenesisFile nc
@@ -198,14 +192,14 @@ readShelleyGenesis nc genesisDir = do
   genesis <- decodeJsonOrError "Shelley" file content
   pure $ ShelleyConfig genesis genesisHash
 
--- | Read Alonzo genesis — read bytes, hash, decode JSON.
+-- | Read Alonzo genesis — plain JSON decode, no hash required.
 readAlonzoGenesis :: NodeConfig -> FilePath -> ExceptT ConfigError IO AlonzoGenesis
 readAlonzoGenesis nc genesisDir = do
   let file = genesisDir </> ncAlonzoGenesisFile nc
   content <- readFileOrError "Alonzo" file
   decodeJsonOrError "Alonzo" file content
 
--- | Read Conway genesis — read bytes, hash, decode JSON.
+-- | Read Conway genesis — plain JSON decode, no hash required.
 readConwayGenesis :: NodeConfig -> FilePath -> ExceptT ConfigError IO ConwayGenesis
 readConwayGenesis nc genesisDir = do
   let file = genesisDir </> ncConwayGenesisFile nc
@@ -255,7 +249,7 @@ mkHardForkTriggers nc =
     toTrigger Nothing      = CardanoTriggerHardForkAtDefaultVersion
     toTrigger (Just epoch) = CardanoTriggerHardForkAtEpoch (EpochNo epoch)
 
--- | Derive the PRAOS nonce from the Shelley genesis hash.
+-- | Wrap the Shelley genesis hash as the PRAOS initial nonce.
 shelleyPraosNonce :: Crypto.Hash Crypto.Blake2b_256 ByteString -> Nonce
 shelleyPraosNonce hsh = Nonce (Crypto.castHash hsh)
 

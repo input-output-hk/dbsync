@@ -1,15 +1,12 @@
--- | Configuration types with FromJSON instances + YAML decoding.
+-- | Types and 'FromJSON' decoders for the db-sync profile YAML file.
 --
--- All configuration types for the db-sync profile JSON file.
--- These are network-agnostic — the same config works for mainnet, preprod, etc.
--- Network-specific details come from the node config (passed via CLI).
--- Operational paths (sockets, ledger state dir) live on the CLI rather
--- than in the profile so the profile can travel across environments.
+-- The profile is network-agnostic: operational paths (socket,
+-- ledger state dir) live on the CLI so the same profile travels
+-- across mainnet, preprod, etc.
 --
--- The @db_options@ block is opt-in: every extractor defaults to
--- disabled and must be enabled explicitly. The @core@ extractor is
--- the sole exception — it is unconditional and not represented in
--- 'DbSyncOptions' at all.
+-- @db_options@ is opt-in: every extractor defaults to disabled and
+-- must be enabled explicitly. The @core@ extractor is unconditional
+-- and not represented in 'DbSyncOptions'.
 module DbSync.App.Config.Types
   ( -- * Top-level config
     SyncConfig (..)
@@ -139,10 +136,6 @@ instance FromJSON SyncMode where
       _        -> Aeson.typeMismatch "SyncMode (auto|ingest|follow)" (Aeson.String t)
 
 -- | Ledger state settings. Opt-in: @enabled@ defaults to 'False'.
---
--- The runtime ledger-state path comes from the @--ledger-state-dir@
--- CLI flag (operational paths live on the CLI; profile is per-DB
--- shape config and travels across environments).
 data LedgerConfig = LedgerConfig
   { lcEnabled              :: !Bool
   , lcBackend              :: !LedgerBackend
@@ -171,28 +164,21 @@ defaultLedgerConfig = LedgerConfig
   , lcSnapshotNearTipEpoch = defaultSnapshotNearTipEpoch
   }
 
--- | Production default for 'lcSnapshotNearTipEpoch'. Matches the
--- upstream cardano-db-sync heuristic: past epoch 580 the chain is
--- "modern" enough that a per-epoch snapshot is cheap and useful.
+-- | Production default for 'lcSnapshotNearTipEpoch'.
 defaultSnapshotNearTipEpoch :: Word64
 defaultSnapshotNearTipEpoch = 580
 
--- | Which backend stores the ledger-state UTxO tables.
+-- | Which backend stores the ledger-state UTxO tables. Only the
+-- on-disk LSM backend is supported; the 'FromJSON' instance rejects
+-- @"inmemory"@ with an explanatory error.
 --
--- Only the on-disk LSM backend is supported: RAM targets rely on the
--- UTxO living on disk, and an in-memory backend would roughly double
--- the testing matrix for no operational gain. The 'FromJSON' instance
--- accepts only @\"lsm\"@ and returns a clear error for the historical
--- @\"inmemory\"@ value.
---
--- The optional 'FilePath' override is not wired through yet;
--- 'Nothing' means \"use the directory passed to 'mkHasLedgerEnv'\"
--- (which is derived from the @--ledger-state-dir@ CLI flag).
+-- The optional 'FilePath' is a directory override; 'Nothing' uses
+-- the directory passed to @mkHasLedgerEnv@ (derived from
+-- @--ledger-state-dir@).
 data LedgerBackend
   = LedgerBackendLSM !(Maybe FilePath)
   deriving stock (Eq, Show)
 
--- | Default ledger backend — LSM with no path override.
 defaultLedgerBackend :: LedgerBackend
 defaultLedgerBackend = LedgerBackendLSM Nothing
 
@@ -219,7 +205,6 @@ instance FromJSON MetricsConfig where
     MetricsConfig
       <$> o .:? "prometheus_port" .!= 8080
 
--- | Default metrics config.
 defaultMetricsConfig :: MetricsConfig
 defaultMetricsConfig = MetricsConfig
   { mcPrometheusPort = 8080
@@ -238,7 +223,6 @@ instance FromJSON LoggingConfig where
       <$> o .:? "level"  .!= "info"
       <*> o .:? "format" .!= LogFormatText
 
--- | Default logging config.
 defaultLoggingConfig :: LoggingConfig
 defaultLoggingConfig = LoggingConfig
   { lgLevel  = "info"
@@ -262,15 +246,11 @@ instance FromJSON LogFormat where
 -- * Sync options
 -- ---------------------------------------------------------------------------
 
--- | Per-option configuration.
+-- | Per-extractor configuration. Omit a key to disable; set
+-- @"key": true@ to enable.
 --
--- Opt-in: every option defaults to disabled. Omit a key to disable;
--- set @"key": true@ to enable. The @core@ extractor is unconditional
--- (every other extractor's tables reference its block / tx /
--- slot_leader rows via FK) and is added by @buildExtractors@.
---
--- 'pcUtxo' is structured because the UTxO extractor has multiple
--- knobs that route different Prep paths; the rest are flat bools.
+-- 'pcUtxo' has its own record because the UTxO extractor needs
+-- multiple knobs; the rest are flat bools.
 data DbSyncOptions = DbSyncOptions
   { pcUtxo                  :: !UtxoOption
   , pcMultiAsset            :: !OptionFlag
@@ -314,11 +294,9 @@ instance FromJSON DbSyncOptions where
       disabled     = OptionFlag False
       epochDefault = OptionFlag True
 
--- | Default option config used when the @"db_options"@ section is
--- omitted: every optional extractor off /except/ 'pcEpoch', which
--- defaults to true so the @epoch@ view machinery is available
--- without an explicit opt-in. The unconditional @core@ extractor is
--- added by @buildExtractors@ and is not represented here.
+-- | Default option config used when @"db_options"@ is omitted:
+-- every optional extractor off /except/ 'pcEpoch', so the @epoch@
+-- view machinery is available without an explicit opt-in.
 defaultDbSyncOptions :: DbSyncOptions
 defaultDbSyncOptions = DbSyncOptions
   { pcUtxo                  = defaultUtxoOption
@@ -341,10 +319,9 @@ defaultDbSyncOptions = DbSyncOptions
 
 -- | Configuration for a single option.
 --
--- Today this just wraps a 'Bool'; the wrapper is intentional so that
--- options needing variants (e.g. multi-asset policy allowlists,
--- metadata key filters, governance subsets) can grow without
--- breaking the @DbSyncOptions@ record.
+-- Wraps a 'Bool' explicitly so options that grow variants (e.g.
+-- multi-asset policy allowlists, metadata key filters) can extend
+-- without touching the @DbSyncOptions@ record.
 data OptionFlag = OptionFlag
   { prEnabled :: !Bool
   }
@@ -354,23 +331,19 @@ data OptionFlag = OptionFlag
 instance FromJSON OptionFlag where
   parseJSON = Aeson.withBool "OptionFlag" (pure . OptionFlag)
 
--- ---------------------------------------------------------------------------
--- * UTxO extractor option
--- ---------------------------------------------------------------------------
+-- UTxO option types
 
 -- | UTxO extractor configuration.
---
--- * 'uoEnabled' — whether the extractor runs; @false@ leaves
---   @tx_in@, @tx_out@, and @ma_tx_out@ empty.
--- * 'uoConsumedByTxId' — whether @tx_out.consumed_by_tx_id@ is
---   populated. The per-epoch 'ConsumedByWorker' covers most rows
---   during Ingest; a Prep residual UPDATE catches cache-misses.
--- * 'uoTxIn' — whether @tx_in@ rows are written.
--- * 'uoStrategy' — see 'UtxoStrategy'.
 data UtxoOption = UtxoOption
   { uoEnabled        :: !Bool
+    -- ^ Whether the extractor runs at all. When 'False', @tx_in@,
+    -- @tx_out@, and @ma_tx_out@ stay empty.
   , uoConsumedByTxId :: !Bool
+    -- ^ Whether @tx_out.consumed_by_tx_id@ is populated. The
+    -- per-epoch consumed-by worker covers most rows during Ingest;
+    -- a Prep residual UPDATE catches cache-misses.
   , uoTxIn           :: !Bool
+    -- ^ Whether @tx_in@ rows are written.
   , uoStrategy       :: !UtxoStrategy
   }
   deriving stock (Eq, Show)
@@ -445,13 +418,13 @@ data GovernanceVariant
   deriving stock (Eq, Show)
 
 -- ---------------------------------------------------------------------------
--- * DB-sync node config (from db-sync-config.json — the book's file)
+-- * DB-sync node config (from db-sync-config.json)
 -- ---------------------------------------------------------------------------
 
--- | Fields extracted from db-sync-config.json (the file users download from
--- the Cardano book). We only extract what we need — NodeConfigFile to find
--- the real node config, plus optional metadata. All iohk-monitoring keys
--- and insert_options are ignored.
+-- | Fields we read from the user's db-sync-config.json (the file
+-- downloadable from the Cardano book): the path to the real
+-- @config.json@ plus optional metadata. iohk-monitoring keys and
+-- @insert_options@ are ignored.
 data DbSyncNodeConfig = DbSyncNodeConfig
   { dscNodeConfigFile :: !FilePath     -- ^ Path to the real node config.json (relative)
   , dscNetworkName    :: !(Maybe Text) -- ^ "mainnet", "preprod", etc.
@@ -467,7 +440,7 @@ instance FromJSON DbSyncNodeConfig where
       <*> o .:? "PrometheusPort"
 
 -- ---------------------------------------------------------------------------
--- * Node config (from config.json — the real cardano-node config)
+-- * Node config (from config.json)
 -- ---------------------------------------------------------------------------
 
 -- | Whether the network requires magic (testnets) or not (mainnet).
@@ -485,10 +458,10 @@ instance FromJSON NetworkMagicConfig where
                              "NetworkMagicConfig (RequiresNoMagic|RequiresMagic)"
                              (Aeson.String t)
 
--- | Fields extracted from the cardano-node config.json.
--- Contains genesis file paths, hashes, network magic, and optional
--- hard fork trigger epochs (only present on testnets).
--- All logging/tracing/P2P keys are ignored.
+-- | Fields we read from the cardano-node config.json: genesis
+-- file paths, hashes, network magic, and optional hard-fork
+-- trigger epochs (testnets only). Logging, tracing, and P2P keys
+-- are ignored.
 data NodeConfig = NodeConfig
   { ncByronGenesisFile     :: !FilePath
   , ncByronGenesisHash     :: !Text

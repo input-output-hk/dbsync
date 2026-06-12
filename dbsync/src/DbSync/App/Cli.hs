@@ -1,12 +1,5 @@
--- | CLI argument parsing for cardano-db-sync.
---
--- Parses the four required arguments:
---   @--db-sync-config@     — path to db-sync-config.json (from the Cardano book)
---   @--socket-path@        — path to the cardano-node Unix socket
---   @--ledger-state-dir@   — parent directory in which the @dbsync-ledger/@
---                            sub-directory will be created and used for the
---                            LSM session and snapshot headers
---   @--profile@            — path to dbsync-profile.json (database, options, sync mode)
+-- | CLI argument parsing for cardano-db-sync. Flag meanings live
+-- on the @help@ text in 'cliArgsP'.
 module DbSync.App.Cli
   ( -- * Types
     CliArgs (..)
@@ -36,7 +29,9 @@ import Options.Applicative
   , switch
   )
 
+-- ---------------------------------------------------------------------------
 -- * Types
+-- ---------------------------------------------------------------------------
 
 -- | Parsed CLI arguments.
 data CliArgs = CliArgs
@@ -53,7 +48,9 @@ data CliArgs = CliArgs
   }
   deriving stock (Eq, Show)
 
+-- ---------------------------------------------------------------------------
 -- * Parser
+-- ---------------------------------------------------------------------------
 
 -- | Full parser with help text and program description.
 cliArgsParser :: ParserInfo CliArgs

@@ -25,8 +25,8 @@ import DbSync.Trace.Types (LogMsg (..), Severity (..), severityFromText)
 
 main :: IO ()
 main = do
-  -- Bootstrap tracer (Info) so profile-parse errors surface before
-  -- the profile-configured tracer is built.
+  -- Bootstrap tracer so profile-parse errors get logged before the
+  -- profile-configured tracer exists.
   args       <- parseCliArgs
   bootTracer <- mkStdErrTracer Info
   let bootLogError msg = traceWith bootTracer $ LogMsg Error "App" msg Nothing
@@ -34,14 +34,13 @@ main = do
   -- 1. Profile (database, sync options, ledger flag, logging).
   validProfile <- loadProfile bootLogError (caProfile args)
 
-  -- 2. Rebuild the tracer at the profile-configured severity. The
-  --    watchdog + per-epoch diagnostics gate on the same value.
+  -- 2. Rebuild the tracer at the profile-configured severity.
   let minSeverity = severityFromText (lgLevel (scLogging validProfile))
   tracer <- mkStdErrTracer minSeverity
   let logError msg = traceWith tracer $ LogMsg Error "App" msg Nothing
       logInfo  msg = traceWith tracer $ LogMsg Info  "App" msg Nothing
 
-  -- 3. db-sync-config (cardano-book shape: pulls out NodeConfigFile).
+  -- 3. db-sync-config: provides the cardano-node config path.
   dbSyncCfg <- loadDbSyncConfig logError (caDbSyncConfig args)
 
   -- 4. cardano-node config (era boundaries, genesis hashes).

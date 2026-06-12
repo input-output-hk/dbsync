@@ -17,8 +17,7 @@ import DbSync.App.Config.Types
   , UtxoOption (..)
   )
 
--- | Validate a parsed config, returning accumulated errors or the valid config.
--- Checks extractor dependencies and ledger requirements.
+-- | Validate a parsed config; return every error found, or the valid config.
 validateConfig :: SyncConfig -> Either [ConfigError] SyncConfig
 validateConfig cfg =
   case errors of
@@ -40,8 +39,6 @@ validateConfig cfg =
 -- * Validation rules
 -- ---------------------------------------------------------------------------
 
--- | epoch_boundary produces rewards, epoch_stake, ada_pots — all from ledger state.
--- If ledger is disabled, epoch_boundary must also be disabled.
 checkEpochBoundaryRequiresLedger :: SyncConfig -> [ConfigError]
 checkEpochBoundaryRequiresLedger cfg
   | prEnabled (pcEpochBoundary extractors) && not (lcEnabled ledger) =
@@ -55,8 +52,6 @@ checkEpochBoundaryRequiresLedger cfg
     extractors = scOptions cfg
     ledger = scLedger cfg
 
--- | pool_stats sources its rows from the worker's per-epoch pool
--- distribution. If ledger is disabled, pool_stats must also be.
 checkPoolStatsRequiresLedger :: SyncConfig -> [ConfigError]
 checkPoolStatsRequiresLedger cfg
   | prEnabled (pcPoolStats extractors) && not (lcEnabled ledger) =
@@ -70,9 +65,6 @@ checkPoolStatsRequiresLedger cfg
     extractors = scOptions cfg
     ledger = scLedger cfg
 
--- | stake_delegation_ledger sources reward / pot_reward / epoch_stake /
--- epoch_stake_progress rows from the worker's per-block stake slice
--- and per-boundary apEvents. Requires ledger.enabled = true.
 checkStakeDelegationLedgerRequiresLedger :: SyncConfig -> [ConfigError]
 checkStakeDelegationLedgerRequiresLedger cfg
   | prEnabled (pcStakeDelegationLedger extractors) && not (lcEnabled ledger) =
@@ -87,7 +79,6 @@ checkStakeDelegationLedgerRequiresLedger cfg
     extractors = scOptions cfg
     ledger = scLedger cfg
 
--- | current_state (current_utxo, current_delegation, etc.) requires ledger state.
 checkCurrentStateRequiresLedger :: SyncConfig -> [ConfigError]
 checkCurrentStateRequiresLedger cfg
   | prEnabled (pcCurrentState extractors) && not (lcEnabled ledger) =
@@ -101,8 +92,6 @@ checkCurrentStateRequiresLedger cfg
     extractors = scOptions cfg
     ledger = scLedger cfg
 
--- | multi_asset (ma_tx_mint, ma_tx_out) references tx_out rows from the UTxO extractor.
--- If UTxO is disabled, multi_asset data has no parent rows to reference.
 checkMultiAssetRequiresUtxo :: SyncConfig -> [ConfigError]
 checkMultiAssetRequiresUtxo cfg
   | prEnabled (pcMultiAsset extractors) && not (uoEnabled (pcUtxo extractors)) =
@@ -115,9 +104,6 @@ checkMultiAssetRequiresUtxo cfg
   where
     extractors = scOptions cfg
 
--- | pool (pool_update, pool_owner, etc.) references stake_address rows from the
--- StakeDelegation extractor (for reward addresses and owner stake keys).
--- Both extractors also share the pool_hash dedup table.
 checkPoolRequiresStakeDelegation :: SyncConfig -> [ConfigError]
 checkPoolRequiresStakeDelegation cfg
   | prEnabled (pcPool extractors) && not (prEnabled (pcStakeDelegation extractors)) =
@@ -130,8 +116,6 @@ checkPoolRequiresStakeDelegation cfg
   where
     extractors = scOptions cfg
 
--- | off_chain_pools rows reference pool_hash and pool_metadata_ref
--- rows written by the pool extractor.
 checkOffChainPoolsRequiresPool :: SyncConfig -> [ConfigError]
 checkOffChainPoolsRequiresPool cfg
   | prEnabled (pcOffChainPools extractors) && not (prEnabled (pcPool extractors)) =
@@ -144,9 +128,6 @@ checkOffChainPoolsRequiresPool cfg
   where
     extractors = scOptions cfg
 
--- | off_chain_votes anchor metadata only has meaning when the
--- governance extractor is enabled — the voting_anchor rows it fetches
--- are produced by the governance pass.
 checkOffChainVotesRequiresGovernance :: SyncConfig -> [ConfigError]
 checkOffChainVotesRequiresGovernance cfg
   | prEnabled (pcOffChainVotes extractors) && not (prEnabled (pcGovernance extractors)) =

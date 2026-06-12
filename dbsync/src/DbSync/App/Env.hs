@@ -1,21 +1,11 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
 
-{- |
-Module      : DbSync.App.Env
-Description : Environment records for the three sync phases.
-
-Defines 'CoreEnv' (shared configuration), 'IngestEnv' (bulk COPY
-phase), and 'FollowEnv' (live chain-following phase). Orphan
-instances for 'HasTracer', 'HasMetrics', 'HasConfig', 'HasExtractors',
-'HasResolver', and 'HasWriter' are defined here to avoid circular
-imports between the class-defining modules and the concrete
-environment types.
-
-The ledger feature is represented as a sum type 'HasLedgerEnv'
-carried on 'IngestEnv' (see 'DbSync.Worker.Ledger.Types'); the block queue
-and epoch-coordination 'TMVar's for the 'LedgerWorker' thread live
-inside that type, so the ledger-disabled path allocates none of it.
--}
+-- | Phase environments: 'CoreEnv' (shared), 'IngestEnv' (bulk COPY
+-- phase), 'FollowEnv' (live chain-follow phase).
+--
+-- Accessor-class instances are defined here as orphans to avoid
+-- circular imports between class-defining modules and the concrete
+-- env records.
 module DbSync.App.Env
   ( -- * Environment types
     CoreEnv (..)
@@ -33,9 +23,8 @@ module DbSync.App.Env
 
     -- * Small env adapters
     --
-    -- Used by boot code and tests where no full phase env is in
-    -- scope. Production phase envs satisfy the same classes directly
-    -- via the records above.
+    -- Used in boot code and tests; production phase envs satisfy the
+    -- same classes directly via the records above.
   , TracerWithControl (..)
   , TracerWithConn (..)
   , LoaderWithControl (..)
@@ -106,14 +95,8 @@ class HasConfig env where
 class HasSecurityParam env where
   getSecurityParam :: env -> Word64
 
--- | The state the chainsync receiver needs from whichever phase
--- owns it. Both 'IngestEnv' and 'FollowEnv' provide it, so
--- 'DbSync.ChainSync.Connection.connectToNode' can run against either.
---
--- These fields are always used together — the receiver writes into
--- the queues, bumps the watchdog, and publishes the rollback
--- boundary on every observed tip. Bundling rather than 7 single-field
--- classes keeps call-site noise down without hiding any field.
+-- | The state the chainsync receiver needs. Both 'IngestEnv' and
+-- 'FollowEnv' provide it so the same receiver runs against either.
 class HasReceiverChannels env where
   getBlockQueue       :: env -> TBQueue ChainSyncMsg
   getLedgerQueue      :: env -> Maybe (TBQueue ChainSyncMsg)
@@ -160,19 +143,7 @@ data CoreEnv = CoreEnv
 
 -- | Environment for the 'IngestChainHistory' phase.
 --
--- Extends 'CoreEnv' with the runtime state needed for loader-stream
--- ingestion: the chainsync message queue, loader-stream connections,
--- ID counters, mutable dedup hash tables, the resolver and writer
--- adapters, the state-query interpreter handle, the system start,
--- and the ledger subsystem 'HasLedgerEnv' which is either
--- @LedgerEnabled !LedgerEnv@ (carrying its own block queue +
--- epoch-coordination 'TMVar's + snapshot queue) or
--- @LedgerDisabled !NoLedgerEnv@ (allocating nothing ledger-stateful).
---
--- The block queue carries raw 'CardanoBlock' values inside
--- 'MsgForward'; parsing into 'DbSync.Parser.Types.GenericBlock'
--- happens inside the consumer so the receiver thread doesn't pay
--- parsing cost on the hot path.
+-- Extends 'CoreEnv' with the runtime state needed for loader-stream ingestion
 data IngestEnv = IngestEnv
   { ieCore          :: !CoreEnv
     -- ^ Shared core environment
@@ -212,10 +183,8 @@ data IngestEnv = IngestEnv
     -- writes either @off_chain_vote_data@ (success) or
     -- @off_chain_vote_fetch_error@ (failure).
   , ieLsmSession :: !LsmSession
-    -- ^ Shared LSM session backing the ingest-phase scratch
-    -- tables. Owned by 'IngestEnv'; the App-level shutdown calls
-    -- 'DbSync.Phase.Ingest.LsmSession.closeLsmSession' (mid-flight
-    -- crash) or 'closeAndDeleteLsmSession' (after Prep completes).
+    -- ^ Shared LSM session backing the ingest-phase scratch tables.
+    -- Closed on mid-flight crash; deleted after Prep completes.
   , ieUtxoStore :: !UtxoStore
     -- ^ Tx-hash → @(tx_id, [(tx_out_id, value)])@ store backed by
     -- 'ieLsmSession'. Consulted by the UTxO extractor to resolve
@@ -266,17 +235,13 @@ data IngestEnv = IngestEnv
     -- progress log. 'Nothing' otherwise.
   , ieWatchdog                :: !Watchdog
     -- ^ Per-thread liveness counters sampled by a background
-    -- watchdog. Consumer + receiver bump via this handle; the
-    -- ledger worker bumps via the same handle, passed explicitly
-    -- to 'DbSync.Worker.Ledger.Worker.runLedgerWorker' because the worker
-    -- runs under 'LedgerEnv' (no 'IngestEnv' in scope).
+    -- watchdog. Consumer, receiver, and ledger worker all bump via
+    -- this handle.
   , iePulse                   :: !Pulse
-    -- ^ In-epoch pulse counter. Bumped once per processed block;
-    -- a background sampler reads it every 'pulseInterval' seconds
-    -- and emits a Debug-level liveness line covering rate +
-    -- receiver/loader queue depths + current consumer note. Same
-    -- disabled/enabled gating as the watchdog: at 'Info' or above
-    -- both the bumps and the sampler are no-ops.
+    -- ^ In-epoch pulse counter. Bumped once per processed block; a
+    -- background sampler reads it every 'pulseInterval' seconds and
+    -- emits a Debug-level liveness line. Disabled at 'Info' or above
+    -- (matching the watchdog).
   , ieLatestReceivedPoint     :: !(IORef (Maybe CardanoPoint))
     -- ^ The latest chain point the receiver has accepted (forward
     -- or rollback). Read on every (re)connection so the chainsync
@@ -303,8 +268,9 @@ data IngestEnv = IngestEnv
     -- depend on the security parameter agreeing across two sources.
   }
 
--- | Environment for the Follow loop ('FollowingVolatileTail' and
--- 'FollowingChainTip').
+-- ---------------------------------------------------------------------------
+-- * Environment for the Follow (FollowingVolatileTail & FollowingChainTip).
+-- ---------------------------------------------------------------------------
 --
 -- Lighter than 'IngestEnv' — no COPY connections, no dedup stores, no
 -- background address resolver. Reads from the same chainsync message
@@ -323,9 +289,13 @@ data FollowEnv = FollowEnv
   , feStateQueryVar       :: !StateQueryVar
     -- ^ Slot-to-time interpreter, used by 'parseBlock'.
   , feSystemStart         :: !SystemStart
+    -- ^ Network system-start time; drives slot-to-time conversion.
   , feReceiverStats       :: !ReceiverStats
+    -- ^ Cumulative receiver counters carried from 'IngestEnv'.
   , feWatchdog            :: !Watchdog
+    -- ^ Per-thread liveness counters carried from 'IngestEnv'.
   , feLatestReceivedPoint :: !(IORef (Maybe CardanoPoint))
+    -- ^ Latest chainsync point accepted; preserved across the phase flip.
   , feHasqlConnection     :: !Conn.Connection
     -- ^ Dedicated Follow connection — drives the resolver and writer
     -- (INSERTs) and the per-block @BEGIN@/@COMMIT@ envelope. Distinct
@@ -533,10 +503,6 @@ instance HasWriter FollowEnv where
 -- * HasLedgerData instances
 -- ---------------------------------------------------------------------------
 
--- | Drains the next per-block 'ApplyResult' from the worker's FIFO
--- and projects it onto 'BlockLedgerData'. The consumer drives this
--- once per processed block; the ledger-OFF arm returns empty without
--- touching any queue.
 instance HasLedgerData IngestEnv where
   getLedgerData ie _block = takeBlockLedgerData (ieHasLedgerEnv ie)
 
@@ -621,10 +587,6 @@ instance HasSystemStart LedgerEnv where
 
 -- ---------------------------------------------------------------------------
 -- * Small env adapters
---
--- Used by boot code (no 'IngestEnv' / 'FollowEnv' built yet) and by
--- tests (no real phase env in scope). Production phase envs satisfy
--- these classes directly via the records above.
 -- ---------------------------------------------------------------------------
 
 -- | Tracer + control connection. Drives 'rebuildDedupMaps' and any

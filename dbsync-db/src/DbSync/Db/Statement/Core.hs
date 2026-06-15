@@ -1,7 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Hasql 'Statement' bindings for the @core@ extractor tables:
--- @block@, @tx@, @slot_leader@.
+-- @block@, @tx@, @slot_leader@, @stake_address@, @pool_hash@.
+--
+-- @stake_address@ is dedup-keyed on @hash_raw@ (the 29-byte serialised
+-- reward address); @pool_hash@ is dedup-keyed on @hash_raw@ (the
+-- 28-byte pool key hash).
 --
 -- Used during 'FollowingChainTip' and 'PreparingForVolatileTail';
 -- 'IngestChainHistory' writes via COPY instead. The @Row@-suffixed
@@ -32,6 +36,16 @@ module DbSync.Db.Statement.Core
   , nextSlotLeaderIdStmt
   , querySlotLeaderIdStmt
   , querySlotLeaderCountStmt
+
+    -- * stake_address
+  , insertStakeAddressRowStmt
+  , nextStakeAddressIdStmt
+  , queryStakeAddressIdStmt
+
+    -- * pool_hash
+  , insertPoolHashRowStmt
+  , nextPoolHashIdStmt
+  , queryPoolHashIdStmt
   ) where
 
 import Cardano.Prelude
@@ -44,19 +58,27 @@ import qualified Hasql.Statement as Stmt
 import DbSync.Db.Schema.Core
   ( Block
   , BlockCols (..)
+  , PoolHash
   , SlotLeader
+  , StakeAddress
   , Tx
   , blockCols
   , blockEncoder
   , blockTableDef
+  , poolHashEncoder
+  , poolHashTableDef
   , slotLeaderEncoder
   , slotLeaderTableDef
+  , stakeAddressEncoder
+  , stakeAddressTableDef
   , txEncoder
   , txTableDef
   )
 import DbSync.Db.Schema.Ids
   ( BlockId (..)
+  , PoolHashId (..)
   , SlotLeaderId (..)
+  , StakeAddressId (..)
   , TxId (..)
   , idDecoder
   , idEncoder
@@ -195,3 +217,38 @@ querySlotLeaderIdStmt = queryIdByColumnStmt slotLeaderTableDef ByHash SlotLeader
 
 querySlotLeaderCountStmt :: Stmt.Statement () Int64
 querySlotLeaderCountStmt = countRowsStmt slotLeaderTableDef
+
+-- ---------------------------------------------------------------------------
+-- * stake_address
+-- ---------------------------------------------------------------------------
+
+insertStakeAddressRowStmt :: Stmt.Statement (StakeAddressId, StakeAddress) ()
+insertStakeAddressRowStmt =
+  Stmt.preparable (insertRowSql stakeAddressTableDef) encoder D.noResult
+  where
+    encoder = (fst >$< idEncoder getStakeAddressId)
+           <> (snd >$< stakeAddressEncoder)
+
+nextStakeAddressIdStmt :: Stmt.Statement () StakeAddressId
+nextStakeAddressIdStmt = nextIdStmt stakeAddressTableDef StakeAddressId
+
+queryStakeAddressIdStmt :: Stmt.Statement ByteString (Maybe StakeAddressId)
+queryStakeAddressIdStmt =
+  queryIdByColumnStmt stakeAddressTableDef ByHashRaw StakeAddressId
+
+-- ---------------------------------------------------------------------------
+-- * pool_hash
+-- ---------------------------------------------------------------------------
+
+insertPoolHashRowStmt :: Stmt.Statement (PoolHashId, PoolHash) ()
+insertPoolHashRowStmt =
+  Stmt.preparable (insertRowSql poolHashTableDef) encoder D.noResult
+  where
+    encoder = (fst >$< idEncoder getPoolHashId)
+           <> (snd >$< poolHashEncoder)
+
+nextPoolHashIdStmt :: Stmt.Statement () PoolHashId
+nextPoolHashIdStmt = nextIdStmt poolHashTableDef PoolHashId
+
+queryPoolHashIdStmt :: Stmt.Statement ByteString (Maybe PoolHashId)
+queryPoolHashIdStmt = queryIdByColumnStmt poolHashTableDef ByHashRaw PoolHashId

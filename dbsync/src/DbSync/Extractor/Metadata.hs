@@ -28,11 +28,9 @@ import DbSync.Writer (HasWriter (..), Writer (..))
 
 metadataExtractor :: ExtractorDef
 metadataExtractor = ExtractorDef
-  { pdName         = "metadata"
-  , pdVersion      = 1
-  , pdDependencies = [("core", 1)]
-  , pdTables       = [txMetadataTableDef]
-  , pdProcess      = processMetadata
+  { pdName    = "metadata"
+  , pdTables  = [txMetadataTableDef]
+  , pdProcess = processMetadata
   }
 
 -- ---------------------------------------------------------------------------

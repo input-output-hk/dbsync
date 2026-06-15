@@ -57,6 +57,7 @@ library dbsync-testlib
     DbSync.Test.PgAssertions
     DbSync.Test.PipelineEnv
     DbSync.Test.Property.Invariants
+    DbSync.Test.RecomputeInvariants
     DbSync.Test.Writer
   build-depends:
       base
@@ -126,8 +127,13 @@ test-suite dbsync-test
     DbSync.Schema.CoreSpec
     DbSync.Schema.EpochBoundarySpec
     DbSync.Schema.EpochViewSpec
+    DbSync.Schema.VersionSpec
     DbSync.Schema.GenerateSpec
     DbSync.Schema.GovernanceSpec
+    DbSync.Schema.Migration.DiffSpec
+    DbSync.Schema.Migration.LadderSpec
+    DbSync.Schema.Migration.RenderSpec
+    DbSync.Schema.Migration.RunnerSpec
     DbSync.Schema.OffChainPoolSpec
     DbSync.Schema.OffChainVoteSpec
     DbSync.Schema.RewardSpec
@@ -185,6 +191,7 @@ test-suite dbsync-test
     DbSync.Phase.LsmLifecycleSpec
     DbSync.Phase.MockChainSpec
     DbSync.Phase.MockNodeSpec
+    DbSync.Phase.RecomputeInvariantsSpec
     DbSync.Phase.Preparing.RunSpec
     DbSync.StateQuery.ObservedSummarySpec
     DbSync.StateQuery.SlotDetailsSpec

@@ -268,6 +268,12 @@ data BootError
     -- ^ The ledger state directory contains data but no readable
     -- fingerprint file. Carries the directory path for the operator
     -- message.
+  | BootSchemaNewerThanBinary !Int !Int
+    -- ^ The database's @schema_version_applied@ exceeds the version this
+    -- binary targets. Fields: @(database, binary)@.
+  | BootSchemaDriftUncovered !Text !Text
+    -- ^ Versions match but the stored @schema_fingerprint@ differs from the
+    -- declared one. Fields: @(stored, declared)@.
   deriving stock (Eq, Show)
 
 -- ---------------------------------------------------------------------------
@@ -517,6 +523,28 @@ renderBootError = \case
       , ""
       , "Recovery: restart with --resync-from-genesis to wipe and re-sync from"
       , "genesis."
+      ]
+
+  BootSchemaNewerThanBinary database binary ->
+    T.unlines
+      [ "Cannot start: the database schema is newer than this binary supports."
+      , ""
+      , "  Database schema version : " <> show database
+      , "  Binary schema version   : " <> show binary
+      , ""
+      , "Recovery: upgrade dbsync to a build that targets this schema version."
+      ]
+
+  BootSchemaDriftUncovered stored declared ->
+    T.unlines
+      [ "Cannot start: the database schema fingerprint does not match the"
+      , "declared schema, and no migration covers the difference."
+      , ""
+      , "  Stored   : " <> stored
+      , "  Declared : " <> declared
+      , ""
+      , "Recovery: add a migration that raises the schema version to cover the"
+      , "change, or restart with --resync-from-genesis to rebuild from genesis."
       ]
 
 -- ---------------------------------------------------------------------------

@@ -56,17 +56,15 @@ import DbSync.Writer (HasWriter (..), Writer (..))
 
 scriptsDatumsExtractor :: ExtractorDef
 scriptsDatumsExtractor = ExtractorDef
-  { pdName         = "scripts_datums"
-  , pdVersion      = 1
-  , pdDependencies = [("core", 1)]
-  , pdTables       =
+  { pdName    = "scripts_datums"
+  , pdTables  =
       [ datumTableDef
       , scriptTableDef
       , redeemerTableDef
       , redeemerDataTableDef
       , extraKeyWitnessTableDef
       ]
-  , pdProcess      = processScriptsDatums
+  , pdProcess = processScriptsDatums
   }
 
 -- ---------------------------------------------------------------------------

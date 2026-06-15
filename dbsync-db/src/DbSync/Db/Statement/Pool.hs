@@ -1,19 +1,13 @@
 -- | Hasql 'Statement' bindings for the @pool@ extractor tables:
--- @pool_hash@, @pool_update@, @pool_metadata_ref@, @pool_owner@,
--- @pool_retire@, @pool_relay@.
+-- @pool_update@, @pool_metadata_ref@, @pool_owner@, @pool_retire@,
+-- @pool_relay@.
 --
--- @pool_hash@ is dedup-keyed on @hash_raw@ (the 28-byte pool key
--- hash). @pool_update@ and @pool_metadata_ref@ are counter-managed
--- (each row allocates a fresh id). @pool_owner@, @pool_retire@ and
--- @pool_relay@ are IDENTITY leaves.
+-- @pool_update@ and @pool_metadata_ref@ are counter-managed (each row
+-- allocates a fresh id). @pool_owner@, @pool_retire@ and @pool_relay@
+-- are IDENTITY leaves.
 module DbSync.Db.Statement.Pool
-  ( -- * pool_hash
-    insertPoolHashRowStmt
-  , nextPoolHashIdStmt
-  , queryPoolHashIdStmt
-
-    -- * pool_update
-  , insertPoolUpdateRowStmt
+  ( -- * pool_update
+    insertPoolUpdateRowStmt
   , nextPoolUpdateIdStmt
 
     -- * pool_metadata_ref
@@ -37,20 +31,16 @@ import qualified Hasql.Decoders as D
 import qualified Hasql.Statement as Stmt
 
 import DbSync.Db.Schema.Ids
-  ( PoolHashId (..)
-  , PoolMetadataRefId (..)
+  ( PoolMetadataRefId (..)
   , PoolUpdateId (..)
   , idEncoder
   )
 import DbSync.Db.Schema.Pool
-  ( PoolHash
-  , PoolMetadataRef
+  ( PoolMetadataRef
   , PoolOwner
   , PoolRelay
   , PoolRetire
   , PoolUpdate
-  , poolHashEncoder
-  , poolHashTableDef
   , poolMetadataRefEncoder
   , poolMetadataRefTableDef
   , poolOwnerEncoder
@@ -62,29 +52,7 @@ import DbSync.Db.Schema.Pool
   , poolUpdateEncoder
   , poolUpdateTableDef
   )
-import DbSync.Db.Statement.Common
-  ( LookupColumn (..)
-  , insertRowSql
-  , nextIdStmt
-  , queryIdByColumnStmt
-  )
-
--- ---------------------------------------------------------------------------
--- * pool_hash
--- ---------------------------------------------------------------------------
-
-insertPoolHashRowStmt :: Stmt.Statement (PoolHashId, PoolHash) ()
-insertPoolHashRowStmt =
-  Stmt.preparable (insertRowSql poolHashTableDef) encoder D.noResult
-  where
-    encoder = (fst >$< idEncoder getPoolHashId)
-           <> (snd >$< poolHashEncoder)
-
-nextPoolHashIdStmt :: Stmt.Statement () PoolHashId
-nextPoolHashIdStmt = nextIdStmt poolHashTableDef PoolHashId
-
-queryPoolHashIdStmt :: Stmt.Statement ByteString (Maybe PoolHashId)
-queryPoolHashIdStmt = queryIdByColumnStmt poolHashTableDef ByHashRaw PoolHashId
+import DbSync.Db.Statement.Common (insertRowSql, nextIdStmt)
 
 -- ---------------------------------------------------------------------------
 -- * pool_update

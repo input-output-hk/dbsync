@@ -12,6 +12,9 @@ maintainer:    operations@iohk.io
 category:      Cryptocurrency
 build-type:    Simple
 
+-- Schema migration files; packaged so they can be embedded at build time.
+extra-source-files: migrations/*.sql
+
 common warnings
   ghc-options:
     -Wall
@@ -63,8 +66,10 @@ library
     DbSync.Db.Schema.EpochParamPending
     DbSync.Db.Schema.Generate
     DbSync.Db.Schema.Init
-    DbSync.Db.Schema.Version
     DbSync.Db.Schema.Migration
+    DbSync.Db.Schema.Migration.Diff
+    DbSync.Db.Schema.Migration.Files
+    DbSync.Db.Schema.Migration.Render
     DbSync.Db.Sql
     DbSync.Db.Sql.Refs
     DbSync.Db.Statement.CBOR
@@ -110,6 +115,7 @@ library
 
     -- Data
     , bytestring
+    , file-embed
     , scientific
     , text
     , time

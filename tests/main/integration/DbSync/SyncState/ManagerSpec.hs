@@ -57,6 +57,7 @@ import DbSync.SyncState.Row
   )
 import DbSync.Test.Database (queryTestDb, testConnBs, testConnStr, testHasqlSettings, truncateAllTables)
 import DbSync.AppM (runAppM)
+import DbSync.Schema.Version (Fingerprint (..))
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -65,8 +66,9 @@ import DbSync.AppM (runAppM)
 coreTables :: [TableDef]
 coreTables = [blockTableDef, txTableDef, slotLeaderTableDef]
 
-coreVersions :: [(Text, Int)]
-coreVersions = [("core", 1)]
+-- | Placeholder schema fingerprint for seeding the sync-state row in tests.
+testFp :: Fingerprint
+testFp = Fingerprint "test-fp"
 
 coreTableNames :: [Text]
 coreTableNames = map tdName coreTables
@@ -185,14 +187,14 @@ sampleTime = UTCTime (fromGregorian 2024 1 15) (secondsToDiffTime 43200)
 
 spec :: Spec
 spec = describe "DbSync.SyncState.Manager.commitEpoch" $
-  beforeAll_ (dropSchema coreTables coreVersions testConnStr >> initSchema coreTables coreVersions testConnStr) $
-  afterAll_  (dropSchema coreTables coreVersions testConnStr) $
+  beforeAll_ (dropSchema coreTables testConnStr >> initSchema coreTables testConnStr) $
+  afterAll_  (dropSchema coreTables testConnStr) $
   before_    resetFixtures $ do
 
     it "flushes bulk data AND advances dbsync_sync_state atomically" $ do
       -- Arrange: control conn seeded, loader stream primed.
       withControlConnection $ \ctrl -> do
-        runAppM ctrl (seedSyncState 1 False)
+        runAppM ctrl (seedSyncState 1 testFp False [])
         bs <- mkLoaderStream testConnBs coreTables
         -- Act: push one row through each of the three tables, commit.
         writeOneOfEach bs 1
@@ -213,7 +215,7 @@ spec = describe "DbSync.SyncState.Manager.commitEpoch" $
 
     it "counters advance monotonically across two epochs" $
       withControlConnection $ \ctrl -> do
-        runAppM ctrl (seedSyncState 1 False)
+        runAppM ctrl (seedSyncState 1 testFp False [])
         bs <- mkLoaderStream testConnBs coreTables
         let env = LoaderWithControl bs ctrl
         -- Epoch 5
@@ -234,7 +236,7 @@ spec = describe "DbSync.SyncState.Manager.commitEpoch" $
 
     it "data table grows by one row per epoch" $
       withControlConnection $ \ctrl -> do
-        runAppM ctrl (seedSyncState 1 False)
+        runAppM ctrl (seedSyncState 1 testFp False [])
         bs <- mkLoaderStream testConnBs coreTables
         let env = LoaderWithControl bs ctrl
         writeOneOfEach bs 1

@@ -31,7 +31,7 @@ tables = [slotLeaderTableDef]
 
 spec :: Spec
 spec = describe "DbSync.Db.Statement.Core" $
-  beforeAll_ (setupFollowTipSchema tables [("core", 1)]) $
+  beforeAll_ (setupFollowTipSchema tables) $
   afterAll_  (teardownSchema tables) $
   before_    (truncateAllTables (map tdName tables)) $ do
 

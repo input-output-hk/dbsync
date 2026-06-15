@@ -86,6 +86,7 @@ import DbSync.StateQuery
   )
 import DbSync.SyncState.Manager (mkBoundarySyncStateRow)
 import DbSync.SyncState.Row (writeSyncState)
+import DbSync.Schema.Version (currentSchemaVersion)
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Pulse (bumpPulse)
 import DbSync.Trace.Replay
@@ -187,7 +188,7 @@ runConsumer = do
           loaderStream = ieLoaderStream ie
           watchdog     = ieWatchdog ie
           ledgerEnabled = lcEnabled (scLedger (getConfig ie))
-          schemaVersion = 1 :: Int
+          schemaVersion = currentSchemaVersion
       -- Drain any residual mid-epoch consumed-by pairs via one last
       -- job carrying an empty address buffer. When consumed-by is
       -- off this branch is unreachable.

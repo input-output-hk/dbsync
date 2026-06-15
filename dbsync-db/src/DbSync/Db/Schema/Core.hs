@@ -5,9 +5,13 @@
 Module      : DbSync.Db.Schema.Core
 Description : Schema types for the @core@ extractor.
 
-The @core@ extractor owns five tables:
+The @core@ extractor owns seven tables:
 
   * @block@, @tx@, @slot_leader@ — block extraction (always-on).
+  * @stake_address@, @pool_hash@ — shared dedup tables. Written
+    unconditionally by the block pipeline (every tx output carrying a
+    stake credential, every block's slot leader), so they must exist
+    regardless of which optional extractors are enabled.
   * @meta@ — chain metadata (network name, version, start time).
     Written once at startup.
   * @reverse_index@ — per-block min-FK watermarks. Required by every
@@ -22,6 +26,8 @@ module DbSync.Db.Schema.Core
     Block (..)
   , Tx (..)
   , SlotLeader (..)
+  , StakeAddress (..)
+  , PoolHash (..)
   , Meta (..)
   , ReverseIndex (..)
 
@@ -29,6 +35,8 @@ module DbSync.Db.Schema.Core
   , blockTableDef
   , txTableDef
   , slotLeaderTableDef
+  , stakeAddressTableDef
+  , poolHashTableDef
   , metaTableDef
   , reverseIndexTableDef
 
@@ -42,6 +50,12 @@ module DbSync.Db.Schema.Core
   , SlotLeaderCols (..)
   , slotLeaderCols
   , slotLeaderColsList
+  , StakeAddressCols (..)
+  , stakeAddressCols
+  , stakeAddressColsList
+  , PoolHashCols (..)
+  , poolHashCols
+  , poolHashColsList
   , MetaCols (..)
   , metaCols
   , metaColsList
@@ -56,6 +70,8 @@ module DbSync.Db.Schema.Core
   , encodeBlockCopy
   , encodeTxCopy
   , encodeSlotLeaderCopy
+  , encodeStakeAddressCopy
+  , encodePoolHashCopy
   , encodeMetaCopy
   , encodeReverseIndexCopy
 
@@ -69,6 +85,12 @@ module DbSync.Db.Schema.Core
   , slotLeaderEncoder
   , slotLeaderDecoder
   , entitySlotLeaderDecoder
+  , stakeAddressEncoder
+  , stakeAddressDecoder
+  , entityStakeAddressDecoder
+  , poolHashEncoder
+  , poolHashDecoder
+  , entityPoolHashDecoder
   , metaEncoder
   , metaDecoder
   , entityMetaDecoder
@@ -102,6 +124,7 @@ import DbSync.Db.Schema.Ids
   , PoolHashId (..)
   , ReverseIndexId (..)
   , SlotLeaderId (..)
+  , StakeAddressId (..)
   , TxId (..)
   , idDecoder
   , idEncoder
@@ -138,6 +161,8 @@ import DbSync.Db.Loader.Encoder
 type instance Key Block = BlockId
 type instance Key Tx = TxId
 type instance Key SlotLeader = SlotLeaderId
+type instance Key StakeAddress = StakeAddressId
+type instance Key PoolHash = PoolHashId
 type instance Key Meta = MetaId
 type instance Key ReverseIndex = ReverseIndexId
 
@@ -190,6 +215,23 @@ data SlotLeader = SlotLeader
   { slotLeaderHash        :: !ByteString       -- ^ hash28type
   , slotLeaderPoolHashId  :: !(Maybe PoolHashId) -- ^ non-null when block mined by pool
   , slotLeaderDescription :: !Text             -- ^ description of the slot leader
+  }
+  deriving stock (Eq, Show)
+
+-- | The @stake_address@ table (dedup table).
+-- One row per unique stake credential hash.
+data StakeAddress = StakeAddress
+  { stakeAddressHashRaw    :: !ByteString        -- ^ 28-byte stake credential hash
+  , stakeAddressView       :: !Text              -- ^ Bech32 representation
+  , stakeAddressScriptHash :: !(Maybe ByteString) -- ^ Script hash if script-based
+  }
+  deriving stock (Eq, Show)
+
+-- | The @pool_hash@ table (dedup table).
+-- One row per unique pool key hash.
+data PoolHash = PoolHash
+  { poolHashHashRaw :: !ByteString  -- ^ Pool key hash (28 bytes)
+  , poolHashView    :: !Text        -- ^ Bech32 representation
   }
   deriving stock (Eq, Show)
 
@@ -293,6 +335,47 @@ slotLeaderTableDef = TableDef
       , ColumnDef "description"  PgText    False
       ]
   , tdMode    = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
+  , tdUniqueConstraints = []
+  , tdGeneratedColumns = []
+  , tdIdentityColumns = []
+  , tdForeignKeys = []
+  }
+
+stakeAddressTableDef :: TableDef
+stakeAddressTableDef = TableDef
+  { tdName    = "stake_address"
+  , tdColumns =
+      [ ColumnDef "id"          PgBigInt  False
+      , ColumnDef "hash_raw"    PgBytea   False
+      , ColumnDef "view"        PgText    False
+      , ColumnDef "script_hash" PgBytea   True
+      ]
+  , tdMode = TableUnlogged
+  , tdPrimaryKey     = Nothing
+  , tdChecks         = []
+  , tdColumnDefaults = []
+    -- Unique by 28-byte credential hash. The Follow dedup resolver
+    -- SELECTs on this column for every unique stake address per
+    -- block; without the index every resolve sequential-scans the
+    -- whole table.
+  , tdUniqueConstraints = [pure "hash_raw"]
+  , tdGeneratedColumns = []
+  , tdIdentityColumns = []
+  , tdForeignKeys = []
+  }
+
+poolHashTableDef :: TableDef
+poolHashTableDef = TableDef
+  { tdName    = "pool_hash"
+  , tdColumns =
+      [ ColumnDef "id"       PgBigInt  False
+      , ColumnDef "hash_raw" PgBytea   False
+      , ColumnDef "view"     PgText    False
+      ]
+  , tdMode = TableUnlogged
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
@@ -483,6 +566,53 @@ slotLeaderColsList =
   , slotLeaderCols.slcDescription
   ]
 
+data StakeAddressCols = StakeAddressCols
+  { sacId         :: !TableColumn
+  , sacHashRaw    :: !TableColumn
+  , sacView       :: !TableColumn
+  , sacScriptHash :: !TableColumn
+  }
+
+stakeAddressCols :: StakeAddressCols
+stakeAddressCols =
+  let c = TableColumn stakeAddressTableDef
+  in StakeAddressCols
+       { sacId         = c "id"
+       , sacHashRaw    = c "hash_raw"
+       , sacView       = c "view"
+       , sacScriptHash = c "script_hash"
+       }
+
+stakeAddressColsList :: [TableColumn]
+stakeAddressColsList =
+  [ stakeAddressCols.sacId
+  , stakeAddressCols.sacHashRaw
+  , stakeAddressCols.sacView
+  , stakeAddressCols.sacScriptHash
+  ]
+
+data PoolHashCols = PoolHashCols
+  { phcId      :: !TableColumn
+  , phcHashRaw :: !TableColumn
+  , phcView    :: !TableColumn
+  }
+
+poolHashCols :: PoolHashCols
+poolHashCols =
+  let c = TableColumn poolHashTableDef
+  in PoolHashCols
+       { phcId      = c "id"
+       , phcHashRaw = c "hash_raw"
+       , phcView    = c "view"
+       }
+
+poolHashColsList :: [TableColumn]
+poolHashColsList =
+  [ poolHashCols.phcId
+  , poolHashCols.phcHashRaw
+  , poolHashCols.phcView
+  ]
+
 data MetaCols = MetaCols
   { mcId          :: !TableColumn
   , mcStartTime   :: !TableColumn
@@ -539,6 +669,8 @@ coreColumnRecords =
   [ (blockTableDef,        blockColsList)
   , (txTableDef,           txColsList)
   , (slotLeaderTableDef,   slotLeaderColsList)
+  , (stakeAddressTableDef, stakeAddressColsList)
+  , (poolHashTableDef,     poolHashColsList)
   , (metaTableDef,         metaColsList)
   , (reverseIndexTableDef, reverseIndexColsList)
   ]
@@ -597,6 +729,25 @@ encodeSlotLeaderCopy (SlotLeaderId slid) sl =
     , Just $ bHex (slotLeaderHash sl)
     , bInt64 . getPoolHashId <$> slotLeaderPoolHashId sl
     , Just $ bText (slotLeaderDescription sl)
+    ]
+
+-- | Encode a 'StakeAddress' with its 'StakeAddressId' into a COPY text row.
+encodeStakeAddressCopy :: StakeAddressId -> StakeAddress -> ByteString
+encodeStakeAddressCopy (StakeAddressId sid) sa =
+  buildCopyRow
+    [ Just $ bInt64 sid
+    , Just $ bHex (stakeAddressHashRaw sa)
+    , Just $ bText (stakeAddressView sa)
+    , bHex <$> stakeAddressScriptHash sa
+    ]
+
+-- | Encode a 'PoolHash' with its 'PoolHashId' into a COPY text row.
+encodePoolHashCopy :: PoolHashId -> PoolHash -> ByteString
+encodePoolHashCopy (PoolHashId pid) ph =
+  buildCopyRow
+    [ Just $ bInt64 pid
+    , Just $ bHex (poolHashHashRaw ph)
+    , Just $ bText (poolHashView ph)
     ]
 
 -- | Encode a 'Meta' row with its 'MetaId' into a COPY text row.
@@ -781,6 +932,48 @@ entitySlotLeaderDecoder :: D.Row (SlotLeaderId, SlotLeader)
 entitySlotLeaderDecoder = (,)
   <$> idDecoder SlotLeaderId
   <*> slotLeaderDecoder
+
+-- | Encoder for a 'StakeAddress' row, excluding the @id@.
+stakeAddressEncoder :: E.Params StakeAddress
+stakeAddressEncoder = mconcat
+  [ stakeAddressHashRaw    >$< E.param (E.nonNullable E.bytea)
+  , stakeAddressView       >$< E.param (E.nonNullable E.text)
+  , stakeAddressScriptHash >$< E.param (E.nullable E.bytea)
+  ]
+
+-- | Decoder for a @stake_address@ row, excluding the @id@ column.
+stakeAddressDecoder :: D.Row StakeAddress
+stakeAddressDecoder = StakeAddress
+  <$> D.column (D.nonNullable D.bytea)
+  <*> D.column (D.nonNullable D.text)
+  <*> D.column (D.nullable D.bytea)
+
+-- | Decoder for a full @stake_address@ row, including @id@. Column
+-- order matches @SELECT *@ on 'stakeAddressTableDef'.
+entityStakeAddressDecoder :: D.Row (StakeAddressId, StakeAddress)
+entityStakeAddressDecoder = (,)
+  <$> idDecoder StakeAddressId
+  <*> stakeAddressDecoder
+
+-- | Encoder for a 'PoolHash' row, excluding the @id@.
+poolHashEncoder :: E.Params PoolHash
+poolHashEncoder = mconcat
+  [ poolHashHashRaw >$< E.param (E.nonNullable E.bytea)
+  , poolHashView    >$< E.param (E.nonNullable E.text)
+  ]
+
+-- | Decoder for a @pool_hash@ row, excluding the @id@ column.
+poolHashDecoder :: D.Row PoolHash
+poolHashDecoder = PoolHash
+  <$> D.column (D.nonNullable D.bytea)
+  <*> D.column (D.nonNullable D.text)
+
+-- | Decoder for a full @pool_hash@ row, including @id@. Column
+-- order matches @SELECT *@ on 'poolHashTableDef'.
+entityPoolHashDecoder :: D.Row (PoolHashId, PoolHash)
+entityPoolHashDecoder = (,)
+  <$> idDecoder PoolHashId
+  <*> poolHashDecoder
 
 -- | Encoder for a 'Meta' row, excluding the auto-generated @id@.
 metaEncoder :: E.Params Meta

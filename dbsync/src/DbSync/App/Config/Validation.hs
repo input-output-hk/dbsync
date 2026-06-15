@@ -30,7 +30,6 @@ validateConfig cfg =
       , checkStakeDelegationLedgerRequiresLedger cfg
       , checkCurrentStateRequiresLedger cfg
       , checkMultiAssetRequiresUtxo cfg
-      , checkPoolRequiresStakeDelegation cfg
       , checkOffChainPoolsRequiresPool cfg
       , checkOffChainVotesRequiresGovernance cfg
       ]
@@ -104,25 +103,13 @@ checkMultiAssetRequiresUtxo cfg
   where
     extractors = scOptions cfg
 
-checkPoolRequiresStakeDelegation :: SyncConfig -> [ConfigError]
-checkPoolRequiresStakeDelegation cfg
-  | prEnabled (pcPool extractors) && not (prEnabled (pcStakeDelegation extractors)) =
-      [ ConfigValidationError
-          "pool extractor requires stake_delegation extractor to be enabled. \
-          \pool_update and pool_owner reference stake_address rows from the \
-          \stake_delegation extractor, and both share the pool_hash dedup table."
-      ]
-  | otherwise = []
-  where
-    extractors = scOptions cfg
-
 checkOffChainPoolsRequiresPool :: SyncConfig -> [ConfigError]
 checkOffChainPoolsRequiresPool cfg
   | prEnabled (pcOffChainPools extractors) && not (prEnabled (pcPool extractors)) =
       [ ConfigValidationError
           "off_chain_pools extractor requires pool extractor to be enabled. \
           \off_chain_pool_data and off_chain_pool_fetch_error reference \
-          \pool_hash and pool_metadata_ref rows written by the pool extractor."
+          \pool_metadata_ref rows written by the pool extractor."
       ]
   | otherwise = []
   where

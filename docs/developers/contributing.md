@@ -112,7 +112,8 @@ selection.
 
 ## Releases
 
-Pre-release; no formal release process yet. The first stable release
-will introduce a schema migration framework
-([`DbSync.Db.Schema.Migration`](https://github.com/input-output-hk/dbsync/blob/main/dbsync-db/src/DbSync/Db/Schema/Migration.hs)
-is the placeholder).
+Pre-release; no formal release process yet. A release that changes the
+schema carries a migration: bump `currentSchemaVersion`, generate the
+migration file with `gen-migration`, and let the pin test, boot gate,
+and ladder test enforce the rest. See
+[Schema versioning and migrations](schema-versioning).

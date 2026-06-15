@@ -46,17 +46,15 @@ import DbSync.Writer (HasWriter (..), Writer (..))
 
 poolExtractor :: ExtractorDef
 poolExtractor = ExtractorDef
-  { pdName         = "pool"
-  , pdVersion      = 1
-  , pdDependencies = [("core", 1), ("stake_delegation", 1)]
-  , pdTables       = [ poolHashTableDef
-                     , poolUpdateTableDef
-                     , poolMetadataRefTableDef
-                     , poolOwnerTableDef
-                     , poolRetireTableDef
-                     , poolRelayTableDef
-                     ]
-  , pdProcess      = processPool
+  { pdName    = "pool"
+  , pdTables  =
+      [ poolUpdateTableDef
+      , poolMetadataRefTableDef
+      , poolOwnerTableDef
+      , poolRetireTableDef
+      , poolRelayTableDef
+      ]
+  , pdProcess = processPool
   }
 
 -- ---------------------------------------------------------------------------

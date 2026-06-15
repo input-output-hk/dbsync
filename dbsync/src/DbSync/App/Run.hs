@@ -20,6 +20,7 @@ import Cardano.Prelude
 import Control.Concurrent.STM (newTBQueueIO, newTVarIO)
 import qualified Control.Concurrent.STM as STM
 import Data.IORef (newIORef)
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Hasql.Connection.Settings as HasqlSettings
@@ -72,15 +73,18 @@ import DbSync.App.Config.Types
       UtxoOption(..) )
 import DbSync.Db.Loader (LoaderStream (..), closeLoaderStream, mkLoaderStream)
 import DbSync.Db.Schema.Types (TableDef)
+import DbSync.Db.Schema.Migration (MigrationOutcome (..), runMigrations)
 import DbSync.Db.Schema.Init
   ( SchemaAction (..)
-  , checkSchemaVersions
+  , checkExtractorPresence
   , decideSchemaAction
   , dropSchema
   , initSchema
   , renderSchemaMismatch
   , showWalLevel
   )
+import DbSync.Schema.Version (Fingerprint, currentSchemaVersion, unFingerprint)
+import DbSync.Extractor.Registry (declaredSchemaFingerprint)
 import DbSync.Extractor (ExtractorDef (..))
 import DbSync.Phase.Ingest.DedupStore (DedupStores, closeStores)
 import DbSync.Phase.Ingest.Consumer (runConsumer)
@@ -216,21 +220,25 @@ runApp tracer args = do
   -- seed the sync-state row and to skip the pre-boot rollback check.
   let extractors       = ceExtractors coreEnv
       tableDefs        = concatMap pdTables extractors
-      versions         = map (\e -> (pdName e, pdVersion e)) extractors
+      extractorNames   = map pdName extractors
       connStrTxt       = TE.decodeUtf8 connStr
-      schemaVersion    = 1 :: Int
+      schemaVersion    = currentSchemaVersion
       ledgerEnabledCfg = lcEnabled (scLedger validProfile)
   freshInit <- setupSchema
     tracer ledgerEnabledCfg ledgerStateDir
-    tableDefs versions connStrTxt (aaResyncFromGenesis args)
+    tableDefs extractorNames connStrTxt (aaResyncFromGenesis args)
 
   -- 6. Open the consumer's control connection; seed @dbsync_sync_state@
-  -- on a fresh schema.
+  -- on a fresh schema, then apply any schema migrations between the
+  -- database's recorded version and this binary's. The gate is a no-op on
+  -- a fresh schema and aborts on a newer database or uncovered drift.
   consumerCtrlConn <- openControlConnection hasqlSettings
   when freshInit $
     setupFreshSyncState
       tracer consumerCtrlConn connStrTxt
-      schemaVersion ledgerEnabledCfg
+      schemaVersion declaredSchemaFingerprint ledgerEnabledCfg extractorNames
+  runMigrationGate
+    tracer consumerCtrlConn schemaVersion declaredSchemaFingerprint extractorNames
 
   -- 7. SystemStart + ledger subsystem (fingerprint check, LSM
   -- session, snapshot manager).
@@ -302,6 +310,30 @@ runApp tracer args = do
 -- * Setup steps (in execution order)
 -- ---------------------------------------------------------------------------
 
+-- | Run the schema-version gate: compare the database's applied version to
+-- this binary's, apply the intervening migration files, and abort on a
+-- database newer than the binary or on drift no migration covers.
+runMigrationGate
+  :: AppTracer
+  -> ControlConnection
+  -> Int          -- ^ schema version this binary targets
+  -> Fingerprint
+  -> [Text]       -- ^ enabled extractor names
+  -> IO ()
+runMigrationGate tracer ctrlConn target declaredFp extractors = do
+  outcome <-
+    runMigrations
+      (unControlConnection ctrlConn) target (unFingerprint declaredFp) extractors
+  case outcome of
+    NoMigrationNeeded -> pure ()
+    MigrationsToApply versions ->
+      logInfoIO tracer "Migration" $
+        "Applied schema migrations: versions " <> show (NE.toList versions)
+    DbNewerThanBinary database binary ->
+      abortBoot tracer (BootSchemaNewerThanBinary database binary)
+    SchemaDriftUncovered stored declared ->
+      abortBoot tracer (BootSchemaDriftUncovered stored declared)
+
 -- | Step 5: dispatch the schema decision.
 --
 -- Classifies the boot via 'decideSchemaAction' and runs the
@@ -317,30 +349,30 @@ setupSchema
   -> Bool                         -- ^ @ledger.enabled@ from config
   -> FilePath                     -- ^ ledger state directory
   -> [TableDef]
-  -> [(Text, Int)]                -- ^ (extractor name, version) pairs
+  -> [Text]                       -- ^ enabled extractor names
   -> Text                         -- ^ psql connection string
   -> Bool                         -- ^ @--resync-from-genesis@ flag
   -> IO Bool
 setupSchema tracer ledgerEnabledCfg ledgerStateDir
-            tableDefs versions connStrTxt resyncFromGenesis = do
-  schemaState <- checkSchemaVersions versions connStrTxt
+            tableDefs extractorNames connStrTxt resyncFromGenesis = do
+  schemaState <- checkExtractorPresence extractorNames connStrTxt
   case decideSchemaAction resyncFromGenesis schemaState of
     ActionSkipInit -> do
-      logInfoIO tracer "App" "Schema present and matches expected versions; skipping init"
+      logInfoIO tracer "App" "Schema present and matches enabled extractors; skipping init"
       pure False
     ActionRunInit -> do
       logInfoIO tracer "App" "Fresh database detected; creating schema"
-      initSchema tableDefs versions connStrTxt
+      initSchema tableDefs connStrTxt
       logInfoIO tracer "App" "Schema ready"
       pure True
     ActionForceReinit -> do
       logInfoIO tracer "App" "--resync-from-genesis: dropping existing schema and re-initialising"
-      dropSchema tableDefs versions connStrTxt
+      dropSchema tableDefs connStrTxt
       when ledgerEnabledCfg $ do
         logInfoIO tracer "App" $
           "--resync-from-genesis: wiping ledger state directory " <> toS ledgerStateDir
         dropLedgerStateDir ledgerStateDir
-      initSchema tableDefs versions connStrTxt
+      initSchema tableDefs connStrTxt
       logInfoIO tracer "App" "Schema ready"
       pure True
     ActionAbort errs -> do
@@ -363,10 +395,12 @@ setupFreshSyncState
   -> ControlConnection
   -> Text                         -- ^ psql connection string
   -> Int                          -- ^ schema version
+  -> Fingerprint                  -- ^ declared schema fingerprint
   -> Bool                         -- ^ @ledger.enabled@
+  -> [Text]                       -- ^ enabled extractor names
   -> IO ()
-setupFreshSyncState tracer ctrl connStrTxt schemaVersion ledgerEnabledCfg = do
-  runAppM ctrl (seedSyncState schemaVersion ledgerEnabledCfg)
+setupFreshSyncState tracer ctrl connStrTxt schemaVersion fingerprint ledgerEnabledCfg extractorNames = do
+  runAppM ctrl (seedSyncState schemaVersion fingerprint ledgerEnabledCfg extractorNames)
   logInfoIO tracer "App" "Sync-state seeded"
   walLevel <- showWalLevel connStrTxt
   unless (walLevel == "minimal") $

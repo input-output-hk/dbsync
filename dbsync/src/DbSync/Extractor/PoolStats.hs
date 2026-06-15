@@ -45,11 +45,9 @@ import qualified Cardano.Ledger.Keys as Ledger
 
 poolStatsExtractor :: ExtractorDef
 poolStatsExtractor = ExtractorDef
-  { pdName         = "pool_stats"
-  , pdVersion      = 1
-  , pdDependencies = [("core", 1), ("pool", 1)]
-  , pdTables       = [poolStatTableDef]
-  , pdProcess      = \_ -> pure ()
+  { pdName    = "pool_stats"
+  , pdTables  = [poolStatTableDef]
+  , pdProcess = \_ -> pure ()
   }
 
 -- ---------------------------------------------------------------------------

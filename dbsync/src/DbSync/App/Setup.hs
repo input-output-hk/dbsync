@@ -9,8 +9,6 @@ module DbSync.App.Setup
 
     -- * Extractor list construction (exported for testing)
   , buildExtractors
-  , validateExtractorDeps
-  , topoSortExtractors
 
     -- * Constants
   , cardanoSecurityParam
@@ -27,10 +25,7 @@ import Cardano.Prelude
 
 import Cardano.Ledger.BaseTypes (Network)
 import Control.Tracer (traceWith)
-import qualified Data.Graph as Graph
 import qualified Data.Map.Strict as Map
-import qualified Data.Text as Text
-import qualified Data.Tree as Tree
 import qualified Hasql.Connection.Settings as HasqlSettings
 
 import DbSync.App.Config.Types
@@ -48,21 +43,7 @@ import DbSync.Metrics (Metrics (..))
 import DbSync.Extractor (ExtractorDef (..))
 import DbSync.Phase.Current (newCurrentPhase)
 import DbSync.Extractor.Core (coreExtractor)
-import DbSync.Extractor.UTxO (utxoExtractor)
-import DbSync.Extractor.Metadata (metadataExtractor)
-import DbSync.Extractor.MultiAsset (multiAssetExtractor)
-import DbSync.Extractor.OffChainPools (offChainPoolsExtractor)
-import DbSync.Extractor.OffChainVotes (offChainVotesExtractor)
-import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
-import DbSync.Extractor.Pool (poolExtractor)
-import DbSync.Extractor.PoolStats (poolStatsExtractor)
-import DbSync.Extractor.Cbor (cborExtractor)
-import DbSync.Extractor.Epoch (epochExtractor)
-import DbSync.Extractor.EpochBoundary (epochBoundaryExtractor)
-import DbSync.Extractor.EpochSyncStats (epochSyncStatsExtractor)
-import DbSync.Extractor.Governance (governanceExtractor)
-import DbSync.Extractor.ScriptsDatums (scriptsDatumsExtractor)
-import DbSync.Extractor.StakeDelegationLedger (stakeDelegationLedgerExtractor)
+import DbSync.Extractor.Registry (allKnownExtractors)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..), severityFromText)
 import DbSync.AppM (CoreM)
 import DbSync.Worker.OffChain.Http (newRestrictedManager)
@@ -90,8 +71,6 @@ import DbSync.Worker.OffChain.Vote
 -- orchestrator in 'DbSync.App.Run' overwrites it immediately after
 -- the boot decision so the displayed value is correct from the
 -- first subsystem log onwards.
---
--- Throws via 'throwInternal' if 'buildExtractors' rejects the profile.
 buildCoreEnv :: AppTracer -> SyncConfig -> NodeConfig -> Network -> IO CoreEnv
 buildCoreEnv tracer syncCfg nodeCfg network = do
   extractors <- case buildExtractors (scOptions syncCfg) of
@@ -110,43 +89,34 @@ buildCoreEnv tracer syncCfg nodeCfg network = do
     , ceSecurityParam = cardanoSecurityParam
     }
 
--- | Build the list of enabled extractors from config, validate their
--- dependencies, and return them in dependency-respecting order.
+-- | Build the list of enabled extractors from config, in declaration
+-- order.
 --
 -- 'coreExtractor' is unconditional — every other extractor's tables
--- reference its block / tx / slot_leader rows. Optional extractors
--- come from @db_options@; unknown names get a no-op stub so the
--- schema is still created when work has not landed yet.
+-- reference its block / tx / slot_leader rows — and so leads the list.
+-- Optional extractors come from @db_options@ and are resolved against
+-- 'allKnownExtractors'; a name with no implementation yet (e.g.
+-- @current_state@) gets a no-op stub so its enablement is still
+-- recorded and the schema reflects it once the work lands.
+--
+-- Returns 'Either' for call-site symmetry; construction no longer fails.
 buildExtractors :: DbSyncOptions -> Either Text [ExtractorDef]
-buildExtractors pc = do
-  let raw = coreExtractor : mapMaybe mkProj optionalExtractors
-  validateExtractorDeps raw
-  topoSortExtractors raw
+buildExtractors pc =
+  Right (coreExtractor : mapMaybe mkProj optionalExtractors)
   where
     mkProj :: (Text, Bool) -> Maybe ExtractorDef
     mkProj (name, enabled)
-      | enabled   = Just $ resolveExtractor name
+      | enabled   = Just (resolveExtractor name)
       | otherwise = Nothing
 
-    -- | Resolve a named extractor to its real implementation (if available)
-    -- or a stub (if not yet implemented).
+    -- | Resolve a named extractor to its real implementation, or a stub
+    -- if it isn't implemented yet.
     resolveExtractor :: Text -> ExtractorDef
-    resolveExtractor "utxo"                    = utxoExtractor
-    resolveExtractor "metadata"                = metadataExtractor
-    resolveExtractor "multi_asset"             = multiAssetExtractor
-    resolveExtractor "stake_delegation"        = stakeDelegationExtractor
-    resolveExtractor "stake_delegation_ledger" = stakeDelegationLedgerExtractor
-    resolveExtractor "pool"                    = poolExtractor
-    resolveExtractor "cbor"                    = cborExtractor
-    resolveExtractor "epoch_sync_stats"        = epochSyncStatsExtractor
-    resolveExtractor "epoch_boundary"          = epochBoundaryExtractor
-    resolveExtractor "pool_stats"              = poolStatsExtractor
-    resolveExtractor "epoch"                   = epochExtractor
-    resolveExtractor "scripts_datums"          = scriptsDatumsExtractor
-    resolveExtractor "governance"              = governanceExtractor
-    resolveExtractor "off_chain_pools"         = offChainPoolsExtractor
-    resolveExtractor "off_chain_votes"         = offChainVotesExtractor
-    resolveExtractor name                      = stubExtractor name
+    resolveExtractor name =
+      Map.findWithDefault (stubExtractor name) name knownByName
+
+    knownByName :: Map.Map Text ExtractorDef
+    knownByName = Map.fromList [(pdName e, e) | e <- allKnownExtractors]
 
     -- | (extractor name, enabled?). 'utxo' reads from the structured
     -- 'UtxoOption'; the rest read the flat 'OptionFlag' bool.
@@ -170,100 +140,12 @@ buildExtractors pc = do
       , ("off_chain_votes",         prEnabled (pcOffChainVotes pc))
       ]
 
--- ---------------------------------------------------------------------------
--- * Dependency validation + topological sort
--- ---------------------------------------------------------------------------
-
--- | Check every declared dependency resolves to an enabled extractor
--- of sufficient version. Stops at the first failure — later errors
--- are usually a consequence of the first.
-validateExtractorDeps :: [ExtractorDef] -> Either Text ()
-validateExtractorDeps exts = traverse_ checkOne exts
-  where
-    nameMap :: Map.Map Text ExtractorDef
-    nameMap = Map.fromList [(pdName e, e) | e <- exts]
-
-    checkOne :: ExtractorDef -> Either Text ()
-    checkOne e = traverse_ (checkDep e) (pdDependencies e)
-
-    checkDep :: ExtractorDef -> (Text, Int) -> Either Text ()
-    checkDep e (depName, minVer) =
-      case Map.lookup depName nameMap of
-        Nothing ->
-          Left $
-            "Extractor '" <> pdName e <> "' is enabled but its dependency '"
-              <> depName <> "' is not enabled.\n"
-              <> "Add  \"" <> depName <> "\": true  to the db_options section "
-              <> "of your dbsync-profile.json."
-        Just dep
-          | pdVersion dep < minVer ->
-              Left $
-                "Extractor '" <> pdName e <> "' requires dependency '"
-                  <> depName <> "' version >= " <> show minVer
-                  <> ", but the enabled '" <> depName
-                  <> "' is only version " <> show (pdVersion dep) <> "."
-          | otherwise -> Right ()
-
--- | Topologically sort extractors so producers come before consumers.
--- Cycles are detected via strongly-connected components and reported
--- as errors. Assumes 'validateExtractorDeps' has already passed.
-topoSortExtractors :: [ExtractorDef] -> Either Text [ExtractorDef]
-topoSortExtractors exts =
-  case cycles of
-    (c:_) ->
-      Left $
-        "Cyclic extractor dependencies detected: "
-          <> Text.intercalate " -> " (map nameOfVertex c)
-          <> ". Remove a dependency edge or split the affected extractors."
-    [] ->
-      Right $ map extractorOfVertex (Graph.topSort graph)
-  where
-    -- For each extractor, the names of OTHER extractors that depend on
-    -- it. We need the "who depends on me" direction (not "who I depend
-    -- on") because 'Graph.topSort' returns vertices in edge-tail-first
-    -- order, and we want dependencies before consumers.
-    consumersOf :: Map.Map Text [Text]
-    consumersOf =
-      Map.fromListWith (++)
-        [ (depName, [pdName e])
-        | e <- exts
-        , (depName, _) <- pdDependencies e
-        ]
-
-    edges :: [(ExtractorDef, Text, [Text])]
-    edges =
-      [ (e, pdName e, Map.findWithDefault [] (pdName e) consumersOf)
-      | e <- exts
-      ]
-
-    graph        :: Graph.Graph
-    vertexToNode :: Graph.Vertex -> (ExtractorDef, Text, [Text])
-    (graph, vertexToNode, _) = Graph.graphFromEdges edges
-
-    extractorOfVertex :: Graph.Vertex -> ExtractorDef
-    extractorOfVertex v = case vertexToNode v of (e, _, _) -> e
-
-    nameOfVertex :: Graph.Vertex -> Text
-    nameOfVertex v = case vertexToNode v of (_, n, _) -> n
-
-    -- An SCC with more than one vertex contains a cycle; singletons are
-    -- the normal case.
-    cycles :: [[Graph.Vertex]]
-    cycles =
-      [ flat
-      | t <- Graph.scc graph
-      , let flat = Tree.flatten t
-      , length flat > 1
-      ]
-
 -- | Placeholder extractor — name only, no real extraction logic yet.
 stubExtractor :: Text -> ExtractorDef
 stubExtractor name = ExtractorDef
-  { pdName         = name
-  , pdVersion      = 1
-  , pdDependencies = []
-  , pdTables       = []
-  , pdProcess      = \_ -> pure ()  -- no-op stub
+  { pdName    = name
+  , pdTables  = []
+  , pdProcess = \_ -> pure ()  -- no-op stub
   }
 
 -- | Placeholder metrics until Prometheus is wired up.

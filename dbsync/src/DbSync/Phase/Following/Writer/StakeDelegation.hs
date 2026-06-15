@@ -31,9 +31,9 @@ import qualified Hasql.Connection as Conn
 
 import DbSync.Db.Schema.EpochBoundary (PotTransfer, Reserve, Treasury)
 import DbSync.Db.Schema.Ids (StakeAddressId)
+import DbSync.Db.Schema.Core (StakeAddress)
 import DbSync.Db.Schema.StakeDelegation
   ( Delegation
-  , StakeAddress
   , StakeDeregistration
   , StakeRegistration
   , Withdrawal
@@ -41,7 +41,7 @@ import DbSync.Db.Schema.StakeDelegation
 import DbSync.Db.Statement.StakeDelegation (insertDelegationRowStmt)
 import DbSync.Db.Statement.StakeDelegation (insertPotTransferRowStmt)
 import DbSync.Db.Statement.StakeDelegation (insertReserveRowStmt)
-import DbSync.Db.Statement.StakeDelegation (insertStakeAddressRowStmt)
+import DbSync.Db.Statement.Core (insertStakeAddressRowStmt)
 import DbSync.Db.Statement.StakeDelegation (insertStakeDeregistrationRowStmt)
 import DbSync.Db.Statement.StakeDelegation (insertStakeRegistrationRowStmt)
 import DbSync.Db.Statement.StakeDelegation (insertTreasuryRowStmt)

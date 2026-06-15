@@ -31,24 +31,29 @@ import DbSync.Db.Schema.SyncState
   , syncStateTableDef
   )
 import DbSync.Db.Sql.Refs (col, table)
+import DbSync.Db.Statement.Common (arrayParam)
 
--- | Idempotent seed @INSERT@. Only @schema_version_applied@ and
--- @ledger_enabled@ come from the caller; other columns use their
--- @DEFAULT@.
-seedSyncStateStmt :: Stmt.Statement (Int32, Bool) ()
+-- | Idempotent seed @INSERT@. Only @schema_version_applied@,
+-- @schema_fingerprint@, @ledger_enabled@ and the @extractors@ set come
+-- from the caller; other columns use their @DEFAULT@.
+seedSyncStateStmt :: Stmt.Statement (Int32, Text, Bool, [Text]) ()
 seedSyncStateStmt =
   Stmt.preparable sql encoder D.noResult
   where
     sql = mconcat
       [ "INSERT INTO ", table syncStateTableDef
       , " (", col syncStateCols.sscSchemaVersionApplied
-      , ", ", col syncStateCols.sscLedgerEnabled, ")"
-      , " VALUES ($1, $2)"
+      , ", ", col syncStateCols.sscSchemaFingerprint
+      , ", ", col syncStateCols.sscLedgerEnabled
+      , ", ", col syncStateCols.sscExtractors, ")"
+      , " VALUES ($1, $2, $3, $4)"
       , " ON CONFLICT (", col syncStateCols.sscId, ") DO NOTHING"
       ]
     encoder =
-         (fst >$< E.param (E.nonNullable E.int4))
-      <> (snd >$< E.param (E.nonNullable E.bool))
+         ((\(v, _, _, _)  -> v)  >$< E.param (E.nonNullable E.int4))
+      <> ((\(_, f, _, _)  -> f)  >$< E.param (E.nonNullable E.text))
+      <> ((\(_, _, l, _)  -> l)  >$< E.param (E.nonNullable E.bool))
+      <> ((\(_, _, _, es) -> es) >$< arrayParam E.text)
 
 -- | 'Nothing' if the singleton has never been seeded.
 readSyncStateStmt :: Stmt.Statement () (Maybe SyncStateRow)

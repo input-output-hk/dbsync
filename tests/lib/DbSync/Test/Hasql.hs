@@ -23,8 +23,8 @@
 --
 -- > spec :: Spec
 -- > spec = describe "DbSync.Db.Statement.<Name>" $
--- >   beforeAll_ (initSchema [] [] testConnStr) $
--- >   afterAll_  (dropSchema [] [] testConnStr) $
+-- >   beforeAll_ (initSchema [] testConnStr) $
+-- >   afterAll_  (dropSchema [] testConnStr) $
 -- >   before_    (truncateAllTables ["<table>"]) $
 -- >     describe "<statementName>" $
 -- >       it "<expectation>" $

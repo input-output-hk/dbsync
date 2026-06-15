@@ -46,12 +46,9 @@ tables =
   , offChainVoteFetchErrorTableDef
   ]
 
-extractorVersions :: [(Text, Int)]
-extractorVersions = [("core", 1), ("governance", 1), ("off_chain_votes", 1)]
-
 spec :: Spec
 spec = describe "DbSync.Worker.OffChain.Vote" $
-  beforeAll_ (setupFollowTipSchema tables extractorVersions) $
+  beforeAll_ (setupFollowTipSchema tables) $
   afterAll_  (teardownSchema tables) $
   before_    (truncateAllTables (map tdName tables)) $ do
 

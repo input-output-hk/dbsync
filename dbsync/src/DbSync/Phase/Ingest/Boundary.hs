@@ -69,6 +69,7 @@ import qualified DbSync.Phase.Ingest.UtxoStore as UtxoStore
 import DbSync.Phase.Type (SyncPhase (..), renderPhase)
 import DbSync.SyncState.Manager (mkBoundarySyncStateRow)
 import DbSync.SyncState.Row (ControlConnection, writeSyncState)
+import DbSync.Schema.Version (currentSchemaVersion)
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Replay (ReplayLogState (..))
 import DbSync.Trace.Timing (fmtCount, fmtF2)
@@ -197,7 +198,7 @@ handleEpochBoundary cls prev slot = do
       securityParam = ceSecurityParam coreEnv
       minSev        = ceMinSeverity coreEnv
       ledgerEnabled = lcEnabled (scLedger (getConfig ie))
-      schemaVersion = 1 :: Int
+      schemaVersion = currentSchemaVersion
 
   epochStart <- liftIO $ readIORef (clsEpochStart cls)
   blockCount <- liftIO $ readIORef (clsBlockCount cls)

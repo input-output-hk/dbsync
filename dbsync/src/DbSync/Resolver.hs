@@ -22,7 +22,7 @@ import Cardano.Prelude
 
 import Data.ByteString.Short (ShortByteString)
 import DbSync.Db.Schema.Address (Address)
-import DbSync.Db.Schema.Core (SlotLeader)
+import DbSync.Db.Schema.Core (PoolHash, SlotLeader, StakeAddress)
 import DbSync.Db.Schema.EpochBoundary (CostModel)
 import DbSync.Db.Schema.Governance
   ( CommitteeHash
@@ -31,9 +31,7 @@ import DbSync.Db.Schema.Governance
   )
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.MultiAsset (MultiAsset)
-import DbSync.Db.Schema.Pool (PoolHash)
 import DbSync.Db.Schema.ScriptsDatums (Datum, RedeemerData, Script)
-import DbSync.Db.Schema.StakeDelegation (StakeAddress)
 import DbSync.Db.Types (AnchorType, DbLovelace)
 import DbSync.Phase.Ingest.UtxoStore (UtxoTxEntry)
 import DbSync.Worker.OffChain.Types (PoolMetadataRef, VotingAnchorRef)

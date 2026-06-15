@@ -68,14 +68,8 @@ spec = do
     it "has name 'core'" $
       pdName coreExtractor `shouldBe` "core"
 
-    it "has version 1" $
-      pdVersion coreExtractor `shouldBe` 1
-
-    it "has no dependencies" $
-      pdDependencies coreExtractor `shouldBe` []
-
-    it "owns three tables: block, tx, slot_leader" $
-      length (pdTables coreExtractor) `shouldBe` 3
+    it "owns five tables: block, tx, slot_leader, stake_address, pool_hash" $
+      length (pdTables coreExtractor) `shouldBe` 5
 
   describe "extraction: empty block (0 txs)" $ do
     it "produces 1 block row and 0 tx rows" $ do

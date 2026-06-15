@@ -73,15 +73,11 @@ class HasNetwork env where
 -- of tables and a processing function that extracts data from a block,
 -- resolves foreign key IDs, and writes rows.
 data ExtractorDef = ExtractorDef
-  { pdName         :: !Text
+  { pdName    :: !Text
       -- ^ Unique extractor name (e.g. "core", "utxo", "governance")
-  , pdVersion      :: !Int
-      -- ^ Schema version; bump when the extractor's tables change
-  , pdDependencies :: ![(Text, Int)]
-      -- ^ @(extractorName, minimumVersion)@ pairs this extractor depends on
-  , pdTables       :: ![TableDef]
+  , pdTables  :: ![TableDef]
       -- ^ Table definitions owned by this extractor
-  , pdProcess      :: ProcessBlockFn
+  , pdProcess :: ProcessBlockFn
       -- ^ Process a block: extract data, resolve IDs, write rows
   }
 

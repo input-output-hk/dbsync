@@ -5,15 +5,14 @@
 --
 -- Tables in this module are owned by three different extractors:
 --
---   * @pool@ extractor (block-extracted): @pool_hash@, @pool_update@,
+--   * @pool@ extractor (block-extracted): @pool_update@,
 --     @pool_metadata_ref@, @pool_owner@, @pool_retire@, @pool_relay@.
 --   * @pool_stats@ extractor (ledger-derived, epoch-boundary): @pool_stat@.
 --   * @off_chain_pools@ extractor (operator-managed via SMASH):
 --     @delisted_pool@, @reserved_pool_ticker@.
 module DbSync.Db.Schema.Pool
   ( -- * Schema types
-    PoolHash (..)
-  , PoolUpdate (..)
+    PoolUpdate (..)
   , PoolMetadataRef (..)
   , PoolOwner (..)
   , PoolRetire (..)
@@ -23,7 +22,6 @@ module DbSync.Db.Schema.Pool
   , ReservedPoolTicker (..)
 
     -- * Table definitions
-  , poolHashTableDef
   , poolUpdateTableDef
   , poolMetadataRefTableDef
   , poolOwnerTableDef
@@ -34,7 +32,6 @@ module DbSync.Db.Schema.Pool
   , reservedPoolTickerTableDef
 
     -- * Column records (compile-time-safe column references)
-  , PoolHashCols (..), poolHashCols, poolHashColsList
   , PoolUpdateCols (..), poolUpdateCols, poolUpdateColsList
   , PoolMetadataRefCols (..), poolMetadataRefCols, poolMetadataRefColsList
   , PoolOwnerCols (..), poolOwnerCols, poolOwnerColsList
@@ -48,7 +45,6 @@ module DbSync.Db.Schema.Pool
   , poolColumnRecords
 
     -- * COPY encoding
-  , encodePoolHashCopy
   , encodePoolUpdateCopy
   , encodePoolMetadataRefCopy
   , encodePoolOwnerCopy
@@ -59,9 +55,6 @@ module DbSync.Db.Schema.Pool
   , encodeReservedPoolTickerCopy
 
     -- * Hasql encoders \/ decoders
-  , poolHashEncoder
-  , poolHashDecoder
-  , entityPoolHashDecoder
   , poolUpdateEncoder
   , poolUpdateDecoder
   , entityPoolUpdateDecoder
@@ -116,7 +109,6 @@ import DbSync.Db.Loader.Encoder (buildCopyRow, bHex, bInt64, bText, bWord64)
 -- * Key type family instances
 -- ---------------------------------------------------------------------------
 
-type instance Key PoolHash = PoolHashId
 type instance Key PoolUpdate = PoolUpdateId
 type instance Key PoolMetadataRef = PoolMetadataRefId
 type instance Key PoolOwner = PoolOwnerId
@@ -129,14 +121,6 @@ type instance Key ReservedPoolTicker = ReservedPoolTickerId
 -- ---------------------------------------------------------------------------
 -- * Schema types
 -- ---------------------------------------------------------------------------
-
--- | The @pool_hash@ table (dedup table).
--- One row per unique pool key hash.
-data PoolHash = PoolHash
-  { poolHashHashRaw :: !ByteString  -- ^ Pool key hash (28 bytes)
-  , poolHashView    :: !Text        -- ^ Bech32 representation
-  }
-  deriving stock (Eq, Show)
 
 -- | The @pool_update@ table.
 data PoolUpdate = PoolUpdate
@@ -221,24 +205,6 @@ data ReservedPoolTicker = ReservedPoolTicker
 -- ---------------------------------------------------------------------------
 -- * Table definitions
 -- ---------------------------------------------------------------------------
-
-poolHashTableDef :: TableDef
-poolHashTableDef = TableDef
-  { tdName    = "pool_hash"
-  , tdColumns =
-      [ ColumnDef "id"       PgBigInt  False
-      , ColumnDef "hash_raw" PgBytea   False
-      , ColumnDef "view"     PgText    False
-      ]
-  , tdMode = TableUnlogged
-  , tdPrimaryKey     = Nothing
-  , tdChecks         = []
-  , tdColumnDefaults = []
-  , tdUniqueConstraints = []
-  , tdGeneratedColumns = []
-  , tdIdentityColumns = []
-  , tdForeignKeys = []
-  }
 
 poolUpdateTableDef :: TableDef
 poolUpdateTableDef = TableDef
@@ -417,28 +383,6 @@ reservedPoolTickerTableDef = TableDef
 -- ---------------------------------------------------------------------------
 -- * Column records
 -- ---------------------------------------------------------------------------
-
-data PoolHashCols = PoolHashCols
-  { phcId      :: !TableColumn
-  , phcHashRaw :: !TableColumn
-  , phcView    :: !TableColumn
-  }
-
-poolHashCols :: PoolHashCols
-poolHashCols =
-  let c = TableColumn poolHashTableDef
-  in PoolHashCols
-       { phcId      = c "id"
-       , phcHashRaw = c "hash_raw"
-       , phcView    = c "view"
-       }
-
-poolHashColsList :: [TableColumn]
-poolHashColsList =
-  [ poolHashCols.phcId
-  , poolHashCols.phcHashRaw
-  , poolHashCols.phcView
-  ]
 
 data PoolUpdateCols = PoolUpdateCols
   { pucId             :: !TableColumn
@@ -682,8 +626,7 @@ reservedPoolTickerColsList =
 
 poolColumnRecords :: [(TableDef, [TableColumn])]
 poolColumnRecords =
-  [ (poolHashTableDef,           poolHashColsList)
-  , (poolUpdateTableDef,         poolUpdateColsList)
+  [ (poolUpdateTableDef,         poolUpdateColsList)
   , (poolMetadataRefTableDef,    poolMetadataRefColsList)
   , (poolOwnerTableDef,          poolOwnerColsList)
   , (poolRetireTableDef,         poolRetireColsList)
@@ -696,14 +639,6 @@ poolColumnRecords =
 -- ---------------------------------------------------------------------------
 -- * COPY encoding
 -- ---------------------------------------------------------------------------
-
-encodePoolHashCopy :: PoolHashId -> PoolHash -> ByteString
-encodePoolHashCopy (PoolHashId pid) ph =
-  buildCopyRow
-    [ Just $ bInt64 pid
-    , Just $ bHex (poolHashHashRaw ph)
-    , Just $ bText (poolHashView ph)
-    ]
 
 encodePoolUpdateCopy :: PoolUpdateId -> PoolUpdate -> ByteString
 encodePoolUpdateCopy (PoolUpdateId puid) pu =
@@ -784,24 +719,6 @@ encodeReservedPoolTickerCopy rpt =
 -- ---------------------------------------------------------------------------
 -- * Hasql encoders / decoders
 -- ---------------------------------------------------------------------------
-
--- PoolHash -----------------------------------------------------------------
-
-poolHashEncoder :: E.Params PoolHash
-poolHashEncoder = mconcat
-  [ poolHashHashRaw >$< E.param (E.nonNullable E.bytea)
-  , poolHashView    >$< E.param (E.nonNullable E.text)
-  ]
-
-poolHashDecoder :: D.Row PoolHash
-poolHashDecoder = PoolHash
-  <$> D.column (D.nonNullable D.bytea)
-  <*> D.column (D.nonNullable D.text)
-
-entityPoolHashDecoder :: D.Row (PoolHashId, PoolHash)
-entityPoolHashDecoder = (,)
-  <$> idDecoder PoolHashId
-  <*> poolHashDecoder
 
 -- PoolUpdate ---------------------------------------------------------------
 

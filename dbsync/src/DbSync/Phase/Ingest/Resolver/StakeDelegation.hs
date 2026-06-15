@@ -8,7 +8,7 @@ import Cardano.Prelude
 import qualified Data.ByteString.Short as SBS
 
 import DbSync.Db.Schema.Ids (StakeAddressId (..))
-import DbSync.Db.Schema.StakeDelegation (StakeAddress)
+import DbSync.Db.Schema.Core (StakeAddress)
 import DbSync.Phase.Ingest.DedupStore (DedupStores (..), lookupOrInsert)
 
 -- | Dedup lookup against the LSM-backed stake_address table.

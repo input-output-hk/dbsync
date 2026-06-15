@@ -12,20 +12,22 @@ import Cardano.Prelude
 
 import DbSync.Db.Loader (LoaderStream (..))
 import DbSync.Db.Schema.Ids (PoolHashId, PoolMetadataRefId, PoolUpdateId)
-import DbSync.Db.Schema.Pool
+import DbSync.Db.Schema.Core
   ( PoolHash
-  , PoolMetadataRef
+  , encodePoolHashCopy
+  , poolHashTableDef
+  )
+import DbSync.Db.Schema.Pool
+  ( PoolMetadataRef
   , PoolOwner
   , PoolRelay
   , PoolRetire
   , PoolUpdate
-  , encodePoolHashCopy
   , encodePoolMetadataRefCopy
   , encodePoolOwnerCopy
   , encodePoolRelayCopy
   , encodePoolRetireCopy
   , encodePoolUpdateCopy
-  , poolHashTableDef
   , poolMetadataRefTableDef
   , poolOwnerTableDef
   , poolRelayTableDef

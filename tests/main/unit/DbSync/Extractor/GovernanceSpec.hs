@@ -66,13 +66,6 @@ spec = do
     it "has name 'governance'" $
       pdName governanceExtractor `shouldBe` "governance"
 
-    it "has version 1" $
-      pdVersion governanceExtractor `shouldBe` 1
-
-    it "depends on core, stake_delegation, and pool" $
-      pdDependencies governanceExtractor `shouldBe`
-        [("core", 1), ("stake_delegation", 1), ("pool", 1)]
-
     it "registers 16 tables" $
       length (pdTables governanceExtractor) `shouldBe` 16
 

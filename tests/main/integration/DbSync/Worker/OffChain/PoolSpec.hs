@@ -21,11 +21,10 @@ import DbSync.Db.Schema.OffChainPool
   )
 import DbSync.Db.Schema.Pool
   ( delistedPoolTableDef
-  , poolHashTableDef
   , poolMetadataRefTableDef
   , reservedPoolTickerTableDef
   )
-import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
+import DbSync.Db.Schema.Core (blockTableDef, poolHashTableDef, slotLeaderTableDef, txTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Test.Database
   ( execTestDb
@@ -56,12 +55,9 @@ tables =
   , reservedPoolTickerTableDef
   ]
 
-extractorVersions :: [(Text, Int)]
-extractorVersions = [("core", 1), ("pool", 1), ("off_chain_pools", 1)]
-
 spec :: Spec
 spec = describe "DbSync.Worker.OffChain.Pool" $
-  beforeAll_ (setupFollowTipSchema tables extractorVersions) $
+  beforeAll_ (setupFollowTipSchema tables) $
   afterAll_  (teardownSchema tables) $
   before_    (truncateAllTables (map tdName tables)) $ do
 

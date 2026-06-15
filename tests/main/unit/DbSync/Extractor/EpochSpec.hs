@@ -18,12 +18,6 @@ spec = describe "epochExtractor metadata" $ do
   it "has name 'epoch'" $
     pdName epochExtractor `shouldBe` "epoch"
 
-  it "has version 1" $
-    pdVersion epochExtractor `shouldBe` 1
-
-  it "depends on 'core' (the block table backs the views)" $
-    pdDependencies epochExtractor `shouldBe` [("core", 1)]
-
   it "registers exactly one table" $
     length (pdTables epochExtractor) `shouldBe` 1
 

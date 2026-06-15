@@ -56,19 +56,17 @@ import DbSync.Writer (HasWriter (..), Writer (..))
 
 stakeDelegationExtractor :: ExtractorDef
 stakeDelegationExtractor = ExtractorDef
-  { pdName         = "stake_delegation"
-  , pdVersion      = 1
-  , pdDependencies = [("core", 1)]
-  , pdTables       = [ stakeAddressTableDef
-                     , stakeRegistrationTableDef
-                     , stakeDeregistrationTableDef
-                     , delegationTableDef
-                     , withdrawalTableDef
-                     , potTransferTableDef
-                     , reserveTableDef
-                     , treasuryTableDef
-                     ]
-  , pdProcess      = processStakeDelegation
+  { pdName    = "stake_delegation"
+  , pdTables  =
+      [ stakeRegistrationTableDef
+      , stakeDeregistrationTableDef
+      , delegationTableDef
+      , withdrawalTableDef
+      , potTransferTableDef
+      , reserveTableDef
+      , treasuryTableDef
+      ]
+  , pdProcess = processStakeDelegation
   }
 
 -- ---------------------------------------------------------------------------

@@ -5,9 +5,8 @@
 --
 -- Two extractors share this module:
 --
---   * @stake_delegation@ (block-extracted): @stake_address@,
---     @stake_registration@, @stake_deregistration@, @delegation@,
---     @withdrawal@.
+--   * @stake_delegation@ (block-extracted): @stake_registration@,
+--     @stake_deregistration@, @delegation@, @withdrawal@.
 --   * @stake_delegation_ledger@ (ledger-derived): @reward@,
 --     @pot_reward@, @epoch_stake@, @epoch_stake_progress@.
 --
@@ -15,8 +14,7 @@
 -- via 'DbSync.Extractor.pdTables'.
 module DbSync.Db.Schema.StakeDelegation
   ( -- * Schema types
-    StakeAddress (..)
-  , StakeRegistration (..)
+    StakeRegistration (..)
   , StakeDeregistration (..)
   , Delegation (..)
   , Withdrawal (..)
@@ -26,7 +24,6 @@ module DbSync.Db.Schema.StakeDelegation
   , EpochStakeProgress (..)
 
     -- * Table definitions
-  , stakeAddressTableDef
   , stakeRegistrationTableDef
   , stakeDeregistrationTableDef
   , delegationTableDef
@@ -37,7 +34,6 @@ module DbSync.Db.Schema.StakeDelegation
   , epochStakeProgressTableDef
 
     -- * Column records (compile-time-safe column references)
-  , StakeAddressCols (..), stakeAddressCols, stakeAddressColsList
   , StakeRegistrationCols (..), stakeRegistrationCols, stakeRegistrationColsList
   , StakeDeregistrationCols (..), stakeDeregistrationCols, stakeDeregistrationColsList
   , DelegationCols (..), delegationCols, delegationColsList
@@ -51,7 +47,6 @@ module DbSync.Db.Schema.StakeDelegation
   , stakeDelegationColumnRecords
 
     -- * COPY encoding
-  , encodeStakeAddressCopy
   , encodeStakeRegistrationCopy
   , encodeStakeDeregistrationCopy
   , encodeDelegationCopy
@@ -62,9 +57,6 @@ module DbSync.Db.Schema.StakeDelegation
   , encodeEpochStakeProgressCopy
 
     -- * Hasql encoders \/ decoders
-  , stakeAddressEncoder
-  , stakeAddressDecoder
-  , entityStakeAddressDecoder
   , stakeRegistrationEncoder
   , stakeRegistrationDecoder
   , entityStakeRegistrationDecoder
@@ -115,9 +107,7 @@ import DbSync.Db.Types
 import DbSync.Db.Loader.Encoder
   ( buildCopyRow
   , bBool
-  , bHex
   , bInt64
-  , bText
   , bWord64
   )
 
@@ -125,7 +115,6 @@ import DbSync.Db.Loader.Encoder
 -- * Key type family instances
 -- ---------------------------------------------------------------------------
 
-type instance Key StakeAddress = StakeAddressId
 type instance Key StakeRegistration = StakeRegistrationId
 type instance Key StakeDeregistration = StakeDeregistrationId
 type instance Key Delegation = DelegationId
@@ -138,15 +127,6 @@ type instance Key EpochStakeProgress = EpochStakeProgressId
 -- ---------------------------------------------------------------------------
 -- * Schema types
 -- ---------------------------------------------------------------------------
-
--- | The @stake_address@ table (dedup table).
--- One row per unique stake credential hash.
-data StakeAddress = StakeAddress
-  { stakeAddressHashRaw    :: !ByteString        -- ^ 28-byte stake credential hash
-  , stakeAddressView       :: !Text              -- ^ Bech32 representation
-  , stakeAddressScriptHash :: !(Maybe ByteString) -- ^ Script hash if script-based
-  }
-  deriving stock (Eq, Show)
 
 -- | The @stake_registration@ table.
 data StakeRegistration = StakeRegistration
@@ -243,29 +223,6 @@ data EpochStakeProgress = EpochStakeProgress
 -- ---------------------------------------------------------------------------
 -- * Table definitions
 -- ---------------------------------------------------------------------------
-
-stakeAddressTableDef :: TableDef
-stakeAddressTableDef = TableDef
-  { tdName    = "stake_address"
-  , tdColumns =
-      [ ColumnDef "id"          PgBigInt  False
-      , ColumnDef "hash_raw"    PgBytea   False
-      , ColumnDef "view"        PgText    False
-      , ColumnDef "script_hash" PgBytea   True
-      ]
-  , tdMode = TableUnlogged
-  , tdPrimaryKey     = Nothing
-  , tdChecks         = []
-  , tdColumnDefaults = []
-    -- Unique by 28-byte credential hash. The Follow dedup resolver
-    -- SELECTs on this column for every unique stake address per
-    -- block; without the index every resolve sequential-scans the
-    -- whole table.
-  , tdUniqueConstraints = [pure "hash_raw"]
-  , tdGeneratedColumns = []
-  , tdIdentityColumns = []
-  , tdForeignKeys = []
-  }
 
 stakeRegistrationTableDef :: TableDef
 stakeRegistrationTableDef = TableDef
@@ -474,31 +431,6 @@ epochStakeProgressTableDef = TableDef
 -- ---------------------------------------------------------------------------
 -- * Column records
 -- ---------------------------------------------------------------------------
-
-data StakeAddressCols = StakeAddressCols
-  { sacId         :: !TableColumn
-  , sacHashRaw    :: !TableColumn
-  , sacView       :: !TableColumn
-  , sacScriptHash :: !TableColumn
-  }
-
-stakeAddressCols :: StakeAddressCols
-stakeAddressCols =
-  let c = TableColumn stakeAddressTableDef
-  in StakeAddressCols
-       { sacId         = c "id"
-       , sacHashRaw    = c "hash_raw"
-       , sacView       = c "view"
-       , sacScriptHash = c "script_hash"
-       }
-
-stakeAddressColsList :: [TableColumn]
-stakeAddressColsList =
-  [ stakeAddressCols.sacId
-  , stakeAddressCols.sacHashRaw
-  , stakeAddressCols.sacView
-  , stakeAddressCols.sacScriptHash
-  ]
 
 data StakeRegistrationCols = StakeRegistrationCols
   { srcId        :: !TableColumn
@@ -748,8 +680,7 @@ epochStakeProgressColsList =
 
 stakeDelegationColumnRecords :: [(TableDef, [TableColumn])]
 stakeDelegationColumnRecords =
-  [ (stakeAddressTableDef,        stakeAddressColsList)
-  , (stakeRegistrationTableDef,   stakeRegistrationColsList)
+  [ (stakeRegistrationTableDef,   stakeRegistrationColsList)
   , (stakeDeregistrationTableDef, stakeDeregistrationColsList)
   , (delegationTableDef,          delegationColsList)
   , (withdrawalTableDef,          withdrawalColsList)
@@ -762,15 +693,6 @@ stakeDelegationColumnRecords =
 -- ---------------------------------------------------------------------------
 -- * COPY encoding
 -- ---------------------------------------------------------------------------
-
-encodeStakeAddressCopy :: StakeAddressId -> StakeAddress -> ByteString
-encodeStakeAddressCopy (StakeAddressId sid) sa =
-  buildCopyRow
-    [ Just $ bInt64 sid
-    , Just $ bHex (stakeAddressHashRaw sa)
-    , Just $ bText (stakeAddressView sa)
-    , bHex <$> stakeAddressScriptHash sa
-    ]
 
 encodeStakeRegistrationCopy :: StakeRegistration -> ByteString
 encodeStakeRegistrationCopy sr =
@@ -858,26 +780,6 @@ encodeEpochStakeProgressCopy esp =
 -- ---------------------------------------------------------------------------
 -- * Hasql encoders / decoders
 -- ---------------------------------------------------------------------------
-
--- StakeAddress -------------------------------------------------------------
-
-stakeAddressEncoder :: E.Params StakeAddress
-stakeAddressEncoder = mconcat
-  [ stakeAddressHashRaw    >$< E.param (E.nonNullable E.bytea)
-  , stakeAddressView       >$< E.param (E.nonNullable E.text)
-  , stakeAddressScriptHash >$< E.param (E.nullable E.bytea)
-  ]
-
-stakeAddressDecoder :: D.Row StakeAddress
-stakeAddressDecoder = StakeAddress
-  <$> D.column (D.nonNullable D.bytea)
-  <*> D.column (D.nonNullable D.text)
-  <*> D.column (D.nullable D.bytea)
-
-entityStakeAddressDecoder :: D.Row (StakeAddressId, StakeAddress)
-entityStakeAddressDecoder = (,)
-  <$> idDecoder StakeAddressId
-  <*> stakeAddressDecoder
 
 -- StakeRegistration --------------------------------------------------------
 

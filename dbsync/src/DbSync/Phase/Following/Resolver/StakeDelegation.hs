@@ -12,8 +12,8 @@ import Cardano.Prelude
 import qualified Hasql.Connection as Conn
 
 import DbSync.Db.Schema.Ids (StakeAddressId)
-import DbSync.Db.Schema.StakeDelegation (StakeAddress)
-import DbSync.Db.Statement.StakeDelegation (nextStakeAddressIdStmt, queryStakeAddressIdStmt)
+import DbSync.Db.Schema.Core (StakeAddress)
+import DbSync.Db.Statement.Core (nextStakeAddressIdStmt, queryStakeAddressIdStmt)
 import DbSync.Phase.Following.Resolver.Internal
   ( BlockDedupCache (..)
   , resolveDedupSimple

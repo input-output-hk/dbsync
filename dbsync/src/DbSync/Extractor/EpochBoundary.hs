@@ -82,16 +82,14 @@ import DbSync.Writer (HasWriter (..), Writer (..))
 -- the consumer calls when an epoch crosses.
 epochBoundaryExtractor :: ExtractorDef
 epochBoundaryExtractor = ExtractorDef
-  { pdName         = "epoch_boundary"
-  , pdVersion      = 1
-  , pdDependencies = [("core", 1)]
-  , pdTables       =
+  { pdName    = "epoch_boundary"
+  , pdTables  =
       [ adaPotsTableDef
       , epochParamTableDef
       , epochStateTableDef
       , costModelTableDef
       ]
-  , pdProcess      = \_ -> pure ()
+  , pdProcess = \_ -> pure ()
   }
 
 -- ---------------------------------------------------------------------------

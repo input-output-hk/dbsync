@@ -19,9 +19,7 @@ import DbSync.Extractor (ExtractorDef (..))
 -- | The @epoch@ extractor.
 epochExtractor :: ExtractorDef
 epochExtractor = ExtractorDef
-  { pdName         = "epoch"
-  , pdVersion      = 1
-  , pdDependencies = [("core", 1)]
-  , pdTables       = [epochFinalizedTableDef]
-  , pdProcess      = \_ -> pure ()
+  { pdName    = "epoch"
+  , pdTables  = [epochFinalizedTableDef]
+  , pdProcess = \_ -> pure ()
   }

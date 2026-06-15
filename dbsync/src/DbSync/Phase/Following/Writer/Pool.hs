@@ -23,15 +23,15 @@ import DbSync.Db.Schema.Ids
   , PoolMetadataRefId
   , PoolUpdateId
   )
+import DbSync.Db.Schema.Core (PoolHash)
 import DbSync.Db.Schema.Pool
-  ( PoolHash
-  , PoolMetadataRef
+  ( PoolMetadataRef
   , PoolOwner
   , PoolRelay
   , PoolRetire
   , PoolUpdate
   )
-import DbSync.Db.Statement.Pool (insertPoolHashRowStmt)
+import DbSync.Db.Statement.Core (insertPoolHashRowStmt)
 import DbSync.Db.Statement.Pool (insertPoolMetadataRefRowStmt)
 import DbSync.Db.Statement.Pool (insertPoolOwnerRowStmt)
 import DbSync.Db.Statement.Pool (insertPoolRelayRowStmt)

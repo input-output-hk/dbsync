@@ -28,6 +28,7 @@ const sidebars: SidebarsConfig = {
       ],
     },
     'schema-layer',
+    'schema-versioning',
     'database-design',
     'testing',
     'repository-layout',

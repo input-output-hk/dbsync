@@ -59,8 +59,12 @@ import qualified DbSync.Schema.ColumnsConsistencySpec as SchemaColumnsConsistenc
 import qualified DbSync.Schema.CoreSpec as SchemaCoreSpec
 import qualified DbSync.Schema.EpochBoundarySpec as SchemaEpochBoundarySpec
 import qualified DbSync.Schema.EpochViewSpec as SchemaEpochViewSpec
+import qualified DbSync.Schema.VersionSpec as SchemaVersionSpec
 import qualified DbSync.Schema.GenerateSpec as SchemaGenerateSpec
 import qualified DbSync.Schema.GovernanceSpec as SchemaGovernanceSpec
+import qualified DbSync.Schema.Migration.DiffSpec as SchemaMigrationDiffSpec
+import qualified DbSync.Schema.Migration.RenderSpec as SchemaMigrationRenderSpec
+import qualified DbSync.Schema.Migration.RunnerSpec as SchemaMigrationRunnerSpec
 import qualified DbSync.Schema.OffChainPoolSpec as SchemaOffChainPoolSpec
 import qualified DbSync.Schema.OffChainVoteSpec as SchemaOffChainVoteSpec
 import qualified DbSync.Schema.RewardSpec as SchemaRewardSpec
@@ -95,6 +99,7 @@ import qualified DbSync.Phase.Following.RollbackSpec as PhaseRollbackSpec
 import qualified DbSync.Phase.Following.RunSpec as PhaseFollowRunSpec
 import qualified DbSync.Phase.Preparing.RunSpec as PhasePrepSpec
 import qualified DbSync.Schema.InitSpec as SchemaInitSpec
+import qualified DbSync.Schema.Migration.LadderSpec as SchemaMigrationLadderSpec
 
 -- End-to-end
 import qualified DbSync.Phase.FollowAtTipSpec as PhaseFollowAtTipSpec
@@ -110,6 +115,7 @@ import qualified DbSync.Phase.FollowReplayOnBootSpec as PhaseFollowReplayOnBootS
 import qualified DbSync.Phase.FollowReplayWindowSpec as PhaseFollowReplayWindowSpec
 import qualified DbSync.Phase.FollowRestartSpec as PhaseFollowRestartSpec
 import qualified DbSync.Phase.IngestPrepFollowSpec as PhaseIngestPrepFollowSpec
+import qualified DbSync.Phase.RecomputeInvariantsSpec as PhaseRecomputeInvariantsSpec
 import qualified DbSync.Phase.IngestRestartSpec as PhaseIngestRestartSpec
 import qualified DbSync.Phase.LsmLifecycleSpec as PhaseLsmLifecycleSpec
 import qualified DbSync.Phase.MockChainSpec as PhaseMockChainSpec
@@ -173,8 +179,12 @@ main = hspec $ do
     SchemaCoreSpec.spec
     SchemaEpochBoundarySpec.spec
     SchemaEpochViewSpec.spec
+    SchemaVersionSpec.spec
     SchemaGenerateSpec.spec
     SchemaGovernanceSpec.spec
+    SchemaMigrationDiffSpec.spec
+    SchemaMigrationRenderSpec.spec
+    SchemaMigrationRunnerSpec.spec
     SchemaOffChainPoolSpec.spec
     SchemaOffChainVoteSpec.spec
     SchemaRewardSpec.spec
@@ -211,6 +221,7 @@ main = hspec $ do
     PhaseRollbackSpec.kSafetyGuardSpec
     PhaseRollbackSpec.rollbackToSlotSpec
     SchemaInitSpec.spec
+    SchemaMigrationLadderSpec.spec
 
   describe "End-to-end" $ withTimeoutSeconds e2eTimeoutSeconds $ do
     PhaseIngestPrepFollowSpec.spec
@@ -230,3 +241,4 @@ main = hspec $ do
     PhaseFollowPerfRealisticSpec.spec
     PhaseMockChainSpec.spec
     PhaseMockNodeSpec.spec
+    PhaseRecomputeInvariantsSpec.spec

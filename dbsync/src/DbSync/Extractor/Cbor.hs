@@ -24,11 +24,9 @@ import DbSync.Writer (HasWriter (..), Writer (..))
 
 cborExtractor :: ExtractorDef
 cborExtractor = ExtractorDef
-  { pdName         = "cbor"
-  , pdVersion      = 1
-  , pdDependencies = [("core", 1)]
-  , pdTables       = [txCborTableDef]
-  , pdProcess      = processCbor
+  { pdName    = "cbor"
+  , pdTables  = [txCborTableDef]
+  , pdProcess = processCbor
   }
 
 -- ---------------------------------------------------------------------------

@@ -48,10 +48,8 @@ import DbSync.Worker.OffChain.Types (VotingAnchorRef (..))
 
 offChainVotesExtractor :: ExtractorDef
 offChainVotesExtractor = ExtractorDef
-  { pdName         = "off_chain_votes"
-  , pdVersion      = 1
-  , pdDependencies = [("core", 1), ("governance", 1)]
-  , pdTables       =
+  { pdName    = "off_chain_votes"
+  , pdTables  =
       [ offChainVoteDataTableDef
       , offChainVoteGovActionDataTableDef
       , offChainVoteDrepDataTableDef
@@ -60,7 +58,7 @@ offChainVotesExtractor = ExtractorDef
       , offChainVoteExternalUpdateTableDef
       , offChainVoteFetchErrorTableDef
       ]
-  , pdProcess      = processOffChainVotes
+  , pdProcess = processOffChainVotes
   }
 
 -- ---------------------------------------------------------------------------

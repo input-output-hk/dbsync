@@ -42,10 +42,8 @@ import DbSync.Writer (HasWriter (..), Writer (..))
 
 utxoExtractor :: ExtractorDef
 utxoExtractor = ExtractorDef
-  { pdName         = "utxo"
-  , pdVersion      = 1
-  , pdDependencies = [("core", 1), ("stake_delegation", 1)]
-  , pdTables       =
+  { pdName    = "utxo"
+  , pdTables  =
       [ addressTableDef
       , txOutTableDef
       , txInTableDef
@@ -53,7 +51,7 @@ utxoExtractor = ExtractorDef
       , collateralTxOutTableDef
       , referenceTxInTableDef
       ]
-  , pdProcess      = processUTxO
+  , pdProcess = processUTxO
   }
 
 -- ---------------------------------------------------------------------------

@@ -86,8 +86,8 @@ spec = describe "DbSync.Db.Schema.SyncState" $ do
     it "matches the table's column order" $
       syncStateColumns `shouldBe` map cdName (tdColumns syncStateTableDef)
 
-    it "lists id + 3 last_committed_* + last_snapshot_slot + counters + 4 metadata + pending_rollback_slot" $
-      length syncStateColumns `shouldBe` 1 + 3 + 1 + length syncStateCounterColumns + 4 + 1
+    it "lists id + 3 last_committed_* + last_snapshot_slot + counters + 6 metadata + pending_rollback_slot" $
+      length syncStateColumns `shouldBe` 1 + 3 + 1 + length syncStateCounterColumns + 6 + 1
 
     it "starts with id" $
       head syncStateColumns `shouldBe` Just "id"
@@ -193,6 +193,8 @@ goldenDdl = T.unlines
   , "  \"ledger_enabled\" BOOLEAN NOT NULL,"
   , "  \"sync_complete\" BOOLEAN NOT NULL DEFAULT false,"
   , "  \"pending_rollback_slot\" BIGINT,"
+  , "  \"schema_fingerprint\" TEXT NOT NULL,"
+  , "  \"extractors\" TEXT[] NOT NULL,"
   , "  \"updated_at\" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),"
   , "  PRIMARY KEY (\"id\"),"
   , "  CHECK (\"id\" = 1)"

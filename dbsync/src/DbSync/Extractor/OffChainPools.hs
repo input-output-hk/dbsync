@@ -43,16 +43,14 @@ import DbSync.Worker.OffChain.Types (PoolMetadataRef (..))
 
 offChainPoolsExtractor :: ExtractorDef
 offChainPoolsExtractor = ExtractorDef
-  { pdName         = "off_chain_pools"
-  , pdVersion      = 1
-  , pdDependencies = [("core", 1), ("pool", 1)]
-  , pdTables       =
+  { pdName    = "off_chain_pools"
+  , pdTables  =
       [ offChainPoolDataTableDef
       , offChainPoolFetchErrorTableDef
       , delistedPoolTableDef
       , reservedPoolTickerTableDef
       ]
-  , pdProcess      = processOffChainPools
+  , pdProcess = processOffChainPools
   }
 
 -- ---------------------------------------------------------------------------

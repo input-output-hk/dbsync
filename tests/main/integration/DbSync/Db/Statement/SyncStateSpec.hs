@@ -45,8 +45,8 @@ import DbSync.Test.Hasql (runStatement, withTestConnection)
 
 spec :: Spec
 spec = describe "DbSync.Db.Statement.SyncState" $
-  beforeAll_ (dropSchema [] [] testConnStr >> initSchema [] [] testConnStr) $
-  afterAll_  (dropSchema [] [] testConnStr) $
+  beforeAll_ (dropSchema [] testConnStr >> initSchema [] testConnStr) $
+  afterAll_  (dropSchema [] testConnStr) $
   before_    truncateSyncState $ do
 
     describe "readSyncStateStmt" $
@@ -58,7 +58,7 @@ spec = describe "DbSync.Db.Statement.SyncState" $
     describe "seedSyncStateStmt" $ do
       it "inserts the singleton row" $
         withTestConnection $ \conn -> do
-          runStatement conn (1, False) seedSyncStateStmt
+          runStatement conn (1, "test-fp", False, []) seedSyncStateStmt
           row <- runStatement conn () readSyncStateStmt
           row `shouldSatisfy` isJust
           case row of
@@ -69,10 +69,10 @@ spec = describe "DbSync.Db.Statement.SyncState" $
 
       it "is idempotent (ON CONFLICT DO NOTHING)" $
         withTestConnection $ \conn -> do
-          runStatement conn (1, False) seedSyncStateStmt
+          runStatement conn (1, "test-fp", False, []) seedSyncStateStmt
           -- A second seed with different args is a no-op — the
           -- first seed's values win.
-          runStatement conn (1, True)  seedSyncStateStmt
+          runStatement conn (1, "test-fp", True, []) seedSyncStateStmt
           rowCount <- T.strip <$> queryTestDb
             ("SELECT count(*) FROM " <> tdName syncStateTableDef <> ";")
           rowCount `shouldBe` "1"
@@ -89,7 +89,7 @@ spec = describe "DbSync.Db.Statement.SyncState" $
 
       it "round-trips every column through readSyncStateStmt" $
         withTestConnection $ \conn -> do
-          runStatement conn (1, True) seedSyncStateStmt
+          runStatement conn (1, "test-fp", True, []) seedSyncStateStmt
           n <- runStatement conn sampleRow writeSyncStateStmt
           n `shouldBe` 1
           mRow <- runStatement conn () readSyncStateStmt
@@ -100,7 +100,7 @@ spec = describe "DbSync.Db.Statement.SyncState" $
     describe "markSnapshotCompleteStmt" $
       it "updates last_snapshot_slot in isolation" $
         withTestConnection $ \conn -> do
-          runStatement conn (1, True) seedSyncStateStmt
+          runStatement conn (1, "test-fp", True, []) seedSyncStateStmt
           _ <- runStatement conn sampleRow writeSyncStateStmt
           n <- runStatement conn 1234 markSnapshotCompleteStmt
           n `shouldBe` 1
@@ -116,7 +116,7 @@ spec = describe "DbSync.Db.Statement.SyncState" $
     describe "markSyncCompleteStmt" $
       it "flips sync_complete to true once seeded" $
         withTestConnection $ \conn -> do
-          runStatement conn (1, False) seedSyncStateStmt
+          runStatement conn (1, "test-fp", False, []) seedSyncStateStmt
           n <- runStatement conn () markSyncCompleteStmt
           n `shouldBe` 1
           mRow <- runStatement conn () readSyncStateStmt
@@ -127,13 +127,13 @@ spec = describe "DbSync.Db.Statement.SyncState" $
     describe "pending_rollback_slot marker" $ do
       it "is NULL on a freshly seeded row" $
         withTestConnection $ \conn -> do
-          runStatement conn (1, False) seedSyncStateStmt
+          runStatement conn (1, "test-fp", False, []) seedSyncStateStmt
           marker <- runStatement conn () readPendingRollbackSlotStmt
           marker `shouldBe` Nothing
 
       it "round-trips through write + read" $
         withTestConnection $ \conn -> do
-          runStatement conn (1, False) seedSyncStateStmt
+          runStatement conn (1, "test-fp", False, []) seedSyncStateStmt
           n <- runStatement conn 99999 writePendingRollbackSlotStmt
           n `shouldBe` 1
           marker <- runStatement conn () readPendingRollbackSlotStmt
@@ -141,7 +141,7 @@ spec = describe "DbSync.Db.Statement.SyncState" $
 
       it "clears via clearPendingRollbackSlotStmt" $
         withTestConnection $ \conn -> do
-          runStatement conn (1, False) seedSyncStateStmt
+          runStatement conn (1, "test-fp", False, []) seedSyncStateStmt
           _ <- runStatement conn 42 writePendingRollbackSlotStmt
           n <- runStatement conn () clearPendingRollbackSlotStmt
           n `shouldBe` 1
@@ -150,7 +150,7 @@ spec = describe "DbSync.Db.Statement.SyncState" $
 
       it "leaves other lifecycle columns alone" $
         withTestConnection $ \conn -> do
-          runStatement conn (1, True) seedSyncStateStmt
+          runStatement conn (1, "test-fp", True, []) seedSyncStateStmt
           _ <- runStatement conn () markSyncCompleteStmt
           _ <- runStatement conn 7 writePendingRollbackSlotStmt
           mRow <- runStatement conn () readSyncStateStmt

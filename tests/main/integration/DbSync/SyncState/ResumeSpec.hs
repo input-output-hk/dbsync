@@ -41,7 +41,8 @@ import DbSync.Db.Loader (LoaderStream (..), closeLoaderStream, mkLoaderStream)
 
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
 import DbSync.Db.Schema.Init (dropSchema, initSchema)
-import DbSync.Db.Schema.Pool (poolHashTableDef)
+import DbSync.Schema.Version (Fingerprint (..))
+import DbSync.Db.Schema.Core (poolHashTableDef)
 import DbSync.Db.Schema.SyncState (syncStateTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Phase.Ingest.DedupStore (DedupStores (..), lookupOrInsert, sizeApprox)
@@ -70,8 +71,9 @@ coreTables =
   , poolHashTableDef
   ]
 
-coreVersions :: [(Text, Int)]
-coreVersions = [("core", 1), ("pool", 1)]
+-- | Placeholder schema fingerprint for seeding the sync-state row in tests.
+testFp :: Fingerprint
+testFp = Fingerprint "test-fp"
 
 coreTableNames :: [Text]
 coreTableNames = map tdName coreTables
@@ -209,8 +211,8 @@ countRows td = do
 
 spec :: Spec
 spec =
-  beforeAll_ (dropSchema coreTables coreVersions testConnStr >> initSchema coreTables coreVersions testConnStr) $
-  afterAll_  (dropSchema coreTables coreVersions testConnStr) $
+  beforeAll_ (dropSchema coreTables testConnStr >> initSchema coreTables testConnStr) $
+  afterAll_  (dropSchema coreTables testConnStr) $
   before_    resetFixtures $ do
     deleteRowsPastSlotSpec
     rebuildDedupMapsSpec
@@ -226,7 +228,7 @@ ingestResumeSpec = describe "IngestResume" $ do
 
     it "is a no-op when last_committed_slot is Nothing" $ do
       withControlConnection $ \ctrl -> do
-        runAppM ctrl (seedSyncState 1 False)
+        runAppM ctrl (seedSyncState 1 testFp False [])
         bs <- mkLoaderStream testConnBs coreTables
         populateChain bs 3
         lsCommit bs
@@ -242,7 +244,7 @@ ingestResumeSpec = describe "IngestResume" $ do
 
     it "deletes block rows past last_committed_slot" $ do
       withControlConnection $ \ctrl -> do
-        runAppM ctrl (seedSyncState 1 False)
+        runAppM ctrl (seedSyncState 1 testFp False [])
         bs <- mkLoaderStream testConnBs coreTables
         populateChain bs 5  -- slots 100, 200, 300, 400, 500
         lsCommit bs
@@ -261,7 +263,7 @@ ingestResumeSpec = describe "IngestResume" $ do
 
     it "deletes tx rows whose block crossed the boundary" $ do
       withControlConnection $ \ctrl -> do
-        runAppM ctrl (seedSyncState 1 False)
+        runAppM ctrl (seedSyncState 1 testFp False [])
         bs <- mkLoaderStream testConnBs coreTables
         populateChain bs 5
         lsCommit bs
@@ -277,7 +279,7 @@ ingestResumeSpec = describe "IngestResume" $ do
 
     it "deletes dedup rows whose id >= the recorded counter" $ do
       withControlConnection $ \ctrl -> do
-        runAppM ctrl (seedSyncState 1 False)
+        runAppM ctrl (seedSyncState 1 testFp False [])
         bs <- mkLoaderStream testConnBs coreTables
         populateChain bs 5
         lsCommit bs
@@ -300,7 +302,7 @@ ingestResumeSpec = describe "IngestResume" $ do
       -- Without it the row past the recorded counter survives boot
       -- and the next boundary's COPY collides on it.
       withControlConnection $ \ctrl -> do
-        runAppM ctrl (seedSyncState 1 False)
+        runAppM ctrl (seedSyncState 1 testFp False [])
         bs <- mkLoaderStream testConnBs coreTables
         populateChain bs 5
         populatePoolHash bs 5
@@ -326,7 +328,7 @@ ingestResumeSpec = describe "IngestResume" $ do
       -- after a successful boundary commit, and is covered by the
       -- "no rows past the boundary" case below.
       withControlConnection $ \ctrl -> do
-        runAppM ctrl (seedSyncState 1 False)
+        runAppM ctrl (seedSyncState 1 testFp False [])
         bs <- mkLoaderStream testConnBs coreTables
         populateChain bs 5
         populatePoolHash bs 5
@@ -348,7 +350,7 @@ ingestResumeSpec = describe "IngestResume" $ do
 
     it "leaves everything alone when no rows are past the boundary" $ do
       withControlConnection $ \ctrl -> do
-        runAppM ctrl (seedSyncState 1 False)
+        runAppM ctrl (seedSyncState 1 testFp False [])
         bs <- mkLoaderStream testConnBs coreTables
         populateChain bs 3
         lsCommit bs
@@ -368,7 +370,7 @@ followRestartSpec = describe "FollowRestart" $ do
 
     it "skips the counter DELETE even when ids exceed the counter" $ do
       withControlConnection $ \ctrl -> do
-        runAppM ctrl (seedSyncState 1 False)
+        runAppM ctrl (seedSyncState 1 testFp False [])
         bs <- mkLoaderStream testConnBs coreTables
         populateChain bs 5
         populatePoolHash bs 5
@@ -395,7 +397,7 @@ followRestartSpec = describe "FollowRestart" $ do
 
     it "still trims fact-table rows past last_committed_slot" $ do
       withControlConnection $ \ctrl -> do
-        runAppM ctrl (seedSyncState 1 False)
+        runAppM ctrl (seedSyncState 1 testFp False [])
         bs <- mkLoaderStream testConnBs coreTables
         populateChain bs 5
         lsCommit bs
@@ -415,7 +417,7 @@ followRestartSpec = describe "FollowRestart" $ do
 
     it "is a no-op when last_committed_slot is Nothing" $ do
       withControlConnection $ \ctrl -> do
-        runAppM ctrl (seedSyncState 1 False)
+        runAppM ctrl (seedSyncState 1 testFp False [])
         bs <- mkLoaderStream testConnBs coreTables
         populateChain bs 3
         lsCommit bs
@@ -437,7 +439,7 @@ rebuildDedupMapsSpec = describe "DbSync.SyncState.Row.rebuildDedupMaps" $ do
     it "returns empty stores when no rows exist" $
       withControlConnection $ \ctrl ->
       withTestLsmSession $ \lsm -> do
-        runAppM ctrl (seedSyncState 1 False)
+        runAppM ctrl (seedSyncState 1 testFp False [])
         stores <- runAppM (TracerWithControl mkNullTracer ctrl)
                     (rebuildDedupMaps coreTables lsm)
         sizeApprox (dstSlotLeader stores)   >>= (`shouldBe` 0)
@@ -448,7 +450,7 @@ rebuildDedupMapsSpec = describe "DbSync.SyncState.Row.rebuildDedupMaps" $ do
     it "loads slot_leader rows back into the dedup store" $
       withControlConnection $ \ctrl ->
       withTestLsmSession $ \lsm -> do
-        runAppM ctrl (seedSyncState 1 False)
+        runAppM ctrl (seedSyncState 1 testFp False [])
         bs <- mkLoaderStream testConnBs coreTables
         populateChain bs 3
         lsCommit bs
@@ -469,7 +471,7 @@ rebuildDedupMapsSpec = describe "DbSync.SyncState.Row.rebuildDedupMaps" $ do
     it "advances the counter past existing ids so new keys avoid collisions" $
       withControlConnection $ \ctrl ->
       withTestLsmSession $ \lsm -> do
-        runAppM ctrl (seedSyncState 1 False)
+        runAppM ctrl (seedSyncState 1 testFp False [])
         bs <- mkLoaderStream testConnBs coreTables
         populateChain bs 3
         lsCommit bs
@@ -485,7 +487,7 @@ rebuildDedupMapsSpec = describe "DbSync.SyncState.Row.rebuildDedupMaps" $ do
     it "skips dedup tables not present in the schema list" $
       withControlConnection $ \ctrl ->
       withTestLsmSession $ \lsm -> do
-        runAppM ctrl (seedSyncState 1 False)
+        runAppM ctrl (seedSyncState 1 testFp False [])
         -- Only block + tx in the schema list — slot_leader is absent,
         -- so its store is left empty even if rows exist server-side.
         bs <- mkLoaderStream testConnBs coreTables
@@ -506,7 +508,7 @@ fetchBlockHashAtSlotSpec = describe "DbSync.SyncState.Row.fetchBlockHashAtSlot" 
 
     it "returns the hash of the block at the given slot" $
       withControlConnection $ \ctrl -> do
-        runAppM ctrl (seedSyncState 1 False)
+        runAppM ctrl (seedSyncState 1 testFp False [])
         bs <- mkLoaderStream testConnBs coreTables
         populateChain bs 5  -- slots 100, 200, 300, 400, 500
         lsCommit bs
@@ -519,7 +521,7 @@ fetchBlockHashAtSlotSpec = describe "DbSync.SyncState.Row.fetchBlockHashAtSlot" 
 
     it "returns Nothing when no block is at the given slot" $
       withControlConnection $ \ctrl -> do
-        runAppM ctrl (seedSyncState 1 False)
+        runAppM ctrl (seedSyncState 1 testFp False [])
         bs <- mkLoaderStream testConnBs coreTables
         populateChain bs 3
         lsCommit bs
@@ -531,7 +533,7 @@ fetchBlockHashAtSlotSpec = describe "DbSync.SyncState.Row.fetchBlockHashAtSlot" 
 
     it "returns Nothing on an empty block table" $
       withControlConnection $ \ctrl -> do
-        runAppM ctrl (seedSyncState 1 False)
+        runAppM ctrl (seedSyncState 1 testFp False [])
         result <- runAppM ctrl (fetchBlockHashAtSlot 100)
         result `shouldBe` Nothing
 

@@ -96,11 +96,9 @@ spec = describe "DbSync.Extractor.Pipeline" $ do
 -- | A mock extractor that increments a counter when run.
 mkMockExtractor :: IORef Int -> ExtractorDef
 mkMockExtractor countRef = ExtractorDef
-  { pdName         = "mock"
-  , pdVersion      = 1
-  , pdDependencies = []
-  , pdTables       = []
-  , pdProcess      = \_ ->
+  { pdName    = "mock"
+  , pdTables  = []
+  , pdProcess = \_ ->
       liftIO $ atomicModifyIORef' countRef $ \n -> (n + 1, ())
   }
 

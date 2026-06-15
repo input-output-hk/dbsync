@@ -177,17 +177,19 @@ recovery message rather than silently corrupting the database.
 
 ## Schema migrations
 
-:::warning Not yet implemented
-Schema migrations are intentionally not implemented yet. The repo
-is greenfield and pre-release; adding a column or changing a type
-currently means a full re-sync. The
+Schema migrations ship as ordered SQL files under `dbsync-db/migrations/`,
+embedded into the binary at build time. At boot
 [`DbSync.Db.Schema.Migration`](https://github.com/input-output-hk/dbsync/blob/main/dbsync-db/src/DbSync/Db/Schema/Migration.hs)
-module exists as a placeholder for the migration runner that will
-land before the first stable release.
-:::
+compares the version stamped on `dbsync_sync_state` against the version
+the binary targets and, when the database is behind, applies the
+intervening files in a single transaction and re-stamps the row. A
+database built by a newer binary, or one whose shape has drifted with no
+migration covering it, aborts boot. The full workflow — fingerprints,
+the `gen-migration` tool, and the drift tests — is in
+[Schema versioning and migrations](schema-versioning).
 
-What does work today is **profile-driven schema selection**:
-`initSchema` walks the enabled extractors and emits DDL for exactly
-the tables they own. Enabling a new extractor on a fresh database
-gets you the new tables; enabling it on a populated database is
-rejected at boot with a clear message.
+Alongside this is **profile-driven schema selection**: `initSchema`
+walks the enabled extractors and emits DDL for exactly the tables they
+own. Enabling a new extractor on a fresh database gets you the new
+tables; enabling it on a populated database is rejected at boot with a
+clear message.

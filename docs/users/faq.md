@@ -56,8 +56,10 @@ No. A profile is fixed once the database is created — see
 [profile immutability](profiles/overview#profile-immutability).
 Changing means a fresh sync against a fresh database.
 
-A migration framework is planned but not implemented. Until then,
-pick the profile carefully before committing to a multi-day sync.
+Schema migrations handle structural schema changes across dbsync
+versions, but they don't turn an extractor on or off in an existing
+database — enabling one needs its tables back-filled from genesis. Pick
+the profile carefully before committing to a multi-day sync.
 
 ## What hardware do I need?
 
@@ -88,11 +90,10 @@ Same schema (mostly), different engine. Headline differences:
   profile JSON. The original is monolithic.
 - **In-process ledger.** The optional ledger worker is V2 LSM-backed
   rather than the in-memory state the original used.
-- **Pre-release.** No schema migration yet; greenfield codebase.
 
-Workloads that worked against the original mostly work against this
-one with a matching profile, but if you're considering a migration,
-expect the schema to evolve before the first stable release.
+Workloads that worked against the original mostly work against this one
+with a matching profile. The schema is close but not identical, so
+validate your queries against a sample sync before switching over.
 
 ## Can I run multiple dbsync instances against one node?
 
@@ -149,7 +150,8 @@ Include:
 
 ## How stable is the schema?
 
-Pre-release. The schema may change between dbsync releases until the
-migration framework lands. Production deployments should pin to a
-specific dbsync git commit until then and plan for re-syncs on
-upgrade.
+The schema is versioned and fingerprinted. When an upgrade changes it,
+dbsync migrates a behind database in place at boot rather than forcing a
+re-sync; a database built by a newer binary, or one whose shape drifted
+with no migration, refuses to start. Profile changes — enabling or
+disabling an extractor — are the exception and still need a fresh sync.

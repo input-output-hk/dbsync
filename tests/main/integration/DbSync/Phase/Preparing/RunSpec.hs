@@ -49,7 +49,7 @@ import DbSync.Parser.Types (GenericBlock)
 import DbSync.Db.Loader (LoaderStream (..), closeLoaderStream, mkLoaderStream)
 import DbSync.Db.Schema.Address (addressTableDef)
 import DbSync.Db.Schema.CBOR (txCborTableDef)
-import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
+import DbSync.Db.Schema.Core (blockTableDef, poolHashTableDef, slotLeaderTableDef, stakeAddressTableDef, txTableDef)
 import DbSync.Db.Schema.Init (dropSchema, initSchema)
 import DbSync.Db.Schema.Metadata (txMetadataTableDef)
 import DbSync.Db.Schema.MultiAsset
@@ -58,8 +58,7 @@ import DbSync.Db.Schema.MultiAsset
   , multiAssetTableDef
   )
 import DbSync.Db.Schema.Pool
-  ( poolHashTableDef
-  , poolMetadataRefTableDef
+  ( poolMetadataRefTableDef
   , poolOwnerTableDef
   , poolRelayTableDef
   , poolRetireTableDef
@@ -67,7 +66,6 @@ import DbSync.Db.Schema.Pool
   )
 import DbSync.Db.Schema.StakeDelegation
   ( delegationTableDef
-  , stakeAddressTableDef
   , stakeDeregistrationTableDef
   , stakeRegistrationTableDef
   , withdrawalTableDef
@@ -148,17 +146,6 @@ tables =
   , txCborTableDef
   ]
 
-versions :: [(Text, Int)]
-versions =
-  [ ("core", 1)
-  , ("utxo", 1)
-  , ("metadata", 1)
-  , ("multi_asset", 1)
-  , ("stake_delegation", 1)
-  , ("pool", 1)
-  , ("cbor", 1)
-  ]
-
 extractors :: [ExtractorDef]
 extractors =
   [ coreExtractor
@@ -196,12 +183,12 @@ runPipelineThenPrepare blocks = withTestIngestStores $ \utxoStore dedupStores ->
 
 setUp :: IO ()
 setUp = do
-  dropSchema tables versions testConnStr
-  initSchema tables versions testConnStr
+  dropSchema tables testConnStr
+  initSchema tables testConnStr
   runPipelineThenPrepare [producerBlock, spendingBlock, byronBlock, withdrawalBlock]
 
 tearDown :: IO ()
-tearDown = dropSchema tables [] testConnStr
+tearDown = dropSchema tables testConnStr
 
 -- ---------------------------------------------------------------------------
 -- * Spec

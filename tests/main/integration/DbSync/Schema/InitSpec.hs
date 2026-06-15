@@ -3,8 +3,8 @@
 -- | Integration tests for schema initialisation.
 --
 -- Tests that 'initSchema' creates tables from 'TableDef's via @psql@,
--- records extractor versions in @schema_version@, and that
--- 'checkSchemaVersions' detects mismatches.
+-- and that 'checkExtractorPresence' compares the enabled extractors
+-- against the set recorded in the @dbsync_sync_state.extractors@ column.
 --
 -- Requires a running PostgreSQL instance with a @dbsync_test@ database.
 module DbSync.Schema.InitSpec (spec) where
@@ -32,14 +32,22 @@ import DbSync.Db.Schema.Init
   ( SchemaAction (..)
   , SchemaMismatch (..)
   , SchemaState (..)
-  , analyzeSchemaState
-  , checkSchemaVersions
+  , analyzeExtractorState
+  , checkExtractorPresence
   , decideSchemaAction
   , dropSchema
   , initSchema
   , queryPsql
   )
 import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Schema.Version (Fingerprint (..))
+import DbSync.SyncState.Row
+  ( closeControlConnection
+  , openControlConnection
+  , seedSyncState
+  )
+import DbSync.AppM (runAppM)
+import DbSync.Test.Database (testHasqlSettings)
 
 -- | Connection string for the test database.
 testConnStr :: Text
@@ -56,9 +64,16 @@ coreTablesInList :: Text
 coreTablesInList =
   T.intercalate ", " (map (\td -> "'" <> tdName td <> "'") coreTables)
 
--- | Extractor version entries for the core tables.
-coreVersions :: [(Text, Int)]
-coreVersions = [("core", 1)]
+-- | The extractor names the core tables belong to.
+coreNames :: [Text]
+coreNames = ["core"]
+
+-- | Seed the @dbsync_sync_state@ singleton row with the given enabled
+-- extractor set, so 'checkExtractorPresence' has a row to read back.
+seedExtractors :: [Text] -> IO ()
+seedExtractors names =
+  bracket (openControlConnection testHasqlSettings) closeControlConnection $ \ctrl ->
+    runAppM ctrl (seedSyncState 1 (Fingerprint "test-fp") False names)
 
 spec :: Spec
 spec = describe "DbSync.Db.Schema.Init" $ do
@@ -75,7 +90,7 @@ spec = describe "DbSync.Db.Schema.Init" $ do
       decideSchemaAction True SchemaFresh `shouldBe` ActionForceReinit
 
     it "resync-from-genesis overrides everything: mismatched" $
-      let errs = MissingExtractor "core" 1 NE.:| []
+      let errs = MissingExtractor "core" NE.:| []
       in decideSchemaAction True (SchemaMismatched errs) `shouldBe` ActionForceReinit
 
     it "no force, schema matches → skip init" $
@@ -85,63 +100,51 @@ spec = describe "DbSync.Db.Schema.Init" $ do
       decideSchemaAction False SchemaFresh `shouldBe` ActionRunInit
 
     it "no force, mismatched → abort with the same errors" $
-      let errs = VersionAhead "core" 1 2 NE.:| [MissingExtractor "utxo" 1]
+      let errs = MissingExtractor "utxo" NE.:| [MissingExtractor "pool"]
       in decideSchemaAction False (SchemaMismatched errs) `shouldBe` ActionAbort errs
 
-  describe "analyzeSchemaState (pure)" $ do
-    it "schema_version table missing → SchemaFresh (no expected extractors)" $
-      analyzeSchemaState [] Nothing `shouldBe` SchemaFresh
+  describe "analyzeExtractorState (pure)" $ do
+    it "no recorded extractors → SchemaFresh (no expected extractors)" $
+      analyzeExtractorState [] Nothing `shouldBe` SchemaFresh
 
-    it "schema_version table missing → SchemaFresh (with expected extractors)" $
-      analyzeSchemaState [("core", 1), ("utxo", 1)] Nothing `shouldBe` SchemaFresh
+    it "no recorded extractors → SchemaFresh (with expected extractors)" $
+      analyzeExtractorState ["core", "utxo"] Nothing `shouldBe` SchemaFresh
 
-    it "all expected extractors present at expected versions → SchemaMatches" $
-      analyzeSchemaState
-        [("core", 1), ("utxo", 1)]
-        (Just [("core", 1), ("utxo", 1)])
+    it "all expected extractors present → SchemaMatches" $
+      analyzeExtractorState
+        ["core", "utxo"]
+        (Just ["core", "utxo"])
         `shouldBe` SchemaMatches
 
     it "extra extractors in DB are silently ignored" $
-      analyzeSchemaState
-        [("core", 1)]
-        (Just [("core", 1), ("removed_feature", 1)])
+      analyzeExtractorState
+        ["core"]
+        (Just ["core", "removed_feature"])
         `shouldBe` SchemaMatches
 
     it "expected extractor missing from DB → MissingExtractor" $
-      analyzeSchemaState
-        [("core", 1), ("utxo", 1)]
-        (Just [("core", 1)])
-        `shouldBe` SchemaMismatched (MissingExtractor "utxo" 1 NE.:| [])
+      analyzeExtractorState
+        ["core", "utxo"]
+        (Just ["core"])
+        `shouldBe` SchemaMismatched (MissingExtractor "utxo" NE.:| [])
 
-    it "DB version older than code → VersionAhead" $
-      analyzeSchemaState
-        [("core", 2)]
-        (Just [("core", 1)])
-        `shouldBe` SchemaMismatched (VersionAhead "core" 1 2 NE.:| [])
-
-    it "DB version newer than code → VersionBehind" $
-      analyzeSchemaState
-        [("core", 1)]
-        (Just [("core", 2)])
-        `shouldBe` SchemaMismatched (VersionBehind "core" 2 1 NE.:| [])
-
-    it "multiple mismatches reported in expected order" $
-      analyzeSchemaState
-        [("core", 1), ("utxo", 2), ("metadata", 1)]
-        (Just [("core", 1), ("utxo", 1)])
+    it "multiple missing extractors reported in expected order" $
+      analyzeExtractorState
+        ["core", "utxo", "metadata"]
+        (Just ["core"])
         `shouldBe` SchemaMismatched
-          (VersionAhead "utxo" 1 2 NE.:| [MissingExtractor "metadata" 1])
+          (MissingExtractor "utxo" NE.:| [MissingExtractor "metadata"])
 
     it "empty expected extractors with present table → SchemaMatches" $
-      analyzeSchemaState [] (Just [("core", 1)]) `shouldBe` SchemaMatches
+      analyzeExtractorState [] (Just ["core"]) `shouldBe` SchemaMatches
 
   -- Each top-level group cleans up after itself
   describe "initSchema + dropSchema" $
-    beforeAll_ (dropSchema coreTables coreVersions testConnStr) $
-    afterAll_  (dropSchema coreTables coreVersions testConnStr) $ do
+    beforeAll_ (dropSchema coreTables testConnStr) $
+    afterAll_  (dropSchema coreTables testConnStr) $ do
 
-      it "creates tables that exist in pg_class" $ do
-        initSchema coreTables coreVersions testConnStr
+      it "creates tables that exist in pg_tables" $ do
+        initSchema coreTables testConnStr
         result <- queryPsql testConnStr $
           "SELECT tablename FROM pg_tables"
             <> " WHERE schemaname = 'public' AND tablename IN ("
@@ -188,63 +191,47 @@ spec = describe "DbSync.Db.Schema.Init" $ do
         T.strip result `shouldBe` "epoch_no|YES"
 
       it "dropSchema removes all tables" $ do
-        dropSchema coreTables coreVersions testConnStr
+        dropSchema coreTables testConnStr
         result <- queryPsql testConnStr $
           "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename IN ("
             <> coreTablesInList <> ");"
         T.strip result `shouldBe` "0"
         -- Re-create for the afterAll_ cleanup to be idempotent
-        initSchema coreTables coreVersions testConnStr
+        initSchema coreTables testConnStr
 
-  describe "schema_version tracking" $
-    beforeAll_ (dropSchema coreTables coreVersions testConnStr >> initSchema coreTables coreVersions testConnStr) $
-    afterAll_  (dropSchema coreTables coreVersions testConnStr) $ do
+  describe "extractors column" $
+    beforeAll_ (dropSchema coreTables testConnStr >> initSchema coreTables testConnStr >> seedExtractors coreNames) $
+    afterAll_  (dropSchema coreTables testConnStr) $ do
 
-      it "creates a schema_version table" $ do
-        result <- queryPsql testConnStr $
-          "SELECT count(*) FROM pg_tables"
-            <> " WHERE schemaname = 'public' AND tablename = 'schema_version';"
-        T.strip result `shouldBe` "1"
-
-      it "records extractor name and version" $ do
+      it "records the enabled extractor set on the sync-state row" $ do
         result <- queryPsql testConnStr
-          "SELECT extractor_name, version FROM schema_version ORDER BY extractor_name;"
-        T.strip result `shouldBe` "core|1"
+          "SELECT unnest(extractors) FROM dbsync_sync_state ORDER BY 1;"
+        let names = T.lines (T.strip result)
+        names `shouldBe` List.sort coreNames
 
-      it "records a created_at timestamp" $ do
-        result <- queryPsql testConnStr
-          "SELECT count(*) FROM schema_version WHERE created_at IS NOT NULL;"
-        T.strip result `shouldBe` "1"
+  describe "checkExtractorPresence" $
+    beforeAll_ (dropSchema coreTables testConnStr >> initSchema coreTables testConnStr >> seedExtractors coreNames) $
+    afterAll_  (dropSchema coreTables testConnStr) $ do
 
-  describe "checkSchemaVersions" $
-    beforeAll_ (dropSchema coreTables coreVersions testConnStr >> initSchema coreTables coreVersions testConnStr) $
-    afterAll_  (dropSchema coreTables coreVersions testConnStr) $ do
-
-      it "returns SchemaMatches when versions match" $ do
-        result <- checkSchemaVersions coreVersions testConnStr
+      it "returns SchemaMatches when the enabled extractors are present" $ do
+        result <- checkExtractorPresence coreNames testConnStr
         result `shouldBe` SchemaMatches
 
-      it "returns SchemaMismatched VersionAhead when code is ahead of DB" $ do
-        let aheadVersions = [("core", 2)]
-        result <- checkSchemaVersions aheadVersions testConnStr
-        result `shouldBe` SchemaMismatched (VersionAhead "core" 1 2 NE.:| [])
+      it "returns SchemaMismatched MissingExtractor when an extractor is absent" $ do
+        result <- checkExtractorPresence ["core", "utxo"] testConnStr
+        result `shouldBe` SchemaMismatched (MissingExtractor "utxo" NE.:| [])
 
-      it "returns SchemaMismatched MissingExtractor when extractor is absent" $ do
-        let extraVersions = [("core", 1), ("utxo", 1)]
-        result <- checkSchemaVersions extraVersions testConnStr
-        result `shouldBe` SchemaMismatched (MissingExtractor "utxo" 1 NE.:| [])
-
-      it "returns SchemaMatches when DB has extra extractors not in code" $ do
-        -- DB has "core" v1, code only checks [] — that's fine
-        result <- checkSchemaVersions [] testConnStr
+      it "returns SchemaMatches when the DB has extra extractors not enabled" $ do
+        -- DB recorded "core"; the running profile enables nothing — fine.
+        result <- checkExtractorPresence [] testConnStr
         result `shouldBe` SchemaMatches
 
   describe "initSchema requires a fresh DB" $
-    beforeAll_ (dropSchema coreTables coreVersions testConnStr) $
-    afterAll_  (dropSchema coreTables coreVersions testConnStr) $ do
+    beforeAll_ (dropSchema coreTables testConnStr) $
+    afterAll_  (dropSchema coreTables testConnStr) $ do
 
       it "creates the expected tables on a clean DB" $ do
-        initSchema coreTables coreVersions testConnStr
+        initSchema coreTables testConnStr
         result <- queryPsql testConnStr $
           "SELECT count(*) FROM pg_tables"
             <> " WHERE schemaname = 'public' AND tablename IN ("
@@ -254,5 +241,5 @@ spec = describe "DbSync.Db.Schema.Init" $ do
       it "fails if called on a populated DB (no longer drops + recreates)" $ do
         -- After the previous test the schema is in place; calling initSchema
         -- again must throw because CREATE TABLE on existing tables fails.
-        initSchema coreTables coreVersions testConnStr
+        initSchema coreTables testConnStr
           `shouldThrow` anyIOException

@@ -44,6 +44,7 @@ data PgType
   | PgNumeric       -- ^ NUMERIC
   | PgTimestamp     -- ^ TIMESTAMP WITHOUT TIME ZONE
   | PgTimestampTz   -- ^ TIMESTAMP WITH TIME ZONE
+  | PgTextArray     -- ^ TEXT[]
   deriving stock (Eq, Show)
 
 -- | Definition of a single column.

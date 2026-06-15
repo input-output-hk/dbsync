@@ -34,6 +34,7 @@ const sidebars: SidebarsConfig = {
         'operations/metrics',
         'operations/troubleshooting',
         'operations/recovery',
+        'operations/schema-versions',
       ],
     },
     'faq',

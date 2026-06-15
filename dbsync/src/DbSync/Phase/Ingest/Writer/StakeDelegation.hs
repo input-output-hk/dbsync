@@ -31,19 +31,21 @@ import DbSync.Db.Schema.EpochBoundary
   , treasuryTableDef
   )
 import DbSync.Db.Schema.Ids (StakeAddressId)
+import DbSync.Db.Schema.Core
+  ( StakeAddress
+  , encodeStakeAddressCopy
+  , stakeAddressTableDef
+  )
 import DbSync.Db.Schema.StakeDelegation
   ( Delegation
-  , StakeAddress
   , StakeDeregistration
   , StakeRegistration
   , Withdrawal
   , delegationTableDef
   , encodeDelegationCopy
-  , encodeStakeAddressCopy
   , encodeStakeDeregistrationCopy
   , encodeStakeRegistrationCopy
   , encodeWithdrawalCopy
-  , stakeAddressTableDef
   , stakeDeregistrationTableDef
   , stakeRegistrationTableDef
   , withdrawalTableDef

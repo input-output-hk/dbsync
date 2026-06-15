@@ -26,7 +26,7 @@ import Cardano.Prelude (IO)
 import DbSync.Db.Schema.AdaPots (AdaPots)
 import DbSync.Db.Schema.Address (Address)
 import DbSync.Db.Schema.CBOR (TxCbor)
-import DbSync.Db.Schema.Core (Block, SlotLeader, Tx)
+import DbSync.Db.Schema.Core (Block, PoolHash, SlotLeader, StakeAddress, Tx)
 import DbSync.Db.Schema.EpochBoundary
   ( CostModel, EpochParam, EpochState, PotTransfer, Reserve, Treasury )
 import DbSync.Db.Schema.EpochSyncStats (EpochSyncStats)
@@ -63,7 +63,6 @@ import DbSync.Db.Schema.OffChainVote
   )
 import DbSync.Db.Schema.Pool
   ( DelistedPool
-  , PoolHash
   , PoolMetadataRef
   , PoolOwner
   , PoolRelay
@@ -80,7 +79,6 @@ import DbSync.Db.Schema.StakeDelegation
   , EpochStakeProgress
   , PotReward
   , Reward
-  , StakeAddress
   , StakeDeregistration
   , StakeRegistration
   , Withdrawal

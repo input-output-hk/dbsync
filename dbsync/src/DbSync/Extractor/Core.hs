@@ -3,6 +3,9 @@
 -- | Core extractor.
 --
 -- Extracts the fundamental tables: @block@, @tx@, and @slot_leader@.
+-- Also owns the shared dedup tables @stake_address@ and @pool_hash@,
+-- which the block pipeline writes unconditionally regardless of which
+-- optional extractors are enabled.
 -- This extractor is always enabled and cannot be disabled.
 --
 -- Uses pre-assigned IDs from 'BlockContext' — it does NOT call
@@ -33,7 +36,9 @@ import DbSync.Db.Schema.Core
   , SlotLeader (..)
   , Tx (..)
   , blockTableDef
+  , poolHashTableDef
   , slotLeaderTableDef
+  , stakeAddressTableDef
   , txTableDef
   )
 import DbSync.Db.Schema.Ids (BlockId (..), PoolHashId, SlotLeaderId)
@@ -58,15 +63,20 @@ import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- | The core extractor definition.
 --
--- Produces rows for the @block@, @tx@, and @slot_leader@ tables.
--- Always enabled, no dependencies on other extractors.
+-- Produces rows for the @block@, @tx@, and @slot_leader@ tables and
+-- owns the pipeline-written @stake_address@ and @pool_hash@ tables.
+-- Always enabled.
 coreExtractor :: ExtractorDef
 coreExtractor = ExtractorDef
-  { pdName         = "core"
-  , pdVersion      = 1
-  , pdDependencies = []
-  , pdTables       = [blockTableDef, txTableDef, slotLeaderTableDef]
-  , pdProcess      = processCore
+  { pdName    = "core"
+  , pdTables  =
+      [ blockTableDef
+      , txTableDef
+      , slotLeaderTableDef
+      , stakeAddressTableDef
+      , poolHashTableDef
+      ]
+  , pdProcess = processCore
   }
 
 -- ---------------------------------------------------------------------------

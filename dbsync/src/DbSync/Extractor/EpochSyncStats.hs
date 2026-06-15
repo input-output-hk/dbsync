@@ -24,9 +24,7 @@ import DbSync.Extractor (ExtractorDef (..))
 
 epochSyncStatsExtractor :: ExtractorDef
 epochSyncStatsExtractor = ExtractorDef
-  { pdName         = "epoch_sync_stats"
-  , pdVersion      = 1
-  , pdDependencies = []  -- Independent meta-data, no block data dependencies
-  , pdTables       = [epochSyncStatsTableDef]
-  , pdProcess      = \_ -> pure ()  -- No-op: Consumer writes directly
+  { pdName    = "epoch_sync_stats"
+  , pdTables  = [epochSyncStatsTableDef]
+  , pdProcess = \_ -> pure ()  -- No-op: Consumer writes directly
   }

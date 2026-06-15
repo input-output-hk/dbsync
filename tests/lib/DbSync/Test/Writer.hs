@@ -16,7 +16,7 @@ import Cardano.Prelude
 import Data.IORef (IORef, atomicModifyIORef')
 
 import DbSync.Db.Schema.Address (Address)
-import DbSync.Db.Schema.Core (Block, SlotLeader, Tx)
+import DbSync.Db.Schema.Core (Block, PoolHash, SlotLeader, StakeAddress, Tx)
 import DbSync.Db.Schema.EpochBoundary
   ( CostModel, EpochParam, EpochState, PotTransfer, Reserve, Treasury )
 import DbSync.Db.Schema.Governance
@@ -61,7 +61,7 @@ import DbSync.Db.Schema.Ids
   )
 import DbSync.Db.Schema.Metadata (TxMetadata)
 import DbSync.Db.Schema.MultiAsset (MaTxMint)
-import DbSync.Db.Schema.Pool (PoolHash, PoolStat, PoolUpdate)
+import DbSync.Db.Schema.Pool (PoolStat, PoolUpdate)
 import DbSync.Db.Schema.ScriptsDatums
   ( Datum, ExtraKeyWitness, Redeemer, RedeemerData, Script )
 import DbSync.Db.Schema.StakeDelegation
@@ -69,7 +69,6 @@ import DbSync.Db.Schema.StakeDelegation
   , EpochStakeProgress
   , PotReward
   , Reward
-  , StakeAddress
   , StakeRegistration
   )
 import DbSync.Db.Schema.UTxO (CollateralTxIn, CollateralTxOut, ReferenceTxIn, TxIn, TxOut)

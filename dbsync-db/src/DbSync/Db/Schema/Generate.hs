@@ -8,6 +8,8 @@
 -- converted to @LOGGED@ and indexes are added.
 module DbSync.Db.Schema.Generate
   ( generateCreateTable
+  , formatColumnDdl
+  , pgTypeToSql
   ) where
 
 import Cardano.Prelude
@@ -108,11 +110,20 @@ generateCreateTable td =
                   Just expr ->
                     quoted <> " " <> typeSql <> " GENERATED ALWAYS AS (" <> expr <> ") STORED"
                   Nothing ->
-                    let nullability = if cdNullable col then "" else " NOT NULL"
-                        defaultClause = case lookup name (tdColumnDefaults td) of
+                    let defaultClause = case lookup name (tdColumnDefaults td) of
                           Nothing   -> ""
                           Just expr -> " DEFAULT " <> expr
-                    in quoted <> " " <> typeSql <> nullability <> defaultClause
+                    in formatColumnDdl col <> defaultClause
+
+-- | A column's base DDL — @"name" TYPE@ with @NOT NULL@ when the
+-- column is not nullable. 'generateCreateTable' layers column defaults,
+-- identity, and generated-column clauses on top of this; an
+-- @ALTER TABLE … ADD COLUMN@ reuses it as-is.
+formatColumnDdl :: ColumnDef -> Text
+formatColumnDdl col =
+  quoteIdent (cdName col) <> " " <> pgTypeToSql (cdType col) <> nullability
+  where
+    nullability = if cdNullable col then "" else " NOT NULL"
 
 -- | Convert a 'PgType' to its SQL string representation.
 pgTypeToSql :: PgType -> Text
@@ -127,3 +138,4 @@ pgTypeToSql = \case
   PgNumeric     -> "NUMERIC"
   PgTimestamp   -> "TIMESTAMP WITHOUT TIME ZONE"
   PgTimestampTz -> "TIMESTAMP WITH TIME ZONE"
+  PgTextArray   -> "TEXT[]"

@@ -11,7 +11,7 @@ import qualified Data.ByteString.Short as SBS
 import Data.IORef (IORef)
 
 import DbSync.Db.Schema.Ids (PoolHashId (..), PoolMetadataRefId (..), PoolUpdateId (..))
-import DbSync.Db.Schema.Pool (PoolHash)
+import DbSync.Db.Schema.Core (PoolHash)
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Phase.Ingest.Counter (IdCounters (..))
 import DbSync.Phase.Ingest.DedupStore (DedupStores (..), lookupOrInsert)

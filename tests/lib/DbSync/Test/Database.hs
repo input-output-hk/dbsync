@@ -158,15 +158,15 @@ truncateAllTables tableNames =
 -- | Drop + init + flip-to-LOGGED + attach sequences. Used in
 -- @beforeAll_@ for any Spec that exercises the FollowingChainTip
 -- INSERT path.
-setupFollowTipSchema :: [TableDef] -> [(Text, Int)] -> IO ()
-setupFollowTipSchema tables versions = do
-  dropSchema tables versions testConnStr
-  initSchema tables versions testConnStr
+setupFollowTipSchema :: [TableDef] -> IO ()
+setupFollowTipSchema tables = do
+  dropSchema tables testConnStr
+  initSchema tables testConnStr
   prepareSchemaForFollowTip tables testConnStr
 
 -- | Drop everything for use in @afterAll_@.
 teardownSchema :: [TableDef] -> IO ()
-teardownSchema tables = dropSchema tables [] testConnStr
+teardownSchema tables = dropSchema tables testConnStr
 
 -- ---------------------------------------------------------------------------
 -- * Internal helpers

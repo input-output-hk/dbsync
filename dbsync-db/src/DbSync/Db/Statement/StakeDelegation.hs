@@ -1,20 +1,13 @@
 -- | Hasql 'Statement' bindings for the @stake_delegation@ extractor
--- tables: @stake_address@, @stake_registration@,
--- @stake_deregistration@, @delegation@, @withdrawal@, @pot_transfer@,
--- @reserve@, @treasury@.
+-- tables: @stake_registration@, @stake_deregistration@, @delegation@,
+-- @withdrawal@, @pot_transfer@, @reserve@, @treasury@.
 --
--- @stake_address@ is dedup-keyed on @hash_raw@ (the 29-byte serialised
--- reward address). @pot_transfer@, @reserve@ and @treasury@ are
--- defined in 'DbSync.Db.Schema.EpochBoundary' but populated by this
--- extractor's MIR-cert handling. Everything else is an IDENTITY leaf.
+-- @pot_transfer@, @reserve@ and @treasury@ are defined in
+-- 'DbSync.Db.Schema.EpochBoundary' but populated by this extractor's
+-- MIR-cert handling. All tables here are IDENTITY leaves.
 module DbSync.Db.Statement.StakeDelegation
-  ( -- * stake_address
-    insertStakeAddressRowStmt
-  , nextStakeAddressIdStmt
-  , queryStakeAddressIdStmt
-
-    -- * stake_registration
-  , insertStakeRegistrationRowStmt
+  ( -- * stake_registration
+    insertStakeRegistrationRowStmt
 
     -- * stake_deregistration
   , insertStakeDeregistrationRowStmt
@@ -35,9 +28,6 @@ module DbSync.Db.Statement.StakeDelegation
   , insertTreasuryRowStmt
   ) where
 
-import Cardano.Prelude
-
-import Data.Functor.Contravariant ((>$<))
 import qualified Hasql.Decoders as D
 import qualified Hasql.Statement as Stmt
 
@@ -52,17 +42,13 @@ import DbSync.Db.Schema.EpochBoundary
   , treasuryEncoder
   , treasuryTableDef
   )
-import DbSync.Db.Schema.Ids (StakeAddressId (..), idEncoder)
 import DbSync.Db.Schema.StakeDelegation
   ( Delegation
-  , StakeAddress
   , StakeDeregistration
   , StakeRegistration
   , Withdrawal
   , delegationEncoder
   , delegationTableDef
-  , stakeAddressEncoder
-  , stakeAddressTableDef
   , stakeDeregistrationEncoder
   , stakeDeregistrationTableDef
   , stakeRegistrationEncoder
@@ -70,30 +56,7 @@ import DbSync.Db.Schema.StakeDelegation
   , withdrawalEncoder
   , withdrawalTableDef
   )
-import DbSync.Db.Statement.Common
-  ( LookupColumn (..)
-  , insertRowSql
-  , nextIdStmt
-  , queryIdByColumnStmt
-  )
-
--- ---------------------------------------------------------------------------
--- * stake_address
--- ---------------------------------------------------------------------------
-
-insertStakeAddressRowStmt :: Stmt.Statement (StakeAddressId, StakeAddress) ()
-insertStakeAddressRowStmt =
-  Stmt.preparable (insertRowSql stakeAddressTableDef) encoder D.noResult
-  where
-    encoder = (fst >$< idEncoder getStakeAddressId)
-           <> (snd >$< stakeAddressEncoder)
-
-nextStakeAddressIdStmt :: Stmt.Statement () StakeAddressId
-nextStakeAddressIdStmt = nextIdStmt stakeAddressTableDef StakeAddressId
-
-queryStakeAddressIdStmt :: Stmt.Statement ByteString (Maybe StakeAddressId)
-queryStakeAddressIdStmt =
-  queryIdByColumnStmt stakeAddressTableDef ByHashRaw StakeAddressId
+import DbSync.Db.Statement.Common (insertRowSql)
 
 -- ---------------------------------------------------------------------------
 -- * stake_registration

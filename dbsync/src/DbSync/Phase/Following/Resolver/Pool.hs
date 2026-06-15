@@ -16,8 +16,8 @@ import Cardano.Prelude
 import qualified Hasql.Connection as Conn
 
 import DbSync.Db.Schema.Ids (PoolHashId, PoolMetadataRefId, PoolUpdateId)
-import DbSync.Db.Schema.Pool (PoolHash)
-import DbSync.Db.Statement.Pool (nextPoolHashIdStmt, queryPoolHashIdStmt)
+import DbSync.Db.Schema.Core (PoolHash)
+import DbSync.Db.Statement.Core (nextPoolHashIdStmt, queryPoolHashIdStmt)
 import DbSync.Db.Statement.Pool (nextPoolMetadataRefIdStmt)
 import DbSync.Db.Statement.Pool (nextPoolUpdateIdStmt)
 import DbSync.Phase.Following.IdAllocator (PreAllocatedIds (..), popHead)

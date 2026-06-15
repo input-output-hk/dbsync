@@ -51,9 +51,8 @@ import DbSync.Db.Schema.Ids
   , VotingAnchorId
   )
 import DbSync.Db.Schema.MultiAsset (MultiAsset (..))
-import DbSync.Db.Schema.Pool (PoolHash (..))
+import DbSync.Db.Schema.Core (PoolHash (..), StakeAddress (..))
 import DbSync.Db.Schema.ScriptsDatums (Datum, RedeemerData, Script)
-import DbSync.Db.Schema.StakeDelegation (StakeAddress (..))
 import DbSync.Db.Types (AnchorType, VoteUrl (..))
 import DbSync.App.Env (HasNetwork (..))
 import qualified DbSync.Extractor.EpochBoundary as EB

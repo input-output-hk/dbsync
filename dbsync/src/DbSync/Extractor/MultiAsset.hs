@@ -27,11 +27,9 @@ import DbSync.Writer (HasWriter (..), Writer (..))
 
 multiAssetExtractor :: ExtractorDef
 multiAssetExtractor = ExtractorDef
-  { pdName         = "multi_asset"
-  , pdVersion      = 1
-  , pdDependencies = [("core", 1), ("utxo", 1)]
-  , pdTables       = [multiAssetTableDef, maTxMintTableDef, maTxOutTableDef]
-  , pdProcess      = processMultiAsset
+  { pdName    = "multi_asset"
+  , pdTables  = [multiAssetTableDef, maTxMintTableDef, maTxOutTableDef]
+  , pdProcess = processMultiAsset
   }
 
 -- ---------------------------------------------------------------------------

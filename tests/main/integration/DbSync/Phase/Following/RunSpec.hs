@@ -36,7 +36,7 @@ import DbSync.Parser.Types
   )
 import DbSync.Db.Schema.Address (addressTableDef)
 import DbSync.Db.Schema.CBOR (txCborTableDef)
-import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
+import DbSync.Db.Schema.Core (blockTableDef, poolHashTableDef, slotLeaderTableDef, stakeAddressTableDef, txTableDef)
 import DbSync.Db.Schema.Metadata (txMetadataTableDef)
 import DbSync.Db.Schema.MultiAsset
   ( maTxMintTableDef
@@ -44,8 +44,7 @@ import DbSync.Db.Schema.MultiAsset
   , multiAssetTableDef
   )
 import DbSync.Db.Schema.Pool
-  ( poolHashTableDef
-  , poolMetadataRefTableDef
+  ( poolMetadataRefTableDef
   , poolOwnerTableDef
   , poolRelayTableDef
   , poolRetireTableDef
@@ -53,7 +52,6 @@ import DbSync.Db.Schema.Pool
   )
 import DbSync.Db.Schema.StakeDelegation
   ( delegationTableDef
-  , stakeAddressTableDef
   , stakeDeregistrationTableDef
   , stakeRegistrationTableDef
   , withdrawalTableDef
@@ -126,17 +124,6 @@ extractors =
   , cborExtractor
   ]
 
-extractorVersions :: [(Text, Int)]
-extractorVersions =
-  [ ("core", 1)
-  , ("utxo", 1)
-  , ("metadata", 1)
-  , ("multi_asset", 1)
-  , ("stake_delegation", 1)
-  , ("pool", 1)
-  , ("cbor", 1)
-  ]
-
 -- | Truncate order: dependent rows first, parent rows last. Hand-ordered
 -- so 'truncateAllTables' (which uses RESTART IDENTITY CASCADE) is safe
 -- against FK violations even without the CASCADE clause.
@@ -170,7 +157,7 @@ tableNames = map tdName
 
 spec :: Spec
 spec = describe "DbSync.Phase.Following.Run" $
-  beforeAll_ (setupFollowTipSchema tables extractorVersions) $
+  beforeAll_ (setupFollowTipSchema tables) $
   afterAll_  (teardownSchema tables) $
   before_    (truncateAllTables tableNames) $ do
 

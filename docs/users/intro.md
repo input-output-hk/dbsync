@@ -47,8 +47,9 @@ tables it would own.
 ## Status
 
 :::warning Pre-release
-Schema migrations aren't implemented yet — changing a profile or
-upgrading dbsync may require a fresh sync. The first stable release
-will introduce a migration framework; until then, treat profile
-choice and schema layout as decisions made once per database.
+Upgrading dbsync migrates a behind database in place at boot, so a schema
+change no longer forces a re-sync. **Changing a profile** — enabling or
+disabling an extractor — is different and still requires a fresh sync, as
+can a change to ledger-derived data. Treat the profile as a decision made
+once per database.
 :::

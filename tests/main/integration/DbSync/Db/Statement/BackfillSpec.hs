@@ -44,7 +44,7 @@ import Test.Hspec
 import DbSync.Db.Loader (LoaderStream (..), closeLoaderStream, mkLoaderStream)
 import DbSync.Db.Schema.Address (addressTableDef)
 import DbSync.Db.Schema.CBOR (txCborTableDef)
-import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
+import DbSync.Db.Schema.Core (blockTableDef, poolHashTableDef, slotLeaderTableDef, stakeAddressTableDef, txTableDef)
 import DbSync.Db.Schema.Init (analyzeSql, dropSchema, initSchema)
 import DbSync.Db.Schema.Metadata (txMetadataTableDef)
 import DbSync.Db.Schema.MultiAsset
@@ -53,8 +53,7 @@ import DbSync.Db.Schema.MultiAsset
   , multiAssetTableDef
   )
 import DbSync.Db.Schema.Pool
-  ( poolHashTableDef
-  , poolMetadataRefTableDef
+  ( poolMetadataRefTableDef
   , poolOwnerTableDef
   , poolRelayTableDef
   , poolRetireTableDef
@@ -62,7 +61,6 @@ import DbSync.Db.Schema.Pool
   )
 import DbSync.Db.Schema.StakeDelegation
   ( delegationTableDef
-  , stakeAddressTableDef
   , stakeDeregistrationTableDef
   , stakeRegistrationTableDef
   , withdrawalTableDef
@@ -149,17 +147,6 @@ tables =
   , txCborTableDef
   ]
 
-versions :: [(Text, Int)]
-versions =
-  [ ("core", 1)
-  , ("utxo", 1)
-  , ("metadata", 1)
-  , ("multi_asset", 1)
-  , ("stake_delegation", 1)
-  , ("pool", 1)
-  , ("cbor", 1)
-  ]
-
 extractors :: [ExtractorDef]
 extractors =
   [ coreExtractor
@@ -195,8 +182,8 @@ analyzeTables =
 -- The plan-shape assertions run against this state.
 setUp :: IO ()
 setUp = do
-  dropSchema tables versions testConnStr
-  initSchema tables versions testConnStr
+  dropSchema tables testConnStr
+  initSchema tables testConnStr
 
   withTestIngestStores $ \utxoStore dedupStores -> do
     stRef <- newIORef freshExtractState
@@ -221,7 +208,7 @@ setUp = do
   for_ analyzeTables $ \td -> execTestDb (analyzeSql (tdName td))
 
 tearDown :: IO ()
-tearDown = dropSchema tables [] testConnStr
+tearDown = dropSchema tables testConnStr
 
 -- ---------------------------------------------------------------------------
 -- * Spec

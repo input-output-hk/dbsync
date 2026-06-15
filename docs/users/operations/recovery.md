@@ -111,9 +111,12 @@ A handful of cases require dropping the database and starting over:
 - **Profile change** — adding, removing, or changing the structure
   of an extractor. See
   [profile immutability](../profiles/overview#profile-immutability).
-- **Schema change** in a dbsync upgrade. Migrations aren't
-  implemented yet; until the migration framework lands, any
-  table-shape change means a full re-sync.
+- **Uncovered schema drift.** A routine schema change in an upgrade is
+  migrated in place at boot, so it is *not* a re-sync case. But if the
+  schema has drifted with no migration to cover it, or the database was
+  built by a newer binary than you're running, dbsync refuses to start.
+  Re-syncing with `--resync-from-genesis` is one recovery path; running
+  the matching binary is the other.
 - **Network change** — pointing dbsync at a different network's
   genesis. The fingerprint check catches this and refuses to boot.
 - **Corruption** — physical disk corruption in either the PG data

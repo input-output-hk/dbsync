@@ -154,14 +154,8 @@ import DbSync.Writer (HasWriter (..), Writer (..))
 
 governanceExtractor :: ExtractorDef
 governanceExtractor = ExtractorDef
-  { pdName         = "governance"
-  , pdVersion      = 1
-  , pdDependencies =
-      [ ("core", 1)
-      , ("stake_delegation", 1)
-      , ("pool", 1)
-      ]
-  , pdTables       =
+  { pdName    = "governance"
+  , pdTables  =
       [ drepHashTableDef
       , drepRegistrationTableDef
       , drepDistrTableDef
@@ -179,7 +173,7 @@ governanceExtractor = ExtractorDef
       , treasuryWithdrawalTableDef
       , eventInfoTableDef
       ]
-  , pdProcess      = processGovernance
+  , pdProcess = processGovernance
   }
 
 -- ---------------------------------------------------------------------------

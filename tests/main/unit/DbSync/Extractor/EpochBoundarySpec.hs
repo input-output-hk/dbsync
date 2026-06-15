@@ -61,12 +61,6 @@ spec = do
     it "has name 'epoch_boundary'" $
       pdName epochBoundaryExtractor `shouldBe` "epoch_boundary"
 
-    it "has version 1" $
-      pdVersion epochBoundaryExtractor `shouldBe` 1
-
-    it "depends on 'core' (block_id is an FK target)" $
-      pdDependencies epochBoundaryExtractor `shouldBe` [("core", 1)]
-
     it "registers four tables" $
       length (pdTables epochBoundaryExtractor) `shouldBe` 4
 

@@ -69,7 +69,7 @@ import DbSync.Db.Schema.Governance
   , votingAnchorTableDef
   )
 import DbSync.Db.Schema.MultiAsset (multiAssetTableDef)
-import DbSync.Db.Schema.Pool (PoolHashCols (..), poolHashCols, poolHashTableDef)
+import DbSync.Db.Schema.Core (PoolHashCols (..), poolHashCols, poolHashTableDef)
 import DbSync.Db.Schema.ScriptsDatums
   ( DatumCols (..)
   , RedeemerDataCols (..)
@@ -81,13 +81,14 @@ import DbSync.Db.Schema.ScriptsDatums
   , scriptCols
   , scriptTableDef
   )
-import DbSync.Db.Schema.StakeDelegation
+import DbSync.Db.Schema.Core
   ( StakeAddressCols (..)
   , stakeAddressCols
   , stakeAddressTableDef
   )
 import DbSync.Db.Schema.SyncState (SyncStateRow (..))
 import DbSync.Db.Schema.Types (TableColumn (..), TableDef (..))
+import DbSync.Schema.Version (Fingerprint (..))
 import DbSync.Db.Statement.Worker.Resume
   ( selectBlockHashAtSlotStmt
   , selectCommitteeByProposalStmt
@@ -190,12 +191,14 @@ writeSyncState row = do
 -- 'DbSync.Db.Schema.Init.initSchema' creates the table.
 seedSyncState
   :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
-  => Int   -- ^ @schema_version_applied@
-  -> Bool  -- ^ @ledger_enabled@
+  => Int          -- ^ @schema_version_applied@
+  -> Fingerprint  -- ^ @schema_fingerprint@
+  -> Bool         -- ^ @ledger_enabled@
+  -> [Text]       -- ^ enabled extractor names (@extractors@)
   -> m ()
-seedSyncState schemaVersion ledgerEnabled =
+seedSyncState schemaVersion fingerprint ledgerEnabled extractorNames =
   runCtrlStmt "seedSyncState"
-    (fromIntegral schemaVersion, ledgerEnabled)
+    (fromIntegral schemaVersion, unFingerprint fingerprint, ledgerEnabled, extractorNames)
     seedSyncStateStmt
 
 -- | Record that a ledger snapshot at the given slot has been

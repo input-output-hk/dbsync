@@ -28,6 +28,11 @@ import qualified Hasql.Decoders as D
 import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
+import DbSync.Db.Schema.Core
+  ( PoolHashCols (..)
+  , poolHashCols
+  , poolHashTableDef
+  )
 import DbSync.Db.Schema.Ids
   ( PoolHashId (..)
   , PoolMetadataRefId (..)
@@ -48,13 +53,10 @@ import DbSync.Db.Schema.OffChainPool
   )
 import DbSync.Db.Schema.Pool
   ( DelistedPool
-  , PoolHashCols (..)
   , PoolMetadataRefCols (..)
   , ReservedPoolTicker
   , delistedPoolEncoder
   , delistedPoolTableDef
-  , poolHashCols
-  , poolHashTableDef
   , poolMetadataRefCols
   , poolMetadataRefTableDef
   , reservedPoolTickerEncoder

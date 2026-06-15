@@ -46,7 +46,7 @@ import DbSync.Extractor.UTxO (utxoExtractor)
 import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.Db.Schema.Address (addressTableDef)
 import DbSync.Db.Schema.CBOR (txCborTableDef)
-import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
+import DbSync.Db.Schema.Core (blockTableDef, poolHashTableDef, slotLeaderTableDef, stakeAddressTableDef, txTableDef)
 import DbSync.Db.Schema.Metadata (txMetadataTableDef)
 import DbSync.Db.Schema.MultiAsset
   ( maTxMintTableDef
@@ -54,8 +54,7 @@ import DbSync.Db.Schema.MultiAsset
   , multiAssetTableDef
   )
 import DbSync.Db.Schema.Pool
-  ( poolHashTableDef
-  , poolMetadataRefTableDef
+  ( poolMetadataRefTableDef
   , poolOwnerTableDef
   , poolRelayTableDef
   , poolRetireTableDef
@@ -63,7 +62,6 @@ import DbSync.Db.Schema.Pool
   )
 import DbSync.Db.Schema.StakeDelegation
   ( delegationTableDef
-  , stakeAddressTableDef
   , stakeDeregistrationTableDef
   , stakeRegistrationTableDef
   , withdrawalTableDef
@@ -97,7 +95,7 @@ import DbSync.Test.PipelineEnv (mkTestPipelineEnvWith)
 
 spec :: Spec
 spec =
-  beforeAll_ (setupFollowTipSchema tables extractorVersions) $
+  beforeAll_ (setupFollowTipSchema tables) $
     afterAll_ (teardownSchema tables) $
       before_ (truncateAllTables tableNames) $
         describe "buffered vs immediate Follow path" $ do
@@ -275,17 +273,6 @@ tables =
   , poolRetireTableDef
   , poolRelayTableDef
   , txCborTableDef
-  ]
-
-extractorVersions :: [(Text, Int)]
-extractorVersions =
-  [ ("core", 1)
-  , ("utxo", 1)
-  , ("metadata", 1)
-  , ("multi_asset", 1)
-  , ("stake_delegation", 1)
-  , ("pool", 1)
-  , ("cbor", 1)
   ]
 
 -- | Truncate order: dependent rows first, parent rows last. Hand-ordered

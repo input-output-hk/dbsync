@@ -93,20 +93,14 @@ import DbSync.Writer (HasWriter (..), Writer (..))
 
 stakeDelegationLedgerExtractor :: ExtractorDef
 stakeDelegationLedgerExtractor = ExtractorDef
-  { pdName         = "stake_delegation_ledger"
-  , pdVersion      = 1
-  , pdDependencies =
-      [ ("core", 1)
-      , ("stake_delegation", 1)
-      , ("pool", 1)
-      ]
-  , pdTables =
+  { pdName    = "stake_delegation_ledger"
+  , pdTables  =
       [ rewardTableDef
       , potRewardTableDef
       , epochStakeTableDef
       , epochStakeProgressTableDef
       ]
-  , pdProcess      = processStakeDelegationLedger
+  , pdProcess = processStakeDelegationLedger
   }
 
 -- ---------------------------------------------------------------------------

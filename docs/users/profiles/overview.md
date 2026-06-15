@@ -50,8 +50,9 @@ the key or set it to `false` to disable.
 A profile is **fixed once the database is created**. The set of
 enabled projections, the `ledger.enabled` flag, and the `utxo`
 strategy are baked into the resulting schema. Changing them after
-the fact requires a fresh sync — there's no in-place migration path
-today.
+the fact requires a fresh sync. Schema migrations upgrade an existing
+database between dbsync versions, but they do not turn projections on
+or off — that is a different operation.
 :::
 
 dbsync detects mismatches at boot: if the database was synced with
@@ -63,9 +64,11 @@ The settings that *can* change between runs against the same database
 are limited to the operational knobs: database connection, logging
 level/format, metrics port. These don't affect the schema.
 
-A migration framework that lets you add projections to an existing
-database is planned but not implemented. Treat profile choice as a
-one-time decision per database for now.
+In-place schema migrations cover the database's *shape* as it evolves
+across dbsync versions. They do not back-fill a newly enabled
+projection's tables from genesis, so adding a projection to an existing
+database still means a fresh sync. Treat profile choice as a one-time
+decision per database.
 
 ## Which profile to pick
 

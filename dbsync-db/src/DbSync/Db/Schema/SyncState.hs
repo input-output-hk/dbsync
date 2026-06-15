@@ -46,7 +46,13 @@ import qualified Hasql.Decoders as D
 import qualified Hasql.Encoders as E
 
 import DbSync.Db.Schema.Address (addressTableDef)
-import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
+import DbSync.Db.Schema.Core
+  ( blockTableDef
+  , poolHashTableDef
+  , slotLeaderTableDef
+  , stakeAddressTableDef
+  , txTableDef
+  )
 import DbSync.Db.Schema.EpochBoundary (costModelTableDef)
 import DbSync.Db.Schema.EpochSyncStats (epochSyncStatsTableDef)
 import DbSync.Db.Schema.Governance
@@ -58,15 +64,13 @@ import DbSync.Db.Schema.Governance
   )
 import DbSync.Db.Schema.MultiAsset (multiAssetTableDef)
 import DbSync.Db.Schema.Pool
-  ( poolHashTableDef
-  , poolMetadataRefTableDef
+  ( poolMetadataRefTableDef
   , poolUpdateTableDef
   )
 import DbSync.Db.Schema.ScriptsDatums
   ( redeemerTableDef
   , scriptTableDef
   )
-import DbSync.Db.Schema.StakeDelegation (stakeAddressTableDef)
 import DbSync.Db.Schema.Types
   ( ColumnDef (..)
   , PgType (..)
@@ -150,6 +154,8 @@ syncStateTableDef = TableDef
       , ColumnDef "ledger_enabled"                  PgBoolean     False
       , ColumnDef "sync_complete"                   PgBoolean     False
       , ColumnDef "pending_rollback_slot"           PgBigInt      True
+      , ColumnDef "schema_fingerprint"              PgText        False
+      , ColumnDef "extractors"                      PgTextArray   False
       , ColumnDef "updated_at"                      PgTimestampTz False
       ]
   , tdMode          = TableLogged
@@ -259,6 +265,8 @@ data SyncStateCols = SyncStateCols
   , sscLedgerEnabled               :: !TableColumn
   , sscSyncComplete                :: !TableColumn
   , sscPendingRollbackSlot         :: !TableColumn
+  , sscSchemaFingerprint           :: !TableColumn
+  , sscExtractors                  :: !TableColumn
   , sscUpdatedAt                   :: !TableColumn
   }
 
@@ -295,6 +303,8 @@ syncStateCols =
        , sscLedgerEnabled              = c "ledger_enabled"
        , sscSyncComplete               = c "sync_complete"
        , sscPendingRollbackSlot        = c "pending_rollback_slot"
+       , sscSchemaFingerprint          = c "schema_fingerprint"
+       , sscExtractors                 = c "extractors"
        , sscUpdatedAt                  = c "updated_at"
        }
 
@@ -329,6 +339,8 @@ syncStateColsList =
   , syncStateCols.sscLedgerEnabled
   , syncStateCols.sscSyncComplete
   , syncStateCols.sscPendingRollbackSlot
+  , syncStateCols.sscSchemaFingerprint
+  , syncStateCols.sscExtractors
   , syncStateCols.sscUpdatedAt
   ]
 
@@ -380,10 +392,11 @@ syncStateRowEncoder =
 -- 'DbSync.Db.Statement.SyncState.readSyncStateStmt'.
 --
 -- Consumes every column of the table in 'tdColumns' order so the
--- statement can use a plain @SELECT *@. The leading @id@ and
--- trailing @updated_at@ are discarded — neither belongs in
--- 'SyncStateRow' (the id is fixed at 1 by CHECK; @updated_at@ is
--- managed by the SET clause).
+-- statement can use a plain @SELECT *@. The leading @id@ and the
+-- trailing @schema_fingerprint@ / @extractors@ / @updated_at@ are
+-- discarded — none belongs in 'SyncStateRow' (the id is fixed at 1 by
+-- CHECK; the fingerprint and extractor set are owned by the
+-- schema-version gate; @updated_at@ is managed by the SET clause).
 syncStateRowDecoder :: D.Row SyncStateRow
 syncStateRowDecoder =
        skipCol D.int2                                          -- id
@@ -417,6 +430,8 @@ syncStateRowDecoder =
         <*> D.column (D.nonNullable D.bool)                        -- sync_complete
         <*> (fmap fromIntegral <$> D.column (D.nullable D.int8))   -- pending_rollback_slot
        )
+    <* skipCol D.text                                          -- schema_fingerprint
+    <* skipCol (D.array (D.dimension replicateM (D.element (D.nonNullable D.text))))  -- extractors
     <* skipCol D.timestamptz                                   -- updated_at
   where
     -- Read a column at the current position and discard the value.

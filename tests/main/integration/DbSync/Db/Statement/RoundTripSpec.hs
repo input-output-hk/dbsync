@@ -52,13 +52,19 @@ import DbSync.Db.Schema.CBOR
   )
 import DbSync.Db.Schema.Core
   ( Block (..)
+  , PoolHash (..)
   , SlotLeader (..)
+  , StakeAddress (..)
   , Tx (..)
   , blockTableDef
   , entityBlockDecoder
+  , entityPoolHashDecoder
   , entitySlotLeaderDecoder
+  , entityStakeAddressDecoder
   , entityTxDecoder
+  , poolHashTableDef
   , slotLeaderTableDef
+  , stakeAddressTableDef
   , txTableDef
   )
 import DbSync.Db.Schema.Ids
@@ -91,16 +97,13 @@ import DbSync.Db.Schema.MultiAsset
   , multiAssetTableDef
   )
 import DbSync.Db.Schema.Pool
-  ( PoolHash (..)
-  , PoolMetadataRef (..)
+  ( PoolMetadataRef (..)
   , PoolOwner (..)
   , PoolRelay (..)
   , PoolRetire (..)
   , PoolUpdate (..)
-  , entityPoolHashDecoder
   , entityPoolMetadataRefDecoder
   , entityPoolUpdateDecoder
-  , poolHashTableDef
   , poolMetadataRefTableDef
   , poolOwnerDecoder
   , poolOwnerTableDef
@@ -112,14 +115,11 @@ import DbSync.Db.Schema.Pool
   )
 import DbSync.Db.Schema.StakeDelegation
   ( Delegation (..)
-  , StakeAddress (..)
   , StakeDeregistration (..)
   , StakeRegistration (..)
   , Withdrawal (..)
   , delegationDecoder
   , delegationTableDef
-  , entityStakeAddressDecoder
-  , stakeAddressTableDef
   , stakeDeregistrationDecoder
   , stakeDeregistrationTableDef
   , stakeRegistrationDecoder
@@ -157,7 +157,7 @@ import DbSync.Db.Statement.StakeDelegation (insertDelegationRowStmt)
 import DbSync.Db.Statement.MultiAsset (insertMaTxMintRowStmt)
 import DbSync.Db.Statement.MultiAsset (insertMaTxOutRowStmt)
 import DbSync.Db.Statement.MultiAsset (insertMultiAssetRowStmt)
-import DbSync.Db.Statement.Pool (insertPoolHashRowStmt)
+import DbSync.Db.Statement.Core (insertPoolHashRowStmt)
 import DbSync.Db.Statement.Pool (insertPoolMetadataRefRowStmt)
 import DbSync.Db.Statement.Pool (insertPoolOwnerRowStmt)
 import DbSync.Db.Statement.Pool (insertPoolRelayRowStmt)
@@ -165,7 +165,7 @@ import DbSync.Db.Statement.Pool (insertPoolRetireRowStmt)
 import DbSync.Db.Statement.Pool (insertPoolUpdateRowStmt)
 import DbSync.Db.Statement.UTxO (insertReferenceTxInRowStmt)
 import DbSync.Db.Statement.Core (insertSlotLeaderRowStmt)
-import DbSync.Db.Statement.StakeDelegation (insertStakeAddressRowStmt)
+import DbSync.Db.Statement.Core (insertStakeAddressRowStmt)
 import DbSync.Db.Statement.StakeDelegation (insertStakeDeregistrationRowStmt)
 import DbSync.Db.Statement.StakeDelegation (insertStakeRegistrationRowStmt)
 import DbSync.Db.Statement.Core (insertTxRowStmt)
@@ -207,17 +207,6 @@ allTables =
   , poolOwnerTableDef, poolRetireTableDef, poolRelayTableDef
     -- CBOR
   , txCborTableDef
-  ]
-
-allVersions :: [(Text, Int)]
-allVersions =
-  [ ("core", 1)
-  , ("utxo", 1)
-  , ("metadata", 1)
-  , ("multi_asset", 1)
-  , ("stake_delegation", 1)
-  , ("pool", 1)
-  , ("cbor", 1)
   ]
 
 -- ---------------------------------------------------------------------------
@@ -287,7 +276,7 @@ runRoundTripLeaf conn td decoder ins sample = do
 
 spec :: Spec
 spec =
-  beforeAll_ (setupFollowTipSchema allTables allVersions) $
+  beforeAll_ (setupFollowTipSchema allTables) $
   afterAll_  (teardownSchema allTables) $
   before_    (truncateAllTables (map tdName allTables)) $
     describe "INSERT/SELECT round-trip" $ do

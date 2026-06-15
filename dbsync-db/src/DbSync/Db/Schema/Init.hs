@@ -1,28 +1,28 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Schema initialisation and version tracking.
+-- | Schema initialisation and extractor presence checks.
 --
--- Creates database tables from 'TableDef' definitions using @psql@,
--- records extractor versions in a @schema_version@ table, and provides
--- version checking on startup.
+-- Creates database tables from 'TableDef' definitions using @psql@ and
+-- provides the boot-time presence check that compares the enabled
+-- extractors against the set recorded on the @dbsync_sync_state@ row.
 --
 -- During 'IngestChainHistory', this module is called once at startup
 -- to create the UNLOGGED tables that COPY streams will write into.
 module DbSync.Db.Schema.Init
   ( -- * Schema lifecycle
     initSchema
+  , initSchemaStatements
   , dropSchema
   , prepareSchemaForFollowTip
 
-    -- * Version checking
-  , checkSchemaVersions
-  , SchemaVersionRow (..)
+    -- * Extractor presence
+  , checkExtractorPresence
 
     -- * Schema-state analysis (pure)
   , SchemaState (..)
   , SchemaMismatch (..)
   , SchemaAction (..)
-  , analyzeSchemaState
+  , analyzeExtractorState
   , decideSchemaAction
   , renderSchemaMismatch
 
@@ -45,7 +45,6 @@ module DbSync.Db.Schema.Init
 
 import Cardano.Prelude
 
-import Data.List (lookup)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Text as T
 
@@ -70,43 +69,32 @@ import DbSync.Db.Sql (quoteIdent, quoteLiteral)
 -- * Types
 -- ---------------------------------------------------------------------------
 
--- | A row from the @schema_version@ table.
-data SchemaVersionRow = SchemaVersionRow
-  { svrExtractorName :: !Text
-  , svrVersion       :: !Int
-  }
-  deriving stock (Eq, Show)
-
--- | Observed state of the database schema, relative to the extractor versions
--- the running code expects.
+-- | Observed state of the database schema, relative to the extractors the
+-- running profile enables.
 --
--- Distinguishes the three boot-time scenarios:
+-- Distinguishes the boot-time scenarios:
 --
---   * 'SchemaFresh' — no @schema_version@ table; this is a brand-new database
---     and the boot flow should run 'initSchema'.
---   * 'SchemaMatches' — every expected extractor is present at the expected
---     version; the boot flow should skip 'initSchema' and resume.
---   * 'SchemaMismatched' — at least one extractor disagrees; the boot flow
---     should abort and surface the discrepancies to the operator (unless
---     @--resync-from-genesis@ overrides).
+--   * 'SchemaFresh' — no @dbsync_sync_state@ table; this is a brand-new
+--     database and the boot flow should run 'initSchema'.
+--   * 'SchemaUnseeded' — the table exists but carries no @id = 1@ row; a
+--     crash landed between schema creation and the seed write. The boot
+--     flow skips 'initSchema' and 'decideBoot' aborts with a resync hint.
+--   * 'SchemaMatches' — every enabled extractor is recorded; the boot flow
+--     should skip 'initSchema' and resume.
+--   * 'SchemaMismatched' — at least one enabled extractor is missing from
+--     the database; the boot flow should abort and surface the
+--     discrepancies to the operator (unless @--resync-from-genesis@
+--     overrides).
 data SchemaState
   = SchemaFresh
+  | SchemaUnseeded
   | SchemaMatches
   | SchemaMismatched !(NonEmpty SchemaMismatch)
   deriving stock (Eq, Show)
 
--- | A single point of disagreement between expected (code) and observed (DB)
--- extractor versions.
+-- | An extractor the profile enables but the database was not built with.
 data SchemaMismatch
-  = -- | Code expects this extractor but the DB has no row for it.
-    --   Fields: @(extractorName, expectedVersion)@.
-    MissingExtractor !Text !Int
-  | -- | DB is at a lower version than the code: re-sync is needed.
-    --   Fields: @(extractorName, dbVersion, expectedVersion)@.
-    VersionAhead !Text !Int !Int
-  | -- | DB is at a higher version than the code: downgrade is not supported.
-    --   Fields: @(extractorName, dbVersion, expectedVersion)@.
-    VersionBehind !Text !Int !Int
+  = MissingExtractor !Text
   deriving stock (Eq, Show)
 
 -- | The action the boot flow should take, given the observed schema state and
@@ -117,7 +105,7 @@ data SchemaAction
   | -- | DB is empty; run 'initSchema' to create everything.
     ActionRunInit
   | -- | Operator forced a clean slate; drop everything (including
-    -- @schema_version@) and re-run 'initSchema'.
+    -- @dbsync_sync_state@) and re-run 'initSchema'.
     ActionForceReinit
   | -- | Schema mismatch and no force flag; the operator must intervene.
     ActionAbort !(NonEmpty SchemaMismatch)
@@ -127,70 +115,54 @@ data SchemaAction
 -- * Schema lifecycle
 -- ---------------------------------------------------------------------------
 
--- | Initialise the database schema on a __fresh__ database.
+-- | Initialise the database schema on a __fresh__ database by executing
+-- 'initSchemaStatements' in order.
 --
--- 1. Creates the @schema_version@ table.
--- 2. Creates the @dbsync_sync_state@ singleton metadata table
---    (LOGGED, constrained; see 'DbSync.Db.Schema.SyncState').
--- 3. Creates the @epoch_param_pending@ system table used by the
---    ledger worker → PreparingForVolatileTail deposit-flush handshake
---    (LOGGED so it survives a crash between flush and sync-state
---    advance; truncated at end of 'PreparingForVolatileTail').
--- 4. Creates all data tables from the 'TableDef's via 'generateCreateTable'.
--- 5. Records extractor versions in @schema_version@.
+-- __Not idempotent__: this function expects the database to be empty.
+-- Callers that want to re-run on a populated DB must call 'dropSchema'
+-- first — the boot flow only does so when the operator explicitly passes
+-- @--resync-from-genesis@.
 --
--- __Not idempotent__: this function expects the database to be empty (no
--- @schema_version@ table). Callers that want to re-run on a populated DB
--- must call 'dropSchema' first — the boot flow only does so when the
--- operator explicitly passes @--resync-from-genesis@.
+-- 'DbSync.SyncState.Row.seedSyncState' is __not__ called here; seeding is
+-- the caller's responsibility so that the @ledger_enabled@ flag and the
+-- enabled-extractor set come from runtime configuration.
+initSchema
+  :: [TableDef]
+  -> Text     -- ^ Connection string.
+  -> IO ()
+initSchema tableDefs connStr =
+  for_ (initSchemaStatements tableDefs) (execPsql connStr)
+
+-- | The ordered DDL 'initSchema' runs on a fresh database:
 --
--- 'DbSync.SyncState.Row.seedSyncState' is __not__ called here;
--- seeding is the caller's responsibility so that the @ledger_enabled@ flag
--- comes from runtime configuration.
-initSchema :: [TableDef] -> [(Text, Int)] -> Text -> IO ()
-initSchema tableDefs extractorVersions connStr = do
-  -- Create the version tracking table
-  execPsql connStr createVersionTableSQL
-
-  -- Create the singleton sync-state table (LOGGED, constrained, with
-  -- defaults). Its DDL is generated from its 'TableDef' exactly like
-  -- the extractor tables, so it picks up the same column-ordering
-  -- golden as the rest of the schema.
-  execPsql connStr (generateCreateTable syncStateTableDef)
-
-  -- System table for the ledger worker's per-epoch deposit-param
-  -- snapshot. Always created; stays empty when the ledger feature
-  -- is disabled.
-  execPsql connStr (generateCreateTable epochParamPendingTableDef)
-
-  -- Create all data tables
-  let ddlStatements = map generateCreateTable tableDefs
-      allDDL = T.unlines ddlStatements
-  execPsql connStr allDDL
-
-  -- If the @epoch@ extractor is enabled (i.e. @epoch_finalized@ is
-  -- one of the data tables), emit the @epoch_current@ and @epoch@
-  -- view DDL on top of it.
-  when (any ((== epochFinalizedTableName) . tdName) tableDefs) $
-    execPsql connStr createEpochViewsSql
-
-  -- Record extractor versions
-  forM_ extractorVersions $ \(name, ver) ->
-    execPsql connStr $ insertVersionSQL name ver
+-- 1. the @dbsync_sync_state@ singleton metadata table;
+-- 2. the @epoch_param_pending@ system table (always created; stays empty
+--    when the ledger feature is disabled);
+-- 3. all data tables from the 'TableDef's, as a single batch;
+-- 4. the @epoch_current@ and @epoch@ views, when the @epoch@ extractor is
+--    enabled (i.e. @epoch_finalized@ is among the data tables).
+--
+-- The migration baseline file is generated from this same list, so it
+-- cannot drift from what 'initSchema' creates.
+initSchemaStatements :: [TableDef] -> [Text]
+initSchemaStatements tableDefs =
+  [ generateCreateTable syncStateTableDef
+  , generateCreateTable epochParamPendingTableDef
+  , T.unlines (map generateCreateTable tableDefs)
+  ]
+    <> [createEpochViewsSql | any ((== epochFinalizedTableName) . tdName) tableDefs]
 
 -- | Drop everything owned by this dbsync schema: the data tables, the
--- @dbsync_sync_state@ singleton, and the @schema_version@ table itself.
+-- @dbsync_sync_state@ singleton, and the @epoch_param_pending@ system
+-- table.
 --
 -- This is the \"force re-sync\" / test-hygiene drop. The boot flow only
--- calls it when the operator opts in via @--resync-from-genesis@; matched-version
+-- calls it when the operator opts in via @--resync-from-genesis@; matched
 -- restarts must not invoke it (that would defeat the resume logic).
 --
--- The @extractorVersions@ argument is currently unused but kept for symmetry
--- with 'initSchema' and to make future per-extractor cleanup additive.
---
 -- Safe to call on an empty database (every statement uses @IF EXISTS@).
-dropSchema :: [TableDef] -> [(Text, Int)] -> Text -> IO ()
-dropSchema tableDefs _extractorVersions connStr = do
+dropSchema :: [TableDef] -> Text -> IO ()
+dropSchema tableDefs connStr = do
   -- Drop epoch views first; they reference @epoch_finalized@.
   when (any ((== epochFinalizedTableName) . tdName) tableDefs) $
     execPsql connStr dropEpochViewsSql
@@ -206,12 +178,6 @@ dropSchema tableDefs _extractorVersions connStr = do
   -- Drop the system temp table used by the ledger-worker deposit flush.
   execPsql connStr $
     "DROP TABLE IF EXISTS " <> quoteIdent epochParamPendingTableName <> " CASCADE;"
-
-  -- Drop the schema_version table itself (not just its rows). Dropping the
-  -- table is the only way to recover from a stale shape (e.g. left over from
-  -- an upstream cardano-db-sync install with different columns); any caller
-  -- that wants to preserve schema_version must not call dropSchema.
-  execPsql connStr "DROP TABLE IF EXISTS \"schema_version\" CASCADE;"
 
 -- | Flip UNLOGGED extractor tables to LOGGED and attach an
 -- @<table>_id_seq@. Idempotent. Precondition for hasql INSERTs.
@@ -283,73 +249,61 @@ vacuumSql tableName =
   "VACUUM " <> quoteIdent tableName
 
 -- ---------------------------------------------------------------------------
--- * Version checking
+-- * Extractor presence
 -- ---------------------------------------------------------------------------
 
 -- | Inspect the database and classify the schema state against the
--- versions expected by the running code.
+-- extractors the running profile enables.
 --
--- Thin IO wrapper over 'analyzeSchemaState': queries @pg_tables@ to detect
--- whether the @schema_version@ table exists, reads its rows if so, and
--- delegates the comparison to the pure analyser.
-checkSchemaVersions :: [(Text, Int)] -> Text -> IO SchemaState
-checkSchemaVersions expectedVersions connStr = do
-  tableExists <- queryPsql connStr
-    "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename = 'schema_version';"
+-- Three-way probe over the @dbsync_sync_state@ singleton:
+--
+--   * table absent → 'SchemaFresh' (brand-new DB; run 'initSchema').
+--   * table present but unseeded (no @id = 1@ row) → 'SchemaUnseeded':
+--     a crash landed between schema creation and the seed write.
+--   * table present and seeded → compare the recorded @extractors@
+--     against @expectedNames@ via 'analyzeExtractorState'.
+checkExtractorPresence :: [Text] -> Text -> IO SchemaState
+checkExtractorPresence expectedNames connStr = do
+  tableExists <- queryPsql connStr $
+    "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename = "
+      <> quoteLiteral syncStateTableName <> ";"
   if T.strip tableExists /= "1"
-    then pure (analyzeSchemaState expectedVersions Nothing)
+    then pure SchemaFresh
     else do
-      dbVersionsRaw <- queryPsql connStr
-        "SELECT extractor_name, version FROM schema_version ORDER BY extractor_name;"
-      pure (analyzeSchemaState expectedVersions (Just (parseVersionRows dbVersionsRaw)))
-
-  where
-    parseVersionRows :: Text -> [(Text, Int)]
-    parseVersionRows raw =
-      let ls = filter (not . T.null) $ T.lines (T.strip raw)
-      in mapMaybe parseLine ls
-
-    parseLine :: Text -> Maybe (Text, Int)
-    parseLine line =
-      case T.splitOn "|" line of
-        [name, verStr] ->
-          case readMaybe (T.unpack (T.strip verStr)) of
-            Just v  -> Just (T.strip name, v)
-            Nothing -> Nothing
-        _ -> Nothing
+      rowExists <- queryPsql connStr $
+        "SELECT count(*) FROM " <> quoteIdent syncStateTableName <> " WHERE id = 1;"
+      if T.strip rowExists /= "1"
+        then pure SchemaUnseeded
+        else do
+          namesRaw <- queryPsql connStr $
+            "SELECT unnest(extractors) FROM " <> quoteIdent syncStateTableName
+              <> " WHERE id = 1;"
+          let names = filter (not . T.null) (map T.strip (T.lines (T.strip namesRaw)))
+          pure (analyzeExtractorState expectedNames (Just names))
 
 -- ---------------------------------------------------------------------------
 -- * Schema-state analysis (pure)
 -- ---------------------------------------------------------------------------
 
 -- | Pure analysis of schema state given the extractors the code expects and
--- the rows observed in the database.
+-- the names observed in the database.
 --
--- @Nothing@ for the second argument means the @schema_version@ table itself
--- does not exist (a fresh DB). @Just rows@ means the table is present and
--- @rows@ are the @(name, version)@ pairs read from it.
+-- @Nothing@ for the second argument means no enabled-extractor set was
+-- recorded (a fresh DB). @Just names@ means a seeded @dbsync_sync_state@
+-- row was found and @names@ are its recorded extractors.
 --
--- Extra extractors in @rows@ that are not in the expected list are
+-- Extra extractors in @names@ that are not in the expected list are
 -- silently ignored — operators are allowed to remove an extractor from
 -- their profile without re-syncing the rest.
-analyzeSchemaState
-  :: [(Text, Int)]            -- ^ Expected: @(extractorName, expectedVersion)@
-  -> Maybe [(Text, Int)]      -- ^ Observed DB rows; 'Nothing' = table missing
+analyzeExtractorState
+  :: [Text]         -- ^ Extractor names the profile enables
+  -> Maybe [Text]   -- ^ Recorded extractor set; 'Nothing' = none recorded
   -> SchemaState
-analyzeSchemaState _ Nothing = SchemaFresh
-analyzeSchemaState expected (Just dbRows) =
-  case mapMaybe (compareOne dbRows) expected of
+analyzeExtractorState _ Nothing = SchemaFresh
+analyzeExtractorState expected (Just present) =
+  case filter (`notElem` present) expected of
     []       -> SchemaMatches
-    (m : ms) -> SchemaMismatched (m NE.:| ms)
-  where
-    compareOne :: [(Text, Int)] -> (Text, Int) -> Maybe SchemaMismatch
-    compareOne dbVersions (name, expectedVer) =
-      case lookup name dbVersions of
-        Nothing -> Just (MissingExtractor name expectedVer)
-        Just dbVer
-          | dbVer == expectedVer -> Nothing
-          | dbVer <  expectedVer -> Just (VersionAhead  name dbVer expectedVer)
-          | otherwise            -> Just (VersionBehind name dbVer expectedVer)
+    (m : ms) -> SchemaMismatched (MissingExtractor m NE.:| map MissingExtractor ms)
 
 -- | Decide what the boot flow should do, given the observed schema state and
 -- the operator-supplied @--resync-from-genesis@ flag.
@@ -359,6 +313,7 @@ analyzeSchemaState expected (Just dbRows) =
 decideSchemaAction :: Bool -> SchemaState -> SchemaAction
 decideSchemaAction True  _                       = ActionForceReinit
 decideSchemaAction False SchemaMatches           = ActionSkipInit
+decideSchemaAction False SchemaUnseeded          = ActionSkipInit
 decideSchemaAction False SchemaFresh             = ActionRunInit
 decideSchemaAction False (SchemaMismatched errs) = ActionAbort errs
 
@@ -366,37 +321,9 @@ decideSchemaAction False (SchemaMismatched errs) = ActionAbort errs
 -- logging. Stable wording so operators can grep for it.
 renderSchemaMismatch :: SchemaMismatch -> Text
 renderSchemaMismatch = \case
-  MissingExtractor name ver ->
-    "Extractor '" <> name <> "' v" <> show ver
-      <> " is expected but not present in the database."
-  VersionAhead name dbVer codeVer ->
-    "Extractor '" <> name <> "': database has v" <> show dbVer
-      <> ", code expects v" <> show codeVer
-      <> ". Re-sync required."
-  VersionBehind name dbVer codeVer ->
-    "Extractor '" <> name <> "': database has v" <> show dbVer
-      <> " but code only supports v" <> show codeVer
-      <> ". Downgrade not supported."
-
--- ---------------------------------------------------------------------------
--- * SQL templates
--- ---------------------------------------------------------------------------
-
--- | DDL for the @schema_version@ table.
-createVersionTableSQL :: Text
-createVersionTableSQL = T.unlines
-  [ "CREATE TABLE IF NOT EXISTS \"schema_version\" ("
-  , "  \"extractor_name\" TEXT NOT NULL,"
-  , "  \"version\" INTEGER NOT NULL,"
-  , "  \"created_at\" TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT now()"
-  , ");"
-  ]
-
--- | INSERT a version row.
-insertVersionSQL :: Text -> Int -> Text
-insertVersionSQL name ver =
-  "INSERT INTO schema_version (extractor_name, version) VALUES ("
-  <> quoteLiteral name <> ", " <> show ver <> ");"
+  MissingExtractor name ->
+    "Extractor '" <> name
+      <> "' is enabled in the profile but missing from the database."
 
 -- ---------------------------------------------------------------------------
 -- * psql helpers

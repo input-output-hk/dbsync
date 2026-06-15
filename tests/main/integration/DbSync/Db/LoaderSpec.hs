@@ -30,7 +30,7 @@ import DbSync.Parser.Types
 import DbSync.Db.Loader (LoaderStream (..), closeLoaderStream, mkLoaderStream)
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
 import DbSync.Db.Schema.Init (dropSchema, initSchema)
-import DbSync.Db.Schema.Pool (poolHashTableDef)
+import DbSync.Db.Schema.Core (poolHashTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Extractor (freshExtractState)
 import DbSync.Extractor.Core (coreExtractor)
@@ -50,9 +50,6 @@ import qualified DbSync.Phase.Ingest.Writer as IngestWriter
 -- causes the loader stream to panic on the first non-Byron block.
 coreTables :: [TableDef]
 coreTables = [blockTableDef, txTableDef, slotLeaderTableDef, poolHashTableDef]
-
-coreVersions :: [(Text, Int)]
-coreVersions = [("core", 1)]
 
 coreTableNames :: [Text]
 coreTableNames = map tdName coreTables
@@ -197,11 +194,11 @@ runPipelineToDb blocks = withTestIngestStores $ \utxoStore dedupStores -> do
 
 setupTestSchema :: IO ()
 setupTestSchema = do
-  dropSchema coreTables coreVersions testConnStr
-  initSchema coreTables coreVersions testConnStr
+  dropSchema coreTables testConnStr
+  initSchema coreTables testConnStr
 
 teardownTestSchema :: IO ()
-teardownTestSchema = dropSchema coreTables coreVersions testConnStr
+teardownTestSchema = dropSchema coreTables testConnStr
 
 -- ---------------------------------------------------------------------------
 -- Test fixtures (same as CoreSpec/PipelineSpec)

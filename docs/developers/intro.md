@@ -73,4 +73,6 @@ transitions.
 - **[Schema layer](schema-layer)** — DDL generation, COPY encoders, hasql
   statements.
 - **[Workers](workers)** — work that runs alongside the main pipeline.
+- **[Comparing databases](db-compare)** — verify this dbsync stores the same
+  data as the original cardano-db-sync.
 - **[Contributing](contributing)** — workflow and code conventions.

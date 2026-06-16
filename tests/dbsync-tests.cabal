@@ -239,3 +239,44 @@ test-suite dbsync-test
     , text
     , time
     , wide-word
+
+-- ---------------------------------------------------------------------------
+-- Database comparison library
+-- ---------------------------------------------------------------------------
+library dbsync-compare-lib
+  import:          warnings, defaults
+  hs-source-dirs:  compare-lib
+  exposed-modules:
+    DbSync.Compare.Connect
+    DbSync.Compare.FkGraph
+    DbSync.Compare.Introspect
+    DbSync.Compare.Report
+    DbSync.Compare.RowCompare
+    DbSync.Compare.RowCounts
+    DbSync.Compare.Schema
+    DbSync.Compare.SchemaCoverage
+    DbSync.Compare.SpotCheck
+  build-depends:
+      base
+    , cardano-prelude
+    , containers
+    , dbsync
+    , dbsync-db
+    , hasql
+    , random
+    , text
+
+-- ---------------------------------------------------------------------------
+-- Database comparison CLI
+-- ---------------------------------------------------------------------------
+executable dbsync-compare
+  import:         warnings, defaults
+  hs-source-dirs: compare
+  main-is:        Main.hs
+  ghc-options:    -threaded
+  other-modules:  DbSync.Compare.Options
+  build-depends:
+      cardano-prelude
+    , dbsync-tests:dbsync-compare-lib
+    , optparse-applicative
+    , text

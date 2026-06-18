@@ -53,6 +53,7 @@ import qualified DbSync.Worker.Ledger.TypesSpec as LedgerTypesSpec
 import qualified DbSync.Worker.Ledger.WorkerSpec as LedgerWorkerSpec
 import qualified DbSync.App.BootSpec as AppBootSpec
 import qualified DbSync.Phase.CurrentSpec as PhaseCurrentSpec
+import qualified DbSync.Phase.Following.IdCountsSpec as PhaseFollowIdCountsSpec
 import qualified DbSync.Schema.AdaPotsSpec as SchemaAdaPotsSpec
 import qualified DbSync.Schema.AddressSpec as SchemaAddressSpec
 import qualified DbSync.Schema.ColumnsConsistencySpec as SchemaColumnsConsistencySpec
@@ -173,6 +174,7 @@ main = hspec $ do
     AppBootSpec.spec
     PhaseCurrentSpec.spec
     PhaseFollowFlipPredicateSpec.spec
+    PhaseFollowIdCountsSpec.spec
     SchemaAdaPotsSpec.spec
     SchemaAddressSpec.spec
     SchemaColumnsConsistencySpec.spec

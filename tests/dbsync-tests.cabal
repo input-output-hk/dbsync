@@ -172,6 +172,7 @@ test-suite dbsync-test
     DbSync.Phase.CurrentSpec
     DbSync.Phase.Following.BufferedDiffSpec
     DbSync.Phase.Following.FlipPredicateSpec
+    DbSync.Phase.Following.IdCountsSpec
     DbSync.Phase.Following.RollbackSpec
     DbSync.Phase.Following.RunSpec
     DbSync.Phase.FollowAtTipSpec
@@ -247,9 +248,11 @@ library dbsync-compare-lib
   import:          warnings, defaults
   hs-source-dirs:  compare-lib
   exposed-modules:
+    DbSync.Compare.Check
     DbSync.Compare.Connect
     DbSync.Compare.FkGraph
     DbSync.Compare.Introspect
+    DbSync.Compare.Normalize
     DbSync.Compare.Report
     DbSync.Compare.RowCompare
     DbSync.Compare.RowCounts
@@ -274,7 +277,8 @@ executable dbsync-compare
   hs-source-dirs: compare
   main-is:        Main.hs
   ghc-options:    -threaded
-  other-modules:  DbSync.Compare.Options
+  other-modules:
+    DbSync.Compare.Options
   build-depends:
       cardano-prelude
     , dbsync-tests:dbsync-compare-lib

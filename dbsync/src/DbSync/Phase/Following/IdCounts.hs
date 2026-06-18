@@ -85,10 +85,16 @@ tally !c tx = c
   }
   where
     !valid      = txValidContract tx
-    !nOuts      = if valid then length (txOutputs tx) else 0
-    !nCollOuts  = if valid then 0 else case txCollateralOutput tx of
-                                         Nothing -> 0
-                                         Just _  -> 1
+    -- The parser writes every tx's surviving output into 'txOutputs'
+    -- (a failed tx's collateral-return is folded in there), so a
+    -- tx_out id is assigned per entry regardless of validity.
+    !nOuts      = length (txOutputs tx)
+    -- 'txCollateralOutput' is only 'Just' for a valid tx with an
+    -- explicit collateral return; the extractor's collateral-out pass
+    -- is gated on 'valid' to match.
+    !nCollOuts  = if valid
+                    then maybe 0 (const 1) (txCollateralOutput tx)
+                    else 0
     !certCounts = foldl' tallyCert emptyCertCounts (txCertificates tx)
     !nRedeemers = length (txRedeemers tx :: [GenericTxRedeemer])
     !propCounts = foldl' tallyProposal emptyProposalCounts (txProposals tx)

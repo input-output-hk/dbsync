@@ -43,6 +43,8 @@ import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
 import DbSync.Db.Schema.Init (dropSchema, initSchema)
 import DbSync.Schema.Version (Fingerprint (..))
 import DbSync.Db.Schema.Core (poolHashTableDef)
+import DbSync.Db.Schema.Metadata (txMetadataTableDef)
+import DbSync.Db.Schema.StakeDelegation (epochStakeTableDef)
 import DbSync.Db.Schema.SyncState (syncStateTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Phase.Ingest.DedupStore (DedupStores (..), lookupOrInsert, sizeApprox)
@@ -69,6 +71,8 @@ coreTables =
   , txTableDef
   , slotLeaderTableDef
   , poolHashTableDef
+  , txMetadataTableDef
+  , epochStakeTableDef
   ]
 
 -- | Placeholder schema fingerprint for seeding the sync-state row in tests.
@@ -130,9 +134,14 @@ safeCounter = 1000
 -- | Push synthetic rows for blocks @[1..n]@. Block @i@ has slot
 -- @i * 100@ and @block_no = i@. Tx @i@ points to block @i@.
 -- slot_leader @i@ has hash @0xab @ replicated.
+--
+-- Blocks are grouped three to an epoch starting at epoch 5 (blocks
+-- 1..3 -> epoch 5, 4..6 -> epoch 6, …) so the slot→epoch mapping the
+-- epoch-anchored cleanup relies on is exercised.
 populateChain :: LoaderStream -> Int64 -> IO ()
 populateChain bs n = do
   forM_ [1 .. n] $ \i -> do
+    let epochNo = fromIntegral ((i - 1) `div` 3) + 5 :: Word64
     lsWriteRow bs (tdName slotLeaderTableDef) $
       buildCopyRow
         [ Just $ bInt64 i
@@ -144,7 +153,7 @@ populateChain bs n = do
       buildCopyRow
         [ Just $ bInt64 i                                            -- id
         , Just $ bHex (BS.replicate 32 (fromIntegral (0xb0 + i)))    -- hash
-        , Just $ bWord64 5                                           -- epoch_no
+        , Just $ bWord64 epochNo                                     -- epoch_no
         , Just $ bWord64 (fromIntegral i * 100)                      -- slot_no
         , Just $ bWord64 0                                           -- epoch_slot_no
         , Just $ bWord64 (fromIntegral i)                            -- block_no
@@ -188,6 +197,35 @@ populatePoolHash bs n =
         [ Just $ bInt64 i
         , Just $ bHex  (BS.replicate 28 (fromIntegral (0xd0 + i)))
         , Just $ bText ("pool-" <> T.pack (show i))
+        ]
+
+-- | Push one @tx_metadata@ row per tx @[1..n]@. The table carries no
+-- @slot_no@ or @block_id@ and is an identity leaf, so its only resume
+-- anchor is the @tx_id@ FK joined back to the block's slot.
+populateTxMetadata :: LoaderStream -> Int64 -> IO ()
+populateTxMetadata bs n =
+  forM_ [1 .. n] $ \i ->
+    lsWriteRow bs (tdName txMetadataTableDef) $
+      buildCopyRow
+        [ Just $ bWord64 674                     -- key
+        , Nothing                                -- json (nullable)
+        , Just $ bHex (BS.replicate 4 0xaa)      -- bytes
+        , Just $ bInt64 i                        -- tx_id
+        ]
+
+-- | Push @epoch_stake@ rows for each @(epoch, addrId)@ pair. The
+-- table is an identity leaf with no @slot_no@ / @block_id@ / tx FK,
+-- so its only resume anchor is @epoch_no@ mapped back to the cutoff
+-- slot through the block table.
+populateEpochStake :: LoaderStream -> [(Word64, Int64)] -> IO ()
+populateEpochStake bs rows =
+  forM_ rows $ \(epochNo, addrId) ->
+    lsWriteRow bs (tdName epochStakeTableDef) $
+      buildCopyRow
+        [ Just $ bInt64 addrId     -- addr_id
+        , Just $ bInt64 1          -- pool_id
+        , Just $ bWord64 1_000_000 -- amount
+        , Just $ bWord64 epochNo   -- epoch_no
         ]
 
 -- ---------------------------------------------------------------------------
@@ -276,6 +314,27 @@ ingestResumeSpec = describe "IngestResume" $ do
         remainingTx <- T.strip <$> queryTestDb
           ("SELECT id FROM " <> tdName txTableDef <> " ORDER BY id;")
         remainingTx `shouldBe` "1\n2"
+
+    it "deletes tx_metadata rows whose tx crossed the boundary (FK pass)" $ do
+      -- @tx_metadata@ has no @slot_no@ or @block_id@ and is an identity
+      -- leaf, so neither the slot pass nor the counter pass reaches it.
+      -- The tx-FK pass joins through tx to the block's slot.
+      withControlConnection $ \ctrl -> do
+        runAppM ctrl (seedSyncState 1 testFp False [])
+        bs <- mkLoaderStream testConnBs coreTables
+        populateChain bs 5  -- tx i -> block i at slot i*100
+        populateTxMetadata bs 5
+        lsCommit bs
+        closeLoaderStream bs
+
+        let row = rowAtBoundary 300 6
+        runAppM ctrl (writeSyncState row)
+        _ <- runAppM (TracerWithControl mkNullTracer ctrl) (deleteRowsPastSlot IngestResume coreTables row)
+
+        countRows txMetadataTableDef >>= (`shouldBe` 3)
+        remaining <- T.strip <$> queryTestDb
+          ("SELECT tx_id FROM " <> tdName txMetadataTableDef <> " ORDER BY tx_id;")
+        remaining `shouldBe` "1\n2\n3"
 
     it "deletes dedup rows whose id >= the recorded counter" $ do
       withControlConnection $ \ctrl -> do
@@ -414,6 +473,50 @@ followRestartSpec = describe "FollowRestart" $ do
         countRows blockTableDef      >>= (`shouldBe` 3)
         countRows txTableDef         >>= (`shouldBe` 3)
         countRows slotLeaderTableDef >>= (`shouldBe` 5)
+
+    it "still trims tx_metadata via the FK pass" $ do
+      -- The tx-FK pass runs in both modes; only the counter pass is
+      -- IngestResume-only.
+      withControlConnection $ \ctrl -> do
+        runAppM ctrl (seedSyncState 1 testFp False [])
+        bs <- mkLoaderStream testConnBs coreTables
+        populateChain bs 5
+        populateTxMetadata bs 5
+        lsCommit bs
+        closeLoaderStream bs
+
+        let row = rowAtBoundary 300 1
+        runAppM ctrl (writeSyncState row)
+        _ <- runAppM (TracerWithControl mkNullTracer ctrl) (deleteRowsPastSlot FollowRestart coreTables row)
+
+        countRows txMetadataTableDef >>= (`shouldBe` 3)
+
+    it "trims epoch_stake rows for the cutoff epoch and beyond" $ do
+      -- @epoch_stake@ is an identity leaf with no @slot_no@,
+      -- @block_id@ or tx FK, so neither the slot/block passes nor the
+      -- FK pass reaches it. Its rows are written per-block in slices
+      -- across an epoch, so a resume into a partially-written epoch
+      -- re-emits the same (addr_id, pool_id, epoch_no) and collides on
+      -- @epoch_stake_unique_1_idx@. Cleanup must prune every row whose
+      -- epoch is at or beyond the cutoff slot's epoch.
+      withControlConnection $ \ctrl -> do
+        runAppM ctrl (seedSyncState 1 testFp False [])
+        bs <- mkLoaderStream testConnBs coreTables
+        populateChain bs 6  -- blocks 1..3 -> epoch 5, 4..6 -> epoch 6
+        -- Epoch 5 (in progress at the cutoff) and epoch 6 each have a
+        -- committed stake row; both must go because replay re-emits
+        -- them from the first normal block onward.
+        populateEpochStake bs [(5, 100), (6, 101)]
+        lsCommit bs
+        closeLoaderStream bs
+
+        -- Cutoff mid-epoch-5 (block 2 at slot 200 is the last
+        -- committed block; block 3 at slot 300 is still in epoch 5).
+        let row = rowAtBoundary 200 1
+        runAppM ctrl (writeSyncState row)
+        _ <- runAppM (TracerWithControl mkNullTracer ctrl) (deleteRowsPastSlot FollowRestart coreTables row)
+
+        countRows epochStakeTableDef >>= (`shouldBe` 0)
 
     it "is a no-op when last_committed_slot is Nothing" $ do
       withControlConnection $ \ctrl -> do

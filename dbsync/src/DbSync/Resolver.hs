@@ -115,6 +115,11 @@ data IdResolver m = IdResolver
     -- Returns @(PoolHashId, isNew)@.
   , resolvePoolHash :: !(ByteString -> PoolHash -> m (PoolHashId, Bool))
 
+    -- | Look up an existing pool hash by its key hash without
+    -- inserting. 'Nothing' means the key was never registered as a
+    -- pool, so a slot leader bearing it is a genesis-key delegate.
+  , resolvePoolHashQuery :: !(ByteString -> m (Maybe PoolHashId))
+
     -- | Assign the next pool_update ID.
   , assignPoolUpdateId :: !(m PoolUpdateId)
 

@@ -8,15 +8,22 @@
 --   * 'IngestResume' — full cleanup. The COPY writer commits at
 --     epoch boundaries and the @*_id_counter@ snapshot in
 --     'SyncStateRow' lags by one epoch, so rows can sit past both
---     'ssrLastCommittedSlot' and the recorded counters. Tables
---     without @slot_no@ or @block_id@ rely on the counter pass for
---     pruning; tables with one of those columns also get the
---     counter pass as a belt-and-braces guard, which is a no-op
---     once the slot pass has finished.
+--     'ssrLastCommittedSlot' and the recorded counters. Each table
+--     is pruned by whichever chain anchor it carries: @slot_no@,
+--     @block_id@, or a FK to @tx@ / @tx_out@ (joined back to
+--     @block.slot_no@). Identity-leaf fact tables — @tx_metadata@,
+--     the @*_tx_in@ family, @ma_tx_out@, etc. — have no id counter,
+--     so the FK pass is the only thing that reaches them.
+--     Counter-tracked tables also get the counter pass as a
+--     belt-and-braces guard, which is a no-op once the slot pass
+--     has finished.
 --
---   * 'FollowRestart' — defensive only. Follow's per-block
---     transaction is atomic, so no orphan rows past the recorded
---     slot are possible. Counter columns are stale on this path
+--   * 'FollowRestart' — Follow's per-block transaction is atomic, so
+--     for slot/block/FK-anchored tables no orphan rows past the
+--     recorded slot are possible. The exception is the ledger-derived
+--     epoch-keyed tables (@epoch_stake@, @reward@, …): they are
+--     re-emitted from scratch for each replayed epoch, so the epoch
+--     pass runs here too. Counter columns are stale on this path
 --     because 'writeSyncStateSlotStmt' deliberately doesn't touch
 --     them — running the counter DELETE would wipe legitimate rows
 --     that fact-table FKs reference.
@@ -51,11 +58,14 @@ import DbSync.SyncState.Row
   , SyncStateRow (..)
   )
 import DbSync.Db.Schema.SyncState (idCounterByTable)
-import DbSync.Db.Schema.Types (ColumnDef (..), TableDef (..))
+import DbSync.Db.Schema.Types (ColumnDef (..), ForeignKey (..), TableDef (..))
 import DbSync.Db.Statement.Worker.Resume
   ( deleteByBlockSlotStmt
+  , deleteByEpochSlotStmt
   , deleteByIdCounterStmt
   , deleteBySlotStmt
+  , deleteByTxFkSlotStmt
+  , deleteByTxOutFkSlotStmt
   )
 import DbSync.Error (throwDb)
 import DbSync.Trace (HasTracer (..))
@@ -96,27 +106,42 @@ deleteRowsPastSlot mode tableDefs row =
                                     , csSlotBlock sh == Just HasBlockId ]
           bySlot      = [ td        | (td, sh) <- classified
                                     , csSlotBlock sh == Just HasSlotNo  ]
+          byTxFk      = [ (td, col) | (td, sh) <- classified
+                                    , Just (HasTxFk col) <- [csSlotBlock sh] ]
+          byTxOutFk   = [ (td, col) | (td, sh) <- classified
+                                    , Just (HasTxOutFk col) <- [csSlotBlock sh] ]
+          byEpoch     = [ (td, col) | (td, sh) <- classified
+                                    , Just (HasEpochNo col) <- [csSlotBlock sh] ]
           byIdCounter = [ (td, ctr) | (td, sh) <- classified
                                     , Just ctr <- [csIdCounter sh] ]
 
       emit tracer $ "starting (cutoff slot > " <> show slotNo <> ")"
       startWall <- liftIO getCurrentTime
 
+      -- FK-anchored tables join back to @block.slot_no@ through @tx@
+      -- (and @tx_out@), so they must run before @block@, @tx@, and
+      -- @tx_out@ are trimmed by the counter pass below.
+      acc1 <- foldM (runByFk tracer slotNo deleteByTxFkSlotStmt) 0 byTxFk
+      acc2 <- foldM (runByFk tracer slotNo deleteByTxOutFkSlotStmt) acc1 byTxOutFk
       -- By-block-id tables join through @block.slot_no@, so they
       -- must run before @block@ itself is trimmed.
-      acc1 <- foldM (runByParam tracer slotNo deleteByBlockSlotStmt) 0 byBlockId
-      acc2 <- foldM (runByParam tracer slotNo deleteBySlotStmt) acc1 bySlot
-      acc3 <- case mode of
-        IngestResume  -> foldM (runByCounter tracer row) acc2 byIdCounter
-        FollowRestart -> pure acc2
+      acc3 <- foldM (runByParam tracer slotNo deleteByBlockSlotStmt) acc2 byBlockId
+      acc4 <- foldM (runByParam tracer slotNo deleteBySlotStmt) acc3 bySlot
+      -- Ledger-derived epoch-keyed tables carry no slot/block/tx
+      -- anchor and Follow re-emits each epoch from scratch on replay,
+      -- so they must be trimmed on both boot paths.
+      acc5 <- foldM (runByFk tracer slotNo deleteByEpochSlotStmt) acc4 byEpoch
+      acc6 <- case mode of
+        IngestResume  -> foldM (runByCounter tracer row) acc5 byIdCounter
+        FollowRestart -> pure acc5
 
       endWall <- liftIO getCurrentTime
       let totalDur = fmtDuration (realToFrac (diffUTCTime endWall startWall))
       emit tracer $
-        if acc3 == 0
+        if acc6 == 0
           then "complete in " <> totalDur <> " (no rows to clean)"
-          else "complete in " <> totalDur <> " (" <> fmtCount acc3 <> " rows)"
-      pure acc3
+          else "complete in " <> totalDur <> " (" <> fmtCount acc6 <> " rows)"
+      pure acc6
 
 -- ---------------------------------------------------------------------------
 -- Per-table step
@@ -133,6 +158,19 @@ runByParam
 runByParam tracer slotNo mkStmt acc td =
   stepTable tracer td
     (runDelete tracer slotNo (mkStmt (tdName td)) (tdName td))
+    acc
+
+runByFk
+  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  => AppTracer
+  -> Word64
+  -> (Text -> Text -> Stmt.Statement Word64 Int64)
+  -> Int64
+  -> (TableDef, Text)
+  -> m Int64
+runByFk tracer slotNo mkStmt acc (td, fkCol) =
+  stepTable tracer td
+    (runDelete tracer slotNo (mkStmt (tdName td) fkCol) (tdName td))
     acc
 
 runByCounter
@@ -194,10 +232,17 @@ data CleanupShape = CleanupShape
   , csIdCounter :: !(Maybe (SyncStateRow -> Int64))
   }
 
--- | Whether a table carries its own @slot_no@ or only references it
--- via @block_id@. Mutually exclusive — @block_id@ tables get the
--- inner-join variant of the cleanup.
-data SlotBlockShape = HasSlotNo | HasBlockId
+-- | How a table reaches the cutoff slot. Mutually exclusive, checked
+-- in order: a direct @slot_no@, a @block_id@ FK, a FK to @tx@ /
+-- @tx_out@ joined back to @block@, then an epoch column mapped to the
+-- cutoff slot's epoch via @block@. The 'Text' on the FK and epoch
+-- variants is the table's FK / epoch column.
+data SlotBlockShape
+  = HasSlotNo
+  | HasBlockId
+  | HasTxFk !Text
+  | HasTxOutFk !Text
+  | HasEpochNo !Text
   deriving stock (Eq, Show)
 
 classify :: TableDef -> CleanupShape
@@ -208,10 +253,16 @@ classify td = CleanupShape
   where
     columnNames = map cdName (tdColumns td)
     hasColumn c = c `elem` columnNames
+    fkTo parent =
+      fkColumn <$> find ((== parent) . fkParentTable) (tdForeignKeys td)
     slotBlock
-      | hasColumn "slot_no"  = Just HasSlotNo
-      | hasColumn "block_id" = Just HasBlockId
-      | otherwise            = Nothing
+      | hasColumn "slot_no"        = Just HasSlotNo
+      | hasColumn "block_id"       = Just HasBlockId
+      | Just c <- fkTo "tx"        = Just (HasTxFk c)
+      | Just c <- fkTo "tx_out"    = Just (HasTxOutFk c)
+      | hasColumn "epoch_no"       = Just (HasEpochNo "epoch_no")
+      | hasColumn "spendable_epoch" = Just (HasEpochNo "spendable_epoch")
+      | otherwise                  = Nothing
 
 -- ---------------------------------------------------------------------------
 -- Internal IO

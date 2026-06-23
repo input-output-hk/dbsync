@@ -14,9 +14,6 @@ module DbSync.Util
   , nonceToBytes
   , unitIntervalToDouble
 
-    -- * Reward address
-  , rewardAddrCred
-
     -- * JSON / PostgreSQL interop
   , jsonValueContainsNul
   ) where
@@ -30,7 +27,6 @@ import Cardano.Ledger.Coin (Coin (..))
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Key as Aeson.Key
 import qualified Data.Aeson.KeyMap as KeyMap
-import qualified Data.ByteString as BS
 import qualified Data.Strict.Maybe as Strict
 import qualified Data.Text as Text
 
@@ -79,19 +75,6 @@ nonceToBytes = \case
 -- store it as a text-encoded 'Double'.
 unitIntervalToDouble :: Ledger.UnitInterval -> Double
 unitIntervalToDouble = fromRational . Ledger.unboundRational
-
--- ---------------------------------------------------------------------------
--- * Reward address
--- ---------------------------------------------------------------------------
-
--- | Strip the 1-byte network header from a reward address
--- (@network_id || credential_hash@) and return the 28-byte
--- credential. Short inputs (length \<= 1) pass through unchanged
--- rather than panicking on malformed data.
-rewardAddrCred :: ByteString -> ByteString
-rewardAddrCred bs
-  | BS.length bs > 1 = BS.drop 1 bs
-  | otherwise        = bs
 
 -- ---------------------------------------------------------------------------
 -- * JSON / PostgreSQL interop

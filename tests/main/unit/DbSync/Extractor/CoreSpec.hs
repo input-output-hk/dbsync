@@ -26,6 +26,7 @@ import Cardano.Ledger.Coin (Coin (..))
 import DbSync.Parser.Types
   ( BlockEra (..)
   , CertAction (..)
+  , CredHash (..)
   , GenericBlock (..)
   , GenericTx (..)
   , GenericTxCertificate (..)
@@ -57,7 +58,6 @@ import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
 import DbSync.Test.Lsm (withTestIngestStores)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv, mkTestPipelineEnvWith)
 import DbSync.Test.Writer (TestWriterState (..), emptyTestWriterState, mkTestWriter)
-import Test.Hspec (shouldSatisfy)
 
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
@@ -140,14 +140,14 @@ spec = do
       idxs `shouldBe` [0, 1, 2]
 
   describe "mkSlotLeader / pool hash propagation" $ do
-    it "Shelley+ blocks populate slot_leader.pool_hash_id" $ do
+    it "leaves slot_leader.pool_hash_id NULL for an unregistered Shelley leader" $ do
       written <- runCore emptyBlock
       let (_, sl) = headDef (panic "no slot_leader") (twSlotLeaders written)
-      slotLeaderPoolHashId sl `shouldSatisfy` isJust
+      slotLeaderPoolHashId sl `shouldBe` Nothing
 
-    it "writes a pool_hash row for the Shelley slot leader" $ do
+    it "writes no pool_hash row for an unregistered Shelley leader" $ do
       written <- runCore emptyBlock
-      length (twPoolHashes written) `shouldBe` 1
+      length (twPoolHashes written) `shouldBe` 0
 
     it "Byron blocks leave slot_leader.pool_hash_id NULL" $ do
       written <- runCore byronBlock
@@ -309,21 +309,21 @@ spec = do
         `shouldBe` False
 
   describe "affectsDeposit" $ do
-    it "True for CertStakeRegistration"    $ affectsDeposit (CertStakeRegistration "" Nothing)         `shouldBe` True
-    it "True for CertStakeDeregistration"  $ affectsDeposit (CertStakeDeregistration "")               `shouldBe` True
+    it "True for CertStakeRegistration"    $ affectsDeposit (CertStakeRegistration (CredHash "" False) Nothing)         `shouldBe` True
+    it "True for CertStakeDeregistration"  $ affectsDeposit (CertStakeDeregistration (CredHash "" False))               `shouldBe` True
     it "True for CertPoolRegistration"     $ affectsDeposit poolRegAction                              `shouldBe` True
     it "True for CertPoolRetirement"       $ affectsDeposit poolRetireAction                           `shouldBe` True
-    it "True for CertConwayRegDeleg"       $ affectsDeposit (CertConwayRegDeleg "" "" Nothing)         `shouldBe` True
+    it "True for CertConwayRegDeleg"       $ affectsDeposit (CertConwayRegDeleg (CredHash "" False) "" Nothing)         `shouldBe` True
     it "True for CertDRepRegistration"     $ affectsDeposit drepRegAction                              `shouldBe` True
-    it "True for CertDRepDeregistration"   $ affectsDeposit (CertDRepDeregistration "" 0)              `shouldBe` True
+    it "True for CertDRepDeregistration"   $ affectsDeposit (CertDRepDeregistration (CredHash "" False) 0)              `shouldBe` True
     it "True for CertOther (defensive)"    $ affectsDeposit (CertOther "")                             `shouldBe` True
 
     it "False for CertDelegation"          $ affectsDeposit delegationAction                           `shouldBe` False
     it "False for CertConwayDelegVote"     $ affectsDeposit conwayDelegVoteAction                      `shouldBe` False
-    it "False for CertConwayDelegStakeVote" $ affectsDeposit (CertConwayDelegStakeVote "" "" G.DRepAlwaysAbstain) `shouldBe` False
+    it "False for CertConwayDelegStakeVote" $ affectsDeposit (CertConwayDelegStakeVote (CredHash "" False) "" G.DRepAlwaysAbstain Nothing) `shouldBe` False
     it "False for CertDRepUpdate"          $ affectsDeposit drepUpdateAction                           `shouldBe` False
     it "False for CertCommitteeAuth"       $ affectsDeposit committeeAuthAction                        `shouldBe` False
-    it "False for CertCommitteeResign"     $ affectsDeposit (CertCommitteeResign "" Nothing)           `shouldBe` False
+    it "False for CertCommitteeResign"     $ affectsDeposit (CertCommitteeResign (CredHash "" False) Nothing)           `shouldBe` False
     it "False for CertMir"                 $ affectsDeposit (CertMir G.MirReserves (G.MirToStakeAddresses [])) `shouldBe` False
 
 -- ---------------------------------------------------------------------------
@@ -475,7 +475,7 @@ validTx = mkTx 0 "validtx"
 -- stake-registration certificate (deposit-affecting).
 regTx :: GenericTx
 regTx = (mkTx 0 "regtx")
-  { G.txCertificates = [certFor (CertStakeRegistration (BS.replicate 28 0xee) Nothing)]
+  { G.txCertificates = [certFor (CertStakeRegistration (CredHash (BS.replicate 28 0xee) False) Nothing)]
   }
 
 -- | One zero-amount withdrawal.
@@ -490,19 +490,19 @@ certFor :: CertAction -> GenericTxCertificate
 certFor act = GenericTxCertificate { txCertIndex = 0, txCertAction = act }
 
 delegationAction :: CertAction
-delegationAction = CertDelegation (BS.replicate 28 0xee) (BS.replicate 28 0xff)
+delegationAction = CertDelegation (CredHash (BS.replicate 28 0xee) False) (BS.replicate 28 0xff)
 
 conwayDelegVoteAction :: CertAction
-conwayDelegVoteAction = CertConwayDelegVote (BS.replicate 28 0xee) G.DRepAlwaysAbstain
+conwayDelegVoteAction = CertConwayDelegVote (CredHash (BS.replicate 28 0xee) False) G.DRepAlwaysAbstain Nothing
 
 drepRegAction :: CertAction
-drepRegAction = CertDRepRegistration (BS.replicate 28 0xee) 500_000_000 Nothing
+drepRegAction = CertDRepRegistration (CredHash (BS.replicate 28 0xee) False) 500_000_000 Nothing
 
 drepUpdateAction :: CertAction
-drepUpdateAction = CertDRepUpdate (BS.replicate 28 0xee) Nothing
+drepUpdateAction = CertDRepUpdate (CredHash (BS.replicate 28 0xee) False) Nothing
 
 committeeAuthAction :: CertAction
-committeeAuthAction = CertCommitteeAuth (BS.replicate 28 0xaa) (BS.replicate 28 0xbb)
+committeeAuthAction = CertCommitteeAuth (CredHash (BS.replicate 28 0xaa) False) (CredHash (BS.replicate 28 0xbb) False)
 
 poolRetireAction :: CertAction
 poolRetireAction = CertPoolRetirement (BS.replicate 28 0xee) 100

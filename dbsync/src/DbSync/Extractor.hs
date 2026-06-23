@@ -22,6 +22,8 @@ module DbSync.Extractor
   , blockStakeKeyDeposit
   , blockPoolDeposit
   , blockStakeSlice
+  , blockRegisteredPools
+  , blockGovExpiresAfter
   , takeBlockLedgerData
 
     -- * Accessor classes
@@ -36,10 +38,12 @@ module DbSync.Extractor
 
 import Cardano.Prelude
 
-import Cardano.Ledger.BaseTypes (Network)
+import Cardano.Ledger.BaseTypes (EpochInterval (..), Network)
 import Cardano.Ledger.Coin (Coin)
 import qualified Control.Concurrent.Class.MonadSTM.Strict as Strict
 import Control.Concurrent.STM.TBQueue (readTBQueue)
+import qualified Data.Set as Set
+import qualified Data.Strict.Maybe as SMaybe
 
 import DbSync.Parser.Types (GenericBlock, GenericTx)
 import DbSync.Phase.Ingest.Counter (IdCounters, freshIdCounters)
@@ -170,6 +174,13 @@ data LedgerOutputs = LedgerOutputs
       -- ^ Protocol-param pool deposit at this block.
   , loStakeSlice      :: !Generic.StakeSliceRes
       -- ^ Per-block slice of the "mark" stake distribution.
+  , loRegisteredPools :: !(Set.Set ByteString)
+      -- ^ Raw pool-hash bytes registered in the ledger before this
+      -- block; used to decide the pool_update.active_epoch_no offset.
+  , loGovExpiresAfter :: !(Maybe Word64)
+      -- ^ Gov-action lifetime (in epochs) from this block's protocol
+      -- params; 'Nothing' outside Conway. Drives
+      -- gov_action_proposal.expiration.
   }
 
 -- | Default for the ledger-disabled case.
@@ -183,6 +194,8 @@ emptyLedgerOutputs = LedgerOutputs
   , loStakeKeyDeposit = Nothing
   , loPoolDeposit     = Nothing
   , loStakeSlice      = Generic.NoSlices
+  , loRegisteredPools = Set.empty
+  , loGovExpiresAfter = Nothing
   }
 
 -- | Per-tx deposits map; 'emptyDepositsMap' when ledger is off.
@@ -210,6 +223,20 @@ blockStakeSlice = \case
   LedgerDataOff   -> Generic.NoSlices
   LedgerDataOn lo -> loStakeSlice lo
 
+-- | Pool hashes registered in the ledger before this block; empty
+-- when ledger is off.
+blockRegisteredPools :: BlockLedgerData -> Set.Set ByteString
+blockRegisteredPools = \case
+  LedgerDataOff   -> Set.empty
+  LedgerDataOn lo -> loRegisteredPools lo
+
+-- | Gov-action lifetime (epochs) from this block's protocol params;
+-- 'Nothing' when ledger is off or outside Conway.
+blockGovExpiresAfter :: BlockLedgerData -> Maybe Word64
+blockGovExpiresAfter = \case
+  LedgerDataOff   -> Nothing
+  LedgerDataOn lo -> loGovExpiresAfter lo
+
 -- | Drain the worker's next per-block 'ApplyResult' and project it
 -- onto 'BlockLedgerData'. Blocks until one is available; the
 -- ledger-OFF arm returns 'emptyBlockLedgerData' without touching any
@@ -224,6 +251,10 @@ takeBlockLedgerData = \case
       , loStakeKeyDeposit = Nothing
       , loPoolDeposit     = Nothing
       , loStakeSlice      = apStakeSlice appResult
+      , loRegisteredPools = apPoolsRegistered appResult
+      , loGovExpiresAfter =
+          SMaybe.maybe Nothing (\(EpochInterval n) -> Just (fromIntegral n))
+            (apGovExpiresAfter appResult)
       }
 
 -- ---------------------------------------------------------------------------

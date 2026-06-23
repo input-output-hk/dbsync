@@ -119,7 +119,7 @@ import qualified Data.ByteString.Lazy as LBS
 
 import qualified DbSync.Parser.Metadata as Metadata
 import qualified DbSync.Parser.ParamProposal as PP
-import DbSync.Util (coinToWord64, jsonValueContainsNul, rewardAddrCred)
+import DbSync.Util (coinToWord64, jsonValueContainsNul)
 import DbSync.Util.Bech32 (serialiseShelleyAddrToBech32)
 
 import Ouroboros.Consensus.Cardano.Block
@@ -142,6 +142,7 @@ import DbSync.Parser.Types
   , GenericTxDatum (..)
   , GenericTxRedeemer (..)
   , CertAction (..)
+  , CredHash (..)
   , DRepIdent (..)
   , AnchorData (..)
   , MirAction (..)
@@ -153,6 +154,7 @@ import DbSync.Parser.Types
   , GenericVoter (..)
   , GenericVotingProcedure (..)
   , GovActionRef (..)
+  , rewardAddrCredHash
   )
 
 -- ---------------------------------------------------------------------------
@@ -222,40 +224,41 @@ mkTxOutCoin txBody = zipWith fromCoinTxOut [0 ..] $ toList (txBody ^. Core.outpu
 
 -- | Extract outputs from a Mary+ body (with multi-asset values).
 --
--- The data-hash extractor varies by era: Mary uses @\\_ -> Nothing@,
--- Alonzo uses 'getAlonzoDatumHash', Babbage+ uses 'getBabbageDatumHash'.
--- 'txOutInlineDatum' and 'txOutRefScript' are owned by a different
--- extractor and are not populated from this path.
+-- The datum extractor varies by era: Mary uses @\\_ -> (Nothing, Nothing)@,
+-- Alonzo uses 'getAlonzoDatum', Babbage+ uses 'getBabbageDatum'. It
+-- returns @(data_hash, inline_datum)@. 'txOutRefScript' is owned by a
+-- different extractor and is not populated from this path.
 mkTxOutMaryValue ::
   forall l era.
   (Core.EraTxBody era, Core.Value era ~ MaryValue) =>
-  (Core.TxOut era -> Maybe ByteString) ->
+  (Core.TxOut era -> (Maybe ByteString, Maybe GenericTxDatum)) ->
   Core.TxBody l era ->
   [GenericTxOut]
-mkTxOutMaryValue dataHash txBody =
-  zipWith (mkMaryTxOut dataHash) [0 ..] $ toList (txBody ^. Core.outputsTxBodyL)
+mkTxOutMaryValue datum txBody =
+  zipWith (mkMaryTxOut datum) [0 ..] $ toList (txBody ^. Core.outputsTxBodyL)
 
 -- | Build one Mary-shape 'GenericTxOut' from a ledger TxOut and a
--- data-hash extractor.  Reused by 'mkTxOutMaryValue' and by the
+-- datum extractor.  Reused by 'mkTxOutMaryValue' and by the
 -- Babbage+ collateral-return path.
 mkMaryTxOut ::
   forall era.
   (Core.EraTxOut era, Core.Value era ~ MaryValue) =>
-  (Core.TxOut era -> Maybe ByteString) ->
+  (Core.TxOut era -> (Maybe ByteString, Maybe GenericTxDatum)) ->
   Word16 ->
   Core.TxOut era ->
   GenericTxOut
-mkMaryTxOut dataHash idx txOut =
+mkMaryTxOut datum idx txOut =
   let MaryValue ada multiAsset = txOut ^. Core.valueTxOutL
       addr = txOut ^. Core.addrTxOutL
       !raw = Ledger.serialiseAddr addr
+      (dataHash, inlineDatum) = datum txOut
   in GenericTxOut
     { txOutIndex       = idx
     , txOutAddress     = addrToText addr raw
     , txOutAddressRaw  = raw
     , txOutValue       = fromIntegral (unCoin ada)
-    , txOutDataHash    = dataHash txOut
-    , txOutInlineDatum = Nothing
+    , txOutDataHash    = dataHash
+    , txOutInlineDatum = inlineDatum
     , txOutRefScript   = Nothing
     , txOutMultiAssets = flattenMultiAsset multiAsset
     }
@@ -313,7 +316,7 @@ mirCertAction mc =
     mirTargetToAction :: MIRTarget -> MirAction
     mirTargetToAction (StakeAddressesMIR rwds) =
       MirToStakeAddresses
-        [ (credToBytes cred, deltaCoinToInteger d)
+        [ (credToCredHash cred, deltaCoinToInteger d)
         | (cred, d) <- Map.toList rwds
         ]
     mirTargetToAction (SendToOppositePotMIR coin) =
@@ -349,75 +352,80 @@ dijkstraCertToAction = \case
 dijkstraDelegAction :: DijkstraDelegCert -> CertAction
 dijkstraDelegAction = \case
   DijkstraRegCert cred deposit ->
-    CertStakeRegistration (credToBytes cred) (Just $ coinToWord64 deposit)
+    CertStakeRegistration (credToCredHash cred) (Just $ coinToWord64 deposit)
   DijkstraUnRegCert cred _deposit ->
-    CertStakeDeregistration (credToBytes cred)
+    CertStakeDeregistration (credToCredHash cred)
   DijkstraDelegCert cred delegatee -> case delegatee of
     DelegStake poolHash ->
-      CertDelegation (credToBytes cred) (keyHashToBytes poolHash)
+      CertDelegation (credToCredHash cred) (keyHashToBytes poolHash)
     DelegVote drep ->
-      CertConwayDelegVote (credToBytes cred) (drepToIdent drep)
+      CertConwayDelegVote (credToCredHash cred) (drepToIdent drep) Nothing
     DelegStakeVote poolHash drep ->
-      CertConwayDelegStakeVote (credToBytes cred) (keyHashToBytes poolHash) (drepToIdent drep)
+      CertConwayDelegStakeVote (credToCredHash cred) (keyHashToBytes poolHash) (drepToIdent drep) Nothing
   DijkstraRegDelegCert cred delegatee deposit -> case delegatee of
     DelegStake poolHash ->
-      CertConwayRegDeleg (credToBytes cred) (keyHashToBytes poolHash) (Just $ coinToWord64 deposit)
-    DelegVote _drep ->
-      CertStakeRegistration (credToBytes cred) (Just $ coinToWord64 deposit)
+      CertConwayRegDeleg (credToCredHash cred) (keyHashToBytes poolHash) (Just $ coinToWord64 deposit)
+    DelegVote drep ->
+      -- Combined register + vote-delegation. The deposit signals the
+      -- stake-registration half so it is not lost; the vote half rides
+      -- the DRep into the governance extractor.
+      CertConwayDelegVote (credToCredHash cred) (drepToIdent drep) (Just $ coinToWord64 deposit)
     DelegStakeVote poolHash drep ->
-      CertConwayDelegStakeVote (credToBytes cred) (keyHashToBytes poolHash) (drepToIdent drep)
+      CertConwayDelegStakeVote (credToCredHash cred) (keyHashToBytes poolHash) (drepToIdent drep) (Just $ coinToWord64 deposit)
 
 -- | Convert Shelley delegation cert subtypes.
 shelleyDelegAction :: ShelleyDelegCert -> CertAction
 shelleyDelegAction = \case
-  ShelleyRegCert cred   -> CertStakeRegistration (credToBytes cred) Nothing
-  ShelleyUnRegCert cred -> CertStakeDeregistration (credToBytes cred)
+  ShelleyRegCert cred   -> CertStakeRegistration (credToCredHash cred) Nothing
+  ShelleyUnRegCert cred -> CertStakeDeregistration (credToCredHash cred)
   ShelleyDelegCert cred poolHash ->
-    CertDelegation (credToBytes cred) (keyHashToBytes poolHash)
+    CertDelegation (credToCredHash cred) (keyHashToBytes poolHash)
 
 -- | Convert Conway delegation cert subtypes.
 conwayDelegAction :: ConwayDelegCert -> CertAction
 conwayDelegAction = \case
   ConwayRegCert cred mDeposit ->
-    CertStakeRegistration (credToBytes cred) (coinToWord64 <$> strictMaybeToMaybe mDeposit)
+    CertStakeRegistration (credToCredHash cred) (coinToWord64 <$> strictMaybeToMaybe mDeposit)
   ConwayUnRegCert cred _mDeposit ->
-    CertStakeDeregistration (credToBytes cred)
+    CertStakeDeregistration (credToCredHash cred)
   ConwayDelegCert cred delegatee -> case delegatee of
     DelegStake poolHash ->
-      CertDelegation (credToBytes cred) (keyHashToBytes poolHash)
+      CertDelegation (credToCredHash cred) (keyHashToBytes poolHash)
     DelegVote drep ->
-      CertConwayDelegVote (credToBytes cred) (drepToIdent drep)
+      CertConwayDelegVote (credToCredHash cred) (drepToIdent drep) Nothing
     DelegStakeVote poolHash drep ->
-      CertConwayDelegStakeVote (credToBytes cred) (keyHashToBytes poolHash) (drepToIdent drep)
+      CertConwayDelegStakeVote (credToCredHash cred) (keyHashToBytes poolHash) (drepToIdent drep) Nothing
   ConwayRegDelegCert cred delegatee mDeposit -> case delegatee of
     DelegStake poolHash ->
-      CertConwayRegDeleg (credToBytes cred) (keyHashToBytes poolHash) (Just $ coinToWord64 mDeposit)
-    DelegVote _drep ->
-      -- Combined register + vote-delegation. Only the stake-registration
-      -- half is materialised here; the vote half is owned by the
-      -- governance extractor and consumes the DRep separately.
-      CertStakeRegistration (credToBytes cred) (Just $ coinToWord64 mDeposit)
+      CertConwayRegDeleg (credToCredHash cred) (keyHashToBytes poolHash) (Just $ coinToWord64 mDeposit)
+    DelegVote drep ->
+      -- Combined register + vote-delegation. The deposit signals the
+      -- stake-registration half so it is not lost; the vote half rides
+      -- the DRep into the governance extractor.
+      CertConwayDelegVote (credToCredHash cred) (drepToIdent drep) (Just $ coinToWord64 mDeposit)
     DelegStakeVote poolHash drep ->
-      CertConwayDelegStakeVote (credToBytes cred) (keyHashToBytes poolHash) (drepToIdent drep)
+      -- Combined register + stake-delegation + vote-delegation. The
+      -- deposit signals the stake-registration half so it is not lost.
+      CertConwayDelegStakeVote (credToCredHash cred) (keyHashToBytes poolHash) (drepToIdent drep) (Just $ coinToWord64 mDeposit)
 
 -- | Convert Conway governance cert subtypes.
 conwayGovAction :: ConwayGovCert -> CertAction
 conwayGovAction = \case
   ConwayRegDRep cred coin mAnchor ->
-    CertDRepRegistration (credToBytes cred) (coinToWord64 coin) (anchorData <$> strictMaybeToMaybe mAnchor)
+    CertDRepRegistration (credToCredHash cred) (coinToWord64 coin) (anchorData <$> strictMaybeToMaybe mAnchor)
   ConwayUnRegDRep cred coin ->
-    CertDRepDeregistration (credToBytes cred) (coinToWord64 coin)
+    CertDRepDeregistration (credToCredHash cred) (coinToWord64 coin)
   ConwayAuthCommitteeHotKey coldKey hotKey ->
-    CertCommitteeAuth (credToBytes coldKey) (credToBytes hotKey)
+    CertCommitteeAuth (credToCredHash coldKey) (credToCredHash hotKey)
   ConwayResignCommitteeColdKey coldKey mAnchor ->
-    CertCommitteeResign (credToBytes coldKey) (anchorData <$> strictMaybeToMaybe mAnchor)
+    CertCommitteeResign (credToCredHash coldKey) (anchorData <$> strictMaybeToMaybe mAnchor)
   ConwayUpdateDRep cred mAnchor ->
-    CertDRepUpdate (credToBytes cred) (anchorData <$> strictMaybeToMaybe mAnchor)
+    CertDRepUpdate (credToCredHash cred) (anchorData <$> strictMaybeToMaybe mAnchor)
 
 -- | Project a ledger 'Ledger.DRep' into our three-way 'DRepIdent'.
 drepToIdent :: Ledger.DRep -> DRepIdent
 drepToIdent = \case
-  Ledger.DRepCredential cred    -> DRepCred (credToBytes cred)
+  Ledger.DRepCredential cred    -> DRepCred (credToCredHash cred)
   Ledger.DRepAlwaysAbstain      -> DRepAlwaysAbstain
   Ledger.DRepAlwaysNoConfidence -> DRepAlwaysNoConfidence
 
@@ -483,10 +491,19 @@ poolMetadataToData md =
     byteArrayToSBS :: ByteArray -> ShortByteString
     byteArrayToSBS (ByteArray ba) = SBS ba
 
--- | Serialise a stake credential to raw bytes.
-credToBytes :: Ledger.Credential kr -> ByteString
-credToBytes (Ledger.KeyHashObj (Ledger.KeyHash h))    = Crypto.hashToBytes h
-credToBytes (Ledger.ScriptHashObj (Core.ScriptHash h)) = Crypto.hashToBytes h
+-- | Flatten a ledger credential to its 28-byte hash plus whether it is
+-- a script hash, preserving the key\/script tag the raw bytes alone
+-- cannot express.
+credToCredHash :: Ledger.Credential kr -> CredHash
+credToCredHash (Ledger.KeyHashObj (Ledger.KeyHash h)) =
+  CredHash (Crypto.hashToBytes h) False
+credToCredHash (Ledger.ScriptHashObj (Core.ScriptHash h)) =
+  CredHash (Crypto.hashToBytes h) True
+
+-- | The 28-byte hash of a credential, discarding the key\/script tag.
+-- For sites that store the raw hash without a reward-address header.
+credBytes :: Ledger.Credential kr -> ByteString
+credBytes = chHash . credToCredHash
 
 -- | Serialise a KeyHash to raw bytes.
 keyHashToBytes :: Ledger.KeyHash r -> ByteString
@@ -510,6 +527,11 @@ getInterval txBody =
 -- | Sum of output values.
 sumOutputValues :: [GenericTxOut] -> Word64
 sumOutputValues = sum . map txOutValue
+
+-- | The collateral a failed phase-2 tx actually pays as its fee.
+totalCollateral :: Core.BabbageEraTxBody era => Core.TxBody Core.TopTx era -> Word64
+totalCollateral txBody =
+  maybe 0 (fromIntegral . unCoin) (strictMaybeToMaybe (txBody ^. Core.totalCollateralTxBodyL))
 
 -- | Extract minting from a Mary+ body as flat list.
 getMint :: MaryEraTxBody era => Core.TxBody l era -> [(ByteString, ByteString, Integer)]
@@ -559,31 +581,40 @@ getPlutusScriptSizesSum tx =
       Alonzo.PlutusScript ps  ->
         Just $ fromIntegral $ SBS.length $ Alonzo.unPlutusBinary $ Alonzo.plutusScriptBinary ps
 
--- | Datum-hash for an Alonzo TxOut. Alonzo outputs only ever carry
--- hashes, never inline datums.
-getAlonzoDatumHash
+-- | Datum projection for an Alonzo TxOut: the @(data_hash, inline)@
+-- pair. Alonzo outputs only ever carry hashes, never inline datums, so
+-- the second component is always 'Nothing'.
+getAlonzoDatum
   :: ( Alonzo.AlonzoEraTxOut era
      , Core.TxOut era ~ Alonzo.AlonzoTxOut era
      )
-  => Alonzo.AlonzoTxOut era -> Maybe ByteString
-getAlonzoDatumHash txOut =
+  => Alonzo.AlonzoTxOut era -> (Maybe ByteString, Maybe GenericTxDatum)
+getAlonzoDatum txOut =
   case strictMaybeToMaybe (txOut ^. Alonzo.dataHashTxOutL) of
-    Nothing -> Nothing
-    Just dh -> Just (Crypto.hashToBytes (extractHash dh))
+    Nothing -> (Nothing, Nothing)
+    Just dh -> (Just (Crypto.hashToBytes (extractHash dh)), Nothing)
 
--- | Datum-hash for a Babbage+ TxOut. Inline datums (the third 'Datum'
--- constructor) are not surfaced here — only the 'DatumHash' case
--- yields a value for @tx_out.data_hash@.
-getBabbageDatumHash
+-- | Datum projection for a Babbage+ TxOut: the @(data_hash, inline)@
+-- pair. A hash-only output yields just the hash; an inline datum yields
+-- both the hash and the 'GenericTxDatum' (CBOR + JSON) so the UTxO
+-- extractor can write the deduplicated @datum@ row and the FK.
+getBabbageDatum
   :: ( Core.BabbageEraTxOut era
      , Core.TxOut era ~ Babbage.BabbageTxOut era
      )
-  => Babbage.BabbageTxOut era -> Maybe ByteString
-getBabbageDatumHash txOut =
+  => Babbage.BabbageTxOut era -> (Maybe ByteString, Maybe GenericTxDatum)
+getBabbageDatum txOut =
   case txOut ^. Core.datumTxOutL of
-    Plutus.DatumHash dh -> Just (Crypto.hashToBytes (extractHash dh))
-    Plutus.NoDatum      -> Nothing
-    Plutus.Datum _      -> Nothing
+    Plutus.DatumHash dh -> (Just (Crypto.hashToBytes (extractHash dh)), Nothing)
+    Plutus.NoDatum      -> (Nothing, Nothing)
+    Plutus.Datum bd     ->
+      let d   = Plutus.binaryDataToData bd
+          gtd = GenericTxDatum
+            { gtdHash  = dataHashBytes (Alonzo.hashData d)
+            , gtdBytes = Core.originalBytes d
+            , gtdValue = Just (ScriptData.plutusDataToJson d)
+            }
+      in (Just (gtdHash gtd), Just gtd)
 
 -- | Extract the Babbage+ collateral-return output, if present.
 --
@@ -598,7 +629,7 @@ getCollateralOutput
   => Core.TxBody Core.TopTx era
   -> Maybe GenericTxOut
 getCollateralOutput txBody =
-  fmap (mkMaryTxOut getBabbageDatumHash collIdx) $
+  fmap (mkMaryTxOut getBabbageDatum collIdx) $
     strictMaybeToMaybe (txBody ^. Core.collateralReturnTxBodyL)
   where
     collIdx = fromIntegral (length (toList (txBody ^. Core.outputsTxBodyL)))
@@ -975,7 +1006,7 @@ fromAllegraTx (blkIndex, tx) =
 fromMaryTx :: (Word64, Core.Tx Core.TopTx MaryEra) -> GenericTx
 fromMaryTx (blkIndex, tx) =
   let txBody = tx ^. Core.bodyTxL
-      outputs = mkTxOutMaryValue (\_ -> Nothing) txBody
+      outputs = mkTxOutMaryValue (\_ -> (Nothing, Nothing)) txBody
       fee = txBody ^. Core.feeTxBodyL
       (invBefore, invAfter) = getInterval txBody
   in GenericTx
@@ -1018,7 +1049,7 @@ fromAlonzoTx :: (Word64, Core.Tx Core.TopTx AlonzoEra) -> GenericTx
 fromAlonzoTx (blkIndex, tx) =
   let txBody = tx ^. Core.bodyTxL
       Alonzo.IsValid isValid = tx ^. Alonzo.isValidTxL
-      outputs = mkTxOutMaryValue getAlonzoDatumHash txBody
+      outputs = mkTxOutMaryValue getAlonzoDatum txBody
       fee = txBody ^. Core.feeTxBodyL
       (invBefore, invAfter) = getInterval txBody
       collIns = mkCollTxIn txBody
@@ -1068,27 +1099,28 @@ fromBabbageTx :: (Word64, Core.Tx Core.TopTx BabbageEra) -> GenericTx
 fromBabbageTx (blkIndex, tx) =
   let txBody = tx ^. Core.bodyTxL
       Alonzo.IsValid isValid = tx ^. Alonzo.isValidTxL
-      outputs = mkTxOutMaryValue getBabbageDatumHash txBody
+      outputs = mkTxOutMaryValue getBabbageDatum txBody
       fee = txBody ^. Core.feeTxBodyL
       (invBefore, invAfter) = getInterval txBody
       collIns = mkCollTxIn txBody
       refIns = mkRefTxIn txBody
+      collOut = getCollateralOutput txBody
   in GenericTx
     { txHash             = txHashId tx
     , txBlockIndex       = blkIndex
     , txSize             = getTxSize tx
-    , txFee              = if isValid then fromIntegral (unCoin fee) else 0
-    , txOutSum           = if isValid then sumOutputValues outputs else 0
+    , txFee              = if isValid then fromIntegral (unCoin fee) else totalCollateral txBody
+    , txOutSum           = if isValid then sumOutputValues outputs else sumOutputValues (maybeToList collOut)
     , txValidContract    = isValid
     , txScriptSize       = getPlutusScriptSizesSum tx
     , txTreasuryDonation = 0
     , txInvalidBefore    = invBefore
     , txInvalidHereafter = invAfter
-    , txInputs           = mkTxIn txBody
-    , txOutputs          = if isValid then outputs else []
+    , txInputs           = if isValid then mkTxIn txBody else collIns
+    , txOutputs          = if isValid then outputs else maybeToList collOut
     , txCollateralInputs = collIns
     , txReferenceInputs  = refIns
-    , txCollateralOutput = getCollateralOutput txBody
+    , txCollateralOutput = if isValid then collOut else Nothing
     , txCertificates     = mkTxCertificatesShelleyEra shelleyCertToAction txBody
     , txWithdrawals      = mkTxWithdrawals txBody
     , txMetadata         = Metadata.getMetadata <$> getTxAuxData tx
@@ -1114,28 +1146,29 @@ fromConwayTx :: (Word64, Core.Tx Core.TopTx ConwayEra) -> GenericTx
 fromConwayTx (blkIndex, tx) =
   let txBody = tx ^. Core.bodyTxL
       Alonzo.IsValid isValid = tx ^. Alonzo.isValidTxL
-      outputs = mkTxOutMaryValue getBabbageDatumHash txBody
+      outputs = mkTxOutMaryValue getBabbageDatum txBody
       fee = txBody ^. Core.feeTxBodyL
       (invBefore, invAfter) = getInterval txBody
       collIns = mkCollTxIn txBody
       refIns = mkRefTxIn txBody
+      collOut = getCollateralOutput txBody
       Coin donation = ctbTreasuryDonation txBody
   in GenericTx
     { txHash             = txHashId tx
     , txBlockIndex       = blkIndex
     , txSize             = getTxSize tx
-    , txFee              = if isValid then fromIntegral (unCoin fee) else 0
-    , txOutSum           = if isValid then sumOutputValues outputs else 0
+    , txFee              = if isValid then fromIntegral (unCoin fee) else totalCollateral txBody
+    , txOutSum           = if isValid then sumOutputValues outputs else sumOutputValues (maybeToList collOut)
     , txValidContract    = isValid
     , txScriptSize       = getPlutusScriptSizesSum tx
     , txTreasuryDonation = fromIntegral donation
     , txInvalidBefore    = invBefore
     , txInvalidHereafter = invAfter
-    , txInputs           = mkTxIn txBody
-    , txOutputs          = if isValid then outputs else []
+    , txInputs           = if isValid then mkTxIn txBody else collIns
+    , txOutputs          = if isValid then outputs else maybeToList collOut
     , txCollateralInputs = collIns
     , txReferenceInputs  = refIns
-    , txCollateralOutput = getCollateralOutput txBody
+    , txCollateralOutput = if isValid then collOut else Nothing
     , txCertificates     = mkTxCertificatesShelleyEra conwayCertToAction txBody
     , txWithdrawals      = mkTxWithdrawals txBody
     , txMetadata         = Metadata.getMetadata <$> getTxAuxData tx
@@ -1165,28 +1198,29 @@ fromDijkstraTx :: (Word64, Core.Tx Core.TopTx DijkstraEra) -> GenericTx
 fromDijkstraTx (blkIndex, tx) =
   let txBody = tx ^. Core.bodyTxL
       Alonzo.IsValid isValid = tx ^. Alonzo.isValidTxL
-      outputs = mkTxOutMaryValue getBabbageDatumHash txBody
+      outputs = mkTxOutMaryValue getBabbageDatum txBody
       fee = txBody ^. Core.feeTxBodyL
       (invBefore, invAfter) = getInterval txBody
       collIns = mkCollTxIn txBody
       refIns = mkRefTxIn txBody
+      collOut = getCollateralOutput txBody
       Coin donation = dtbTreasuryDonation txBody
   in GenericTx
     { txHash             = txHashId tx
     , txBlockIndex       = blkIndex
     , txSize             = getTxSize tx
-    , txFee              = if isValid then fromIntegral (unCoin fee) else 0
-    , txOutSum           = if isValid then sumOutputValues outputs else 0
+    , txFee              = if isValid then fromIntegral (unCoin fee) else totalCollateral txBody
+    , txOutSum           = if isValid then sumOutputValues outputs else sumOutputValues (maybeToList collOut)
     , txValidContract    = isValid
     , txScriptSize       = getPlutusScriptSizesSum tx
     , txTreasuryDonation = fromIntegral donation
     , txInvalidBefore    = invBefore
     , txInvalidHereafter = invAfter
-    , txInputs           = mkTxIn txBody
-    , txOutputs          = if isValid then outputs else []
+    , txInputs           = if isValid then mkTxIn txBody else collIns
+    , txOutputs          = if isValid then outputs else maybeToList collOut
     , txCollateralInputs = collIns
     , txReferenceInputs  = refIns
-    , txCollateralOutput = getCollateralOutput txBody
+    , txCollateralOutput = if isValid then collOut else Nothing
     , txCertificates     = mkTxCertificatesShelleyEra dijkstraCertToAction txBody
     , txWithdrawals      = mkTxWithdrawals txBody
     , txMetadata         = Metadata.getMetadata <$> getTxAuxData tx
@@ -1236,7 +1270,7 @@ conwayProposals txBody =
     mkProposal idx pp = GenericGovActionProposal
       { ggapTxIndex         = idx
       , ggapReturnAddrCred  =
-          rewardAddrCred (Ledger.serialiseAccountAddress (pProcReturnAddr pp))
+          rewardAddrCredHash (Ledger.serialiseAccountAddress (pProcReturnAddr pp))
       , ggapDeposit         = coinToWord64 (pProcDeposit pp)
       , ggapAnchor          = anchorData (pProcAnchor pp)
       , ggapAction          = convertGovAction (pProcGovAction pp)
@@ -1277,7 +1311,7 @@ convertGovAction = \case
       (fromIntegral (Ledger.pvMinor pv))
   TreasuryWithdrawals mp guardrail ->
     GovTreasuryWithdraw
-      [ (rewardAddrCred (Ledger.serialiseAccountAddress acct), coinToWord64 coin)
+      [ (rewardAddrCredHash (Ledger.serialiseAccountAddress acct), coinToWord64 coin)
       | (acct, coin) <- Map.toList mp
       ]
       (scriptHashBytes <$> strictMaybeToMaybe guardrail)
@@ -1286,8 +1320,8 @@ convertGovAction = \case
   UpdateCommittee prev remove add quorum ->
     GovUpdateCommittee
       (govPurposeRef <$> strictMaybeToMaybe prev)
-      (Set.map credToBytes remove)
-      [ (credToBytes cred, unEpochNo expiry)
+      (Set.map credBytes remove)
+      [ (credBytes cred, unEpochNo expiry)
       | (cred, expiry) <- Map.toList add
       ]
       (fromIntegral (numerator (Ledger.unboundRational quorum)))
@@ -1351,15 +1385,12 @@ convertVoter :: Voter -> GenericVoter
 convertVoter = \case
   DRepVoter cred       -> VoterDRep (credToDRep cred)
   StakePoolVoter pkh   -> VoterStakePool (keyHashToBytes pkh)
-  CommitteeVoter cred  -> VoterCommittee (credToBytes cred) (credHasScript cred)
+  CommitteeVoter cred  ->
+    let ch = credToCredHash cred
+    in VoterCommittee (chHash ch) (chIsScript ch)
   where
     credToDRep :: Ledger.Credential r -> DRepIdent
-    credToDRep = DRepCred . credToBytes
-
-    credHasScript :: Ledger.Credential r -> Bool
-    credHasScript = \case
-      Ledger.KeyHashObj    {} -> False
-      Ledger.ScriptHashObj {} -> True
+    credToDRep = DRepCred . credToCredHash
 
 -- | Project the ledger's three-valued 'Vote' into our enum.
 convertVote :: Vote -> Db.Vote

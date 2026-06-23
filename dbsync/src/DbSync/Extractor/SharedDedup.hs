@@ -10,6 +10,7 @@
 module DbSync.Extractor.SharedDedup
   ( resolveAndWritePoolHash
   , resolveAndWriteStakeAddress
+  , resolveStakeCred
   , resolveAndWriteMultiAsset
   , resolveAndWriteDatum
   , resolveAndWriteScript
@@ -54,6 +55,7 @@ import DbSync.Db.Schema.MultiAsset (MultiAsset (..))
 import DbSync.Db.Schema.Core (PoolHash (..), StakeAddress (..))
 import DbSync.Db.Schema.ScriptsDatums (Datum, RedeemerData, Script)
 import DbSync.Db.Types (AnchorType, VoteUrl (..))
+import DbSync.Parser.Types (CredHash (..))
 import DbSync.App.Env (HasNetwork (..))
 import qualified DbSync.Extractor.EpochBoundary as EB
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
@@ -62,6 +64,7 @@ import DbSync.Util.Bech32
   , serialiseDrepToBech32
   , serialisePoolKeyHashToBech32
   , serialiseStakeKeyHashToBech32
+  , serialiseStakeScriptHashToBech32
   )
 import DbSync.Util.DedupHash
   ( committeeHashDedupKey
@@ -77,15 +80,10 @@ import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- | Resolve a pool hash by 28-byte key hash, writing a fresh
 -- @pool_hash@ row on first sighting.
---
--- The 'Bool' is 'True' when this call assigned a new ID — callers
--- that need to distinguish first registration from re-registration
--- (e.g. @pool_update.active_epoch_no@: +2 vs +3 epoch offset) consult
--- the flag instead of querying the DB.
 resolveAndWritePoolHash
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
   => ByteString
-  -> m (PoolHashId, Bool)
+  -> m PoolHashId
 resolveAndWritePoolHash poolKeyHash = do
   resolver <- asks getResolver
   writer   <- asks getWriter
@@ -93,9 +91,9 @@ resolveAndWritePoolHash poolKeyHash = do
         { poolHashHashRaw = poolKeyHash
         , poolHashView    = serialisePoolKeyHashToBech32 poolKeyHash
         }
-  result@(phId, isNew) <- liftIO $ resolvePoolHash resolver poolKeyHash ph
+  (phId, isNew) <- liftIO $ resolvePoolHash resolver poolKeyHash ph
   when isNew $ liftIO $ writePoolHash writer phId ph
-  pure result
+  pure phId
 
 -- | Resolve a stake address by 28-byte credential hash, writing a fresh
 -- @stake_address@ row on first sighting.
@@ -104,9 +102,10 @@ resolveAndWritePoolHash poolKeyHash = do
 -- (header byte || credential), matching the original schema's
 -- @addr29type@. The @view@ is its Bech32 encoding.
 --
--- Script-hash detection is deferred — the row currently always has
--- @script_hash = Nothing@ and uses the stake-key (not stake-script)
--- header.
+-- The header nibble follows CIP-19: reward addresses use @0xE_@ for a
+-- stake-key credential and @0xF_@ for a stake-script credential, with
+-- the low bit set on mainnet. Script credentials also populate
+-- @script_hash@; key credentials leave it NULL.
 resolveAndWriteStakeAddress
   :: ( HasResolver env
      , HasWriter env
@@ -115,18 +114,22 @@ resolveAndWriteStakeAddress
      , MonadIO m
      )
   => ByteString
+  -> Bool          -- ^ credential is a script hash (vs. a stake-key hash)
   -> m StakeAddressId
-resolveAndWriteStakeAddress credHash = do
+resolveAndWriteStakeAddress credHash isScript = do
   resolver <- asks getResolver
   writer   <- asks getWriter
   network  <- asks getNetwork
-  let mainnet = isMainnet network
-      header  = if mainnet then 0xE1 else 0xE0
-      addr29  = BS.cons header credHash
+  let mainnet  = isMainnet network
+      header   = rewardAddrHeader mainnet isScript
+      addr29   = BS.cons header credHash
+      view     = if isScript
+                   then serialiseStakeScriptHashToBech32 mainnet credHash
+                   else serialiseStakeKeyHashToBech32 mainnet credHash
       sa = StakeAddress
         { stakeAddressHashRaw    = addr29
-        , stakeAddressView       = serialiseStakeKeyHashToBech32 mainnet credHash
-        , stakeAddressScriptHash = Nothing
+        , stakeAddressView       = view
+        , stakeAddressScriptHash = if isScript then Just credHash else Nothing
         }
   -- Dedup key is the 29-byte serialised reward address — matches
   -- what 'rebuildDedupMaps' reads back from @stake_address.hash_raw@
@@ -134,6 +137,26 @@ resolveAndWriteStakeAddress credHash = do
   (saId, isNew) <- liftIO $ resolveStakeAddress resolver addr29 sa
   when isNew $ liftIO $ writeStakeAddress writer saId sa
   pure saId
+
+-- | Resolve a 'CredHash' to its @stake_address@ id, threading the
+-- script\/key flag through to the header byte and @script_hash@.
+resolveStakeCred
+  :: ( HasResolver env
+     , HasWriter env
+     , HasNetwork env
+     , MonadReader env m
+     , MonadIO m
+     )
+  => CredHash
+  -> m StakeAddressId
+resolveStakeCred ch = resolveAndWriteStakeAddress (chHash ch) (chIsScript ch)
+
+-- | Reward-address header byte (CIP-19): base @0xE0@ for a stake-key
+-- credential, bit 4 set (@0xF0@) for a stake-script credential, low bit
+-- set on mainnet.
+rewardAddrHeader :: Bool -> Bool -> Word8
+rewardAddrHeader mainnet isScript =
+  0xE0 .|. (if isScript then 0x10 else 0x00) .|. (if mainnet then 0x01 else 0x00)
 
 -- | Resolve a multi-asset by @(policy, name)@, writing a fresh
 -- @multi_asset@ row on first sighting.

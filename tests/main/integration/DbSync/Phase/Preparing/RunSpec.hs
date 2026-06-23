@@ -205,10 +205,12 @@ spec = describe "DbSync.Phase.Preparing.Run" $
           ("SELECT tx_out_id FROM " <> tdName txInTableDef <> " WHERE id = 1")
         result `shouldBe` "1"
 
-      it "collateral_tx_in.tx_out_id is populated the same way" $ do
+      it "no collateral_tx_in rows: a failed tx folds collateral into tx_in" $ do
+        -- The parser rewrites a phase-2 failure so its collateral input
+        -- becomes an ordinary tx_in; no collateral_tx_in row is emitted.
         result <- T.strip <$> queryTestDb
-          ("SELECT tx_out_id FROM " <> tdName collateralTxInTableDef <> " WHERE id = 1")
-        result `shouldBe` "1"
+          ("SELECT count(*) FROM " <> tdName collateralTxInTableDef)
+        result `shouldBe` "0"
 
       it "tx_out.consumed_by_tx_id is set on every spending tx_in" $ do
         result <- T.strip <$> queryTestDb
@@ -216,16 +218,19 @@ spec = describe "DbSync.Phase.Preparing.Run" $
         let rows = T.lines result
         rows `shouldBe`
           [ "1|2"  -- producer.0: spent by the Shelley consumer (tx 2)
-          , "2|"   -- producer.1: only collateral consumed it; not tracked
+          , "2|3"  -- producer.1: folded collateral input of the failed tx (tx 3)
           , "3|4"  -- producer.2: spent by the Byron tx (tx 4)
           , "4|5"  -- producer.3: spent by the withdrawal-only tx (tx 5)
           , "5|"   -- consumer's own output: never spent
           , "6|"   -- byron tx's own output: never spent
           , "7|"   -- withdrawal tx's own output: never spent
+          , "8|"   -- failed tx's folded collateral return: never spent
           ]
 
     describe "tx column backfill" $ do
-      it "phase-2 failed tx.fee is collateral-in minus collateral-out" $ do
+      it "phase-2 failed tx.fee is folded-input value minus out_sum" $ do
+        -- Failed tx folds its collateral: input producer.1 (5_000_000)
+        -- minus the collateral return (2_000_000) = 3_000_000.
         result <- T.strip <$> queryTestDb
           ("SELECT fee FROM " <> tdName txTableDef <> " WHERE valid_contract = FALSE")
         result `shouldBe` "3000000"
@@ -348,16 +353,17 @@ spec = describe "DbSync.Phase.Preparing.Run" $
 
       it "tx_out_id_seq's next value is MAX(id) + 1" $ do
         -- Producer wrote four outputs; consumer wrote one; Byron
-        -- wrote one; withdrawal-only wrote one; phase-2 wrote none.
-        -- MAX(id) = 7, next = 8.
+        -- wrote one; withdrawal-only wrote one; the phase-2 failure
+        -- wrote one folded collateral return. MAX(id) = 8, next = 9.
         result <- T.strip <$> queryTestDb (nextvalSql txOutTableDef)
-        result `shouldBe` "8"
+        result `shouldBe` "9"
 
       it "tx_in_id_seq's next value is MAX(id) + 1" $ do
-        -- Three tx_in rows: consumer's spend, Byron's spend,
-        -- withdrawal-only's spend.
+        -- Four tx_in rows: consumer's spend, the phase-2 failure's
+        -- folded collateral input, Byron's spend, withdrawal-only's
+        -- spend.
         result <- T.strip <$> queryTestDb (nextvalSql txInTableDef)
-        result `shouldBe` "4"
+        result `shouldBe` "5"
 
       it "an empty table's sequence still starts at 1" $ do
         -- No reference_tx_in rows were produced; setval(seq, 0+1, false)

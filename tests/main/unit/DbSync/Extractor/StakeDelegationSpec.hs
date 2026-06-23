@@ -24,6 +24,7 @@ import Cardano.Ledger.Coin (Coin (..))
 import DbSync.Parser.Types
   ( BlockEra (..)
   , CertAction (..)
+  , CredHash (..)
   , GenericBlock (..)
   , GenericTx (..)
   , GenericTxCertificate (..)
@@ -109,9 +110,9 @@ spec = do
 
     it "multi-recipient MIR writes one row per recipient" $ do
       let act = MirToStakeAddresses
-            [ (stakeCred,           1_000_000)
-            , (BS.replicate 28 0xcd, 2_000_000)
-            , (BS.replicate 28 0xef, 3_000_000)
+            [ (stakeCred,                          1_000_000)
+            , (CredHash (BS.replicate 28 0xcd) False, 2_000_000)
+            , (CredHash (BS.replicate 28 0xef) False, 3_000_000)
             ]
       written <- runWith emptyBlockLedgerData (blockWithMir MirReserves act)
       length (twReserves written) `shouldBe` 3
@@ -156,8 +157,8 @@ runWith bld block = withTestIngestStores $ \utxoStore dedupStores -> do
 -- Fixtures
 -- ---------------------------------------------------------------------------
 
-stakeCred :: ByteString
-stakeCred = BS.replicate 28 0xab
+stakeCred :: CredHash
+stakeCred = CredHash (BS.replicate 28 0xab) False
 
 txWithStakeReg :: Maybe Word64 -> GenericTx
 txWithStakeReg mDeposit = GenericTx

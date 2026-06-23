@@ -16,14 +16,18 @@ module DbSync.Extractor.Pool
 import Cardano.Prelude
 
 import Cardano.Slotting.Slot (EpochNo (..))
+import Data.IORef (modifyIORef', newIORef, readIORef)
+import qualified Data.Set as Set
 
 import DbSync.Parser.Types
-  ( GenericBlock (..)
+  ( CertAction (..)
+  , CredHash (..)
+  , GenericBlock (..)
   , GenericTx (..)
   , GenericTxCertificate (..)
-  , CertAction (..)
   , PoolRegistrationData (..)
   , PoolRelayData (..)
+  , rewardAddrCredHash
   )
 import DbSync.Db.Schema.Ids
 import DbSync.Db.Schema.Pool
@@ -34,10 +38,11 @@ import DbSync.Extractor
   , ProcessBlockFn
   , TxContext (..)
   , blockPoolDeposit
+  , blockRegisteredPools
   )
-import DbSync.Extractor.SharedDedup (resolveAndWritePoolHash, resolveAndWriteStakeAddress)
+import DbSync.Extractor.SharedDedup (resolveAndWritePoolHash, resolveStakeCred)
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
-import DbSync.Util (coinToDbLovelace, rewardAddrCred)
+import DbSync.Util (coinToDbLovelace)
 import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- ---------------------------------------------------------------------------
@@ -71,6 +76,13 @@ processPool ctx = do
       -- otherwise — pool_update.deposit stays NULL to match the
       -- original schema's behaviour for ledger-disabled runs.
       mPoolDeposit = blockPoolDeposit (bcLedgerData ctx)
+      -- Pools already registered in the ledger before this block.
+      registeredPools = blockRegisteredPools (bcLedgerData ctx)
+
+  -- Pools registered earlier within this same block. Combined with
+  -- 'registeredPools' it tells us whether a registration activates a
+  -- currently-inactive pool (+2) or re-registers an active one (+3).
+  seenRef <- liftIO $ newIORef Set.empty
 
   forM_ (bcTxs ctx) $ \tc -> when (txValidContract (tcGenTx tc)) $ do
     let txId = tcTxId tc
@@ -84,7 +96,17 @@ processPool ctx = do
 
         -- Pool registration
         CertPoolRegistration prd -> do
-          (phId, isFirstReg) <- resolveAndWritePoolHash (prdPoolHash prd)
+          phId <- resolveAndWritePoolHash (prdPoolHash prd)
+
+          -- A registration activates a pool (+2) when it's neither a
+          -- current ledger member nor already registered earlier in
+          -- this block; otherwise it re-registers an active pool (+3).
+          seenThisBlock <- liftIO $ readIORef seenRef
+          let poolBytes      = prdPoolHash prd
+              isReactivation =
+                not (Set.member poolBytes registeredPools)
+                  && not (Set.member poolBytes seenThisBlock)
+          liftIO $ modifyIORef' seenRef (Set.insert poolBytes)
 
           mMetaId <- case prdMetadata prd of
             Nothing -> pure Nothing
@@ -99,24 +121,24 @@ processPool ctx = do
               liftIO $ writePoolMetadataRef writer pmId pm
               pure (Just pmId)
 
-          let rewardCredHash = rewardAddrCred (prdRewardAddr prd)
-          rewardAddrId <- resolveAndWriteStakeAddress rewardCredHash
+          rewardAddrId <- resolveStakeCred (rewardAddrCredHash (prdRewardAddr prd))
 
           puId <- liftIO $ assignPoolUpdateId resolver
-          -- Only first registration is charged the deposit; re-
-          -- registration of an already-known pool keeps the
-          -- existing deposit on file.
-          let mDeposit = if isFirstReg then coinToDbLovelace <$> mPoolDeposit
-                                       else Nothing
+          -- A deposit is charged whenever a registration activates an
+          -- inactive pool — its first registration and every later
+          -- reactivation after a retirement. Re-registering a pool that
+          -- is already active keeps the deposit already on file.
+          let mDeposit = if isReactivation then coinToDbLovelace <$> mPoolDeposit
+                                           else Nothing
               pu = PoolUpdate
                 { poolUpdateHashId         = phId
                 , poolUpdateCertIndex      = certIdx
                 , poolUpdateVrfKeyHash     = prdVrfKeyHash prd
                 , poolUpdatePledge         = DbLovelace (prdPledge prd)
-                  -- First registration takes effect at @epoch + 2@;
-                  -- a re-registration of an already-known pool takes
-                  -- effect one epoch later.
-                , poolUpdateActiveEpochNo  = epochNo + (if isFirstReg then 2 else 3)
+                  -- Activating an inactive pool takes effect at
+                  -- @epoch + 2@; re-registering an already-active pool
+                  -- takes effect one epoch later.
+                , poolUpdateActiveEpochNo  = epochNo + (if isReactivation then 2 else 3)
                 , poolUpdateMetaId         = mMetaId
                 , poolUpdateMargin         = prdMargin prd
                 , poolUpdateFixedCost      = DbLovelace (prdCost prd)
@@ -128,7 +150,7 @@ processPool ctx = do
 
           -- 5. Write pool owners
           forM_ (prdOwners prd) $ \ownerHash -> do
-            ownerAddrId <- resolveAndWriteStakeAddress ownerHash
+            ownerAddrId <- resolveStakeCred (CredHash ownerHash False)
             liftIO $ writePoolOwner writer PoolOwner
               { poolOwnerAddrId       = ownerAddrId
               , poolOwnerPoolUpdateId = puId
@@ -140,7 +162,7 @@ processPool ctx = do
 
         -- Pool retirement
         CertPoolRetirement poolKeyHash retiringEpoch -> do
-          (phId, _) <- resolveAndWritePoolHash poolKeyHash
+          phId <- resolveAndWritePoolHash poolKeyHash
           liftIO $ writePoolRetire writer PoolRetire
             { poolRetireHashId        = phId
             , poolRetireCertIndex     = certIdx

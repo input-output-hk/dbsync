@@ -87,7 +87,7 @@ writePoolStatRow
   -> m ()
 writePoolStatRow epoch blocksPerPool poolKey stake delegators = do
   writer <- asks getWriter
-  (phId, _) <- resolveAndWritePoolHash (poolKeyHashBytes poolKey)
+  phId <- resolveAndWritePoolHash (poolKeyHashBytes poolKey)
   let blocks = fromMaybe 0 (Map.lookup poolKey blocksPerPool)
   liftIO $ writePoolStat writer PoolStat
     { poolStatPoolHashId         = phId

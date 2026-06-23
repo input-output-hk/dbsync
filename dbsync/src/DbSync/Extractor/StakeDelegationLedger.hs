@@ -65,10 +65,10 @@ import DbSync.Extractor
   )
 import DbSync.Extractor.SharedDedup
   ( resolveAndWritePoolHash
-  , resolveAndWriteStakeAddress
+  , resolveStakeCred
   )
+import DbSync.Parser.Types (CredHash (..), rewardAddrCredHash)
 import DbSync.Resolver (HasResolver)
-import DbSync.Util (rewardAddrCred)
 import qualified DbSync.Worker.Ledger.EpochUpdate as Generic
 import DbSync.Worker.Ledger.Event
   ( GovActionRefunded (..)
@@ -128,8 +128,8 @@ emitSlice slice isLast = do
   writer <- asks getWriter
   let epoch = unEpochNo (sliceEpochNo slice)
   forM_ (sliceDistr slice) $ \(stakeCred, (Coin amount, poolKey)) -> do
-    saId      <- resolveAndWriteStakeAddress (stakeCredBytes stakeCred)
-    (phId, _) <- resolveAndWritePoolHash (poolKeyHashBytes poolKey)
+    saId      <- resolveStakeCred (stakeCredHash stakeCred)
+    phId <- resolveAndWritePoolHash (poolKeyHashBytes poolKey)
     liftIO $ writeEpochStake writer EpochStake
       { epochStakeAddrId  = saId
       , epochStakePoolId  = phId
@@ -205,9 +205,9 @@ emitLedgerRewards
 emitLedgerRewards spendable rewardsMap = do
   writer <- asks getWriter
   forM_ (Map.toList rewardsMap) $ \(stakeCred, rewardSet) -> do
-    saId <- resolveAndWriteStakeAddress (stakeCredBytes stakeCred)
+    saId <- resolveStakeCred (stakeCredHash stakeCred)
     forM_ (Set.toList rewardSet) $ \r -> do
-      (phId, _) <- resolveAndWritePoolHash (poolKeyHashBytes (Ledger.rewardPool r))
+      phId <- resolveAndWritePoolHash (poolKeyHashBytes (Ledger.rewardPool r))
       liftIO $ writeReward writer Reward
         { rewardAddrId         = saId
         , rewardType           = rewardTypeToSource (Ledger.rewardType r)
@@ -233,9 +233,9 @@ emitGenericRewards
 emitGenericRewards spendable rewardsMap = do
   writer <- asks getWriter
   forM_ (Map.toList rewardsMap) $ \(stakeCred, rewardSet) -> do
-    saId <- resolveAndWriteStakeAddress (stakeCredBytes stakeCred)
+    saId <- resolveStakeCred (stakeCredHash stakeCred)
     forM_ (Set.toList rewardSet) $ \r -> do
-      (phId, _) <- resolveAndWritePoolHash (poolKeyHashBytes (Generic.rewardPool r))
+      phId <- resolveAndWritePoolHash (poolKeyHashBytes (Generic.rewardPool r))
       liftIO $ writeReward writer Reward
         { rewardAddrId         = saId
         , rewardType           = Generic.rewardSource r
@@ -260,7 +260,7 @@ emitMirDist
 emitMirDist spendable potMap = do
   writer <- asks getWriter
   forM_ (Map.toList potMap) $ \(stakeCred, potSet) -> do
-    saId <- resolveAndWriteStakeAddress (stakeCredBytes stakeCred)
+    saId <- resolveStakeCred (stakeCredHash stakeCred)
     forM_ (Set.toList potSet) $ \pr ->
       liftIO $ writePotReward writer PotReward
         { potRewardAddrId         = saId
@@ -290,7 +290,7 @@ emitGovInfoTreasury spendable enacted = do
       Nothing       -> pure ()
       Just payments ->
         forM_ (Map.toList payments) $ \(acct, coin) -> do
-          saId <- resolveAndWriteStakeAddress (accountAddrCred acct)
+          saId <- resolveStakeCred (accountAddrCred acct)
           liftIO $ writePotReward writer PotReward
             { potRewardAddrId         = saId
             , potRewardType           = RwdTreasury
@@ -303,13 +303,13 @@ emitGovInfoTreasury spendable enacted = do
 -- * Key extraction helpers
 -- ---------------------------------------------------------------------------
 
-stakeCredBytes :: StakeCred -> ByteString
-stakeCredBytes = \case
-  Ledger.KeyHashObj (Ledger.KeyHash h)      -> Crypto.hashToBytes h
-  Ledger.ScriptHashObj (Core.ScriptHash h)  -> Crypto.hashToBytes h
+stakeCredHash :: StakeCred -> CredHash
+stakeCredHash = \case
+  Ledger.KeyHashObj (Ledger.KeyHash h)      -> CredHash (Crypto.hashToBytes h) False
+  Ledger.ScriptHashObj (Core.ScriptHash h)  -> CredHash (Crypto.hashToBytes h) True
 
 poolKeyHashBytes :: PoolKeyHash -> ByteString
 poolKeyHashBytes (Ledger.KeyHash h) = Crypto.hashToBytes h
 
-accountAddrCred :: Ledger.AccountAddress -> ByteString
-accountAddrCred = rewardAddrCred . Ledger.serialiseAccountAddress
+accountAddrCred :: Ledger.AccountAddress -> CredHash
+accountAddrCred = rewardAddrCredHash . Ledger.serialiseAccountAddress

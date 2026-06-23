@@ -106,6 +106,7 @@ import DbSync.Extractor
   , HasNetwork
   , ProcessBlockFn
   , TxContext (..)
+  , blockGovExpiresAfter
   )
 import DbSync.Worker.Ledger.EpochUpdate (NewEpoch (..))
 import DbSync.Extractor.SharedDedup
@@ -114,14 +115,15 @@ import DbSync.Extractor.SharedDedup
   , resolveAndWriteCostModel
   , resolveAndWriteDrepHash
   , resolveAndWritePoolHash
-  , resolveAndWriteStakeAddress
   , resolveAndWriteVotingAnchor
+  , resolveStakeCred
   )
 import qualified DbSync.Parser.Types as G
 import DbSync.Parser.ParamProposal (GenericParamProposal (..))
 import DbSync.Parser.Types
   ( AnchorData (..)
   , CertAction (..)
+  , CredHash (..)
   , DRepIdent (..)
   , GenericGovAction (..)
   , GenericGovActionProposal (..)
@@ -205,7 +207,7 @@ processCerts ctx tc =
         certIdx = txCertIndex cert
     case txCertAction cert of
       CertDRepRegistration credHash deposit mAnchor -> do
-        drepId <- resolveAndWriteDrepHash credHash False
+        drepId <- resolveAndWriteDrepHash (chHash credHash) (chIsScript credHash)
         mAnchorId <- resolveAnchor ctx DrepAnchor mAnchor
         writer <- asks getWriter
         liftIO $ writeDrepRegistration writer DrepRegistration
@@ -217,7 +219,7 @@ processCerts ctx tc =
           }
 
       CertDRepDeregistration credHash refund -> do
-        drepId <- resolveAndWriteDrepHash credHash False
+        drepId <- resolveAndWriteDrepHash (chHash credHash) (chIsScript credHash)
         writer <- asks getWriter
         liftIO $ writeDrepRegistration writer DrepRegistration
           { drepRegistrationTxId           = txId
@@ -230,7 +232,7 @@ processCerts ctx tc =
           }
 
       CertDRepUpdate credHash mAnchor -> do
-        drepId <- resolveAndWriteDrepHash credHash False
+        drepId <- resolveAndWriteDrepHash (chHash credHash) (chIsScript credHash)
         mAnchorId <- resolveAnchor ctx DrepAnchor mAnchor
         writer <- asks getWriter
         liftIO $ writeDrepRegistration writer DrepRegistration
@@ -242,8 +244,8 @@ processCerts ctx tc =
           }
 
       CertCommitteeAuth coldKey hotKey -> do
-        coldId <- resolveAndWriteCommitteeHash coldKey False
-        hotId  <- resolveAndWriteCommitteeHash hotKey False
+        coldId <- resolveAndWriteCommitteeHash (chHash coldKey) (chIsScript coldKey)
+        hotId  <- resolveAndWriteCommitteeHash (chHash hotKey) (chIsScript hotKey)
         writer <- asks getWriter
         liftIO $ writeCommitteeRegistration writer CommitteeRegistration
           { committeeRegistrationTxId      = txId
@@ -253,7 +255,7 @@ processCerts ctx tc =
           }
 
       CertCommitteeResign coldKey mAnchor -> do
-        coldId    <- resolveAndWriteCommitteeHash coldKey False
+        coldId    <- resolveAndWriteCommitteeHash (chHash coldKey) (chIsScript coldKey)
         mAnchorId <- resolveAnchor ctx CommitteeDeRegAnchor mAnchor
         writer <- asks getWriter
         liftIO $ writeCommitteeDeRegistration writer CommitteeDeRegistration
@@ -264,9 +266,9 @@ processCerts ctx tc =
           }
 
       -- Combined vote-delegation certs.
-      CertConwayDelegVote credHash drepIdent ->
+      CertConwayDelegVote credHash drepIdent _mDeposit ->
         writeDelegationVoteRow tc certIdx credHash drepIdent
-      CertConwayDelegStakeVote credHash _poolKeyHash drepIdent ->
+      CertConwayDelegStakeVote credHash _poolKeyHash drepIdent _mDeposit ->
         writeDelegationVoteRow tc certIdx credHash drepIdent
 
       _ -> pure ()
@@ -279,10 +281,10 @@ writeDelegationVoteRow
      , MonadReader env m
      , MonadIO m
      )
-  => TxContext -> Word16 -> ByteString -> DRepIdent -> m ()
-writeDelegationVoteRow tc certIdx credHash drepIdent = do
+  => TxContext -> Word16 -> CredHash -> DRepIdent -> m ()
+writeDelegationVoteRow tc certIdx cred drepIdent = do
   writer <- asks getWriter
-  saId   <- resolveAndWriteStakeAddress credHash
+  saId   <- resolveStakeCred cred
   drepId <- resolveDRep drepIdent
   liftIO $ writeDelegationVote writer DelegationVote
     { delegationVoteAddrId     = saId
@@ -298,7 +300,7 @@ resolveDRep
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
   => DRepIdent -> m DrepHashId
 resolveDRep = \case
-  DRepCred credHash      -> resolveAndWriteDrepHash credHash False
+  DRepCred credHash      -> resolveAndWriteDrepHash (chHash credHash) (chIsScript credHash)
   DRepAlwaysAbstain      -> resolveAndWriteAbstractDrep "drep_always_abstain"
   DRepAlwaysNoConfidence -> resolveAndWriteAbstractDrep "drep_always_no_confidence"
 
@@ -324,7 +326,7 @@ processProposals ctx tc =
         action       = ggapAction prop
         currentEpoch = unEpochNo (G.blkEpochNo (bcGenBlock ctx))
 
-    addrId    <- resolveAndWriteStakeAddress (ggapReturnAddrCred prop)
+    addrId    <- resolveStakeCred (ggapReturnAddrCred prop)
     anchorId  <- resolveAndWriteVotingAnchor (adUrl anchor) (adHash anchor)
                    GovActionAnchor (bcBlockId ctx)
 
@@ -338,8 +340,12 @@ processProposals ctx tc =
       Just ref ->
         liftIO $ lookupGovActionProposalId resolver (garTxHash ref) (garIndex ref)
 
-    mLifetime <- liftIO $ readGovExpiresAfter resolver
-    let mExpiration = (\lt -> currentEpoch + 1 + lt) <$> mLifetime
+    -- Prefer this block's own gov-action lifetime; fall back to the
+    -- boundary-stashed value for the first proposal of an epoch before
+    -- any boundary has run.
+    stashed <- liftIO $ readGovExpiresAfter resolver
+    let mLifetime   = blockGovExpiresAfter (bcLedgerData ctx) <|> stashed
+        mExpiration = (\lt -> currentEpoch + 1 + lt) <$> mLifetime
 
     gapId <- liftIO $ assignGovActionProposalId resolver
     liftIO $ writeGovActionProposal writer gapId GovActionProposal
@@ -363,7 +369,7 @@ processProposals ctx tc =
     case action of
       GovTreasuryWithdraw recipients _ ->
         forM_ recipients $ \(rewardAcctCred, amount) -> do
-          recipientId <- resolveAndWriteStakeAddress rewardAcctCred
+          recipientId <- resolveStakeCred rewardAcctCred
           liftIO $ writeTreasuryWithdrawal writer TreasuryWithdrawal
             { treasuryWithdrawalGovActionProposalId = gapId
             , treasuryWithdrawalStakeAddressId      = recipientId
@@ -562,7 +568,7 @@ resolveVoter = \case
     did <- resolveDRep ident
     pure (DRep, Just did, Nothing, Nothing)
   VoterStakePool poolHash -> do
-    (phId, _) <- resolveAndWritePoolHash poolHash
+    phId <- resolveAndWritePoolHash poolHash
     pure (SPO, Nothing, Just phId, Nothing)
   VoterCommittee credHash hasScript -> do
     chId <- resolveAndWriteCommitteeHash credHash hasScript

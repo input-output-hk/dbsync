@@ -57,7 +57,7 @@ newOnlySkips =
 -- Declared in the new schema but never populated by any extractor yet.
 unpopulatedInNew :: [(Text, Text)]
 unpopulatedInNew =
-  [ ("event_info", "declared but never populated in new")
+  [ ("event_info", "declared but never populated in either")
   , ("delisted_pool", "SMASH not wired in new")
   , ("reserved_pool_ticker", "SMASH not wired in new")
   ]

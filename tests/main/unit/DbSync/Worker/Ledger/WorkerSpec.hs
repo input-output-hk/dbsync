@@ -23,6 +23,7 @@ import Cardano.Prelude
 
 import Control.Concurrent.STM (newTBQueueIO, writeTBQueue)
 import qualified Control.Concurrent.Class.MonadSTM.Strict as Strict
+import qualified Data.Set as Set
 import qualified Data.Strict.Maybe as SMaybe
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 
@@ -199,6 +200,7 @@ mkApplyResult ne =
     , apEvents          = []
     , apGovActionState  = Nothing
     , apDepositsMap     = emptyDepositsMap
+    , apPoolsRegistered = Set.empty
     }
 
 mkNewEpoch :: Word64 -> Generic.NewEpoch

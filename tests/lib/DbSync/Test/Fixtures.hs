@@ -50,6 +50,7 @@ import qualified Data.ByteString as BS
 import DbSync.Parser.Types
   ( BlockEra (..)
   , CertAction (..)
+  , CredHash (..)
   , GenericBlock (..)
   , GenericTx (..)
   , GenericTxCertificate (..)
@@ -190,21 +191,28 @@ consumerTx = (emptyTx (padHash32 "VALID"))
   , txCertificates =
       [ GenericTxCertificate
           { txCertIndex  = 0
-          , txCertAction = CertStakeRegistration (BS.replicate 28 0xee) Nothing
+          , txCertAction = CertStakeRegistration (CredHash (BS.replicate 28 0xee) False) Nothing
           }
       ]
   }
 
--- | Phase-2 failure. Mirrors what the parser writes after the
--- isValid check: @txFee = 0@ sentinel, no inputs/outputs/withdrawals,
--- just the collateral input and return.
+-- | Phase-2 failure, in the shape the parser emits. For a failed tx the
+-- parser folds the collateral input into 'txInputs' and the collateral
+-- return into 'txOutputs' (numbered at the tx's output count, here 0),
+-- leaves 'txCollateralOutput' 'Nothing', and keeps 'txCollateralInputs'
+-- populated. With no @total_collateral@ field the fee stays at the @0@
+-- sentinel for the post-load backfill to compute as
+-- @SUM(input.value) - out_sum = 5_000_000 - 2_000_000 = 3_000_000@.
 phase2Tx :: GenericTx
 phase2Tx = (emptyTx (padHash32 "FAIL"))
   { txBlockIndex       = 1
   , txSize             = 300
   , txValidContract    = False
+  , txOutSum           = 2000000
+  , txInputs           = [GenericTxIn producerHash 1]
+  , txOutputs          = [mkOut 0 2000000]
   , txCollateralInputs = [GenericTxIn producerHash 1]
-  , txCollateralOutput = Just (mkOut 0 2000000)
+  , txCollateralOutput = Nothing
   }
 
 -- | Block carrying the consumer and the phase-2 failure.

@@ -18,6 +18,7 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 import DbSync.Parser.Types
   ( BlockEra (..)
+  , CredHash (..)
   , GenericBlock (..)
   , GenericTx (..)
   , GenericTxIn (..)
@@ -53,21 +54,21 @@ spec :: Spec
 spec = do
   describe "extractStakeCred / Shelley address parser" $ do
     it "extracts the stake credential from a base key-key address (0x00)" $
-      extractStakeCred (mkBaseAddr 0x00) `shouldBe` Just stakeCred28
+      extractStakeCred (mkBaseAddr 0x00) `shouldBe` Just (CredHash stakeCred28 False)
 
     it "extracts the stake credential from a base script-key address (0x10)" $
-      extractStakeCred (mkBaseAddr 0x10) `shouldBe` Just stakeCred28
+      extractStakeCred (mkBaseAddr 0x10) `shouldBe` Just (CredHash stakeCred28 False)
 
-    it "extracts the stake credential from a base key-script address (0x20)" $
-      extractStakeCred (mkBaseAddr 0x20) `shouldBe` Just stakeCred28
+    it "flags a script stake credential on a base key-script address (0x20)" $
+      extractStakeCred (mkBaseAddr 0x20) `shouldBe` Just (CredHash stakeCred28 True)
 
-    it "extracts the stake credential from a base script-script address (0x30)" $
-      extractStakeCred (mkBaseAddr 0x30) `shouldBe` Just stakeCred28
+    it "flags a script stake credential on a base script-script address (0x30)" $
+      extractStakeCred (mkBaseAddr 0x30) `shouldBe` Just (CredHash stakeCred28 True)
 
     it "ignores network-id bits (low nibble) when matching the type" $ do
       -- 0x01 = base key-key on mainnet, 0x10 already covered
-      extractStakeCred (mkBaseAddr 0x01) `shouldBe` Just stakeCred28
-      extractStakeCred (mkBaseAddr 0x21) `shouldBe` Just stakeCred28
+      extractStakeCred (mkBaseAddr 0x01) `shouldBe` Just (CredHash stakeCred28 False)
+      extractStakeCred (mkBaseAddr 0x21) `shouldBe` Just (CredHash stakeCred28 True)
 
     it "returns Nothing for pointer addresses (0x40, 0x50)" $ do
       extractStakeCred (mkBaseAddr 0x40) `shouldBe` Nothing
@@ -252,29 +253,35 @@ spec = do
       length refIds                      `shouldBe` 1
 
   describe "processUTxO: phase-2 failure (txValidContract = False)" $ do
-    it "writes no tx_out rows" $ do
+    -- The parser folds a failed tx's collateral inputs into 'txInputs'
+    -- and its collateral return into 'txOutputs', so the surviving
+    -- input/output land in tx_in / tx_out and no collateral_* rows are
+    -- written.
+    it "folds the collateral inputs into tx_in" $ do
       written <- runFullPipeline (blockWithFailedTx alonzoFailedTx)
-      length (twTxOuts written) `shouldBe` 0
+      length (twTxIns written) `shouldBe` 1
 
-    it "writes no tx_in rows" $ do
+    it "writes no collateral_tx_in rows" $ do
       written <- runFullPipeline (blockWithFailedTx alonzoFailedTx)
-      length (twTxIns written) `shouldBe` 0
+      length (twCollateralTxIns written) `shouldBe` 0
 
     it "writes no reference_tx_in rows" $ do
       written <- runFullPipeline (blockWithFailedTx alonzoFailedTx)
       length (twReferenceTxIns written) `shouldBe` 0
 
-    it "writes the collateral_tx_in rows" $ do
-      written <- runFullPipeline (blockWithFailedTx alonzoFailedTx)
-      length (twCollateralTxIns written) `shouldBe` 1
-
-    it "writes no collateral_tx_out for an Alonzo failure" $ do
-      written <- runFullPipeline (blockWithFailedTx alonzoFailedTx)
+    it "writes no collateral_tx_out rows" $ do
+      written <- runFullPipeline (blockWithFailedTx babbageFailedTx)
       length (twCollateralTxOuts written) `shouldBe` 0
 
-    it "writes the collateral_tx_out for a Babbage+ failure" $ do
+    it "folds an Alonzo failure's collateral return into no tx_out" $ do
+      -- Alonzo has no collateral-return output, so the failed tx yields
+      -- no tx_out row.
+      written <- runFullPipeline (blockWithFailedTx alonzoFailedTx)
+      length (twTxOuts written) `shouldBe` 0
+
+    it "folds a Babbage+ collateral return into tx_out" $ do
       written <- runFullPipeline (blockWithFailedTx babbageFailedTx)
-      length (twCollateralTxOuts written) `shouldBe` 1
+      length (twTxOuts written) `shouldBe` 1
 
     it "still emits the address row for a Babbage+ collateral return" $ do
       written <- runFullPipeline (blockWithFailedTx babbageFailedTx)
@@ -458,25 +465,28 @@ mkOutput idx rawAddr value = GenericTxOut
 blockWithFailedTx :: GenericTx -> GenericBlock
 blockWithFailedTx tx = shelleyEmptyBlock { blkTxs = [tx] }
 
--- | An Alonzo-shape failed phase-2 tx: collateral inputs only, no
--- collateral return (the field exists in the parser only for Babbage+).
--- The parser's failed-path produces @txOutputs = []@ regardless, but
--- we leave one output here to assert the extractor ignores it.
+-- | An Alonzo-shape failed phase-2 tx, in the shape the parser emits:
+-- the collateral inputs are folded into 'txInputs' (what the chain
+-- actually consumed) and 'txOutputs' is empty because Alonzo has no
+-- collateral-return output. 'txCollateralInputs' stays populated as the
+-- parser leaves it; 'txCollateralOutput' is 'Nothing'.
 alonzoFailedTx :: GenericTx
 alonzoFailedTx = (singleOutputTx (mkBaseAddr 0x00) 5_000_000)
   { txValidContract    = False
-  , txInputs           = []
+  , txInputs           = [GenericTxIn (BS.replicate 32 0xcc) 0]
   , txOutputs          = []
   , txCollateralInputs = [GenericTxIn (BS.replicate 32 0xcc) 0]
   , txReferenceInputs  = []
   , txCollateralOutput = Nothing
   }
 
--- | A Babbage+-shape failed phase-2 tx: collateral inputs and a
--- collateral-return output.
+-- | A Babbage+-shape failed phase-2 tx: like 'alonzoFailedTx' but with a
+-- collateral-return output, which the parser folds into 'txOutputs'
+-- (numbered at the tx's output count) and leaves 'txCollateralOutput'
+-- 'Nothing'.
 babbageFailedTx :: GenericTx
 babbageFailedTx = alonzoFailedTx
-  { txCollateralOutput = Just (mkOutput 1 (mkBaseAddr 0x00) 4_000_000)
+  { txOutputs = [mkOutput 1 (mkBaseAddr 0x00) 4_000_000]
   }
 
 -- ---------------------------------------------------------------------------

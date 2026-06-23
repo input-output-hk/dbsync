@@ -23,8 +23,10 @@ import DbSync.Parser.Types
   , GenericTxCertificate (..)
   , GenericTxWithdrawal (..)
   , CertAction (..)
+  , CredHash (..)
   , MirAction (..)
   , MirPot (..)
+  , rewardAddrCredHash
   )
 import DbSync.Db.Schema.EpochBoundary
   ( PotTransfer (..)
@@ -45,9 +47,9 @@ import DbSync.Extractor
   , TxContext (..)
   , blockStakeKeyDeposit
   )
-import DbSync.Extractor.SharedDedup (resolveAndWritePoolHash, resolveAndWriteStakeAddress)
+import DbSync.Extractor.SharedDedup (resolveAndWritePoolHash, resolveStakeCred)
 import DbSync.Resolver (HasResolver (..))
-import DbSync.Util (coinToDbLovelace, rewardAddrCred)
+import DbSync.Util (coinToDbLovelace)
 import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- ---------------------------------------------------------------------------
@@ -92,8 +94,8 @@ processStakeDelegation ctx = do
       case txCertAction cert of
 
         -- Stake registration (Shelley-Babbage + Conway)
-        CertStakeRegistration credHash mDeposit -> do
-          saId <- resolveAndWriteStakeAddress credHash
+        CertStakeRegistration cred mDeposit -> do
+          saId <- resolveStakeCred cred
           liftIO $ writeStakeRegistration writer StakeRegistration
             { stakeRegistrationAddrId    = saId
             , stakeRegistrationCertIndex = certIdx
@@ -103,8 +105,8 @@ processStakeDelegation ctx = do
             }
 
         -- Stake deregistration
-        CertStakeDeregistration credHash -> do
-          saId <- resolveAndWriteStakeAddress credHash
+        CertStakeDeregistration cred -> do
+          saId <- resolveStakeCred cred
           liftIO $ writeStakeDeregistration writer StakeDeregistration
             { stakeDeregistrationAddrId     = saId
             , stakeDeregistrationCertIndex  = certIdx
@@ -114,9 +116,9 @@ processStakeDelegation ctx = do
             }
 
         -- Delegation
-        CertDelegation credHash poolKeyHash -> do
-          saId <- resolveAndWriteStakeAddress credHash
-          (phId, _) <- resolveAndWritePoolHash poolKeyHash
+        CertDelegation cred poolKeyHash -> do
+          saId <- resolveStakeCred cred
+          phId <- resolveAndWritePoolHash poolKeyHash
           liftIO $ writeDelegation writer Delegation
             { delegationAddrId        = saId
             , delegationCertIndex     = certIdx
@@ -128,9 +130,9 @@ processStakeDelegation ctx = do
             }
 
         -- Conway combined: register + delegate
-        CertConwayRegDeleg credHash poolKeyHash mDeposit -> do
-          saId <- resolveAndWriteStakeAddress credHash
-          (phId, _) <- resolveAndWritePoolHash poolKeyHash
+        CertConwayRegDeleg cred poolKeyHash mDeposit -> do
+          saId <- resolveStakeCred cred
+          phId <- resolveAndWritePoolHash poolKeyHash
           liftIO $ writeStakeRegistration writer StakeRegistration
             { stakeRegistrationAddrId    = saId
             , stakeRegistrationCertIndex = certIdx
@@ -148,11 +150,35 @@ processStakeDelegation ctx = do
             , delegationRedeemerId    = Nothing
             }
 
+        -- DRep-only delegation. The DRep half is consumed by the
+        -- governance extractor; here a present deposit (RegDeleg variant)
+        -- materialises the stake_registration.
+        CertConwayDelegVote cred _drep mDeposit ->
+          forM_ mDeposit $ \_ -> do
+            saId <- resolveStakeCred cred
+            liftIO $ writeStakeRegistration writer StakeRegistration
+              { stakeRegistrationAddrId    = saId
+              , stakeRegistrationCertIndex = certIdx
+              , stakeRegistrationEpochNo   = epochNo
+              , stakeRegistrationTxId      = txId
+              , stakeRegistrationDeposit   = stakeDeposit mDeposit
+              }
+
         -- Combined stake-pool + DRep delegation; the DRep half is
-        -- consumed by the governance extractor.
-        CertConwayDelegStakeVote credHash poolKeyHash _drep -> do
-          saId <- resolveAndWriteStakeAddress credHash
-          (phId, _) <- resolveAndWritePoolHash poolKeyHash
+        -- consumed by the governance extractor. A present deposit means
+        -- the cert also registers the stake key (RegDeleg variant), so a
+        -- stake_registration row is materialised here too.
+        CertConwayDelegStakeVote cred poolKeyHash _drep mDeposit -> do
+          saId <- resolveStakeCred cred
+          phId <- resolveAndWritePoolHash poolKeyHash
+          forM_ mDeposit $ \_ ->
+            liftIO $ writeStakeRegistration writer StakeRegistration
+              { stakeRegistrationAddrId    = saId
+              , stakeRegistrationCertIndex = certIdx
+              , stakeRegistrationEpochNo   = epochNo
+              , stakeRegistrationTxId      = txId
+              , stakeRegistrationDeposit   = stakeDeposit mDeposit
+              }
           liftIO $ writeDelegation writer Delegation
             { delegationAddrId        = saId
             , delegationCertIndex     = certIdx
@@ -172,8 +198,7 @@ processStakeDelegation ctx = do
 
     -- 2. Process withdrawals
     forM_ (txWithdrawals gtx) $ \w -> do
-      let credHash = rewardAddrCred (txwRewardAddress w)
-      saId <- resolveAndWriteStakeAddress credHash
+      saId <- resolveStakeCred (rewardAddrCredHash (txwRewardAddress w))
       liftIO $ writeWithdrawal writer Withdrawal
         { withdrawalAddrId     = saId
         , withdrawalTxId       = txId
@@ -219,10 +244,10 @@ writeMirRecipient
      , MonadReader env m
      , MonadIO m
      )
-  => TxId -> Word16 -> MirPot -> (ByteString, Integer) -> m ()
-writeMirRecipient txId certIdx pot (credHash, dcoin) = do
+  => TxId -> Word16 -> MirPot -> (CredHash, Integer) -> m ()
+writeMirRecipient txId certIdx pot (cred, dcoin) = do
   writer <- asks getWriter
-  saId   <- resolveAndWriteStakeAddress credHash
+  saId   <- resolveStakeCred cred
   let amount = toDbInt65 (fromInteger dcoin)
   case pot of
     MirReserves ->

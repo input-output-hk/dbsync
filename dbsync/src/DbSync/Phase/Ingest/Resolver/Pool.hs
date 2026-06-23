@@ -1,6 +1,7 @@
 -- | Ingest 'IdResolver' fragments for the @pool@ extractor.
 module DbSync.Phase.Ingest.Resolver.Pool
   ( resolvePoolHashIngest
+  , resolvePoolHashQueryIngest
   , assignPoolUpdateIdIngest
   , assignPoolMetadataRefIdIngest
   ) where
@@ -14,7 +15,7 @@ import DbSync.Db.Schema.Ids (PoolHashId (..), PoolMetadataRefId (..), PoolUpdate
 import DbSync.Db.Schema.Core (PoolHash)
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Phase.Ingest.Counter (IdCounters (..))
-import DbSync.Phase.Ingest.DedupStore (DedupStores (..), lookupOrInsert)
+import DbSync.Phase.Ingest.DedupStore (DedupStores (..), lookupOnly, lookupOrInsert)
 import DbSync.Phase.Ingest.Resolver.Internal (allocateNextId)
 
 -- | Dedup lookup against the LSM-backed pool_hash table.
@@ -24,6 +25,13 @@ resolvePoolHashIngest dedupStores hash _ph = do
   let !key = SBS.toShort hash
   (phId, isNew) <- lookupOrInsert key (dstPoolHash dedupStores)
   pure (PoolHashId phId, isNew)
+
+-- | Query-only pool_hash lookup, for resolving a slot leader's pool
+-- without registering a new pool for genesis-key leaders.
+resolvePoolHashQueryIngest :: DedupStores -> ByteString -> IO (Maybe PoolHashId)
+resolvePoolHashQueryIngest dedupStores hash = do
+  let !key = SBS.toShort hash
+  fmap PoolHashId <$> lookupOnly key (dstPoolHash dedupStores)
 
 assignPoolUpdateIdIngest :: IORef ExtractState -> IO PoolUpdateId
 assignPoolUpdateIdIngest extractStateRef =

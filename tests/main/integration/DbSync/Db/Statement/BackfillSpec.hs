@@ -272,18 +272,18 @@ spec = describe "DbSync.Db.Statement.Worker.Backfill" $
         plan `shouldMention` tdName txTableDef
         plan `shouldNotMention` "HashAggregate"
 
-      it "looks up collateral inputs via the pre-resolve index" $ do
+      it "looks up the failed tx's folded inputs via tx_in_tx_in_id_idx" $ do
         plan <- explainOf backfillPhaseTwoFeeSql
-        plan `shouldMention` "collateral_tx_in_tx_in_id_idx"
+        plan `shouldMention` "tx_in_tx_in_id_idx"
 
-      it "looks up collateral outputs via the pre-resolve index" $ do
+      it "looks up the producing outputs via tx_out_tx_id_index_idx" $ do
         plan <- explainOf backfillPhaseTwoFeeSql
-        plan `shouldMention` "collateral_tx_out_tx_id_idx"
+        plan `shouldMention` "tx_out_tx_id_index_idx"
 
     describe "backfillByronFeeStmt plan" $ do
-      it "drives off the block.proto_major filter, not the tx_in aggregate" $ do
+      it "drives off the block.vrf_key filter, not the tx_in aggregate" $ do
         plan <- explainOf backfillByronFeeSql
-        plan `shouldMention` tableColumn blockTableDef "proto_major"
+        plan `shouldMention` tableColumn blockTableDef "vrf_key"
         plan `shouldNotMention` "HashAggregate"
 
       it "looks up Byron tx inputs via tx_in_tx_in_id_idx" $ do

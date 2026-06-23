@@ -17,6 +17,8 @@ module DbSync.Parser.Types
   , GenericTx (..)
   , GenericTxIn (..)
   , GenericTxOut (..)
+  , CredHash (..)
+  , rewardAddrCredHash
   , GenericTxCertificate (..)
   , GenericTxWithdrawal (..)
   , GenericTxScript (..)
@@ -51,6 +53,7 @@ import Cardano.Prelude
 import Cardano.Ledger.Metadata (Metadatum)
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
+import qualified Data.ByteString as BS
 import qualified Data.Set as Set
 import Data.Time.Clock (UTCTime)
 
@@ -214,11 +217,12 @@ data GenericTxScript = GenericTxScript
   deriving stock (Eq, Show)
 
 -- | A Plutus datum witness. 'gtdValue' is the JSON rendering for
--- the @datum.value@ JSONB column.
+-- the @datum.value@ JSONB column, kept lazy so it is only forced
+-- when the deduplicated @datum@ row is written.
 data GenericTxDatum = GenericTxDatum
   { gtdHash  :: !ByteString
   , gtdBytes :: !ByteString
-  , gtdValue :: !(Maybe Text)
+  , gtdValue :: Maybe Text
   }
   deriving stock (Eq, Show)
 
@@ -252,12 +256,35 @@ data GenericTxOut = GenericTxOut
   , txOutAddressRaw  :: !ByteString   -- ^ Raw address bytes
   , txOutValue       :: !Word64       -- ^ Lovelace value
   , txOutDataHash    :: !(Maybe ByteString)
-  , txOutInlineDatum :: !(Maybe ByteString)
+  , txOutInlineDatum :: !(Maybe GenericTxDatum)
+      -- ^ Babbage+ inline datum (hash + CBOR + JSON), 'Nothing' for a
+      -- hash-only or datum-less output. Drives @tx_out.inline_datum_id@
+      -- and the deduplicated @datum@ row.
   , txOutRefScript   :: !(Maybe ByteString)
   , txOutMultiAssets  :: ![(ByteString, ByteString, Integer)]
       -- ^ [(policy_id, asset_name, quantity)]
   }
   deriving stock (Show)
+
+-- | A credential flattened to its 28-byte hash together with whether
+-- that hash is a script hash (vs. a stake/verification-key hash). The
+-- flag selects the reward-address header nibble (@0xE_@ key vs @0xF_@
+-- script) and whether @stake_address.script_hash@ is populated, so it
+-- must travel with the bytes rather than be discarded at parse time.
+data CredHash = CredHash
+  { chHash     :: !ByteString
+  , chIsScript :: !Bool
+  }
+  deriving stock (Eq, Show)
+
+-- | Split a serialised reward address (@header || credential_hash@)
+-- into its 28-byte credential and the script\/key flag carried by
+-- header bit 4 (@0xF_@ script, @0xE_@ key). An empty input yields an
+-- empty key credential rather than panicking on malformed data.
+rewardAddrCredHash :: ByteString -> CredHash
+rewardAddrCredHash bs = case BS.uncons bs of
+  Just (header, cred) -> CredHash cred (header .&. 0x10 /= 0)
+  Nothing             -> CredHash bs False
 
 -- | A certificate within a transaction.
 --
@@ -277,12 +304,12 @@ data GenericTxCertificate = GenericTxCertificate
 data CertAction
   -- Stake delegation certificates (Shelley+)
   = CertStakeRegistration
-      !ByteString              -- ^ Stake credential hash (raw 28 bytes)
+      !CredHash                -- ^ Stake credential
       !(Maybe Word64)          -- ^ Deposit (Conway+ only; Nothing for Shelley-Babbage)
   | CertStakeDeregistration
-      !ByteString              -- ^ Stake credential hash
+      !CredHash                -- ^ Stake credential
   | CertDelegation
-      !ByteString              -- ^ Stake credential hash
+      !CredHash                -- ^ Stake credential
       !ByteString              -- ^ Pool key hash (28 bytes)
 
   -- Pool certificates (Shelley+)
@@ -293,33 +320,35 @@ data CertAction
 
   -- Conway combined delegation certificates
   | CertConwayRegDeleg
-      !ByteString              -- ^ Stake credential hash
+      !CredHash                -- ^ Stake credential
       !ByteString              -- ^ Pool key hash
       !(Maybe Word64)          -- ^ Deposit
   | CertConwayDelegVote
-      !ByteString              -- ^ Stake credential hash
+      !CredHash                -- ^ Stake credential
       !DRepIdent               -- ^ DRep target (credential or special abstain/no-confidence)
+      !(Maybe Word64)          -- ^ Registration deposit when the cert also registers the stake key (RegDeleg variant); Nothing for a pure delegation
   | CertConwayDelegStakeVote
-      !ByteString              -- ^ Stake credential hash
+      !CredHash                -- ^ Stake credential
       !ByteString              -- ^ Pool key hash
       !DRepIdent               -- ^ DRep target
+      !(Maybe Word64)          -- ^ Registration deposit when the cert also registers the stake key (RegDeleg variant); Nothing for a pure delegation
 
   -- Conway governance certificates (for future Governance extractor)
   | CertDRepRegistration
-      !ByteString              -- ^ DRep credential hash
+      !CredHash                -- ^ DRep credential
       !Word64                  -- ^ Deposit
       !(Maybe AnchorData)      -- ^ Anchor (URL + hash) if present
   | CertDRepDeregistration
-      !ByteString              -- ^ DRep credential hash
+      !CredHash                -- ^ DRep credential
       !Word64                  -- ^ Deposit refund
   | CertDRepUpdate
-      !ByteString              -- ^ DRep credential hash
+      !CredHash                -- ^ DRep credential
       !(Maybe AnchorData)      -- ^ Anchor (URL + hash) if present
   | CertCommitteeAuth
-      !ByteString              -- ^ Cold key credential hash
-      !ByteString              -- ^ Hot key credential hash
+      !CredHash                -- ^ Cold key credential
+      !CredHash                -- ^ Hot key credential
   | CertCommitteeResign
-      !ByteString              -- ^ Cold key credential hash
+      !CredHash                -- ^ Cold key credential
       !(Maybe AnchorData)      -- ^ Anchor (URL + hash) if present
 
   -- | Move-Instantaneous-Reward cert (Shelley-Babbage). The
@@ -344,8 +373,8 @@ data MirPot
 
 -- | Payload of a MIR certificate.
 data MirAction
-  = MirToStakeAddresses ![(ByteString, Integer)]
-      -- ^ Per-recipient (stake credential hash, delta-coin). Positive
+  = MirToStakeAddresses ![(CredHash, Integer)]
+      -- ^ Per-recipient (stake credential, delta-coin). Positive
       --   means \"credit the recipient from the named pot\".
   | MirPotToPot !Integer
       -- ^ Pot-to-pot transfer. Positive means \"send this much from
@@ -356,8 +385,8 @@ data MirAction
 -- the protocol-defined \"always abstain\" / \"always no-confidence\"
 -- meta-DReps.
 data DRepIdent
-  = DRepCred !ByteString
-      -- ^ DRep credential hash (28 bytes, key or script)
+  = DRepCred !CredHash
+      -- ^ DRep credential (key or script)
   | DRepAlwaysAbstain
   | DRepAlwaysNoConfidence
   deriving stock (Eq, Show)
@@ -397,7 +426,7 @@ data GenericGovAction
   = GovParameterChange  !(Maybe GovActionRef) !GenericParamProposal !(Maybe ByteString)
   | GovHardForkInit     !(Maybe GovActionRef) !Word16 !Word16
       -- ^ Target @(major, minor)@ protocol version.
-  | GovTreasuryWithdraw ![(ByteString, Word64)] !(Maybe ByteString)
+  | GovTreasuryWithdraw ![(CredHash, Word64)] !(Maybe ByteString)
       -- ^ @[(reward-account, lovelace)]@ + optional guardrail script hash.
   | GovNoConfidence     !(Maybe GovActionRef)
   | GovUpdateCommittee
@@ -419,7 +448,7 @@ data GenericGovAction
 -- column stores it verbatim.
 data GenericGovActionProposal = GenericGovActionProposal
   { ggapTxIndex         :: !Word64
-  , ggapReturnAddrCred  :: !ByteString    -- ^ Stake credential of the return-deposit address.
+  , ggapReturnAddrCred  :: !CredHash      -- ^ Stake credential of the return-deposit address.
   , ggapDeposit         :: !Word64        -- ^ Deposit amount in Lovelace.
   , ggapAnchor          :: !AnchorData    -- ^ Anchor URL+hash for the off-chain document.
   , ggapAction          :: !GenericGovAction

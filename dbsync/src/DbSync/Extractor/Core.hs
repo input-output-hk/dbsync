@@ -29,7 +29,7 @@ import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 
 import qualified Data.ByteString as BS
 
-import DbSync.Parser.Types (GenericBlock (..))
+import DbSync.Parser.Types (BlockEra (..), GenericBlock (..))
 import qualified DbSync.Parser.Types as G
 import DbSync.Db.Schema.Core
   ( Block (..)
@@ -186,8 +186,9 @@ affectsDeposit = \case
   G.CertDRepDeregistration{}   -> True
   G.CertOther{}                -> True
   G.CertDelegation{}           -> False
-  G.CertConwayDelegVote{}      -> False
-  G.CertConwayDelegStakeVote{} -> False
+  -- Registering variants (deposit present) lock a stake-key deposit.
+  G.CertConwayDelegVote _ _ mDeposit        -> isJust mDeposit
+  G.CertConwayDelegStakeVote _ _ _ mDeposit -> isJust mDeposit
   G.CertDRepUpdate{}           -> False
   G.CertCommitteeAuth{}        -> False
   G.CertCommitteeResign{}      -> False
@@ -226,7 +227,7 @@ mkSlotLeader :: Maybe PoolHashId -> GenericBlock -> SlotLeader
 mkSlotLeader mPoolHashId gb = SlotLeader
   { slotLeaderHash        = blkSlotLeader gb
   , slotLeaderPoolHashId  = mPoolHashId
-  , slotLeaderDescription = mkSlotLeaderDesc (blkSlotLeader gb)
+  , slotLeaderDescription = mkSlotLeaderDesc gb mPoolHashId
   }
 
 -- | Build a 'Tx' record from a 'GenericTx'.
@@ -250,12 +251,18 @@ mkTx blkId gtx = Tx
 -- * Internal helpers
 -- ---------------------------------------------------------------------------
 
--- | Generate a slot leader description from the raw hash.
-mkSlotLeaderDesc :: ByteString -> Text
-mkSlotLeaderDesc hash =
-  "Pool-" <> shortHash
+-- | Describe a slot leader. Byron EBBs carry a synthetic null leader;
+-- Byron regular blocks are signed by a genesis-key delegate; from
+-- Shelley on, a block with no resolved pool hash is a genesis-key
+-- delegate, otherwise it is a registered stake pool.
+mkSlotLeaderDesc :: GenericBlock -> Maybe PoolHashId -> Text
+mkSlotLeaderDesc gb mPoolHashId
+  | blkIsEBB gb           = "Epoch boundary slot leader"
+  | blkEra gb == Byron    = "ByronGenesisKey-" <> shortHash
+  | Nothing <- mPoolHashId = "ShelleyGenesisKey-" <> shortHash
+  | otherwise             = "Pool-" <> shortHash
   where
-    shortHash = toS @[Char] @Text $ concatMap hexByte (take 8 $ BS.unpack hash)
+    shortHash = toS @[Char] @Text $ concatMap hexByte (take 8 $ BS.unpack (blkSlotLeader gb))
     hexByte :: Word8 -> [Char]
     hexByte w =
       let hi = w `div` 16

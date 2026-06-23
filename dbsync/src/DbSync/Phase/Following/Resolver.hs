@@ -87,6 +87,7 @@ mkFollowResolver conn = do
 
       -- Pool
     , resolvePoolHash         = Pool.resolvePoolHashConn         conn
+    , resolvePoolHashQuery    = Pool.resolvePoolHashQueryConn    conn
     , assignPoolUpdateId      = Pool.assignPoolUpdateIdConn      conn
     , assignPoolMetadataRefId = Pool.assignPoolMetadataRefIdConn conn
 
@@ -179,6 +180,7 @@ mkBufferedFollowResolver conn preAlloc buf = do
 
       -- Pool
     , resolvePoolHash         = Pool.resolvePoolHashBuf         conn cache
+    , resolvePoolHashQuery    = Pool.resolvePoolHashQueryBuf    conn cache
     , assignPoolUpdateId      = Pool.assignPoolUpdateIdBuf      preAlloc
     , assignPoolMetadataRefId = Pool.assignPoolMetadataRefIdBuf preAlloc
 

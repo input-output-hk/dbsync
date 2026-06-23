@@ -9,10 +9,11 @@
 -- During 'IngestChainHistory', this module is called once at startup
 -- to create the UNLOGGED tables that COPY streams will write into.
 module DbSync.Db.Schema.Init
-  ( -- * Schema lifecycle
+  (     -- * Schema lifecycle
     initSchema
   , initSchemaStatements
   , dropSchema
+  , truncateDataTables
   , prepareSchemaForFollowTip
 
     -- * Extractor presence
@@ -178,6 +179,24 @@ dropSchema tableDefs connStr = do
   -- Drop the system temp table used by the ledger-worker deposit flush.
   execPsql connStr $
     "DROP TABLE IF EXISTS " <> quoteIdent epochParamPendingTableName <> " CASCADE;"
+
+-- | Empty every data table and reset its identity sequences, leaving
+-- the schema and the @dbsync_sync_state@ singleton in place.
+--
+-- The fresh-boot purge for a database that crashed mid-Ingest before
+-- the first epoch-boundary commit: @last_committed_slot@ is still NULL
+-- so the boot is classified fresh, but orphan rows from the aborted
+-- leg survive and would collide with the genesis re-COPY. One
+-- @TRUNCATE … RESTART IDENTITY CASCADE@ clears them and rewinds the
+-- identity sequences so the re-COPY starts from id 1.
+truncateDataTables :: [TableDef] -> Text -> IO ()
+truncateDataTables tableDefs connStr =
+  unless (null names) $
+    execPsql connStr $
+      "TRUNCATE TABLE " <> T.intercalate ", " (map quoteIdent names)
+        <> " RESTART IDENTITY CASCADE;"
+  where
+    names = map tdName tableDefs <> [epochParamPendingTableName]
 
 -- | Flip UNLOGGED extractor tables to LOGGED and attach an
 -- @<table>_id_seq@. Idempotent. Precondition for hasql INSERTs.

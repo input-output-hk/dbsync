@@ -27,10 +27,7 @@ import DbSync.Extractor
   , TxContext (..)
   )
 import DbSync.Extractor.Core (mkSlotLeader)
-import DbSync.Extractor.SharedDedup
-  ( resolveAndWritePoolHash
-  , resolveAndWriteStakeAddress
-  )
+import DbSync.Extractor.SharedDedup (resolveStakeCred)
 import DbSync.Extractor.UTxO (extractStakeCred)
 import DbSync.Db.Schema.Ids (PoolHashId, StakeAddressId)
 import DbSync.Phase.Current (HasCurrentPhase (..))
@@ -128,15 +125,17 @@ processBlock block = do
 --
 -- Byron blocks delegate slot leadership through genesis keys (not pool
 -- keys) and EBBs carry a synthetic null leader, so both produce
--- 'Nothing' here. For everything else we dedup-write a pool_hash row.
+-- 'Nothing'. For everything else we query (without inserting) the
+-- registered pool hashes: a genesis-key delegate misses and stays
+-- 'Nothing', so it is never given a fabricated pool_hash row.
 resolveSlotLeaderPoolHash
-  :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
+  :: (HasResolver env, MonadReader env m, MonadIO m)
   => GenericBlock -> m (Maybe PoolHashId)
 resolveSlotLeaderPoolHash block
   | blkEra block == Byron = pure Nothing
   | otherwise = do
-      (phId, _) <- resolveAndWritePoolHash (blkSlotLeader block)
-      pure (Just phId)
+      resolver <- asks getResolver
+      liftIO $ resolvePoolHashQuery resolver (blkSlotLeader block)
 
 -- | Pre-resolve the @stake_address@ FK for one tx output.
 --
@@ -154,4 +153,4 @@ resolveOutStakeId
 resolveOutStakeId gout =
   case extractStakeCred (txOutAddressRaw gout) of
     Nothing -> pure Nothing
-    Just credHash -> Just <$> resolveAndWriteStakeAddress credHash
+    Just cred -> Just <$> resolveStakeCred cred

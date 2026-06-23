@@ -13,6 +13,8 @@ module DbSync.Compare.Connect
   ) where
 
 import Cardano.Prelude
+import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import qualified Hasql.Connection as Conn
 import qualified Hasql.Connection.Settings as Settings
 import qualified Hasql.Decoders as D
@@ -36,6 +38,7 @@ data DbConn = DbConn
   { dbcRole :: !DbRole
   , dbcName :: !Text
   , dbcConn :: !Conn.Connection
+  , dbcVerbose :: !Bool -- ^ Echo each SQL statement to stderr before running it.
   }
 
 newtype CompareError = CompareError Text
@@ -56,52 +59,59 @@ mkSettings name mHost mPort mUser mPass =
           [Settings.hostAndPort (fromMaybe "localhost" mHost) (maybe 5432 fromIntegral mPort)]
       | otherwise = []
 
-withDb :: Settings.Settings -> DbRole -> Text -> (DbConn -> IO a) -> IO a
-withDb settings role name action =
-  bracket acquire Conn.release (action . DbConn role name)
+-- Acquire a connection, apply a per-statement timeout so a pathological query
+-- fails loudly instead of hanging, and run the action.
+withDb :: Settings.Settings -> DbRole -> Text -> Bool -> Int -> (DbConn -> IO a) -> IO a
+withDb settings role name verbose timeoutSeconds action =
+  bracket acquire Conn.release $ \rawConn -> do
+    let conn = DbConn role name rawConn verbose
+    setStatementTimeout conn timeoutSeconds
+    action conn
   where
     acquire =
       Conn.acquire settings >>= \case
         Left err -> throwIO (CompareError ("Could not connect to " <> name <> ": " <> show err))
         Right conn -> pure conn
 
+setStatementTimeout :: DbConn -> Int -> IO ()
+setStatementTimeout conn seconds =
+  void $ run conn ("SET statement_timeout = " <> T.pack (show (seconds * 1000))) (D.noResult)
+
 -- ---------------------------------------------------------------------------
 -- * Query helpers
 -- ---------------------------------------------------------------------------
 
-runSession :: DbConn -> Sess.Session a -> IO a
-runSession conn session =
-  Conn.use (dbcConn conn) session >>= \case
-    Left err -> throwIO (CompareError ("Query failed on " <> dbcName conn <> ": " <> show err))
+-- Echo (when verbose) and execute one statement, surfacing the SQL on failure.
+run :: DbConn -> Text -> D.Result a -> IO a
+run conn sql decoder = do
+  when (dbcVerbose conn) $
+    TIO.hPutStrLn stderr (roleLabel (dbcRole conn) <> "> " <> T.unwords (T.words sql))
+  Conn.use (dbcConn conn) (Sess.statement () (Stmt.unpreparable sql E.noParams decoder)) >>= \case
+    Left err -> throwIO (CompareError ("Query failed on " <> dbcName conn <> ":\n  " <> sql <> "\n  " <> show err))
     Right a -> pure a
-
-stmtText :: Text -> D.Result a -> Stmt.Statement () a
-stmtText sql = Stmt.unpreparable sql E.noParams
 
 queryScalarInt :: DbConn -> Text -> IO Int64
 queryScalarInt conn sql =
-  runSession conn (Sess.statement () (stmtText sql (D.singleRow (D.column (D.nonNullable D.int8)))))
+  run conn sql (D.singleRow (D.column (D.nonNullable D.int8)))
 
 queryMaybeInt :: DbConn -> Text -> IO (Maybe Int64)
 queryMaybeInt conn sql =
-  runSession conn (Sess.statement () (stmtText sql (D.singleRow (D.column (D.nullable D.int8)))))
+  run conn sql (D.singleRow (D.column (D.nullable D.int8)))
 
 queryScalarText :: DbConn -> Text -> IO Text
 queryScalarText conn sql =
-  runSession conn (Sess.statement () (stmtText sql (D.singleRow (D.column (D.nonNullable D.text)))))
+  run conn sql (D.singleRow (D.column (D.nonNullable D.text)))
 
 queryTextList :: DbConn -> Text -> IO [Text]
 queryTextList conn sql =
-  runSession conn (Sess.statement () (stmtText sql (D.rowList (D.column (D.nonNullable D.text)))))
+  run conn sql (D.rowList (D.column (D.nonNullable D.text)))
 
 queryBool :: DbConn -> Text -> IO Bool
 queryBool conn sql =
-  runSession conn (Sess.statement () (stmtText sql (D.singleRow (D.column (D.nonNullable D.bool)))))
+  run conn sql (D.singleRow (D.column (D.nonNullable D.bool)))
 
 -- Run SQL whose SELECT projects @ncols@ columns, each read as nullable text.
 -- Callers cast every column @::text@ so one decoder serves any row shape.
 queryRows :: DbConn -> Int -> Text -> IO [[Maybe Text]]
 queryRows conn ncols sql =
-  runSession conn (Sess.statement () (stmtText sql decoder))
-  where
-    decoder = D.rowList (replicateM ncols (D.column (D.nullable D.text)))
+  run conn sql (D.rowList (replicateM ncols (D.column (D.nullable D.text))))

@@ -12,6 +12,9 @@ module DbSync.Db.Statement.Worker.Resume
   ( -- * Cleanup deletes
     deleteBySlotStmt
   , deleteByBlockSlotStmt
+  , deleteByTxFkSlotStmt
+  , deleteByTxOutFkSlotStmt
+  , deleteByEpochSlotStmt
   , deleteByIdCounterStmt
 
     -- * Dedup-map rebuild selects
@@ -71,6 +74,66 @@ deleteByBlockSlotStmt tableName =
     sql = T.concat
       [ "DELETE FROM ", quoteIdent tableName
       , " WHERE block_id IN (SELECT id FROM \"block\" WHERE slot_no > $1)"
+      ]
+    encoder = fromIntegral >$< E.param (E.nonNullable E.int8)
+
+-- | Trim a table that anchors to the chain through a FK to @tx@
+-- (e.g. @tx_metadata.tx_id@, @pool_retire.announced_tx_id@). Joins
+-- the FK column back to @block.slot_no@. For identity-leaf fact
+-- tables that carry neither @slot_no@ nor @block_id@ and have no id
+-- counter, this is the only resume-time pruning that reaches them.
+deleteByTxFkSlotStmt
+  :: Text  -- ^ Table to delete from.
+  -> Text  -- ^ FK column on that table referencing @tx.id@.
+  -> Stmt.Statement Word64 Int64
+deleteByTxFkSlotStmt tableName fkCol =
+  Stmt.unpreparable sql encoder D.rowsAffected
+  where
+    sql = T.concat
+      [ "DELETE FROM ", quoteIdent tableName, " AS t"
+      , " USING \"tx\", \"block\""
+      , " WHERE t.", quoteIdent fkCol, " = \"tx\".id"
+      , " AND \"tx\".block_id = \"block\".id"
+      , " AND \"block\".slot_no > $1"
+      ]
+    encoder = fromIntegral >$< E.param (E.nonNullable E.int8)
+
+-- | Trim a table that anchors through a FK to @tx_out@
+-- (e.g. @ma_tx_out.tx_out_id@). Joins @tx_out -> tx -> block@.
+deleteByTxOutFkSlotStmt
+  :: Text  -- ^ Table to delete from.
+  -> Text  -- ^ FK column on that table referencing @tx_out.id@.
+  -> Stmt.Statement Word64 Int64
+deleteByTxOutFkSlotStmt tableName fkCol =
+  Stmt.unpreparable sql encoder D.rowsAffected
+  where
+    sql = T.concat
+      [ "DELETE FROM ", quoteIdent tableName, " AS t"
+      , " USING \"tx_out\", \"tx\", \"block\""
+      , " WHERE t.", quoteIdent fkCol, " = \"tx_out\".id"
+      , " AND \"tx_out\".tx_id = \"tx\".id"
+      , " AND \"tx\".block_id = \"block\".id"
+      , " AND \"block\".slot_no > $1"
+      ]
+    encoder = fromIntegral >$< E.param (E.nonNullable E.int8)
+
+-- | Trim a ledger-derived, epoch-keyed table (@epoch_stake@,
+-- @reward@, @pool_stat@, …) that carries no @slot_no@, @block_id@,
+-- tx FK, or id counter. The cutoff slot is mapped to its epoch via
+-- @block@, and every row from that epoch onward is deleted: Follow
+-- re-emits those epochs from scratch on replay past the resume point.
+deleteByEpochSlotStmt
+  :: Text  -- ^ Table to delete from.
+  -> Text  -- ^ Epoch column (@epoch_no@ or @spendable_epoch@).
+  -> Stmt.Statement Word64 Int64
+deleteByEpochSlotStmt tableName epochCol =
+  Stmt.unpreparable sql encoder D.rowsAffected
+  where
+    sql = T.concat
+      [ "DELETE FROM ", quoteIdent tableName
+      , " WHERE ", quoteIdent epochCol, " >= COALESCE("
+      , "(SELECT epoch_no FROM \"block\""
+      , " WHERE slot_no <= $1 ORDER BY slot_no DESC LIMIT 1), 0)"
       ]
     encoder = fromIntegral >$< E.param (E.nonNullable E.int8)
 

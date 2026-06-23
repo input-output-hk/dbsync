@@ -12,6 +12,7 @@ import Test.Hspec (Spec, describe, it, shouldBe)
 
 import DbSync.Db.Schema.Address (addressTableDef)
 import DbSync.Db.Schema.Core (txTableDef)
+import DbSync.Db.Schema.StakeDelegation (delegationTableDef)
 import DbSync.Db.Schema.Types
   ( ColumnDef (..)
   , PgType (..)
@@ -20,6 +21,7 @@ import DbSync.Db.Schema.Types
   )
 import DbSync.Db.Statement.Indexes
   ( Concurrency (..)
+  , foreignKeyIndexStatements
   , ingestResolveIndexStatements
   , postResolveIndexStatements
   , preResolveIndexStatements
@@ -188,3 +190,21 @@ spec = describe "DbSync.Db.Statement.Indexes" $ do
         , "CREATE INDEX IF NOT EXISTS \"collateral_tx_in_tx_in_id_idx\""
             <> " ON \"collateral_tx_in\" (\"tx_in_id\")"
         ]
+
+  describe "foreignKeyIndexStatements" $ do
+    it "emits one named index per FK / scope column of a known table" $
+      foreignKeyIndexStatements NonConcurrent delegationTableDef `shouldBe`
+        [ "CREATE INDEX IF NOT EXISTS \"delegation_tx_id_idx\""
+            <> " ON \"delegation\" (\"tx_id\")"
+        , "CREATE INDEX IF NOT EXISTS \"delegation_addr_id_idx\""
+            <> " ON \"delegation\" (\"addr_id\")"
+        , "CREATE INDEX IF NOT EXISTS \"delegation_pool_hash_id_idx\""
+            <> " ON \"delegation\" (\"pool_hash_id\")"
+        , "CREATE INDEX IF NOT EXISTS \"delegation_redeemer_id_idx\""
+            <> " ON \"delegation\" (\"redeemer_id\")"
+        , "CREATE INDEX IF NOT EXISTS \"delegation_active_epoch_no_idx\""
+            <> " ON \"delegation\" (\"active_epoch_no\")"
+        ]
+
+    it "emits nothing for a table with no FK / scope targets" $
+      foreignKeyIndexStatements NonConcurrent plainTable `shouldBe` []

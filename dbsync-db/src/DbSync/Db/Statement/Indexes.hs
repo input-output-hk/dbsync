@@ -13,14 +13,13 @@
 --     post-load UPDATEs run. Tables are still UNLOGGED so the build
 --     skips WAL writes and the second-pass scan that @CONCURRENTLY@
 --     would force.
---   * 'tableIndexStatements' — full schema-driven set, driven by
---     'tdPrimaryKey' and 'tdUniqueConstraints'. @IF NOT EXISTS@
---     dedupes against the pre-resolve pass.
---
--- Performance-only (non-uniqueness) indexes are hand-rolled in the
--- pre-resolve set until 'TableDef' grows explicit index metadata.
+--   * 'tableIndexStatements' — per table, the PK and unique
+--     constraints (from 'tdPrimaryKey' and 'tdUniqueConstraints')
+--     plus the FK/scope indexes from 'foreignKeyIndexStatements'.
+--     @IF NOT EXISTS@ dedupes against the pre/post-resolve passes.
 module DbSync.Db.Statement.Indexes
   ( tableIndexStatements
+  , foreignKeyIndexStatements
   , ingestResolveIndexStatements
   , preResolveIndexStatements
   , postResolveIndexStatements
@@ -30,13 +29,105 @@ module DbSync.Db.Statement.Indexes
 
 import Cardano.Prelude
 
+import Data.List (lookup)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Text as T
 
 import DbSync.Db.Schema.Address (AddressCols (..), addressCols, addressTableDef)
-import DbSync.Db.Schema.Core (TxCols (..), txCols, txTableDef)
+import DbSync.Db.Schema.CBOR (TxCborCols (..), txCborCols, txCborTableDef)
+import DbSync.Db.Schema.Core
+  ( BlockCols (..)
+  , SlotLeaderCols (..)
+  , TxCols (..)
+  , blockCols
+  , blockTableDef
+  , slotLeaderCols
+  , slotLeaderTableDef
+  , txCols
+  , txTableDef
+  )
+import DbSync.Db.Schema.EpochBoundary
+  ( EpochParamCols (..)
+  , ReserveCols (..)
+  , TreasuryCols (..)
+  , epochParamCols
+  , epochParamTableDef
+  , reserveCols
+  , reserveTableDef
+  , treasuryCols
+  , treasuryTableDef
+  )
+import DbSync.Db.Schema.Governance
+  ( DrepDistrCols (..)
+  , ParamProposalCols (..)
+  , drepDistrCols
+  , drepDistrTableDef
+  , paramProposalCols
+  , paramProposalTableDef
+  )
+import DbSync.Db.Schema.Metadata (TxMetadataCols (..), txMetadataCols, txMetadataTableDef)
+import DbSync.Db.Schema.MultiAsset
+  ( MaTxMintCols (..)
+  , MaTxOutCols (..)
+  , maTxMintCols
+  , maTxMintTableDef
+  , maTxOutCols
+  , maTxOutTableDef
+  )
+import DbSync.Db.Schema.Pool
+  ( PoolMetadataRefCols (..)
+  , PoolOwnerCols (..)
+  , PoolRelayCols (..)
+  , PoolRetireCols (..)
+  , PoolUpdateCols (..)
+  , ReservedPoolTickerCols (..)
+  , poolMetadataRefCols
+  , poolMetadataRefTableDef
+  , poolOwnerCols
+  , poolOwnerTableDef
+  , poolRelayCols
+  , poolRelayTableDef
+  , poolRetireCols
+  , poolRetireTableDef
+  , poolUpdateCols
+  , poolUpdateTableDef
+  , reservedPoolTickerCols
+  , reservedPoolTickerTableDef
+  )
+import DbSync.Db.Schema.ScriptsDatums
+  ( DatumCols (..)
+  , ExtraKeyWitnessCols (..)
+  , RedeemerCols (..)
+  , RedeemerDataCols (..)
+  , ScriptCols (..)
+  , datumCols
+  , datumTableDef
+  , extraKeyWitnessCols
+  , extraKeyWitnessTableDef
+  , redeemerCols
+  , redeemerDataCols
+  , redeemerDataTableDef
+  , redeemerTableDef
+  , scriptCols
+  , scriptTableDef
+  )
 import DbSync.Db.Schema.StakeDelegation
-  ( WithdrawalCols (..)
+  ( DelegationCols (..)
+  , EpochStakeCols (..)
+  , RewardCols (..)
+  , StakeDeregistrationCols (..)
+  , StakeRegistrationCols (..)
+  , WithdrawalCols (..)
+  , delegationCols
+  , delegationTableDef
+  , epochStakeCols
+  , epochStakeTableDef
+  , rewardCols
+  , rewardTableDef
+  , stakeDeregistrationCols
+  , stakeDeregistrationTableDef
+  , stakeRegistrationCols
+  , stakeRegistrationTableDef
   , withdrawalCols
   , withdrawalTableDef
   )
@@ -44,12 +135,15 @@ import DbSync.Db.Schema.Types (TableColumn (..), TableDef (..))
 import DbSync.Db.Schema.UTxO
   ( CollateralTxInCols (..)
   , CollateralTxOutCols (..)
+  , ReferenceTxInCols (..)
   , TxInCols (..)
   , TxOutCols (..)
   , collateralTxInCols
   , collateralTxInTableDef
   , collateralTxOutCols
   , collateralTxOutTableDef
+  , referenceTxInCols
+  , referenceTxInTableDef
   , txInCols
   , txInTableDef
   , txOutCols
@@ -64,7 +158,7 @@ import DbSync.Db.Sql (quoteIdent)
 -- support.
 tableIndexStatements :: Concurrency -> TableDef -> [Text]
 tableIndexStatements conc td =
-  pkStatement : uniqueStatements
+  pkStatement : uniqueStatements <> foreignKeyIndexStatements conc td
   where
     pkCols = fromMaybe ["id"] (tdPrimaryKey td)
     pkStatement =
@@ -87,6 +181,151 @@ tableIndexStatements conc td =
 uniqueConstraintIndexName :: TableDef -> Int -> Text
 uniqueConstraintIndexName td n =
   tdName td <> "_unique_" <> show n <> "_idx"
+
+-- ---------------------------------------------------------------------------
+-- * Foreign-key / scope indexes
+-- ---------------------------------------------------------------------------
+
+-- | The FK and scope-column indexes the Follow query patterns rely
+-- on, built table-by-table in the Prep pass. The leading columns
+-- already covered by 'preResolveIndexStatements' /
+-- 'postResolveIndexStatements' (the @tx_id@ / @tx_in_id@ scope
+-- indexes) are omitted here.
+foreignKeyIndexStatements :: Concurrency -> TableDef -> [Text]
+foreignKeyIndexStatements conc td =
+  [ renderIndex conc NonUnique (fkIndexName td cols) (tdName td) cols
+  | cols <- maybe [] (map (map tcName)) (lookup (tdName td) fkIndexColumns)
+  ]
+
+-- | @\<table>_\<col…>_idx@ — the repo-wide name shape for a non-unique
+-- index, matching the hand-rolled pre/post-resolve names.
+fkIndexName :: TableDef -> [Text] -> Text
+fkIndexName td cols = tdName td <> "_" <> T.intercalate "_" cols <> "_idx"
+
+-- | Per-table FK / scope index targets, keyed by table name taken
+-- straight from each 'TableDef'. Each inner list is one index's
+-- column set.
+fkIndexColumns :: [(Text, [[TableColumn]])]
+fkIndexColumns =
+  [ tableEntry blockTableDef
+      [ [blockCols.bcTime]
+      , [blockCols.bcSlotLeaderId]
+      , [blockCols.bcPreviousId]
+      ]
+  , tableEntry slotLeaderTableDef
+      [ [slotLeaderCols.slcPoolHashId] ]
+  , tableEntry txOutTableDef
+      [ [txOutCols.tocStakeAddressId]
+      , [txOutCols.tocInlineDatumId]
+      , [txOutCols.tocReferenceScriptId]
+      , [txOutCols.tocConsumedByTxId]
+      ]
+  , tableEntry addressTableDef
+      [ [addressCols.acPaymentCred] ]
+  , tableEntry collateralTxOutTableDef
+      [ [collateralTxOutCols.ctocStakeAddressId]
+      , [collateralTxOutCols.ctocInlineDatumId]
+      , [collateralTxOutCols.ctocReferenceScriptId]
+      ]
+  , tableEntry txInTableDef
+      [ [txInCols.ticTxOutId]
+      , [txInCols.ticRedeemerId]
+      ]
+  , tableEntry collateralTxInTableDef
+      [ [collateralTxInCols.cticTxOutId] ]
+  , tableEntry referenceTxInTableDef
+      [ [referenceTxInCols.rticTxInId]
+      , [referenceTxInCols.rticTxOutId]
+      ]
+  , tableEntry redeemerTableDef
+      [ [redeemerCols.rdcTxId]
+      , [redeemerCols.rdcRedeemerDataId]
+      ]
+  , tableEntry redeemerDataTableDef
+      [ [redeemerDataCols.rddcTxId] ]
+  , tableEntry datumTableDef
+      [ [datumCols.dmcTxId] ]
+  , tableEntry scriptTableDef
+      [ [scriptCols.sccTxId] ]
+  , tableEntry extraKeyWitnessTableDef
+      [ [extraKeyWitnessCols.ekwcTxId] ]
+  , tableEntry maTxOutTableDef
+      [ [maTxOutCols.mtocTxOutId] ]
+  , tableEntry maTxMintTableDef
+      [ [maTxMintCols.mtmcTxId] ]
+  , tableEntry txMetadataTableDef
+      [ [txMetadataCols.tmcTxId] ]
+  , tableEntry txCborTableDef
+      [ [txCborCols.tcbTxId] ]
+  , tableEntry stakeRegistrationTableDef
+      [ [stakeRegistrationCols.srcTxId]
+      , [stakeRegistrationCols.srcAddrId]
+      ]
+  , tableEntry stakeDeregistrationTableDef
+      [ [stakeDeregistrationCols.sdcTxId]
+      , [stakeDeregistrationCols.sdcAddrId]
+      , [stakeDeregistrationCols.sdcRedeemerId]
+      ]
+  , tableEntry delegationTableDef
+      [ [delegationCols.dcTxId]
+      , [delegationCols.dcAddrId]
+      , [delegationCols.dcPoolHashId]
+      , [delegationCols.dcRedeemerId]
+      , [delegationCols.dcActiveEpochNo]
+      ]
+  , tableEntry withdrawalTableDef
+      [ [withdrawalCols.wcAddrId]
+      , [withdrawalCols.wcRedeemerId]
+      ]
+  , tableEntry poolUpdateTableDef
+      [ [poolUpdateCols.pucRegisteredTxId]
+      , [poolUpdateCols.pucHashId]
+      , [poolUpdateCols.pucMetaId]
+      , [poolUpdateCols.pucRewardAddrId]
+      , [poolUpdateCols.pucActiveEpochNo]
+      ]
+  , tableEntry poolRetireTableDef
+      [ [poolRetireCols.prcHashId]
+      , [poolRetireCols.prcAnnouncedTxId]
+      ]
+  , tableEntry poolMetadataRefTableDef
+      [ [poolMetadataRefCols.pmrcRegisteredTxId] ]
+  , tableEntry poolRelayTableDef
+      [ [poolRelayCols.prlcUpdateId] ]
+  , tableEntry poolOwnerTableDef
+      [ [poolOwnerCols.pocPoolUpdateId] ]
+  , tableEntry reservedPoolTickerTableDef
+      [ [reservedPoolTickerCols.rptcPoolHash] ]
+  , tableEntry paramProposalTableDef
+      [ [paramProposalCols.ppcCostModelId]
+      , [paramProposalCols.ppcRegisteredTxId]
+      ]
+  , tableEntry epochParamTableDef
+      [ [epochParamCols.epcCostModelId]
+      , [epochParamCols.epcBlockId]
+      ]
+  , tableEntry epochStakeTableDef
+      [ [epochStakeCols.escPoolId]
+      , [epochStakeCols.escAddrId]
+      ]
+  , tableEntry rewardTableDef
+      [ [rewardCols.rcPoolId]
+      , [rewardCols.rcAddrId]
+      , [rewardCols.rcEarnedEpoch]
+      ]
+  , tableEntry reserveTableDef
+      [ [reserveCols.rscTxId]
+      , [reserveCols.rscAddrId]
+      ]
+  , tableEntry treasuryTableDef
+      [ [treasuryCols.trcTxId]
+      , [treasuryCols.trcAddrId]
+      ]
+  , tableEntry drepDistrTableDef
+      [ [drepDistrCols.ddcHashId, drepDistrCols.ddcEpochNo] ]
+  ]
+  where
+    tableEntry td cols = (tdName td, cols)
 
 -- | Built at the start of Ingest. Index names match what
 -- 'tableIndexStatements' would emit later, so the schema-driven Prep

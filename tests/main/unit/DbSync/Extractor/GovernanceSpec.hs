@@ -40,6 +40,7 @@ import DbSync.Parser.Types
   ( AnchorData (..)
   , BlockEra (..)
   , CertAction (..)
+  , CredHash (..)
   , DRepIdent (..)
   , GenericBlock (..)
   , GenericGovAction (..)
@@ -103,7 +104,7 @@ spec = do
     it "delegation vote writes a delegation_vote row" $ do
       written <- runGovernance
         [txWithCerts
-          [ GenericTxCertificate 0 (CertConwayDelegVote stakeCredA (DRepCred drepCredA))
+          [ GenericTxCertificate 0 (CertConwayDelegVote (CredHash stakeCredA False) (DRepCred (CredHash drepCredA False)) Nothing)
           ]
         ]
       length (twDelegationVotes written) `shouldBe` 1
@@ -114,7 +115,7 @@ spec = do
     it "cold->hot pair writes 2 committee_hash + 1 committee_registration" $ do
       written <- runGovernance
         [txWithCerts
-          [ GenericTxCertificate 0 (CertCommitteeAuth coldKey hotKey)
+          [ GenericTxCertificate 0 (CertCommitteeAuth (CredHash coldKey False) (CredHash hotKey False))
           ]
         ]
       length (twCommitteeHashes written) `shouldBe` 2
@@ -129,7 +130,7 @@ spec = do
 
     it "TreasuryWithdraw with 2 recipients writes 2 treasury_withdrawal rows" $ do
       let action = GovTreasuryWithdraw
-            [(stakeCredA, 1_000_000), (stakeCredB, 2_000_000)]
+            [(CredHash stakeCredA False, 1_000_000), (CredHash stakeCredB False, 2_000_000)]
             Nothing
       written <- runGovernance [txWithProposal (proposal action)]
       length (twGovActionProposals written) `shouldBe` 1
@@ -263,11 +264,11 @@ dummySlotDetails = SlotDetails
 
 drepRegCert :: ByteString -> Word64 -> Maybe AnchorData -> GenericTxCertificate
 drepRegCert cred deposit mAnchor =
-  GenericTxCertificate 0 (CertDRepRegistration cred deposit mAnchor)
+  GenericTxCertificate 0 (CertDRepRegistration (CredHash cred False) deposit mAnchor)
 
 drepDeregCert :: ByteString -> Word64 -> GenericTxCertificate
 drepDeregCert cred refund =
-  GenericTxCertificate 1 (CertDRepDeregistration cred refund)
+  GenericTxCertificate 1 (CertDRepDeregistration (CredHash cred False) refund)
 
 emptyTx :: () -> GenericTx
 emptyTx () = GenericTx
@@ -310,7 +311,7 @@ txWithProposal p = (emptyTx ()) { txProposals = [p] }
 proposal :: GenericGovAction -> GenericGovActionProposal
 proposal action = GenericGovActionProposal
   { ggapTxIndex         = 0
-  , ggapReturnAddrCred  = stakeCredA
+  , ggapReturnAddrCred  = CredHash stakeCredA False
   , ggapDeposit         = 1_000_000_000
   , ggapAnchor          = AnchorData "https://prop.example" anchorHashA
   , ggapAction          = action
@@ -323,7 +324,7 @@ proposalRef tx = GovActionRef (txHash tx) 0
 drepVote :: ByteString -> GovActionRef -> GenericVotingProcedure
 drepVote cred ref = GenericVotingProcedure
   { gvpTxIndex     = 0
-  , gvpVoter       = VoterDRep (DRepCred cred)
+  , gvpVoter       = VoterDRep (DRepCred (CredHash cred False))
   , gvpGovActionId = ref
   , gvpVote        = VoteYes
   , gvpAnchor      = Nothing
@@ -366,6 +367,7 @@ mkApplyResult mNewEpoch = ApplyResult
   , apEvents          = []
   , apGovActionState  = Nothing
   , apDepositsMap     = emptyDepositsMap
+  , apPoolsRegistered = Set.empty
   }
 
 mkNewEpoch :: EpochNo -> Strict.Maybe a -> Generic.NewEpoch

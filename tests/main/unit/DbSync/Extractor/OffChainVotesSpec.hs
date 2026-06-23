@@ -24,6 +24,7 @@ import DbSync.Parser.Types
   ( AnchorData (..)
   , BlockEra (..)
   , CertAction (..)
+  , CredHash (..)
   , GenericBlock (..)
   , GenericGovAction (..)
   , GenericGovActionProposal (..)
@@ -82,21 +83,21 @@ spec =
     it "enqueues a DRep registration anchor" $ do
       refs <- runExtractor
         ( blockWithCert
-            (CertDRepRegistration drepCred 500_000_000 (Just sampleDrepAnchor))
+            (CertDRepRegistration (CredHash drepCred False) 500_000_000 (Just sampleDrepAnchor))
         )
       length refs `shouldBe` 1
       varAnchorType (headDef (panic "no enqueue") refs) `shouldBe` DrepAnchor
 
     it "enqueues a DRep update anchor" $ do
       refs <- runExtractor
-        ( blockWithCert (CertDRepUpdate drepCred (Just sampleDrepAnchor)) )
+        ( blockWithCert (CertDRepUpdate (CredHash drepCred False) (Just sampleDrepAnchor)) )
       length refs `shouldBe` 1
       varAnchorType (headDef (panic "no enqueue") refs) `shouldBe` DrepAnchor
 
     it "enqueues a committee resignation anchor" $ do
       refs <- runExtractor
         ( blockWithCert
-            (CertCommitteeResign committeeKey (Just sampleCommitteeAnchor))
+            (CertCommitteeResign (CredHash committeeKey False) (Just sampleCommitteeAnchor))
         )
       length refs `shouldBe` 1
       varAnchorType (headDef (panic "no enqueue") refs)
@@ -189,7 +190,7 @@ newConstitutionProposal ca = GovNewConstitution Nothing ca Nothing
 sampleProposal :: AnchorData -> GenericGovAction -> GenericGovActionProposal
 sampleProposal anchor action = GenericGovActionProposal
   { ggapTxIndex         = 0
-  , ggapReturnAddrCred  = returnAddr
+  , ggapReturnAddrCred  = CredHash returnAddr False
   , ggapDeposit         = 100_000_000_000
   , ggapAnchor          = anchor
   , ggapAction          = action

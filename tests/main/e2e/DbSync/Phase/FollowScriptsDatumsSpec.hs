@@ -59,7 +59,7 @@ import DbSync.Db.Schema.ScriptsDatums
   , scriptTableDef
   )
 import DbSync.Db.Schema.Types (TableDef (..))
-import DbSync.Db.Schema.UTxO (collateralTxOutTableDef)
+import DbSync.Db.Schema.UTxO (collateralTxOutTableDef, txOutTableDef)
 import DbSync.Test.AppHarness
   ( ledgerEnabledTestProfile
   , quietTracer
@@ -163,9 +163,10 @@ spec = describe "Follow scripts/datums writes" $ do
       (followRedeemers - baselineRedeemers) `shouldBe` 1
       (followDatums    - baselineDatums)    `shouldSatisfy` (>= 1)
 
-  it "records a phase-2 failure with valid_contract=false and a collateral return" $
+  it "records a phase-2 failure with valid_contract=false, folding the collateral return into tx_out" $
     withScriptsDatumsSession "dbsync-test-scripts-failed" $ \mn -> do
       baselineBlocks <- countRows (tdName blockTableDef)
+      baselineTxOut  <- countRows (tdName txOutTableDef)
       baselineColOut <- countRows (tdName collateralTxOutTableDef)
 
       lockTxs <- buildLockTxs mn
@@ -178,9 +179,10 @@ spec = describe "Follow scripts/datums writes" $ do
         (tdName blockTableDef <> " count reaches " <> show expectedBlocks)
         (do n <- countRows (tdName blockTableDef); pure (n >= expectedBlocks))
         60
+      -- The surviving collateral return lands in tx_out, not collateral_tx_out.
       waitFor
-        (tdName collateralTxOutTableDef <> " count grows")
-        (do n <- countRows (tdName collateralTxOutTableDef); pure (n > baselineColOut))
+        (tdName txOutTableDef <> " count grows")
+        (do n <- countRows (tdName txOutTableDef); pure (n > baselineTxOut))
         30
 
       latestValid <- T.strip <$> queryTestDb
@@ -188,6 +190,10 @@ spec = describe "Follow scripts/datums writes" $ do
             <> " ORDER BY id DESC LIMIT 1"
         )
       latestValid `shouldBe` "false"
+
+      -- A failed tx writes no collateral_tx_out row.
+      followColOut <- countRows (tdName collateralTxOutTableDef)
+      (followColOut - baselineColOut) `shouldBe` 0
 
   it "writes one redeemer per spent script when several are unlocked together" $
     withScriptsDatumsSession "dbsync-test-scripts-multi" $ \mn -> do
@@ -210,15 +216,15 @@ spec = describe "Follow scripts/datums writes" $ do
       followRedeemers <- countRows (tdName redeemerTableDef)
       (followRedeemers - baselineRedeemers) `shouldBe` 2
 
-  it "writes a collateral_tx_out row keyed to the failing tx" $
+  it "writes a collateral_tx_out row for a valid tx that declares a collateral return" $
     withScriptsDatumsSession "dbsync-test-scripts-col" $ \mn -> do
       baselineBlocks <- countRows (tdName blockTableDef)
       baselineColOut <- countRows (tdName collateralTxOutTableDef)
 
       lockTxs <- buildLockTxs mn
       _ <- forgeAndPush mn lockTxs
-      failTxs <- buildFailingUnlockTxs mn
-      _ <- forgeAndPush mn failTxs
+      validTxs <- buildValidUnlockWithCollateralReturnTxs mn
+      _ <- forgeAndPush mn validTxs
 
       let expectedBlocks = baselineBlocks + 2
       waitFor
@@ -422,6 +428,22 @@ buildFailingUnlockTxs mn =
       []
       True
       False
+      499_000 1_000 state'
+    Right [Mock.TxConway (withRequiredSigner reqSigner tx)]
+
+-- | A valid (IsValid=True) script-spending tx that still declares a
+-- collateral-return output. Only a valid tx routes its collateral
+-- return to @collateral_tx_out@; a failed tx folds it into @tx_out@.
+buildValidUnlockWithCollateralReturnTxs :: MockNode -> IO [Mock.TxEra]
+buildValidUnlockWithCollateralReturnTxs mn =
+  Mock.withConwayLedgerState (mcInterpreter (mnChain mn)) $ \state' -> do
+    tx <- Conway.mkUnlockScriptTxBabbage
+      [Mock.UTxOAddress Scripts.alwaysSucceedsScriptAddr]
+      (Mock.UTxOIndex 0)
+      (Mock.UTxOAddressNew 0)
+      []
+      True
+      True
       499_000 1_000 state'
     Right [Mock.TxConway (withRequiredSigner reqSigner tx)]
 

@@ -26,6 +26,7 @@ import qualified Cardano.Ledger.Alonzo.Scripts as Alonzo
 import Cardano.Ledger.Plutus.Language (Language)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import qualified Data.Strict.Maybe as Strict
 import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 
@@ -160,6 +161,7 @@ mkApplyResult mNewEpoch =
     , apEvents          = []
     , apGovActionState  = Nothing
     , apDepositsMap     = emptyDepositsMap
+    , apPoolsRegistered = Set.empty
     }
 
 -- | Build a 'Generic.NewEpoch' for the given epoch with the supplied

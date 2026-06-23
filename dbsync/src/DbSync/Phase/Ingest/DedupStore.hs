@@ -51,6 +51,7 @@ module DbSync.Phase.Ingest.DedupStore
 
     -- * Hot path
   , lookupOrInsert
+  , lookupOnly
   , insertExisting
 
     -- * Sizes
@@ -228,6 +229,17 @@ lookupOrInsert key store = do
       writeIORef (dstCounter store) $! newId + 1
       LSMTree.insert table key (encodeInt64 newId) Nothing
       pure (newId, True)
+
+-- | Look up a key without inserting on a miss. 'Nothing' means the
+-- key was never registered, which the slot-leader path reads as
+-- "genesis-key leader, not a known pool".
+lookupOnly :: ShortByteString -> DedupStore -> IO (Maybe Int64)
+lookupOnly key store = do
+  table  <- readIORef (dstTable store)
+  result <- LSMTree.lookup table key
+  pure $ case LSMTree.getValue result of
+    Just bs -> decodeInt64 bs
+    Nothing -> Nothing
 
 -- | Insert a @(key, id)@ pair retaining the supplied id, and bump
 -- the counter to @max(currentCounter, id + 1)@ so subsequent

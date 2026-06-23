@@ -438,6 +438,10 @@ data ApplyResult = ApplyResult
   , apEvents          :: ![LedgerEvent]
   , apGovActionState  :: !(Maybe (ConwayGovState ConwayEra))
   , apDepositsMap     :: !DepositsMap
+  , apPoolsRegistered :: !(Set.Set ByteString)
+    -- ^ Raw pool-hash bytes registered in the ledger before this
+    -- block was applied. Drives the pool_update.active_epoch_no
+    -- reactivation offset.
   }
 
 -- | A no-op 'ApplyResult' that only carries 'SlotDetails'. Useful
@@ -454,6 +458,7 @@ defaultApplyResult slotDetails =
     , apEvents          = []
     , apGovActionState  = Nothing
     , apDepositsMap     = emptyDepositsMap
+    , apPoolsRegistered = Set.empty
     }
 
 -- | Target epoch at which a governance-action deposit will expire,

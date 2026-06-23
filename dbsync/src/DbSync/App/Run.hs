@@ -27,6 +27,7 @@ import qualified Hasql.Connection.Settings as HasqlSettings
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 
+import qualified Cardano.Chain.Genesis as Byron
 import Cardano.Ledger.BaseTypes (Network)
 import Cardano.Network.NodeToClient (IOManager, withIOManager)
 import Ouroboros.Consensus.BlockchainTime.WallClock.Types (SystemStart (..))
@@ -82,12 +83,14 @@ import DbSync.Db.Schema.Init
   , initSchema
   , renderSchemaMismatch
   , showWalLevel
+  , truncateDataTables
   )
 import DbSync.Schema.Version (Fingerprint, currentSchemaVersion, unFingerprint)
 import DbSync.Extractor.Registry (declaredSchemaFingerprint)
 import DbSync.Extractor (ExtractorDef (..))
 import DbSync.Phase.Ingest.DedupStore (DedupStores, closeStores)
 import DbSync.Phase.Ingest.Consumer (runConsumer)
+import DbSync.Phase.Ingest.Genesis (insertByronGenesisDist)
 import DbSync.Phase.Ingest.PipelineStats (emptyPipelineStats)
 import DbSync.Phase.Ingest.ReceiverStats (newReceiverStats)
 import DbSync.Worker.Ledger.Fingerprint
@@ -105,7 +108,11 @@ import DbSync.Worker.Ledger.Types
   , mkNoLedgerEnv
   )
 import DbSync.Worker.Ledger.Worker (withLedgerThreads)
-import DbSync.ChainSync.Connection (connectToNode, getNetworkMagic)
+import DbSync.ChainSync.Connection
+  ( IntersectionRequirement (..)
+  , connectToNode
+  , getNetworkMagic
+  )
 
 import DbSync.App.Boot
   ( BootDecision (..)
@@ -286,7 +293,16 @@ runApp tracer args = do
       -- 'runIngestThenFollow' below.
       mIngestState <-
         case bootDecision of
-          BootFresh ->
+          BootFresh -> do
+            -- A fresh boot on a schema we did not just create means the
+            -- prior leg crashed mid-Ingest before its first
+            -- epoch-boundary commit, so @last_committed_slot@ is NULL.
+            -- Orphan rows from that leg survive 'setupSchema' and would
+            -- collide with the genesis re-COPY; purge them first.
+            unless freshInit $ do
+              logInfoIO tracer "Boot"
+                "Fresh boot on a non-empty schema; purging orphan rows from an aborted pre-boundary leg"
+              truncateDataTables tableDefs connStrTxt
             Just <$> resolveFreshBoot tracer hasLedgerEnv lsmSession
           BootResume rc ->
             Just <$> resolveResumeBoot
@@ -305,6 +321,7 @@ runApp tracer args = do
           tracer hasqlSettings connStr coreEnv validProfile
           topLevelCfg networkMagic socketPath systemStart stateQueryVar
           hasLedgerEnv consumerCtrlConn lsmSession tableDefs mShutdown
+          (gcByron genesisCfg)
 
 -- ---------------------------------------------------------------------------
 -- * Setup steps (in execution order)
@@ -516,12 +533,13 @@ runIngestThenFollow
   -> LsmSession
   -> [TableDef]
   -> Maybe (IO ())                                    -- ^ optional shutdown signal
+  -> Byron.Config                                     -- ^ Byron genesis, for the fresh-boot distribution
   -> IngestBootState
   -> IO ()
 runIngestThenFollow
   tracer hasqlSettings connStr coreEnv validProfile
   topLevelCfg networkMagic socketPath systemStart stateQueryVar
-  hasLedgerEnv consumerCtrlConn lsmSession tableDefs mShutdown
+  hasLedgerEnv consumerCtrlConn lsmSession tableDefs mShutdown byronCfg
   IngestBootState
     { ibsInitialExtractState = initialExtractState
     , ibsDedupStores         = dedupStores
@@ -596,6 +614,15 @@ runIngestThenFollow
           , ieRollbackBoundary        = rollbackBoundary
           , ieLatestTipBlock          = latestTipBlock
           }
+
+    -- On a fresh sync the Byron genesis UTxO distribution is not a
+    -- chain block, so it must be written before the consumer applies
+    -- block 1 — both so that block's @previous_id@ resolves and so
+    -- later Byron txs spending genesis outputs can find their inputs.
+    case (intersectReq, replayBoundary) of
+      (IntersectGenesis, Nothing) ->
+        runAppM ingestEnv (insertByronGenesisDist byronCfg)
+      _ -> pure ()
 
     logInfoIO tracer "App" "Starting block ingestion..."
 

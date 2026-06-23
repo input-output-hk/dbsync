@@ -111,7 +111,7 @@ viewSqlSpec = describe "view DDL" $ do
 
     it "guards epoch_current against rows already in epoch_finalized" $
       createEpochViewsSql `shouldSatisfy` T.isInfixOf
-        ("(SELECT MAX(no) FROM " <> epochFinalizedTableName <> ")")
+        ("NOT EXISTS (SELECT 1 FROM \"" <> epochFinalizedTableName <> "\" ef")
 
     it "unions epoch_finalized then epoch_current in the epoch view" $ do
       let body = T.lines createEpochViewsSql

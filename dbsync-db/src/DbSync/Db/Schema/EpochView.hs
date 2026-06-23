@@ -214,9 +214,10 @@ epochViewName = "epoch"
 -- | @CREATE VIEW@ DDL for @epoch_current@ followed by @epoch@.
 --
 -- @epoch_current@ aggregates the un-finalised epoch live from
--- @block@ + @tx@. The @b.epoch_no > COALESCE(MAX(no), -1)@ guard
--- skips epochs already in @epoch_finalized@ — without it the union
--- would double-count.
+-- @block@ + @tx@. The @NOT EXISTS@ guard skips any epoch already in
+-- @epoch_finalized@ — without it the union would double-count, and a
+-- per-row check (rather than @> MAX(no)@) also tolerates a
+-- non-contiguous finalised set.
 --
 -- @epoch@ is a plain @UNION ALL@ of the two so the public-facing
 -- name behaves like the original project's @epoch@ table.
@@ -235,8 +236,8 @@ createEpochViewsSql = T.unlines
   , "  FROM block b"
   , "  LEFT JOIN tx ON tx.block_id = b." <> blkId
   , "  WHERE b." <> epochNo <> " IS NOT NULL"
-  , "    AND b." <> epochNo <> " > COALESCE("
-       <> "(SELECT MAX(" <> noCol <> ") FROM " <> epochFinalizedTableName <> "), -1)"
+  , "    AND NOT EXISTS (SELECT 1 FROM \"" <> epochFinalizedTableName
+       <> "\" ef WHERE ef." <> noCol <> " = b." <> epochNo <> ")"
   , "  GROUP BY b." <> epochNo <> ";"
   , ""
   , "CREATE VIEW " <> epochViewName <> " AS"

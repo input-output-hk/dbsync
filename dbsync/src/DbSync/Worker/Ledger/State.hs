@@ -73,6 +73,7 @@ module DbSync.Worker.Ledger.State
   , getGovExpiration
   , getGovState
   , getPrices
+  , getRegisteredPools
 
     -- * Miscellaneous helpers
   , getHeaderHash
@@ -82,6 +83,7 @@ module DbSync.Worker.Ledger.State
 
 import Cardano.Prelude hiding (atomically)
 
+import qualified Cardano.Crypto.Hash as Crypto
 import qualified Cardano.Ledger.Alonzo.PParams as Alonzo
 import Cardano.Ledger.Alonzo.Scripts (Prices)
 import qualified Cardano.Ledger.BaseTypes as Ledger
@@ -102,7 +104,9 @@ import Control.Concurrent.Class.MonadSTM.Strict
 import qualified Control.Concurrent.Class.MonadSTM.Strict as STM
 import Control.Concurrent.STM.TBQueue (newTBQueueIO, writeTBQueue)
 import qualified Data.ByteString.Short as SBS
+import qualified Data.Map.Strict as Map
 import qualified Data.Sequence.Strict as StrictSeq
+import qualified Data.Set as Set
 import qualified Data.Strict.Maybe as Strict
 import qualified Data.Time.Clock as Time
 import GHC.IO.Exception (userError)
@@ -119,6 +123,7 @@ import Ouroboros.Consensus.Ledger.Basics (EmptyMK)
 import Ouroboros.Consensus.Ledger.Extended (ExtLedgerCfg (..), ExtLedgerState (..))
 import Ouroboros.Consensus.Ledger.Tables.Utils (forgetLedgerTables)
 import qualified Ouroboros.Consensus.Node.ProtocolInfo as Consensus
+import Ouroboros.Consensus.Shelley.Ledger (ShelleyBlock)
 import qualified Ouroboros.Consensus.Shelley.Ledger.Ledger as Consensus
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot)
 import Ouroboros.Consensus.Storage.LedgerDB.V2.Backend hiding (Trace)
@@ -636,6 +641,7 @@ applyBlock blk slotDetails = do
               , apEvents          = events
               , apGovActionState  = getGovState finalState
               , apDepositsMap     = DepositsMap deposits
+              , apPoolsRegistered = getRegisteredPools oldCls
               }
       liftIO $ atomically $ do
         writeTVar (leLatestApplyResult env) (Strict.Just appResult)
@@ -1054,6 +1060,34 @@ getPrices st = case ledgerState $ clsState st of
            . Alonzo.ppPricesL
       )
   _ -> Strict.Nothing
+
+-- | Raw 28-byte hashes of the pools registered in the ledger as of
+-- this state. Empty for Byron (no pools). Returned as 'ByteString' so
+-- extractors can match against their raw pool-hash bytes without
+-- pulling in ledger key types.
+getRegisteredPools :: CardanoLedgerState -> Set.Set ByteString
+getRegisteredPools st =
+  case ledgerState $ clsState st of
+    LedgerStateByron _      -> Set.empty
+    LedgerStateShelley sts  -> registeredPoolBytes sts
+    LedgerStateAllegra sts  -> registeredPoolBytes sts
+    LedgerStateMary sts     -> registeredPoolBytes sts
+    LedgerStateAlonzo ats   -> registeredPoolBytes ats
+    LedgerStateBabbage bts  -> registeredPoolBytes bts
+    LedgerStateConway stc   -> registeredPoolBytes stc
+    LedgerStateDijkstra dls -> registeredPoolBytes dls
+
+registeredPoolBytes
+  :: Shelley.EraCertState era
+  => LedgerState (ShelleyBlock p era) mk
+  -> Set.Set ByteString
+registeredPoolBytes lState =
+  Set.map keyHashBytes . Map.keysSet $ certState ^. Shelley.certPStateL . Shelley.psStakePoolsL
+  where
+    certState =
+      Shelley.lsCertState . Shelley.esLState . Shelley.nesEs $
+        Consensus.shelleyLedgerState lState
+    keyHashBytes (KeyHash h) = Crypto.hashToBytes h
 
 -- ---------------------------------------------------------------------------
 -- * Miscellaneous helpers

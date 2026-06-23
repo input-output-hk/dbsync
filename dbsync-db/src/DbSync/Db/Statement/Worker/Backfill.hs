@@ -77,14 +77,8 @@ import DbSync.Db.Schema.StakeDelegation
   , withdrawalTableDef
   )
 import DbSync.Db.Schema.UTxO
-  ( CollateralTxInCols (..)
-  , CollateralTxOutCols (..)
-  , TxInCols (..)
+  ( TxInCols (..)
   , TxOutCols (..)
-  , collateralTxInCols
-  , collateralTxInTableDef
-  , collateralTxOutCols
-  , collateralTxOutTableDef
   , txInCols
   , txInTableDef
   , txOutCols
@@ -92,11 +86,14 @@ import DbSync.Db.Schema.UTxO
   )
 import DbSync.Db.Sql.Refs (col, qcol, table)
 
--- | Replace the @0@ fee sentinel on phase-2 failed Alonzo+ txs with
--- @SUM(collateral_in.value) - SUM(collateral_out.value)@. Requires
--- 'resolveCollateralTxInStmt' to have populated
--- @collateral_tx_in.tx_out_id@. The @EXISTS@ guard skips rows for
--- which no collateral input row was written (data anomalies only).
+-- | Patch the @0@ fee sentinel on phase-2 failed Alonzo+ txs that
+-- carried no @total_collateral@ field. For a failed tx the parser
+-- folds the collateral inputs into @tx_in@ and the collateral return
+-- into @tx_out@, so the real fee is @SUM(input.value) - out_sum@.
+-- Requires 'resolveTxInStmt' to have populated @tx_in.tx_out_id@. The
+-- @EXISTS@ guard skips rows for which no input row was written (data
+-- anomalies only); txs that set @total_collateral@ already have a
+-- non-zero fee and are excluded by the @fee = 0@ guard.
 backfillPhaseTwoFeeStmt :: Stmt.Statement () Int64
 backfillPhaseTwoFeeStmt =
   Stmt.preparable backfillPhaseTwoFeeSql E.noParams D.rowsAffected
@@ -106,26 +103,21 @@ backfillPhaseTwoFeeSql = T.unwords
   [ "UPDATE", table txTableDef
   , "SET",    col txCols.tcFee, "= COALESCE("
   , "  (SELECT SUM(p.", col txOutCols.tocValue, ")"
-  , "   FROM", table collateralTxInTableDef, "cti"
+  , "   FROM", table txInTableDef, "ti"
   , "   JOIN", table txOutTableDef, "p"
   , "     ON p.", col txOutCols.tocTxId
-  ,        "=",    qcol "cti" collateralTxInCols.cticTxOutId
+  ,        "=",    qcol "ti" txInCols.ticTxOutId
   , "    AND p.", col txOutCols.tocIndex
-  ,        "=",    qcol "cti" collateralTxInCols.cticTxOutIndex
-  , "   WHERE",   qcol "cti" collateralTxInCols.cticTxInId
+  ,        "=",    qcol "ti" txInCols.ticTxOutIndex
+  , "   WHERE",   qcol "ti" txInCols.ticTxInId
   ,        "= tx.", col txCols.tcId, "),"
   , "  0)"
-  , "- COALESCE("
-  , "  (SELECT SUM(", col collateralTxOutCols.ctocValue, ")"
-  , "   FROM",  table collateralTxOutTableDef
-  , "   WHERE", col collateralTxOutCols.ctocTxId
-  ,        "= tx.", col txCols.tcId, "),"
-  , "  0)"
+  , "- tx.", col txCols.tcOutSum
   , "WHERE", col txCols.tcValidContract, "= FALSE"
   , "  AND", col txCols.tcFee, "= 0"
   , "  AND EXISTS ("
-  , "    SELECT 1 FROM", table collateralTxInTableDef, "cti"
-  , "    WHERE", qcol "cti" collateralTxInCols.cticTxInId
+  , "    SELECT 1 FROM", table txInTableDef, "ti"
+  , "    WHERE", qcol "ti" txInCols.ticTxInId
   ,         "= tx.", col txCols.tcId, ")"
   ]
 
@@ -203,7 +195,10 @@ backfillValidContractDepositSql = T.unwords
   ]
 
 -- | @fee = inputs - outputs@ for Byron-era txs whose @fee@ is still
--- the @0@ sentinel. Byron is identified via @block.proto_major < 2@.
+-- the @0@ sentinel. Byron blocks are identified via @block.vrf_key IS
+-- NULL@ (a Shelley+ header field): the final Byron epoch already
+-- advertises @proto_major = 2@, so a @proto_major@ guard would strand
+-- those last Byron txs at the @0@ sentinel.
 -- Genesis txs aren't extracted; orphan-input rows are excluded by
 -- the @EXISTS@ guard. Requires 'resolveTxInStmt' to have populated
 -- @tx_in.tx_out_id@.
@@ -229,7 +224,7 @@ backfillByronFeeSql = T.unwords
   , "FROM", table blockTableDef, "b"
   , "WHERE tx.", col txCols.tcBlockId
   ,         "= b.", col blockCols.bcId
-  , "  AND b.", col blockCols.bcProtoMajor, "< 2"
+  , "  AND b.", col blockCols.bcVrfKey, "IS NULL"
   , "  AND tx.", col txCols.tcFee, "= 0"
   , "  AND EXISTS ("
   , "    SELECT 1 FROM", table txInTableDef, "ti"

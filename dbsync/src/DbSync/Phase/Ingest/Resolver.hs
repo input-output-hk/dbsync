@@ -84,6 +84,7 @@ mkIngestResolver extractStateRef dedupStores addrBufRef utxoStore mConsumedByBuf
 
     -- Pool
   , resolvePoolHash         = Pool.resolvePoolHashIngest         dedupStores
+  , resolvePoolHashQuery    = Pool.resolvePoolHashQueryIngest    dedupStores
   , assignPoolUpdateId      = Pool.assignPoolUpdateIdIngest      extractStateRef
   , assignPoolMetadataRefId = Pool.assignPoolMetadataRefIdIngest extractStateRef
 

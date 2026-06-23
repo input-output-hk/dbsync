@@ -26,6 +26,7 @@ import Test.Hspec (Spec, afterAll_, beforeAll_, before_, describe, it, shouldBe)
 import DbSync.Parser.Types
   ( BlockEra (..)
   , CertAction (..)
+  , CredHash (..)
   , GenericBlock (..)
   , GenericTx (..)
   , GenericTxCertificate (..)
@@ -355,9 +356,9 @@ spec = describe "DbSync.Phase.Following.Run" $
         phN <- countOf poolHashTableDef
         puN <- countOf poolUpdateTableDef
         saN <- countOf stakeAddressTableDef
-        -- 2 pool_hash rows: one for the slot leader (Shelley+ pipeline
-        -- always writes one), one for the registered pool itself.
-        phN `shouldBe` "2"
+        -- 1 pool_hash row: the registered pool. The unregistered slot
+        -- leader is queried only, so it adds no pool_hash row.
+        phN `shouldBe` "1"
         puN `shouldBe` "1"
         saN `shouldBe` "1"  -- the reward addr
 
@@ -377,17 +378,18 @@ spec = describe "DbSync.Phase.Following.Run" $
           ( "SELECT pool_id, url, encode(hash, 'hex') FROM "
               <> tdName poolMetadataRefTableDef <> ";"
           )
-        -- pool_id = 2: the slot leader allocates id=1, the registered
-        -- pool gets id=2.
-        pmr `shouldBe` "2|https://pool.example.com/meta.json|6d657461686173685f33325f62797465735f70616464645f5f5f5f5f5f5f5f5f"
+        -- pool_id = 1: the registered pool is the only pool_hash row;
+        -- the unregistered slot leader adds none.
+        pmr `shouldBe` "1|https://pool.example.com/meta.json|6d657461686173685f33325f62797465735f70616464645f5f5f5f5f5f5f5f5f"
 
     describe "block with a pool retirement cert" $
       it "writes 1 pool_retire row and dedupes pool_hash" $ do
         runFollow [blockWithPoolRetire]
         phN <- countOf poolHashTableDef
         prN <- countOf poolRetireTableDef
-        -- 2 pool_hash rows: slot leader + retired pool.
-        phN `shouldBe` "2"
+        -- 1 pool_hash row: the retired pool. The unregistered slot
+        -- leader adds none.
+        phN `shouldBe` "1"
         prN `shouldBe` "1"
 
     describe "block with a delegation cert (cross-extractor flow)" $
@@ -400,11 +402,11 @@ spec = describe "DbSync.Phase.Following.Run" $
               <> tdName delegationTableDef <> ";"
           )
         saN `shouldBe` "1"
-        -- 2 pool_hash rows: slot leader (id=1) + delegation target (id=2).
-        phN `shouldBe` "2"
-        -- active_epoch_no = blkEpochNo (5) + 2 = 7; pool_hash_id = 2
-        -- because the slot leader took id=1.
-        d   `shouldBe` "1|2|7|1"
+        -- 1 pool_hash row: the delegation target. The unregistered slot
+        -- leader adds none.
+        phN `shouldBe` "1"
+        -- active_epoch_no = blkEpochNo (5) + 2 = 7; pool_hash_id = 1.
+        d   `shouldBe` "1|1|7|1"
 
     describe "block with a tx carrying CBOR bytes" $ do
       it "writes 1 tx_cbor row when txCborRaw is set" $ do
@@ -776,13 +778,13 @@ sampleStakeCred = "stake_cred_28b" <> BS.replicate (28 - 14) 0
 stakeRegCert :: GenericTxCertificate
 stakeRegCert = GenericTxCertificate
   { txCertIndex  = 0
-  , txCertAction = CertStakeRegistration sampleStakeCred Nothing
+  , txCertAction = CertStakeRegistration (CredHash sampleStakeCred False) Nothing
   }
 
 stakeDeregCert :: GenericTxCertificate
 stakeDeregCert = GenericTxCertificate
   { txCertIndex  = 1
-  , txCertAction = CertStakeDeregistration sampleStakeCred
+  , txCertAction = CertStakeDeregistration (CredHash sampleStakeCred False)
   }
 
 blockWithStakeReg :: GenericBlock
@@ -883,7 +885,7 @@ blockWithPoolRetire = emptyBlock
 delegationCert :: GenericTxCertificate
 delegationCert = GenericTxCertificate
   { txCertIndex  = 0
-  , txCertAction = CertDelegation sampleStakeCred samplePoolKey
+  , txCertAction = CertDelegation (CredHash sampleStakeCred False) samplePoolKey
   }
 
 blockWithDelegation :: GenericBlock
@@ -916,22 +918,22 @@ blockWithFourRegistrations = emptyBlock
       [ sampleTx
           { txHash = BS.replicate 32 0xaa
           , txCertificates =
-              [ GenericTxCertificate 0 (CertStakeRegistration sampleStakeCred Nothing) ]
+              [ GenericTxCertificate 0 (CertStakeRegistration (CredHash sampleStakeCred False) Nothing) ]
           }
       , sampleTx
           { txHash = BS.replicate 32 0xab
           , txCertificates =
-              [ GenericTxCertificate 0 (CertStakeDeregistration sampleStakeCred) ]
+              [ GenericTxCertificate 0 (CertStakeDeregistration (CredHash sampleStakeCred False)) ]
           }
       , sampleTx
           { txHash = BS.replicate 32 0xac
           , txCertificates =
-              [ GenericTxCertificate 0 (CertStakeRegistration sampleStakeCredB Nothing) ]
+              [ GenericTxCertificate 0 (CertStakeRegistration (CredHash sampleStakeCredB False) Nothing) ]
           }
       , sampleTx
           { txHash = BS.replicate 32 0xad
           , txCertificates =
-              [ GenericTxCertificate 0 (CertStakeDeregistration sampleStakeCredB) ]
+              [ GenericTxCertificate 0 (CertStakeDeregistration (CredHash sampleStakeCredB False)) ]
           }
       ]
   }
@@ -942,9 +944,9 @@ blockWithMultiRegCerts = emptyBlock
   { blkTxs =
       [ sampleTx
           { txCertificates =
-              [ GenericTxCertificate 0 (CertStakeRegistration sampleStakeCred  Nothing)
-              , GenericTxCertificate 1 (CertStakeDeregistration sampleStakeCred)
-              , GenericTxCertificate 2 (CertStakeRegistration sampleStakeCredB Nothing)
+              [ GenericTxCertificate 0 (CertStakeRegistration (CredHash sampleStakeCred False)  Nothing)
+              , GenericTxCertificate 1 (CertStakeDeregistration (CredHash sampleStakeCred False))
+              , GenericTxCertificate 2 (CertStakeRegistration (CredHash sampleStakeCredB False) Nothing)
               ]
           }
       ]

@@ -538,7 +538,6 @@ phase2Tx = (mkTx 0 "phase2tx")
 outFor :: Word64 -> GenericTxOut
 outFor v = GenericTxOut
   { G.txOutIndex       = 0
-  , G.txOutAddress     = "addr_test1xyz"
   , G.txOutAddressRaw  = BS.pack (0x00 : replicate 56 0x11)
   , G.txOutValue       = v
   , G.txOutDataHash    = Nothing

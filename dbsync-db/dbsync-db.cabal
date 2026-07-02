@@ -110,6 +110,7 @@ library
     , cardano-prelude
 
     -- Crypto / encoding
+    , base58-bytestring
     , bech32
     , cardano-crypto-class
 

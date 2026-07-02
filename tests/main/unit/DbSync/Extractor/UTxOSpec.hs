@@ -12,6 +12,7 @@ import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import Data.IORef (newIORef, readIORef)
 
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Short as SBS
 import qualified Data.Map.Strict as Map
 
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
@@ -24,7 +25,7 @@ import DbSync.Parser.Types
   , GenericTxIn (..)
   , GenericTxOut (..)
   )
-import DbSync.Db.Schema.Address (Address (..))
+import DbSync.Db.Schema.Address (Address (..), addressFromRaw)
 import DbSync.Db.Schema.Ids (AddressId (..))
 import qualified DbSync.Db.Schema.UTxO as SU
 import DbSync.Extractor (freshExtractState)
@@ -294,11 +295,12 @@ spec = do
 -- | Run @core@ + @stake_delegation@ + @utxo@ on a single block.
 -- | Run @core@ + @stake_delegation@ + @utxo@ on a single block.
 --
--- The UTxO extractor records each output's address in the per-epoch
--- 'EpochAddressBuffer' rather than writing 'Address' rows via the
--- 'Writer'. To keep assertions on 'twAddresses' meaningful for these
--- tests, we materialise the buffer's address map into the returned
--- 'TestWriterState' with synthetic ids in insertion order.
+-- The UTxO extractor records each output's raw address + resolved
+-- stake id in the per-epoch 'EpochAddressBuffer' rather than writing
+-- 'Address' rows via the 'Writer'. To keep assertions on 'twAddresses'
+-- meaningful, we rebuild each 'Address' from the buffer exactly as the
+-- TxOut worker does (via 'addressFromRaw'), with synthetic ids in
+-- insertion order.
 runFullPipeline :: GenericBlock -> IO TestWriterState
 runFullPipeline block = withTestIngestStores $ \utxoStore dedupStores -> do
   stRef <- newIORef freshExtractState
@@ -311,9 +313,9 @@ runFullPipeline block = withTestIngestStores $ \utxoStore dedupStores -> do
   written <- readIORef wrRef
   buf <- readIORef addrBuf
   let buffered = zipWith
-        (\i addr -> (AddressId i, addr))
+        (\i (key, mStakeId) -> (AddressId i, addressFromRaw (SBS.fromShort key) mStakeId))
         [1 ..]
-        (Map.elems (eabAddresses buf))
+        (Map.toList (eabAddresses buf))
   pure written { twAddresses = buffered }
 
 -- ---------------------------------------------------------------------------
@@ -448,7 +450,6 @@ singleOutputTx rawAddr value = GenericTx
 mkOutput :: Word16 -> ByteString -> Word64 -> GenericTxOut
 mkOutput idx rawAddr value = GenericTxOut
   { txOutIndex       = idx
-  , txOutAddress     = "addr_test1xyz"
   , txOutAddressRaw  = rawAddr
   , txOutValue       = value
   , txOutDataHash    = Nothing

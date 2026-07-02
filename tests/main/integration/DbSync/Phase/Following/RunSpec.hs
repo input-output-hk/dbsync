@@ -36,6 +36,7 @@ import DbSync.Parser.Types
   , PoolRegistrationData (..)
   )
 import DbSync.Db.Schema.Address (addressTableDef)
+import DbSync.Util.Bech32 (serialiseShelleyAddrToBech32)
 import DbSync.Db.Schema.CBOR (txCborTableDef)
 import DbSync.Db.Schema.Core (blockTableDef, poolHashTableDef, slotLeaderTableDef, stakeAddressTableDef, txTableDef)
 import DbSync.Db.Schema.Metadata (txMetadataTableDef)
@@ -222,7 +223,7 @@ spec = describe "DbSync.Phase.Following.Run" $
               <> " ON " <> tdName addressTableDef <> ".id = "
               <> tdName txOutTableDef <> ".address_id;"
           )
-        result `shouldBe` "0|5000000|addr_test1xyz"
+        result `shouldBe` ("0|5000000|" <> serialiseShelleyAddrToBech32 sampleAddrRaw)
 
     describe "block with one tx and two outputs" $ do
       it "writes both tx_outs in order" $ do
@@ -692,7 +693,6 @@ sampleAddrRaw = BS.pack (0x00 : replicate 56 0x11)
 sampleOut :: Word16 -> Word64 -> GenericTxOut
 sampleOut idx value = GenericTxOut
   { txOutIndex       = idx
-  , txOutAddress     = "addr_test1xyz"
   , txOutAddressRaw  = sampleAddrRaw
   , txOutValue       = value
   , txOutDataHash    = Nothing

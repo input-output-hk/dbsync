@@ -14,7 +14,6 @@ module DbSync.Extractor.UTxO
     -- * Internal helpers (exported for tests)
   , extractPaymentCred
   , extractStakeCred
-  , mkAddress
   , mkTxOut
   , rawHasScript
   ) where
@@ -27,7 +26,7 @@ import Data.List (zip3)
 import DbSync.Parser.Types (CredHash (..), GenericTx (..), GenericTxDatum (..), GenericTxIn (..))
 import qualified DbSync.Parser.Types as G
 import DbSync.Phase.Type (SyncPhase, isFollowPath)
-import DbSync.Db.Schema.Address (Address (..), addressTableDef)
+import DbSync.Db.Schema.Address (addressFromRaw, addressTableDef, extractPaymentCred, rawHasScript)
 import DbSync.Db.Schema.Ids (AddressId, DatumId, StakeAddressId, TxId (..))
 import DbSync.Db.Schema.ScriptsDatums (Datum (..))
 import DbSync.Db.Schema.UTxO
@@ -80,13 +79,12 @@ processUTxO ctx = do
     -- pipeline so the address record and the tx_out row share the same
     -- StakeAddressId.
     forM_ (zip3 outIds stakeIds (txOutputs gtx)) $ \(outId, mStakeId, gout) -> do
-      let raw  = G.txOutAddressRaw gout
-          addr = mkAddress mStakeId gout
-      mAid       <- followAddressId phase resolver raw addr
+      let raw = G.txOutAddressRaw gout
+      mAid       <- followAddressId phase resolver raw mStakeId
       mInlineId  <- resolveInlineDatum txId gout
       liftIO $ writeTxOut writer outId (mkTxOut txId mAid mStakeId mInlineId gout)
       unless followPath $
-        liftIO $ recordTxOutAddress resolver outId raw addr
+        liftIO $ recordTxOutAddress resolver outId raw mStakeId
 
     -- For a valid tx these are its regular inputs; for a failed phase-2 tx
     -- the parser has already substituted the collateral inputs, since those
@@ -113,13 +111,12 @@ processUTxO ctx = do
       forM_ (txCollateralOutput gtx) $ \gout -> do
         outId <- liftIO $ assignCollateralTxOutId resolver
         mStakeId <- resolveCollateralStake gout
-        let raw  = G.txOutAddressRaw gout
-            addr = mkAddress mStakeId gout
-        mAid      <- followAddressId phase resolver raw addr
+        let raw = G.txOutAddressRaw gout
+        mAid      <- followAddressId phase resolver raw mStakeId
         mInlineId <- resolveInlineDatum txId gout
         liftIO $ writeCollateralTxOut writer outId (mkCollateralTxOut txId mAid mStakeId mInlineId gout)
         unless followPath $
-          liftIO $ recordCollateralTxOutAddress resolver outId raw addr
+          liftIO $ recordCollateralTxOutAddress resolver outId raw mStakeId
 
       forM_ (txCollateralInputs gtx) $ \gin -> do
         mProducer <- liftIO $ resolveInputUtxo resolver
@@ -154,23 +151,14 @@ processUTxO ctx = do
 -- bulk UPDATE an epoch later.
 followAddressId
   :: MonadIO m
-  => SyncPhase -> IdResolver IO -> ByteString -> Address -> m (Maybe AddressId)
-followAddressId phase resolver raw addr
-  | isFollowPath phase = Just <$> liftIO (resolveAddressId resolver raw addr)
+  => SyncPhase -> IdResolver IO -> ByteString -> Maybe StakeAddressId -> m (Maybe AddressId)
+followAddressId phase resolver raw mStakeId
+  | isFollowPath phase = Just <$> liftIO (resolveAddressId resolver raw (addressFromRaw raw mStakeId))
   | otherwise          = pure Nothing
 
 -- ---------------------------------------------------------------------------
 -- * Record builders
 -- ---------------------------------------------------------------------------
-
-mkAddress :: Maybe StakeAddressId -> G.GenericTxOut -> Address
-mkAddress mStakeId gout = Address
-  { addressAddress        = G.txOutAddress gout
-  , addressRaw            = G.txOutAddressRaw gout
-  , addressHasScript      = rawHasScript (G.txOutAddressRaw gout)
-  , addressPaymentCred    = extractPaymentCred (G.txOutAddressRaw gout)
-  , addressStakeAddressId = mStakeId
-  }
 
 mkTxOut
   :: TxId -> Maybe AddressId -> Maybe StakeAddressId -> Maybe DatumId -> G.GenericTxOut -> TxOut
@@ -248,37 +236,6 @@ mkCollateralTxOut txId addrId mStakeId mInlineId gout = CollateralTxOut
 -- ---------------------------------------------------------------------------
 -- * Helpers
 -- ---------------------------------------------------------------------------
-
--- | Check if an address contains a script (bit 4 of header byte).
--- Shelley+ addresses encode this in the header. Byron addresses
--- never contain scripts.
-rawHasScript :: ByteString -> Bool
-rawHasScript bs
-  | BS.null bs = False
-  | otherwise  =
-      let header = BS.head bs
-      in (header .&. 0x10) /= 0  -- bit 4 set = script address
-
--- | Extract the 28-byte payment credential from a Shelley address
--- (bytes 1..28 after the header).
---
--- Returns 'Just' for the eight Shelley address types that carry a
--- payment credential (base/pointer/enterprise, header high nibble
--- 0x0..0x7), and 'Nothing' for everything else:
---
---   * Byron raws — CBOR-wrapped, not Shelley header+payload, so
---     bytes 1..28 would be CBOR-frame bytes rather than a credential.
---   * Reward addresses (0xE0/0xF0) — those bytes are the stake hash,
---     not a payment credential.
---   * Anything shorter than 29 bytes.
-extractPaymentCred :: ByteString -> Maybe ByteString
-extractPaymentCred bs
-  | BS.length bs < 29 = Nothing
-  | otherwise =
-      let typeBits = BS.head bs .&. 0xF0
-      in if typeBits <= 0x70
-           then Just (BS.take 28 (BS.drop 1 bs))
-           else Nothing
 
 -- | Extract the inline stake credential from a Shelley address.
 --

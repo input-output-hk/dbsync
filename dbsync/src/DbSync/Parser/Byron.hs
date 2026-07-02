@@ -163,7 +163,6 @@ fromByronTxOut :: Word16 -> Byron.TxOut -> GenericTxOut
 fromByronTxOut idx txOut =
   GenericTxOut
     { txOutIndex       = idx
-    , txOutAddress     = Text.decodeUtf8 (Byron.addrToBase58 (Byron.txOutAddress txOut))
     , txOutAddressRaw  = serialize' (Byron.txOutAddress txOut)
     , txOutValue       = fromIntegral (Byron.lovelaceToInteger (Byron.txOutValue txOut))
     , txOutDataHash    = Nothing

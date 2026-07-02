@@ -91,7 +91,6 @@ failedTxFoldedCollateral = baseTx
 mkOut :: Word16 -> Word64 -> GenericTxOut
 mkOut idx value = GenericTxOut
   { txOutIndex       = idx
-  , txOutAddress     = "addr_test1xyz"
   , txOutAddressRaw  = BS.replicate 57 0x00
   , txOutValue       = value
   , txOutDataHash    = Nothing

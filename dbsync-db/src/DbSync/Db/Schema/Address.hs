@@ -16,6 +16,12 @@ module DbSync.Db.Schema.Address
   ( -- * Schema types
     Address (..)
 
+    -- * Building an address from raw bytes
+  , addressFromRaw
+  , rawToDisplayText
+  , rawHasScript
+  , extractPaymentCred
+
     -- * Table definitions
   , addressTableDef
 
@@ -38,7 +44,10 @@ module DbSync.Db.Schema.Address
 
 import Cardano.Prelude
 
+import qualified Data.ByteString as BS
+import Data.ByteString.Base58 (bitcoinAlphabet, encodeBase58)
 import Data.Functor.Contravariant ((>$<))
+import qualified Data.Text.Encoding as TextEnc
 import qualified Hasql.Decoders as D
 import qualified Hasql.Encoders as E
 
@@ -52,6 +61,7 @@ import DbSync.Db.Loader.Encoder
   , bInt64
   , bText
   )
+import DbSync.Util.Bech32 (serialiseShelleyAddrToBech32)
 
 -- ---------------------------------------------------------------------------
 -- * Key type family instances
@@ -72,6 +82,54 @@ data Address = Address
   , addressStakeAddressId :: !(Maybe StakeAddressId) -- ^ FK to stake_address (NULL during ingest)
   }
   deriving stock (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- * Building an address from raw bytes
+-- ---------------------------------------------------------------------------
+
+-- | Reconstruct an 'Address' row from its raw bytes and resolved stake
+-- id. The display text, has-script flag, and payment credential are all
+-- pure functions of the raw bytes, so the ingest path buffers only the
+-- @stake_address_id@ and rebuilds the row when it is written.
+addressFromRaw :: ByteString -> Maybe StakeAddressId -> Address
+addressFromRaw raw mStakeId = Address
+  { addressAddress        = rawToDisplayText raw
+  , addressRaw            = raw
+  , addressHasScript      = rawHasScript raw
+  , addressPaymentCred    = extractPaymentCred raw
+  , addressStakeAddressId = mStakeId
+  }
+
+-- | Render an address from its raw bytes. Shelley+ payment addresses
+-- (header high bit clear) Bech32-encode with the HRP taken from the
+-- header; Byron bootstrap addresses (CBOR, high bit set) Base58-encode.
+-- For Byron, @encodeBase58 bitcoinAlphabet raw@ equals
+-- @Cardano.Chain.Common.addrToBase58@ on the decoded address, since the
+-- stored raw is exactly that address's byron-CBOR serialisation.
+rawToDisplayText :: ByteString -> Text
+rawToDisplayText raw = case BS.uncons raw of
+  Just (header, _)
+    | header .&. 0x80 == 0 -> serialiseShelleyAddrToBech32 raw
+  _ -> TextEnc.decodeUtf8 (encodeBase58 bitcoinAlphabet raw)
+
+-- | Whether the address header marks a script payment credential (bit
+-- 4). Byron addresses never carry scripts.
+rawHasScript :: ByteString -> Bool
+rawHasScript bs
+  | BS.null bs = False
+  | otherwise  = (BS.head bs .&. 0x10) /= 0
+
+-- | The 28-byte payment credential (bytes 1..28) of a Shelley payment
+-- address (header high nibble @0x0@-@0x7@). Byron raws, reward
+-- addresses, and anything shorter than 29 bytes yield 'Nothing'.
+extractPaymentCred :: ByteString -> Maybe ByteString
+extractPaymentCred bs
+  | BS.length bs < 29 = Nothing
+  | otherwise =
+      let typeBits = BS.head bs .&. 0xF0
+      in if typeBits <= 0x70
+           then Just (BS.take 28 (BS.drop 1 bs))
+           else Nothing
 
 -- ---------------------------------------------------------------------------
 -- * Table definitions

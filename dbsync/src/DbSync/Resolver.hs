@@ -73,13 +73,13 @@ data IdResolver m = IdResolver
     -- UTxO extractor IDs
     -- ---------------------------------------------------------------
 
-    -- | Ingest-only: queue (tx_out_id, raw, derived address) for the
-    -- 'AddressResolver' worker, which bulk-fills @tx_out.address_id@
-    -- an epoch later. Panics in Follow.
-  , recordTxOutAddress           :: !(TxOutId -> ByteString -> Address -> m ())
+    -- | Ingest-only: queue @(tx_out_id, raw, resolved stake id)@ for
+    -- the 'AddressResolver' worker, which bulk-fills
+    -- @tx_out.address_id@ an epoch later. Panics in Follow.
+  , recordTxOutAddress           :: !(TxOutId -> ByteString -> Maybe StakeAddressId -> m ())
 
     -- | As 'recordTxOutAddress' but for @collateral_tx_out@.
-  , recordCollateralTxOutAddress :: !(CollateralTxOutId -> ByteString -> Address -> m ())
+  , recordCollateralTxOutAddress :: !(CollateralTxOutId -> ByteString -> Maybe StakeAddressId -> m ())
 
     -- | Follow-only: resolve raw bytes to an 'AddressId', queuing the
     -- @address@ INSERT on the per-block buffer when the bytes are new.

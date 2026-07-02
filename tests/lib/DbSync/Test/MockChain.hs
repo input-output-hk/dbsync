@@ -322,7 +322,7 @@ parseAndProcess conn mc extractors blocks = do
         (mcStateQueryVar mc)
         (mcSystemStart mc)
         (Network.blockSlot blk)
-      pure (parseBlock slotDetails blk)
+      pure (parseBlock True slotDetails blk)
 
 -- | Re-seed 'mcStateQueryVar' from the interpreter's current ledger
 -- state. The seeded interpreter forecast only covers a bounded

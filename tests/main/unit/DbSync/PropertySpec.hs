@@ -132,7 +132,7 @@ prop_plainTransfersGetZeroDeposit
   :: CardanoBlock StandardCrypto -> Property
 prop_plainTransfersGetZeroDeposit block = ioProperty $ do
   let sd       = syntheticSlotDetails (blockSlot block)
-      genBlock = parseBlock sd block
+      genBlock = parseBlock True sd block
       plainTxHashes = Set.fromList
         [ G.txHash gtx
         | gtx <- G.blkTxs genBlock

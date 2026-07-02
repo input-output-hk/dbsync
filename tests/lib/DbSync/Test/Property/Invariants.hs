@@ -85,7 +85,7 @@ runPureExtractMany extractors blocks = withTestIngestStores $ \utxoStore dedupSt
                               (mkTestWriter ref) extractors
   for_ blocks $ \block -> do
     let sd        = syntheticSlotDetails (blockSlot block)
-        !genBlock = parseBlock sd block
+        !genBlock = parseBlock True sd block
     runReaderT (processBlock genBlock) env
   readIORef ref
 

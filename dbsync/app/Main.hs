@@ -1,3 +1,5 @@
+{-# LANGUAGE CPP #-}
+
 module Main
   ( main
   ) where
@@ -23,8 +25,20 @@ import DbSync.App.Config.Validation (validateConfig)
 import DbSync.Trace.Backend (mkStdErrTracer)
 import DbSync.Trace.Types (LogMsg (..), Severity (..), severityFromText)
 
+#ifdef GHC_DEBUG
+import GHC.Debug.Stub (withGhcDebug)
+#endif
+
 main :: IO ()
-main = do
+#ifdef GHC_DEBUG
+-- Serve the ghc-debug socket so a client can pause and inspect the heap.
+main = withGhcDebug realMain
+#else
+main = realMain
+#endif
+
+realMain :: IO ()
+realMain = do
   -- Bootstrap tracer so profile-parse errors get logged before the
   -- profile-configured tracer exists.
   args       <- parseCliArgs

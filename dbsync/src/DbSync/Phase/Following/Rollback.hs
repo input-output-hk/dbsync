@@ -32,7 +32,7 @@ import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
 import Ouroboros.Consensus.Cardano.Node ()                       -- CanHardFork orphan
 import Ouroboros.Consensus.Shelley.HFEras ()                     -- per-era HFC instances
 import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()    -- LedgerSupportsProtocol orphans
-import Ouroboros.Network.Block (pattern BlockPoint, pattern GenesisPoint)
+import Ouroboros.Network.Block (data BlockPoint, data GenesisPoint)
 import Cardano.Slotting.Slot (SlotNo (..))
 
 import DbSync.Parser.Types (CardanoPoint)

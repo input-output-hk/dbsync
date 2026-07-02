@@ -10,7 +10,7 @@ repository cardano-haskell-packages
     d4a35cd3121aa00d18544bb0ac01c3e1691d618f462c46129271bccf39f7e8ee
 
 index-state:
-  , hackage.haskell.org 2026-03-26T20:21:33Z
+  , hackage.haskell.org 2026-06-23T11:04:38Z
   , cardano-haskell-packages 2026-05-21T00:00:00Z
 
 active-repositories:
@@ -82,15 +82,48 @@ if !os(linux)
 
 constraints:
   , text < 2.1.2
+  , any.proto-lens-setup >= 0.4.0.10
+  , validation < 1.2
 
--- Allow-newer clauses needed by LSM/LedgerDB V2 transitive deps.
+-- Allow-newer clauses needed by LSM/LedgerDB V2 transitive deps, plus the
+-- GHC 9.14 boot-library upper bounds relaxed so the pinned snapshot solves
+-- against base-4.22 and its bundled boot packages.
 allow-newer:
   , cardano-api:plutus-core
   , resource-registry:nothunks
-
-if impl (ghc >= 9.12)
-  allow-newer:
-    , Unique:hashable
+  , Unique:hashable
+  , *:base
+  , *:ghc-prim
+  , *:ghc-bignum
+  , *:ghc-internal
+  , *:ghc
+  , *:ghc-boot
+  , *:ghc-boot-th
+  , *:ghc-heap
+  , *:integer-gmp
+  , *:template-haskell
+  , *:array
+  , *:binary
+  , *:bytestring
+  , *:containers
+  , *:deepseq
+  , *:directory
+  , *:exceptions
+  , *:filepath
+  , *:file-io
+  , *:mtl
+  , *:os-string
+  , *:parsec
+  , *:pretty
+  , *:process
+  , *:semaphore-compat
+  , *:stm
+  , *:text
+  , *:time
+  , *:transformers
+  , *:unix
+  , *:Cabal
+  , *:Cabal-syntax
 
 -- ---------------------------------------------------------------------------
 -- Tests

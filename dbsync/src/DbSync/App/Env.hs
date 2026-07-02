@@ -57,8 +57,6 @@ import DbSync.Extractor
   , takeBlockLedgerData
   )
 import DbSync.Phase.Ingest.DedupStore (DedupStores)
-import DbSync.Phase.Ingest.PipelineStats (PipelineStats)
-import DbSync.Phase.Ingest.ReceiverStats (ReceiverStats)
 import DbSync.Phase.Ingest.LsmSession (LsmSession)
 import DbSync.Phase.Ingest.UtxoStore (UtxoStore)
 import DbSync.Worker.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..))
@@ -76,9 +74,7 @@ import DbSync.StateQuery.Types
   , StateQueryVar
   )
 import DbSync.Trace (HasTracer (..))
-import DbSync.Trace.Pulse (HasPulse (..), Pulse)
 import DbSync.Trace.Types (AppTracer, Severity)
-import DbSync.Trace.Watchdog (HasWatchdog (..), Watchdog)
 import DbSync.Writer (HasWriter (..), Writer)
 
 -- ---------------------------------------------------------------------------
@@ -101,8 +97,6 @@ class HasReceiverChannels env where
   getBlockQueue       :: env -> TBQueue ChainSyncMsg
   getLedgerQueue      :: env -> Maybe (TBQueue ChainSyncMsg)
   getStateQueryVar    :: env -> StateQueryVar
-  getReceiverStats    :: env -> ReceiverStats
-  getWatchdog         :: env -> Watchdog
   getLatestPoint      :: env -> IORef (Maybe CardanoPoint)
   getRollbackBoundary :: env -> TVar (Maybe BlockNo)
   getLatestTipBlock   :: env -> TVar (Maybe BlockNo)
@@ -120,8 +114,8 @@ data CoreEnv = CoreEnv
     -- ^ Structured logging tracer (contra-tracer)
   , ceMinSeverity :: !Severity
     -- ^ Same value the tracer was built with. Subsystems that gate
-    -- allocation on log level (watchdog, per-epoch diagnostic) read
-    -- it rather than re-parsing the profile.
+    -- allocation on log level (the per-epoch diagnostic) read it
+    -- rather than re-parsing the profile.
   , ceMetrics     :: !Metrics
     -- ^ Prometheus metrics handles
   , ceConfig      :: !SyncConfig
@@ -135,7 +129,7 @@ data CoreEnv = CoreEnv
     -- on stake / reward Bech32 encodings.
   , ceCurrentPhase :: !CurrentPhase
     -- ^ Live lifecycle phase. Written by the orchestrator and the
-    -- Follow loop; read by extractors, logs, and the watchdog.
+    -- Follow loop; read by extractors and logs.
   , ceSecurityParam :: !Word64
     -- ^ Protocol @k@ (max rollback depth). Read by the rollback path
     -- to gate deletes past the k-safety horizon.
@@ -214,14 +208,6 @@ data IngestEnv = IngestEnv
   , ieExtractState  :: !(IORef ExtractState)
     -- ^ Per-block extraction state — carries the 'IdCounters' through
     -- 'atomicModifyIORef'' so the resolver can hand out fresh IDs.
-  , ieReceiverStats :: !ReceiverStats
-    -- ^ Cumulative receiver-thread counters (blocks received, writes
-    -- blocked). Mutated by the chainsync receiver; sampled by the
-    -- watchdog at each interval for Debug diagnostics.
-  , iePipelineStats :: !(IORef PipelineStats)
-    -- ^ Per-epoch drain-size counters. Consumer increments on every
-    -- queue drain and resets at each epoch boundary; the watchdog
-    -- samples for interval deltas.
   , ieControlConnection :: !ControlConnection
     -- ^ PG connection used by the consumer to advance
     -- @dbsync_sync_state@ at each epoch boundary via 'commitEpoch'.
@@ -233,15 +219,6 @@ data IngestEnv = IngestEnv
     -- ^ Lower edge of the replay window (the chosen snapshot's
     -- slot). Drives the percentage in the consumer\'s replay
     -- progress log. 'Nothing' otherwise.
-  , ieWatchdog                :: !Watchdog
-    -- ^ Per-thread liveness counters sampled by a background
-    -- watchdog. Consumer, receiver, and ledger worker all bump via
-    -- this handle.
-  , iePulse                   :: !Pulse
-    -- ^ In-epoch pulse counter. Bumped once per processed block; a
-    -- background sampler reads it every 'pulseInterval' seconds and
-    -- emits a Debug-level liveness line. Disabled at 'Info' or above
-    -- (matching the watchdog).
   , ieLatestReceivedPoint     :: !(IORef (Maybe CardanoPoint))
     -- ^ The latest chain point the receiver has accepted (forward
     -- or rollback). Read on every (re)connection so the chainsync
@@ -290,10 +267,6 @@ data FollowEnv = FollowEnv
     -- ^ Slot-to-time interpreter, used by 'parseBlock'.
   , feSystemStart         :: !SystemStart
     -- ^ Network system-start time; drives slot-to-time conversion.
-  , feReceiverStats       :: !ReceiverStats
-    -- ^ Cumulative receiver counters carried from 'IngestEnv'.
-  , feWatchdog            :: !Watchdog
-    -- ^ Per-thread liveness counters carried from 'IngestEnv'.
   , feLatestReceivedPoint :: !(IORef (Maybe CardanoPoint))
     -- ^ Latest chainsync point accepted; preserved across the phase flip.
   , feHasqlConnection     :: !Conn.Connection
@@ -343,9 +316,9 @@ data FollowEnv = FollowEnv
 -- ---------------------------------------------------------------------------
 
 -- | Build a 'FollowEnv' by reusing receiver-side state from the
--- 'IngestEnv'. The block queue, watchdog, state-query interpreter,
--- and latest-point ref are shared so the receiver keeps producing
--- into the same FIFO across the phase boundary.
+-- 'IngestEnv'. The block queue, state-query interpreter, and
+-- latest-point ref are shared so the receiver keeps producing into
+-- the same FIFO across the phase boundary.
 --
 -- The caller supplies the new Follow-only resources: a fresh hasql
 -- connection (drives resolver + writer + per-block transactions) and
@@ -363,8 +336,6 @@ mkFollowEnvFromIngest ie conn resolver writer =
     , feHasLedgerEnv        = ieHasLedgerEnv ie
     , feStateQueryVar       = ieStateQueryVar ie
     , feSystemStart         = ieSystemStart ie
-    , feReceiverStats       = ieReceiverStats ie
-    , feWatchdog            = ieWatchdog ie
     , feLatestReceivedPoint = ieLatestReceivedPoint ie
     , feHasqlConnection     = conn
     , feResolver            = resolver
@@ -448,8 +419,6 @@ instance HasReceiverChannels IngestEnv where
     LedgerEnabled lenv -> Just (leLedgerQueue lenv)
     LedgerDisabled _   -> Nothing
   getStateQueryVar    = ieStateQueryVar
-  getReceiverStats    = ieReceiverStats
-  getWatchdog         = ieWatchdog
   getLatestPoint      = ieLatestReceivedPoint
   getRollbackBoundary = ieRollbackBoundary
   getLatestTipBlock   = ieLatestTipBlock
@@ -460,8 +429,6 @@ instance HasReceiverChannels FollowEnv where
     LedgerEnabled lenv -> Just (leLedgerQueue lenv)
     LedgerDisabled _   -> Nothing
   getStateQueryVar    = feStateQueryVar
-  getReceiverStats    = feReceiverStats
-  getWatchdog         = feWatchdog
   getLatestPoint      = feLatestReceivedPoint
   getRollbackBoundary = feRollbackBoundary
   getLatestTipBlock   = feLatestTipBlock
@@ -548,23 +515,6 @@ instance HasHasqlConnection FollowEnv where
 
 instance HasLoaderStream IngestEnv where
   getLoaderStream = ieLoaderStream
-
--- ---------------------------------------------------------------------------
--- * HasWatchdog instances
--- ---------------------------------------------------------------------------
-
-instance HasWatchdog IngestEnv where
-  getWatchdog = ieWatchdog
-
-instance HasWatchdog FollowEnv where
-  getWatchdog = feWatchdog
-
--- ---------------------------------------------------------------------------
--- * HasPulse instances
--- ---------------------------------------------------------------------------
-
-instance HasPulse IngestEnv where
-  getPulse = iePulse
 
 -- ---------------------------------------------------------------------------
 -- * HasStateQueryVar / HasSystemStart instances

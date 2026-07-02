@@ -326,8 +326,8 @@ quietTracer = pure mkNullTracer
 -- | Writes traces to stderr at or above the given severity. Use
 -- when diagnosing a failing spec: @verboseTracer Info@ surfaces the
 -- per-step Prep timing, ChainSync handshake, and shutdown lines;
--- @verboseTracer Debug@ also enables the Watchdog and per-epoch
--- dedup/RAM diagnostics.
+-- @verboseTracer Debug@ also enables the per-epoch dedup/RAM
+-- diagnostics.
 verboseTracer :: Severity -> IO AppTracer
 verboseTracer = mkStdErrTracer
 

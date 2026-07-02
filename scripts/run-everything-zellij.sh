@@ -24,8 +24,11 @@ if [ ! -d "$TESTNET_DIR" ]; then
     exit 1
 fi
 
-# Find dbsync binary
-dbsync="$(find "$PROJECT_DIR"/dist-newstyle -name dbsync -type f | head -1)"
+# Find the dbsync binary. DBSYNC_BIN overrides autodetection: when more
+# than one build variant exists under dist-newstyle, `find | head -1`
+# picks an arbitrary one; the boot log's "binary … (linked …)" line
+# confirms which one actually ran.
+dbsync="${DBSYNC_BIN:-$(find "$PROJECT_DIR"/dist-newstyle -name dbsync -type f | head -1)}"
 
 if [ -z "$dbsync" ]; then
     echo "ERROR: dbsync binary not found in: $PROJECT_DIR/dist-newstyle"
@@ -55,6 +58,11 @@ echo "Cleanup complete. Starting services..."
 #           work-stealing runtime; parallelises sig-verification, Plutus eval, GC.
 #   -A64m   bump GC young-gen nursery from 4 MB to 64 MB; cuts minor-GC frequency
 #           by ~16x during the heavy-allocation ledger replay.
+#
+# When $dbsync was built with -f ghc-debug, the stub serves a heap-inspection
+# socket in the XDG data dir, which ghc-debug-brick auto-discovers. Export
+# GHC_DEBUG_SOCKET before running to pin an explicit path instead; unset it
+# for auto-discovery.
 zellij --layout <(cat <<EOF
 layout {
     pane split_direction="vertical" {
@@ -64,8 +72,8 @@ layout {
         }
         pane name="cardano-db-sync" {
             command "bash"
-            args "-c" "cd $PROJECT_DIR/ && echo 'Starting DbSync...' && $dbsync --db-sync-config $TESTNET_DIR/db-sync-config.json --socket-path $TESTNET_DIR/db/node.socket --ledger-state-dir $TESTNET_DIR --profile $PROFILE"
-        }
+            args "-c" "cd $PROJECT_DIR/ && echo 'Starting DbSync...' && ${GHC_DEBUG_SOCKET:+GHC_DEBUG_SOCKET=$GHC_DEBUG_SOCKET }$dbsync --db-sync-config $TESTNET_DIR/db-sync-config.json --socket-path $TESTNET_DIR/db/node.socket --ledger-state-dir $TESTNET_DIR --profile $PROFILE "
+      }
     }
 }
 EOF

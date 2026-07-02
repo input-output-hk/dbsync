@@ -25,6 +25,9 @@ import Cardano.Prelude
 
 import Cardano.Ledger.BaseTypes (Network)
 import Control.Tracer (traceWith)
+import Data.Time.Clock (UTCTime)
+import System.Directory (getModificationTime)
+import System.Environment (getExecutablePath)
 import qualified Data.Map.Strict as Map
 import qualified Hasql.Connection.Settings as HasqlSettings
 
@@ -172,7 +175,19 @@ runStartup = do
   let projNames = map pdName extractors
       projCount = length projNames
 
+  -- Identify the running binary by its link mtime, read at runtime
+  -- so it cannot disagree with the file actually executing; lets any
+  -- saved log answer which build produced it.
+  binaryLine <- liftIO $ do
+    exePath <- getExecutablePath
+    eTime   <- try (getModificationTime exePath)
+                 :: IO (Either IOException UTCTime)
+    pure $ case eTime of
+      Right t -> "binary " <> toS exePath <> " (linked " <> show t <> ")"
+      Left _  -> "binary " <> toS exePath
+
   liftIO $ traceWith tracer $ LogMsg Info "App" "cardano-db-sync starting" Nothing
+  liftIO $ traceWith tracer $ LogMsg Info "App" binaryLine Nothing
   liftIO $ traceWith tracer $ LogMsg Info "App"
     ( "Enabled extractors (" <> show projCount <> "): "
       <> showExtractorList projNames

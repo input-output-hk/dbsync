@@ -38,6 +38,7 @@ module DbSync.StateQuery.ObservedSummary
   ( -- * Types
     ObservedSummary
   , EraIdx (..)
+  , renderEraIdx
   , ObservationResult (..)
   , ObservedTransition (..)
 
@@ -104,7 +105,19 @@ data EraIdx
   | BabbageIdx
   | ConwayIdx
   | DijkstraIdx
-  deriving stock (Eq, Ord, Show, Enum, Bounded)
+  deriving stock (Eq, Ord, Enum, Bounded, Show)
+
+-- | Human era name, without the @Idx@ suffix that derived 'Show' adds.
+renderEraIdx :: EraIdx -> Text
+renderEraIdx = \case
+  ByronIdx    -> "Byron"
+  ShelleyIdx  -> "Shelley"
+  AllegraIdx  -> "Allegra"
+  MaryIdx     -> "Mary"
+  AlonzoIdx   -> "Alonzo"
+  BabbageIdx  -> "Babbage"
+  ConwayIdx   -> "Conway"
+  DijkstraIdx -> "Dijkstra"
 
 -- | Pattern-match a 'CardanoBlock' to its era index.
 eraOf :: CardanoBlock StandardCrypto -> EraIdx

@@ -68,7 +68,7 @@ import Ouroboros.Consensus.Config (TopLevelConfig)
 import Ouroboros.Consensus.Shelley.HFEras ()                     -- per-era HFC instances
 import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()    -- 'LedgerSupportsProtocol' orphans
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..))
-import Ouroboros.Network.Block (pattern BlockPoint, pattern GenesisPoint)
+import Ouroboros.Network.Block (data BlockPoint, data GenesisPoint)
 import Ouroboros.Network.Magic (NetworkMagic)
 
 import DbSync.AppM (runAppM)
@@ -94,7 +94,6 @@ import DbSync.Phase.Following.Tuning (defaultFollowTuning, setFollowSessionGUCs)
 import qualified DbSync.Phase.Following.Writer as FollowingWriter
 import DbSync.Phase.Ingest.DedupStore (DedupStores, newStores)
 import DbSync.Phase.Ingest.LsmSession (LsmSession, closeLsmSession)
-import DbSync.Phase.Ingest.ReceiverStats (newReceiverStats)
 import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Resolver (IdResolver)
 import DbSync.Writer (Writer)
@@ -122,7 +121,6 @@ import DbSync.Trace.Types
   , logInfoIO
   , logWarnIO
   )
-import DbSync.Trace.Watchdog (newWatchdog, runWatchdogIO)
 import DbSync.Worker.Ledger.Fingerprint (LedgerStateFingerprint, renderFingerprint)
 import DbSync.Worker.Ledger.Snapshot (deleteNewerSnapshots)
 import DbSync.Worker.Ledger.State
@@ -878,7 +876,6 @@ runBootFollowRestart
     -- the long-running follow loop.
     closeLsmSession lsmSession
     runAppM coreEnv (setCurrentPhase (ceCurrentPhase coreEnv) FollowingVolatileTail)
-    watchdog <- newWatchdog (ceMinSeverity coreEnv)
 
     let row = frcSyncState frc
         tableDefs = concatMap pdTables (ceExtractors coreEnv)
@@ -908,7 +905,7 @@ runBootFollowRestart
       -- boundary baked in. Inside the window the worker suppresses
       -- snapshot writes and 'accumulateEpochParams' because those
       -- epochs are already represented in PG / on disk.
-      withLedgerThreads hasLedgerEnv mReplayBoot stateQueryVar watchdog $
+      withLedgerThreads hasLedgerEnv mReplayBoot stateQueryVar $
         bracket
           (setupOffChainPoolWorker tracer hasqlSettings (scOptions (ceConfig coreEnv)))
           (mapM_ closeOffChainPoolWorker) $ \mPoolWorker ->
@@ -921,15 +918,11 @@ runBootFollowRestart
           -- enough for scheduling jitter, shallow enough that a full
           -- queue of decoded blocks doesn't pin hundreds of MB.
           blockQueue       <- newTBQueueIO 150
-          receiverStats    <- newReceiverStats
           latestPointRef   <- newIORef Nothing
           rollbackBoundary <- newTVarIO Nothing
           latestTipBlock   <- newTVarIO Nothing
 
-          let mLedgerQueue = case hasLedgerEnv of
-                LedgerEnabled lenv -> Just (leLedgerQueue lenv)
-                LedgerDisabled _   -> Nothing
-              intersectReq = IntersectAt [intersectPoint]
+          let intersectReq = IntersectAt [intersectPoint]
               mkEnv conn resolver writer =
                 FollowEnv
                   { feCore                = coreEnv
@@ -937,8 +930,6 @@ runBootFollowRestart
                   , feHasLedgerEnv        = hasLedgerEnv
                   , feStateQueryVar       = stateQueryVar
                   , feSystemStart         = systemStart
-                  , feReceiverStats       = receiverStats
-                  , feWatchdog            = watchdog
                   , feLatestReceivedPoint = latestPointRef
                   , feHasqlConnection     = conn
                   , feResolver            = resolver
@@ -954,12 +945,10 @@ runBootFollowRestart
 
           let mLastBlock = ssrLastCommittedBlockNo (frcSyncState frc)
               kBlocks    = ceSecurityParam coreEnv
-          withAsync (runWatchdogIO tracer watchdog blockQueue mLedgerQueue Nothing) $ \watchdogThread -> do
-            link watchdogThread
-            withAsync (checkResumeGap tracer kBlocks mLastBlock rollbackBoundary) $ \gapThread -> do
-              link gapThread
-              runFollowSession tracer "Boot" iomgr hasqlSettings topLevelCfg
-                networkMagic socketPath intersectReq mShutdown mkEnv
+          withAsync (checkResumeGap tracer kBlocks mLastBlock rollbackBoundary) $ \gapThread -> do
+            link gapThread
+            runFollowSession tracer "Boot" iomgr hasqlSettings topLevelCfg
+              networkMagic socketPath intersectReq mShutdown mkEnv
 
 -- | Open a dedicated Follow hasql connection, build its resolver and
 -- writer, hand them to the caller-supplied 'FollowEnv' builder, and

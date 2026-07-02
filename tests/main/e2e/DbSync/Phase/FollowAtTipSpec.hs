@@ -21,7 +21,7 @@ import qualified Ouroboros.Network.Block as Network
 
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
-import Ouroboros.Network.Block (pattern BlockPoint)
+import Ouroboros.Network.Block (data BlockPoint)
 
 import DbSync.Db.Schema.Core (blockTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))

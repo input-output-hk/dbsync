@@ -83,7 +83,7 @@ import Ouroboros.Consensus.Storage.LedgerDB.Snapshots
   , trimSnapshots
   )
 
-import Ouroboros.Network.Block (pattern BlockPoint, pattern GenesisPoint, pointSlot)
+import Ouroboros.Network.Block (data BlockPoint, data GenesisPoint, pointSlot)
 
 import DbSync.AppM (LedgerM, runAppM)
 import DbSync.SyncState.Row (markSnapshotComplete)

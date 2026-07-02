@@ -90,14 +90,17 @@ import DbSync.Db.Schema.SyncState (SyncStateRow (..))
 import DbSync.Db.Schema.Types (TableColumn (..), TableDef (..))
 import DbSync.Schema.Version (Fingerprint (..))
 import DbSync.Db.Statement.Worker.Resume
-  ( selectBlockHashAtSlotStmt
+  ( declareDedupSingleCursorStmt
+  , declareMultiAssetDedupCursorStmt
+  , fetchDedupSinglePageStmt
+  , fetchMultiAssetDedupPageStmt
+  , selectBlockHashAtSlotStmt
   , selectCommitteeByProposalStmt
   , selectCommitteeHashDedupStmt
   , selectConstitutionByProposalStmt
   , selectDedupSingleStmt
   , selectDrepHashDedupStmt
   , selectGovActionProposalCacheStmt
-  , selectMultiAssetDedupStmt
   , selectVotingAnchorDedupStmt
   , updateGovActionDroppedStmt
   , updateGovActionEnactedStmt
@@ -117,6 +120,7 @@ import DbSync.Db.Statement.SyncState
   , writePendingRollbackSlotStmt
   , writeSyncStateStmt
   )
+import DbSync.Db.Statement.Transaction (beginSql, commitSql)
 import DbSync.Error (throwDb)
 import DbSync.Phase.Ingest.DedupStore
   ( DedupStore
@@ -357,6 +361,48 @@ rebuildDedupMaps tableDefs lsmSession = do
     populateVotingAnchor (dstVotingAnchor stores)
   pure stores
 
+-- | Page size for the boot-time dedup rebuild. Each page is read,
+-- inserted into the LSM store, then released before the next, so peak
+-- memory stays flat regardless of the table's size.
+dedupPageSize :: Int64
+dedupPageSize = 50000
+
+-- | Stream a whole dedup table through a server-side cursor, inserting
+-- each fetched page before requesting the next. One sequential scan in
+-- physical order — no @ORDER BY@ and no @id@ index — with at most one
+-- page resident. The scan runs in a single transaction; boot is
+-- single-threaded on the control connection, so holding it open is safe.
+cursorInsert
+  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  => Text                  -- ^ caller label for errors
+  -> Stmt.Statement () ()  -- ^ DECLARE … CURSOR
+  -> Stmt.Statement () [r] -- ^ FETCH FORWARD …
+  -> (r -> IO ())          -- ^ insert one fetched row
+  -> m Int64
+cursorInsert callerName declareStmt fetchStmt insertRow = do
+  ControlConnection conn <- asks getControlConnection
+  result <- liftIO $ Conn.use conn $ do
+    Sess.script beginSql
+    Sess.statement () declareStmt
+    let loop acc = do
+          rows <- Sess.statement () fetchStmt
+          if null rows
+            then pure acc
+            else do
+              liftIO (forM_ rows insertRow)
+              loop $! acc + fromIntegral (length rows)
+    total <- loop (0 :: Int64)
+    Sess.script commitSql
+    pure total
+  case result of
+    Left err -> throwDb $ callerName <> ": " <> show err
+    Right n -> pure n
+
+-- | Cursor name for a table's dedup rebuild. Each rebuild runs in its
+-- own transaction, so a per-table name never collides.
+dedupCursorName :: Text -> Text
+dedupCursorName tableName = "dedup_cur_" <> tableName
+
 populateSingle
   :: ( HasCallStack
      , HasTracer env
@@ -366,12 +412,12 @@ populateSingle
      )
   => Text -> Text -> DedupStore -> m ()
 populateSingle tableName keyCol store =
-  timedRebuild tableName $ do
-    rows <- runCtrlStmt ("rebuildDedupMaps[" <> tableName <> "]") ()
-              (selectDedupSingleStmt tableName keyCol)
-    liftIO $ forM_ rows $ \(rowId, key) ->
-      insertExisting (SBS.toShort key) rowId store
-    pure (fromIntegral (length rows))
+  timedRebuild tableName $
+    cursorInsert
+      ("rebuildDedupMaps[" <> tableName <> "]")
+      (declareDedupSingleCursorStmt (dedupCursorName tableName) tableName keyCol)
+      (fetchDedupSinglePageStmt (dedupCursorName tableName) dedupPageSize)
+      (\(rowId, key) -> insertExisting (SBS.toShort key) rowId store)
 
 populateMultiAsset
   :: ( HasCallStack
@@ -382,12 +428,12 @@ populateMultiAsset
      )
   => DedupStore -> m ()
 populateMultiAsset store =
-  timedRebuild "multi_asset" $ do
-    rows <- runCtrlStmt "rebuildDedupMaps[multi_asset]" ()
-              selectMultiAssetDedupStmt
-    liftIO $ forM_ rows $ \(rowId, policy, name) ->
-      insertExisting (hashDedupKey (policy <> name)) rowId store
-    pure (fromIntegral (length rows))
+  timedRebuild "multi_asset" $
+    cursorInsert
+      "rebuildDedupMaps[multi_asset]"
+      (declareMultiAssetDedupCursorStmt (dedupCursorName "multi_asset"))
+      (fetchMultiAssetDedupPageStmt (dedupCursorName "multi_asset") dedupPageSize)
+      (\(rowId, policy, name) -> insertExisting (hashDedupKey (policy <> name)) rowId store)
 
 populateDrepHash
   :: ( HasCallStack

@@ -27,6 +27,12 @@ data SyncPhase
   | FollowingChainTip
   deriving stock (Eq, Show, Bounded, Enum)
 
+instance NFData SyncPhase where
+  rnf IngestChainHistory = ()
+  rnf PreparingForVolatileTail = ()
+  rnf FollowingVolatileTail = ()
+  rnf FollowingChainTip = ()
+
 -- | True for phases where extractors write via INSERT (so inline
 -- collateral diffs and ledger-disabled deposit identities are
 -- computed per block rather than deferred to a post-load backfill).

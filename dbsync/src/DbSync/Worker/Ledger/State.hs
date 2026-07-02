@@ -103,11 +103,13 @@ import Control.Concurrent.Class.MonadSTM.Strict
   )
 import qualified Control.Concurrent.Class.MonadSTM.Strict as STM
 import Control.Concurrent.STM.TBQueue (newTBQueueIO, writeTBQueue)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import qualified Data.ByteString.Short as SBS
 import qualified Data.Map.Strict as Map
 import qualified Data.Sequence.Strict as StrictSeq
 import qualified Data.Set as Set
 import qualified Data.Strict.Maybe as Strict
+import System.Mem.StableName (eqStableName, makeStableName)
 import qualified Data.Time.Clock as Time
 import GHC.IO.Exception (userError)
 import Lens.Micro ((%~), (^.), (^?))
@@ -163,6 +165,8 @@ import DbSync.Worker.Ledger.Event
   )
 import DbSync.Worker.Ledger.Types
   ( ApplyResult (..)
+  , BlockApplyData (..)
+  , BoundaryApplyData (..)
   , CardanoLedgerState (..)
   , ConsensusStateRef
   , DbSyncStateRef (..)
@@ -172,6 +176,7 @@ import DbSync.Worker.Ledger.Types
   , LedgerDB (..)
   , LedgerEnv (..)
   , PanicPolicy
+  , RegisteredPoolsCache (..)
   , initCardanoLedgerState
   , newEpochStateT
   , updatedCommittee
@@ -214,7 +219,7 @@ ledgerDbCheckpointBufferSize = 100
 -- buffer grows to 'ledgerDbCheckpointBufferSize' naturally within
 -- ~100 blocks of the Follow handoff.
 ingestLedgerDbCheckpointBufferSize :: Int
-ingestLedgerDbCheckpointBufferSize = 10
+ingestLedgerDbCheckpointBufferSize = 1
 
 -- | Push a new 'DbSyncStateRef' onto the newest end of the
 -- 'LedgerDB', then prune any entries that fall outside the supplied
@@ -402,6 +407,8 @@ mkHasLedgerEnv
         closeBackend =
           releaseResources (Proxy @(CardanoBlock StandardCrypto)) res
 
+    poolsCacheRef <- newIORef Nothing
+
     pure $
       LedgerEnabled
         LedgerEnv
@@ -428,6 +435,7 @@ mkHasLedgerEnv
           , leLatestApplyResult    = latestApplyVar
           , leBoundaryApplyResults = boundaryQueue
           , leBlockApplyResults    = blockApplyQueue
+          , leRegisteredPoolsCache = poolsCacheRef
           , leDepositAccumulator   = depositAccumRef
           , leControlConnection    = ctrlConn
           , leCurrentPhase         = phaseRef
@@ -443,18 +451,21 @@ mkHasLedgerEnv
     snapshotQueueBound :: Natural
     snapshotQueueBound = 4
 
-    -- One slot per epoch we might queue while the consumer catches up
-    -- to a boundary; deeper than 'ledgerQueueBound / epochLength'
-    -- isn't reachable since the receiver-to-worker queue itself caps
-    -- look-ahead at 100 blocks.
+    -- Each entry is a small, NF-forced 'BoundaryApplyData' projection
+    -- (never a full 'ApplyResult'), and the replay window suppresses
+    -- the enqueue, so this only absorbs the rare case where the
+    -- consumer briefly lags a boundary. Receiver-to-worker look-ahead
+    -- is capped at 100 blocks (<< a mainnet epoch), so at most one
+    -- boundary is ever in flight; 4 is ample slack.
     boundaryQueueBound :: Natural
-    boundaryQueueBound = 16
+    boundaryQueueBound = 4
 
-    -- One slot per worker-side look-ahead block. Sized slightly above
-    -- 'ledgerQueueBound' so the worker can keep enqueuing while the
-    -- consumer briefly stalls (e.g. on a slow PG transaction).
+    -- One slot per worker-side look-ahead block. Each entry is a
+    -- small, fully-forced projection, so this bound is pure
+    -- back-pressure: kept modest so the worker cannot race far ahead
+    -- of a stalled consumer and pin many ledger generations.
     blockApplyQueueBound :: Natural
-    blockApplyQueueBound = 128
+    blockApplyQueueBound = 16
 
 -- | Seed the in-memory 'LedgerDB' buffer with the genesis state on
 -- a fresh boot. The resume path uses 'initLedgerDbFromSnapshot'
@@ -605,8 +616,10 @@ tickThenReapplyCheckHash cfg block = do
 applyBlock
   :: CardanoBlock StandardCrypto
   -> SlotDetails
+  -> Bool
+  -- ^ Suppress the boundary enqueue (replay window)
   -> LedgerM (DbSyncStateRef, ApplyResult, [DbSyncStateRef])
-applyBlock blk slotDetails = do
+applyBlock blk slotDetails suppressBoundary = do
   env <- ask
   result <- tickThenReapplyCheckHash (ExtLedgerCfg (getTopLevelConfig env)) blk
   case result of
@@ -619,36 +632,77 @@ applyBlock blk slotDetails = do
               (Consensus.lrEvents newResult)
           (!events, !deposits) = splitDeposits eventsFull
           !rawNewState         = clsState (Consensus.lrResult newResult)
-      newEpoch <-
+      -- Detect the epoch boundary from the raw post-tick state. The
+      -- test is epoch-number based, so the un-finalised pulser in
+      -- 'rawNewState' is irrelevant and this probe is discarded
+      -- without being forced.
+      isBoundary <-
         case mkOnNewEpoch env blk (clsState oldCls) rawNewState (findAdaPots events) of
           Left e   -> panic e
-          Right ne -> pure ne
-      let !finalState =
-            case newEpoch of
-              Just _  -> finaliseDrepDistr rawNewState
-              Nothing -> rawNewState
+          Right ne -> pure (isJust ne)
+      let !finalState
+            | isBoundary = finaliseDrepDistr rawNewState
+            | otherwise  = rawNewState
           !newCls' =
             (Consensus.lrResult newResult)
               { clsState = finalState }
-          appResult =
+      -- Rebuild 'NewEpoch' from 'finalState' so its DRep pulsing state
+      -- is the completed 'DRComplete' representative rather than a
+      -- 'DRPulsing' that pins the epoch stake maps.
+      newEpoch <-
+        if isBoundary
+          then case mkOnNewEpoch env blk (clsState oldCls) finalState (findAdaPots events) of
+                 Left e   -> panic e
+                 Right ne -> pure ne
+          else pure Nothing
+      poolsRegistered <-
+        liftIO $ getRegisteredPools (leRegisteredPoolsCache env) oldCls
+      let appResult =
             ApplyResult
               { apPrices          = getPrices newCls'
               , apGovExpiresAfter = getGovExpiration newCls'
               , apNewEpoch        = maybeToStrictMaybe newEpoch
               , apDeposits        = maybeToStrictMaybe (Generic.getDeposits finalState)
               , apSlotDetails     = slotDetails
-              , apStakeSlice      = getStakeSlice env newCls' Generic.SteadyStateSlice
-              , apEvents          = events
-              , apGovActionState  = getGovState finalState
-              , apDepositsMap     = DepositsMap deposits
-              , apPoolsRegistered = getRegisteredPools oldCls
+              -- Never read from 'leLatestApplyResult'; the live copies
+              -- travel via 'blockData' / 'boundaryData'.
+              , apStakeSlice      = Generic.NoSlices
+              , apEvents          = []
+              , apGovActionState  = Nothing
+              , apDepositsMap     = DepositsMap mempty
+              , apPoolsRegistered = Set.empty
               }
+          blockData =
+            BlockApplyData
+              { badDepositsMap     = DepositsMap deposits
+              , badStakeSlice      = getStakeSlice env newCls' Generic.SteadyStateSlice
+              , badPoolsRegistered = poolsRegistered
+              , badGovExpiresAfter = getGovExpiration newCls'
+              }
+          boundaryData =
+            BoundaryApplyData
+              { bndNewEpoch        = maybeToStrictMaybe newEpoch
+              , bndEvents          = events
+              , bndGovActionState  = getGovState finalState
+              , bndGovExpiresAfter = getGovExpiration newCls'
+              , bndSlotDetails     = slotDetails
+              }
+      -- Force the per-block projection to normal form before queueing
+      -- so a buffered entry can't pin the ledger state it came from.
+      blockData' <- liftIO (evaluate (force blockData))
+      -- At an epoch boundary (outside the replay window) force the
+      -- boundary projection too, so the queued entry holds only
+      -- compact data and never pins a 'NewEpochState' generation.
+      mBoundaryData <-
+        if isBoundary && not suppressBoundary
+          then Just <$> liftIO (evaluate (force boundaryData))
+          else pure Nothing
       liftIO $ atomically $ do
         writeTVar (leLatestApplyResult env) (Strict.Just appResult)
-        writeTBQueue (leBlockApplyResults env) appResult
-        case apNewEpoch appResult of
-          Strict.Just _  -> writeTBQueue (leBoundaryApplyResults env) appResult
-          Strict.Nothing -> pure ()
+        writeTBQueue (leBlockApplyResults env) blockData'
+        case mBoundaryData of
+          Just bd -> writeTBQueue (leBoundaryApplyResults env) bd
+          Nothing -> pure ()
       pure (oldRef, appResult, pruned)
 
 -- | 'applyBlock' plus the snapshot-cadence decision and pruning of
@@ -671,9 +725,9 @@ applyBlockAndSnapshot
   -> LedgerM ApplyResult
 applyBlockAndSnapshot blk slotDetails phase mReplayBoundary = do
   env <- ask
-  (oldRef, appResult, pruned) <- applyBlock blk slotDetails
   let proximity      = isSyncedNearTip slotDetails
       inReplayWindow = maybe False (blockSlot blk <=) mReplayBoundary
+  (oldRef, appResult, pruned) <- applyBlock blk slotDetails inReplayWindow
   -- Record this block's epoch params in the in-memory accumulator
   -- so the consumer can flush them at the next epoch boundary.
   -- Skipped inside the replay window: those epochs are already in
@@ -1065,24 +1119,45 @@ getPrices st = case ledgerState $ clsState st of
 -- this state. Empty for Byron (no pools). Returned as 'ByteString' so
 -- extractors can match against their raw pool-hash bytes without
 -- pulling in ledger key types.
-getRegisteredPools :: CardanoLedgerState -> Set.Set ByteString
-getRegisteredPools st =
+--
+-- Cached on the pointer identity of the ledger's registered-pool
+-- 'Map' ('RegisteredPoolsCache'): the 'Map' is structure-shared
+-- across blocks without pool certificates, so the projection is
+-- rebuilt only when a certificate actually changed it.
+getRegisteredPools
+  :: IORef (Maybe RegisteredPoolsCache)
+  -> CardanoLedgerState
+  -> IO (Set.Set ByteString)
+getRegisteredPools cacheRef st =
   case ledgerState $ clsState st of
-    LedgerStateByron _      -> Set.empty
-    LedgerStateShelley sts  -> registeredPoolBytes sts
-    LedgerStateAllegra sts  -> registeredPoolBytes sts
-    LedgerStateMary sts     -> registeredPoolBytes sts
-    LedgerStateAlonzo ats   -> registeredPoolBytes ats
-    LedgerStateBabbage bts  -> registeredPoolBytes bts
-    LedgerStateConway stc   -> registeredPoolBytes stc
-    LedgerStateDijkstra dls -> registeredPoolBytes dls
+    LedgerStateByron _      -> pure Set.empty
+    LedgerStateShelley sts  -> registeredPoolBytes cacheRef sts
+    LedgerStateAllegra sts  -> registeredPoolBytes cacheRef sts
+    LedgerStateMary sts     -> registeredPoolBytes cacheRef sts
+    LedgerStateAlonzo ats   -> registeredPoolBytes cacheRef ats
+    LedgerStateBabbage bts  -> registeredPoolBytes cacheRef bts
+    LedgerStateConway stc   -> registeredPoolBytes cacheRef stc
+    LedgerStateDijkstra dls -> registeredPoolBytes cacheRef dls
 
 registeredPoolBytes
   :: Shelley.EraCertState era
-  => LedgerState (ShelleyBlock p era) mk
-  -> Set.Set ByteString
-registeredPoolBytes lState =
-  Set.map keyHashBytes . Map.keysSet $ certState ^. Shelley.certPStateL . Shelley.psStakePoolsL
+  => IORef (Maybe RegisteredPoolsCache)
+  -> LedgerState (ShelleyBlock p era) mk
+  -> IO (Set.Set ByteString)
+registeredPoolBytes cacheRef lState = do
+  -- Force the projection to the shared 'Map' object itself before
+  -- taking its 'StableName' — a fresh projection thunk would never
+  -- compare equal and the cache would always miss.
+  pools  <- evaluate (certState ^. Shelley.certPStateL . Shelley.psStakePoolsL)
+  key    <- makeStableName pools
+  cached <- readIORef cacheRef
+  case cached of
+    Just (RegisteredPoolsCache cachedKey bytes)
+      | eqStableName cachedKey key -> pure bytes
+    _ -> do
+      let !bytes = Set.map keyHashBytes (Map.keysSet pools)
+      writeIORef cacheRef (Just (RegisteredPoolsCache key bytes))
+      pure bytes
   where
     certState =
       Shelley.lsCertState . Shelley.esLState . Shelley.nesEs $

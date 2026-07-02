@@ -30,7 +30,7 @@ import qualified Data.Set as Set
 import qualified Data.Strict.Maybe as Strict
 import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 
-import Test.Hspec (Spec, describe, expectationFailure, it, shouldBe)
+import Test.Hspec (Spec, anyException, describe, expectationFailure, it, shouldBe, shouldThrow)
 
 import qualified DbSync.Worker.Ledger.EpochUpdate as Generic
 import qualified DbSync.Worker.Ledger.ProtoParams as Proto
@@ -42,6 +42,7 @@ import DbSync.Extractor (ExtractorDef (..), freshExtractState)
 import DbSync.Extractor.EpochBoundary (epochBoundaryExtractor, runEpochBoundary)
 import DbSync.Worker.Ledger.Types
   ( ApplyResult (..)
+  , BoundaryApplyData (..)
   , emptyDepositsMap
   )
 import DbSync.AppM (runAppM)
@@ -83,7 +84,7 @@ spec = do
           result = mkApplyResult Strict.Nothing
 
       let env = mkTestPipelineEnv resolver writer []
-      runAppM env (runEpochBoundary result (BlockId 100))
+      runAppM env (runEpochBoundary (boundaryApplyData result) (BlockId 100))
 
       adaPotsCalls <- readIORef counterRef
       adaPotsCalls `shouldBe` 0
@@ -99,7 +100,7 @@ spec = do
                 mkNewEpoch (EpochNo 1) Strict.Nothing
 
       let env = mkTestPipelineEnv resolver writer []
-      runAppM env (runEpochBoundary result (BlockId 100))
+      runAppM env (runEpochBoundary (boundaryApplyData result) (BlockId 100))
 
       adaPotsCalls <- readIORef counterRef
       adaPotsCalls `shouldBe` 0
@@ -109,6 +110,14 @@ spec = do
     -- existing genesis-fixture deferrals in DbSync.Worker.Ledger.StateSpec.
 
   describe "runEpochBoundary — proto-param boundary writes" $ do
+    -- 'ProtoParams' rides in queued boundary payloads, so its 'rnf'
+    -- must reach through the 'Maybe'-wrapped era fields — a thunk
+    -- hiding inside a 'Just' would leak whatever it closes over
+    -- (the era's 'PParams', cost models included).
+    it "ProtoParams NFData forces the Maybe-wrapped era fields (bomb)" $
+      evaluate (force dummyProtoParams { Proto.ppCostmdls = Just (panic "unforced cost models") })
+        `shouldThrow` anyException
+
     it "writes no new rows when euProtoParams is Nothing (Byron boundary)" $ do
       written <- runBoundary $
         mkApplyResult $ Strict.Just $ mkNewEpochWith (EpochNo 1) Strict.Nothing
@@ -146,6 +155,19 @@ spec = do
 -- ---------------------------------------------------------------------------
 -- Test fixtures
 -- ---------------------------------------------------------------------------
+
+-- | Project an 'ApplyResult' onto the boundary payload, mirroring what the
+-- worker enqueues, so the existing 'mkApplyResult' fixtures can drive the
+-- 'BoundaryApplyData'-typed boundary extractors.
+boundaryApplyData :: ApplyResult -> BoundaryApplyData
+boundaryApplyData ar =
+  BoundaryApplyData
+    { bndNewEpoch        = apNewEpoch ar
+    , bndEvents          = apEvents ar
+    , bndGovActionState  = apGovActionState ar
+    , bndGovExpiresAfter = apGovExpiresAfter ar
+    , bndSlotDetails     = apSlotDetails ar
+    }
 
 -- | A minimal 'ApplyResult' with everything zero-/empty-/Nothing- valued
 -- except 'apNewEpoch', which is supplied by the caller.
@@ -248,7 +270,7 @@ runBoundaries applyResults = withTestIngestStores $ \utxoStore dedupStores -> do
       writer   = mkTestWriter wrRef
       env      = mkTestPipelineEnv resolver writer []
   forM_ applyResults $ \r ->
-    runAppM env (runEpochBoundary r (BlockId 100))
+    runAppM env (runEpochBoundary (boundaryApplyData r) (BlockId 100))
   readIORef wrRef
 
 -- | 'Generic.NewEpoch' with the supplied protocol-params payload.

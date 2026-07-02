@@ -34,7 +34,7 @@ import DbSync.Extractor.Governance (governanceExtractor, runGovernanceBoundary)
 import DbSync.Extractor.Pipeline (processBlock)
 import qualified DbSync.Worker.Ledger.EpochUpdate as Generic
 import qualified DbSync.Worker.Ledger.StakeDist as Generic
-import DbSync.Worker.Ledger.Types (ApplyResult (..), emptyDepositsMap)
+import DbSync.Worker.Ledger.Types (ApplyResult (..), BoundaryApplyData (..), emptyDepositsMap)
 import DbSync.Parser.ParamProposal (GenericParamProposal (..))
 import DbSync.Parser.Types
   ( AnchorData (..)
@@ -221,7 +221,7 @@ runBoundaryOnly applyResult = withTestIngestStores $ \utxoStore dedupStores -> d
               (mkIngestResolver stRef dedupStores addrBuf utxoStore Nothing)
               (mkTestWriter wrRef)
               [coreExtractor, governanceExtractor]
-  runAppM env (runGovernanceBoundary applyResult (BlockId 100))
+  runAppM env (runGovernanceBoundary (boundaryApplyData applyResult) (BlockId 100))
   readIORef wrRef
 
 -- ---------------------------------------------------------------------------
@@ -355,6 +355,19 @@ conwayBlock epoch txs = GenericBlock
       { txBlockIndex = i
       , txHash       = BS.replicate 32 (fromIntegral i)
       }
+
+-- | Project an 'ApplyResult' onto the boundary payload, mirroring what the
+-- worker enqueues, so the existing 'mkApplyResult' fixtures can drive the
+-- 'BoundaryApplyData'-typed boundary extractors.
+boundaryApplyData :: ApplyResult -> BoundaryApplyData
+boundaryApplyData ar =
+  BoundaryApplyData
+    { bndNewEpoch        = apNewEpoch ar
+    , bndEvents          = apEvents ar
+    , bndGovActionState  = apGovActionState ar
+    , bndGovExpiresAfter = apGovExpiresAfter ar
+    , bndSlotDetails     = apSlotDetails ar
+    }
 
 mkApplyResult :: Strict.Maybe Generic.NewEpoch -> ApplyResult
 mkApplyResult mNewEpoch = ApplyResult

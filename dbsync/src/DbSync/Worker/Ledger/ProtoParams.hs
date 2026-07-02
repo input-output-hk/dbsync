@@ -24,6 +24,7 @@ module DbSync.Worker.Ledger.ProtoParams
   ) where
 
 import Cardano.Prelude
+import Prelude (seq)
 
 import Cardano.Ledger.Alonzo.Core
 import qualified Cardano.Ledger.Alonzo.Scripts as Alonzo
@@ -101,6 +102,34 @@ data ProtoParams = ProtoParams
   , ppDRepActivity               :: !(Maybe EpochInterval)
   , ppMinFeeRefScriptCostPerByte :: !(Maybe Rational)
   }
+
+-- | The strict scalar fields are already normal form at WHNF; only
+-- the 'Maybe'-wrapped era fields can hide a @Just <thunk>@ projected
+-- from the era's 'PParams' (cost models included), and this record
+-- is forced into queued boundary payloads, so 'rnf' reaches through
+-- exactly those.
+instance NFData ProtoParams where
+  rnf pp =
+    rnf (ppCoinsPerUtxo pp)
+      `seq` rnf (ppCostmdls pp)
+      `seq` rnf (ppPriceMem pp)
+      `seq` rnf (ppPriceStep pp)
+      `seq` rnf (ppMaxTxExMem pp)
+      `seq` rnf (ppMaxTxExSteps pp)
+      `seq` rnf (ppMaxBlockExMem pp)
+      `seq` rnf (ppMaxBlockExSteps pp)
+      `seq` rnf (ppMaxValSize pp)
+      `seq` rnf (ppCollateralPercentage pp)
+      `seq` rnf (ppMaxCollateralInputs pp)
+      `seq` rnf (ppPoolVotingThresholds pp)
+      `seq` rnf (ppDRepVotingThresholds pp)
+      `seq` rnf (ppCommitteeMinSize pp)
+      `seq` rnf (ppCommitteeMaxTermLength pp)
+      `seq` rnf (ppGovActionLifetime pp)
+      `seq` rnf (ppGovActionDeposit pp)
+      `seq` rnf (ppDRepDeposit pp)
+      `seq` rnf (ppDRepActivity pp)
+      `seq` rnf (ppMinFeeRefScriptCostPerByte pp)
 
 -- | Key \/ pool deposits at a given ledger state.
 data Deposits = Deposits

@@ -147,7 +147,7 @@ import DbSync.Worker.Ledger.Event
   ( GovActionRefunded (..)
   , LedgerEvent (..)
   )
-import DbSync.Worker.Ledger.Types (ApplyResult (..))
+import DbSync.Worker.Ledger.Types (BoundaryApplyData (..))
 import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- ---------------------------------------------------------------------------
@@ -613,21 +613,21 @@ runGovernanceBoundary
      , MonadReader env m
      , MonadIO m
      )
-  => ApplyResult
+  => BoundaryApplyData
   -> BlockId
   -> m ()
 runGovernanceBoundary applyResult _blockId = do
   resolver <- asks getResolver
   liftIO $ writeGovExpiresAfter resolver $
-    case apGovExpiresAfter applyResult of
+    case bndGovExpiresAfter applyResult of
       Strict.Just (Ledger.EpochInterval n) -> Just (fromIntegral n)
       Strict.Nothing                       -> Nothing
   refreshEnactedEpochStateIds applyResult
-  case apNewEpoch applyResult of
+  case bndNewEpoch applyResult of
     Strict.Nothing -> pure ()
     Strict.Just newEpoch -> do
       let epoch = neEpoch newEpoch
-      applyGovInfoEvents (apEvents applyResult) epoch
+      applyGovInfoEvents (bndEvents applyResult) epoch
       case neDRepState newEpoch of
         Strict.Nothing -> pure ()
         Strict.Just pulsingState ->
@@ -683,8 +683,8 @@ refreshEnactedEpochStateIds
      , MonadReader env m
      , MonadIO m
      )
-  => ApplyResult -> m ()
-refreshEnactedEpochStateIds applyResult = case apGovActionState applyResult of
+  => BoundaryApplyData -> m ()
+refreshEnactedEpochStateIds applyResult = case bndGovActionState applyResult of
   Nothing  -> pure ()
   Just cgs -> do
     resolver <- asks getResolver

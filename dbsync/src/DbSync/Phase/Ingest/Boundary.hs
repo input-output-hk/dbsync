@@ -32,6 +32,9 @@ module DbSync.Phase.Ingest.Boundary
   , renderEpochSummary
   , renderUtxoHitRate
   , renderDedupCounts
+  , renderMemCurve
+  , renderBufferSizes
+  , recordMemSample
   , sampleHeapBytes
   , fmtBytes
   , fmtDuration
@@ -52,6 +55,7 @@ import qualified Data.Text as Text
 import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import GHC.Stats (RTSStats (..), GCDetails (..), getRTSStats, getRTSStatsEnabled)
 import System.Mem (performMajorGC)
+import qualified System.Timeout as Timeout
 import Text.Printf (printf)
 
 import DbSync.AppM (IngestM, runAppM)
@@ -64,7 +68,6 @@ import DbSync.Phase.Ingest.Counter (IdCounters)
 import DbSync.Phase.Ingest.DedupStore (DedupStores, dedupStoreSizes)
 import qualified DbSync.Phase.Ingest.DedupStore as DedupStore
 import DbSync.Phase.Ingest.LsmSession (LsmSession)
-import DbSync.Phase.Ingest.PipelineStats (emptyPipelineStats)
 import qualified DbSync.Phase.Ingest.UtxoStore as UtxoStore
 import DbSync.Phase.Type (SyncPhase (..), renderPhase)
 import DbSync.SyncState.Manager (mkBoundarySyncStateRow)
@@ -74,14 +77,18 @@ import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Replay (ReplayLogState (..))
 import DbSync.Trace.Timing (fmtCount, fmtF2)
 import DbSync.Trace.Types (LogMsg (..), Severity (..))
-import DbSync.Trace.Watchdog (Watchdog, setConsumerNote)
 import DbSync.Worker.Ledger.DepositAccumulator (drainCompletedEpochs, flushEpochParams)
 import DbSync.Worker.Ledger.Types
   ( ApplyResult (..)
+  , BoundaryApplyData (..)
   , HasLedgerEnv (..)
   , LedgerEnv (..)
   )
-import DbSync.Worker.TxOut.AddressBuffer (takeAndReset)
+import DbSync.Worker.TxOut.AddressBuffer
+  ( addressBufferCounts
+  , forceEpochAddressBuffer
+  , takeAndReset
+  )
 import qualified DbSync.Worker.TxOut.ConsumedByBuffer as ConsumedByBuffer
 import DbSync.Worker.TxOut.Worker
   ( TxOutJob (..)
@@ -112,6 +119,18 @@ data PendingBoundary = PendingBoundary
   , pbCounters    :: !IdCounters
   }
 
+-- | Per-epoch memory samples plus running peaks. The @(in-use, live)@
+-- samples (newest first) drive the curve; the peaks are tracked
+-- separately so they reflect every sample, not just the curve points.
+data MemStats = MemStats
+  { msSamples   :: ![(Word64, Word64)]
+  , msPeakInUse :: !Word64
+  , msPeakLive  :: !Word64
+  }
+
+emptyMemStats :: MemStats
+emptyMemStats = MemStats [] 0 0
+
 -- | Mutable state threaded through the consumer loop. Lives for one
 -- 'runConsumer' invocation.
 data ConsumerLoopState = ConsumerLoopState
@@ -133,6 +152,11 @@ data ConsumerLoopState = ConsumerLoopState
   , clsReplay          :: !(IORef ReplayLogState)
     -- ^ Replay-progress state machine; 'ReplayPending' on a resume
     -- with a replay window, 'NoReplay' otherwise.
+  , clsMemStats        :: !(IORef MemStats)
+    -- ^ Per-epoch @(in-use, live)@ samples + running peaks, taken on the
+    -- consumer's sample stride. Rendered as a curve+peak readout and
+    -- reset at each boundary. Empty until first sampled (or without
+    -- @+RTS -T@).
   }
 
 -- | Allocate a fresh 'ConsumerLoopState'. The replay machine is
@@ -149,6 +173,7 @@ newConsumerLoopState bootSlot = do
     <*> newIORef (case bootSlot of
                     Just _  -> ReplayPending
                     Nothing -> NoReplay)
+    <*> newIORef emptyMemStats
 
 -- ---------------------------------------------------------------------------
 -- * Boundary handler
@@ -183,7 +208,6 @@ handleEpochBoundary cls prev slot = do
       txOutWorker   = ieTxOutWorker ie
       mConsumedBuf  = ieConsumedByBuffer ie
       loaderStream  = ieLoaderStream ie
-      watchdog      = ieWatchdog ie
       ctrlConn      = ieControlConnection ie
       hasLedger     = ieHasLedgerEnv ie
       addressBuffer = ieAddressBuffer ie
@@ -192,7 +216,6 @@ handleEpochBoundary cls prev slot = do
       utxoStore     = ieUtxoStore ie
       resolver      = ieResolver ie
       writer        = ieWriter ie
-      statsRef      = iePipelineStats ie
       coreEnv       = ieCore ie
       boundaryVar   = ieRollbackBoundary ie
       securityParam = ceSecurityParam coreEnv
@@ -205,29 +228,39 @@ handleEpochBoundary cls prev slot = do
   mLastBlock <- liftIO $ readIORef (clsLastBlock cls)
   counters   <- liftIO $ esIdCounters <$> readIORef (ieExtractState ie)
 
+  -- Fold in a near-boundary sample so even a short epoch (fewer than
+  -- the consumer's sample cadence) still contributes to the curve.
+  liftIO $ recordMemSample (clsMemStats cls)
+
   -- Steps 1–4: drain the existing pipeline so the resolver can run
   -- in parallel with the next epoch's ingest.
   (buf, mConsumedSnap) <- liftIO $ do
-    setConsumerNote watchdog "consumer: lsCommit (flushing loader stream)"
     lsCommit loaderStream
-
-    setConsumerNote watchdog "consumer: takeAndReset addressBuffer"
     b <- takeAndReset addressBuffer
-
     cb <- case mConsumedBuf of
       Just ref -> Just <$> ConsumedByBuffer.takeAndReset ref
       Nothing  -> pure Nothing
-
-    setConsumerNote watchdog "consumer: awaitTxOutDrained (epoch N-1)"
     awaitTxOutDrained txOutWorker
-
-    setConsumerNote watchdog "consumer: flushEpochParams"
     flushPendingDeposits hasLedger prev slot ctrlConn
     pure (b, cb)
 
+  -- Boundary probe (Debug-gated): brackets the buffer force with
+  -- per-step logs and a timeout, so a wedged force surfaces as a log
+  -- line instead of a hung pipeline. No performMajorGC here (it
+  -- cannot be interrupted).
+  when (minSev <= Debug) $ liftIO $ do
+    let tag m = traceWith tracer $ LogMsg Debug "TxOutProbe"
+          ("epoch " <> show (unEpochNo prev) <> " " <> m) Nothing
+    l0 <- sampleHeapBytes
+    tag ("preForce live=" <> maybe "n/a" fmtBytes l0)
+    r <- Timeout.timeout 60000000 $ do
+      _ <- evaluate (forceEpochAddressBuffer buf)
+      for_ mConsumedSnap (evaluate . ConsumedByBuffer.forceEpochConsumedByBuffer)
+      pure ()
+    tag (maybe "force TIMEOUT(60s)" (const "force done") r)
+
   -- Step 5: advance @sync_state@ for the previously snapshotted
   -- epoch. The address counter reflects rows just drained in step 3.
-  liftIO $ setConsumerNote watchdog "consumer: writeSyncState (lagging)"
   addressIdCounter <- liftIO $ readAddressIdCounter txOutWorker
   mPending         <- liftIO $ readIORef (clsPendingBoundary cls)
   for_ mPending $ \pb ->
@@ -238,9 +271,7 @@ handleEpochBoundary cls prev slot = do
         schemaVersion ledgerEnabled
 
   -- Step 6: queue the just-finished epoch for the worker.
-  liftIO $ do
-    setConsumerNote watchdog "consumer: enqueueTxOutJob"
-    enqueueTxOutJob txOutWorker (TxOutJob prev buf mConsumedSnap)
+  liftIO $ enqueueTxOutJob txOutWorker (TxOutJob prev buf mConsumedSnap)
 
   -- Step 7: stash the snapshot for the next boundary.
   liftIO $ for_ mLastBlock $ \(lastSlot, lastBlockNo, lastHash) ->
@@ -253,16 +284,13 @@ handleEpochBoundary cls prev slot = do
       }
 
   -- Step 8: reopen loader streams for the next epoch.
-  liftIO $ do
-    setConsumerNote watchdog "consumer: lsReopen"
-    lsReopen loaderStream
-    setConsumerNote watchdog "consumer: post-commit"
+  liftIO $ lsReopen loaderStream
 
   -- Step 9: persist the LSM-backed Ingest tables (snapshot refresh
   -- for restart-resume); every 'ingestCompactEveryEpochs' the cycle
   -- also reopens each table from its snapshot to cap active runs
   -- and open fds.
-  liftIO $ compactIngestStores watchdog utxoStore dedupStores lsm prev
+  liftIO $ compactIngestStores utxoStore dedupStores lsm prev
 
   -- Per-epoch stats row + summary log.
   epochEnd <- liftIO getCurrentTime
@@ -286,12 +314,16 @@ handleEpochBoundary cls prev slot = do
 
   mBoundary  <- liftIO $ readTVarIO boundaryVar
   storeStats <- liftIO $ UtxoStore.readStoreStats utxoStore
+  memStats   <- liftIO $ readIORef (clsMemStats cls)
 
   let summary = renderEpochSummary prev blockCount elapsedSec blocksPerSec
                   storeStats mBoundary securityParam
                   (fmap (\(_, b, _) -> b) mLastBlock)
+                  <> renderBufferSizes (addressBufferCounts buf)
 
   liftIO $ traceWith tracer $ LogMsg Info "Ingest" summary Nothing
+  liftIO $ for_ (renderMemCurve prev memStats) $ \line ->
+    traceWith tracer $ LogMsg Info "Ingest" line Nothing
 
   -- Dedup-store size + heap diagnostic. Gated on Debug because
   -- sampling 'getRTSStats' isn't free.
@@ -309,9 +341,9 @@ handleEpochBoundary cls prev slot = do
 
   -- Reset for the next epoch.
   liftIO $ do
-    modifyIORef' statsRef (const emptyPipelineStats)
     writeIORef (clsBlockCount cls) 0
     writeIORef (clsEpochStart cls) epochEnd
+    writeIORef (clsMemStats cls) emptyMemStats
 
 -- ---------------------------------------------------------------------------
 -- * LedgerWorker coordination
@@ -329,11 +361,11 @@ waitForApplyResultAt lenv targetSlot = Strict.atomically $ do
       | sdSlotNo (apSlotDetails ar) >= targetSlot -> pure ar
     _ -> retry
 
--- | Take the next boundary 'ApplyResult' from the worker's FIFO,
+-- | Take the next boundary 'BoundaryApplyData' from the worker's FIFO,
 -- blocking until one is available. Each call consumes exactly one
 -- boundary; pair every consumer-side boundary detection with one
 -- 'readBoundaryApplyResult'.
-readBoundaryApplyResult :: LedgerEnv -> IO ApplyResult
+readBoundaryApplyResult :: LedgerEnv -> IO BoundaryApplyData
 readBoundaryApplyResult lenv =
   Strict.atomically (readTBQueue (leBoundaryApplyResults lenv))
 
@@ -375,20 +407,16 @@ ingestCompactEveryEpochs = 20
 -- table from its snapshot to collapse the active run set and cap
 -- open fds.
 compactIngestStores
-  :: Watchdog
-  -> UtxoStore.UtxoStore
+  :: UtxoStore.UtxoStore
   -> DedupStores
   -> LsmSession
   -> EpochNo          -- ^ epoch just completed
   -> IO ()
-compactIngestStores watchdog utxoStore dedupStores lsm prev = do
+compactIngestStores utxoStore dedupStores lsm prev = do
   let fullCycle = unEpochNo prev `mod` ingestCompactEveryEpochs == 0
-      note      = if fullCycle then "compact" else "persist" :: Text
-  setConsumerNote watchdog ("consumer: utxoStore " <> note)
   if fullCycle
     then UtxoStore.compactUtxoStore utxoStore lsm
     else UtxoStore.persistUtxoStore utxoStore lsm
-  setConsumerNote watchdog ("consumer: dedupStore " <> note)
   for_ (DedupStore.allDedupStores dedupStores) $ \store ->
     if fullCycle
       then DedupStore.compactDedupStore store lsm
@@ -441,6 +469,42 @@ renderUtxoHitRate s
   where
     looked = UtxoStore.ssHits s + UtxoStore.ssMisses s
 
+-- | Render the per-epoch memory curve as three log lines: a header,
+-- then aligned @in-use@ and @live@ rows at 4 evenly-spaced points
+-- across the epoch (start → end) plus each row's running peak. @live@
+-- rising with @in-use@ is retention; @live@ flat beneath a rising
+-- @in-use@ is fragmentation. @[]@ when unsampled.
+renderMemCurve :: EpochNo -> MemStats -> [Text]
+renderMemCurve epoch ms
+  | null (msSamples ms) = []
+  | otherwise =
+      [ ep <> " in-use" <> cols fst <> "  |" <> col (msPeakInUse ms)
+      , ep <> " live  " <> cols snd <> "  |" <> col (msPeakLive ms)
+      ]
+  where
+    ep       = "Epoch " <> show (unEpochNo epoch)
+    pts      = downsampleN 4 (reverse (msSamples ms))
+    cols sel = Text.concat [ col (sel p) | p <- pts ]
+    col b    = Text.pack (printf "%8.1f" (fromIntegral b / gib :: Double))
+    gib      = 1073741824 :: Double
+
+-- | Pick up to @k@ evenly-spaced elements (including first and last).
+downsampleN :: Int -> [a] -> [a]
+downsampleN k xs
+  | k <= 0 || null xs = []
+  | n <= k            = xs
+  | otherwise         = [ x | (i, x) <- zip [(0 :: Int) ..] xs, i `elem` idxs ]
+  where
+    n    = length xs
+    step = fromIntegral (n - 1) / fromIntegral (k - 1) :: Double
+    idxs = [ round (fromIntegral j * step) | j <- [0 .. k - 1] ] :: [Int]
+
+-- | Render the per-epoch buffer cardinalities as @" | addrs N out N"@
+-- (unique addresses, tx_out rows recorded this epoch).
+renderBufferSizes :: (Int, Int) -> Text
+renderBufferSizes (addrs, outs) =
+  " | addrs " <> fmtCount addrs <> " out " <> fmtCount outs
+
 -- | Render @[(name, count)]@ as @"name=N1,234 …"@.
 renderDedupCounts :: [(Text, Int)] -> Text
 renderDedupCounts = Text.intercalate " " . map one
@@ -455,6 +519,22 @@ sampleHeapBytes = do
   if enabled
     then Just . gcdetails_live_bytes . gc <$> getRTSStats
     else pure Nothing
+
+-- | Append the current @(in-use, live)@ sample to @ref@ (newest first)
+-- and bump the running peaks. Components are forced so the sampler
+-- can't itself retain the 'GCDetails'. No-op without @+RTS -T@.
+recordMemSample :: IORef MemStats -> IO ()
+recordMemSample ref = do
+  enabled <- getRTSStatsEnabled
+  when enabled $ do
+    d <- gc <$> getRTSStats
+    let !inuse = gcdetails_mem_in_use_bytes d
+        !live  = gcdetails_live_bytes d
+    modifyIORef' ref $ \ms -> ms
+      { msSamples   = (inuse, live) : msSamples ms
+      , msPeakInUse = max (msPeakInUse ms) inuse
+      , msPeakLive  = max (msPeakLive ms) live
+      }
 
 -- | Render a byte count as a short human-readable string.
 fmtBytes :: Word64 -> Text

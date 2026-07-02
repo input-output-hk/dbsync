@@ -228,6 +228,14 @@ data RewardSource
   | RwdProposalRefund
   deriving stock (Bounded, Enum, Eq, Ord, Read, Show)
 
+instance NFData RewardSource where
+  rnf RwdLeader = ()
+  rnf RwdMember = ()
+  rnf RwdReserves = ()
+  rnf RwdTreasury = ()
+  rnf RwdDepositRefund = ()
+  rnf RwdProposalRefund = ()
+
 -- | Whether the local tip is lagging or following the global chain
 -- tip. Stored in the legacy @epoch_sync_time.state@ column.
 data SyncState

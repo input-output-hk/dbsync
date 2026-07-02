@@ -216,12 +216,13 @@ data GenericTxScript = GenericTxScript
   }
   deriving stock (Eq, Show)
 
--- | A Plutus datum witness. 'gtdValue' is the JSON rendering for
--- the @datum.value@ JSONB column, kept lazy so it is only forced
--- when the deduplicated @datum@ row is written.
+-- | A Plutus datum witness. 'gtdBytes' (the CBOR payload copy) and
+-- 'gtdValue' (the @datum.value@ JSONB rendering) are both lazy: the
+-- dedup resolver keys on 'gtdHash' and drops the row on a hash hit, so
+-- neither is forced unless this is the first sighting actually written.
 data GenericTxDatum = GenericTxDatum
   { gtdHash  :: !ByteString
-  , gtdBytes :: !ByteString
+  , gtdBytes :: ByteString
   , gtdValue :: Maybe Text
   }
   deriving stock (Eq, Show)
@@ -229,7 +230,9 @@ data GenericTxDatum = GenericTxDatum
 -- | A Plutus redeemer. The embedded datum carries its own dedup
 -- key ('gtrDataHash') so the extractor can write the
 -- @redeemer_data@ row once per unique datum and link multiple
--- @redeemer@ rows to it.
+-- @redeemer@ rows to it. 'gtrDataBytes' and 'gtrDataValue' are lazy
+-- for the same reason as their 'GenericTxDatum' counterparts: a
+-- @redeemer_data@ hash hit drops the row without forcing them.
 data GenericTxRedeemer = GenericTxRedeemer
   { gtrUnitMem    :: !Word64
   , gtrUnitSteps  :: !Word64
@@ -237,8 +240,8 @@ data GenericTxRedeemer = GenericTxRedeemer
   , gtrIndex      :: !Word64
   , gtrScriptHash :: !(Maybe ByteString)
   , gtrDataHash   :: !ByteString
-  , gtrDataBytes  :: !ByteString
-  , gtrDataValue  :: !(Maybe Text)
+  , gtrDataBytes  :: ByteString
+  , gtrDataValue  :: Maybe Text
   }
   deriving stock (Eq, Show)
 
@@ -252,7 +255,6 @@ data GenericTxIn = GenericTxIn
 -- | A transaction output.
 data GenericTxOut = GenericTxOut
   { txOutIndex       :: !Word16
-  , txOutAddress     :: !Text         -- ^ Bech32 or Byron base58 address
   , txOutAddressRaw  :: !ByteString   -- ^ Raw address bytes
   , txOutValue       :: !Word64       -- ^ Lovelace value
   , txOutDataHash    :: !(Maybe ByteString)

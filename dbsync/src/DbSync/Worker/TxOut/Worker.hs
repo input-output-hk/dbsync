@@ -42,6 +42,9 @@ module DbSync.Worker.TxOut.Worker
     -- * Counter access
   , readAddressIdCounter
 
+    -- * Diagnostics
+  , txOutWorkerDepths
+
     -- * Hook-based entry points (exported for tests)
   , runTxOutWorkerWith
   , realTxOutHooks
@@ -58,6 +61,7 @@ import qualified Data.ByteString.Short as SBS
 import qualified Data.Foldable as Foldable
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import qualified Data.Map.Strict as Map
+import GHC.Stats (GCDetails (..), RTSStats (..), getRTSStats, getRTSStatsEnabled)
 import qualified Hasql.Connection as Conn
 import qualified Hasql.Connection.Settings as Settings
 import qualified Hasql.Session as Sess
@@ -65,6 +69,7 @@ import qualified Hasql.Statement as Stmt
 
 import DbSync.Db.Schema.Address
   ( Address (..)
+  , addressFromRaw
   )
 import DbSync.Db.Schema.Ids
   ( AddressId (..)
@@ -147,7 +152,7 @@ txOutWorkerQueueBound = 4
 -- bulk UPDATE per child table) instead of one round-trip per row.
 data TxOutHooks = TxOutHooks
   { thBulkResolveAddresses
-      :: !([(ShortByteString, Address)] -> IO (Map ShortByteString AddressId))
+      :: !([(ShortByteString, Maybe StakeAddressId)] -> IO (Map ShortByteString AddressId))
     -- ^ Return the canonical 'AddressId' for every input raw:
     -- existing rows are looked up; missing rows are allocated from
     -- the in-process counter and inserted in bulk.
@@ -199,7 +204,7 @@ realTxOutHooks conn idRef = TxOutHooks
 resolveBulk
   :: Conn.Connection
   -> IORef Int64
-  -> [(ShortByteString, Address)]
+  -> [(ShortByteString, Maybe StakeAddressId)]
   -> IO (Map ShortByteString AddressId)
 resolveBulk _ _ [] = pure Map.empty
 resolveBulk conn idRef entries = do
@@ -207,14 +212,15 @@ resolveBulk conn idRef entries = do
   existing <- run conn rawList bulkSelectAddressIdsStmt
   let existingMap :: Map ShortByteString AddressId
       existingMap = Map.fromList [ (SBS.toShort raw, aid) | (raw, aid) <- existing ]
-      missing = [ (key, addr) | (key, addr) <- entries
-                              , not (Map.member key existingMap) ]
+      missing = [ (key, mStakeId) | (key, mStakeId) <- entries
+                                  , not (Map.member key existingMap) ]
   if null missing
     then pure existingMap
     else do
-      let n         = length missing
-          missingAddrs = map snd missing
+      let n            = length missing
           missingKeys  = map fst missing
+          missingAddrs = [ addressFromRaw (SBS.fromShort key) mStakeId
+                         | (key, mStakeId) <- missing ]
       startId <- atomicModifyIORef' idRef $ \i -> (i + fromIntegral n, i)
       let newIds    = [ startId + i | i <- [0 .. fromIntegral n - 1] ]
           insertCols = BulkAddressInsert
@@ -293,6 +299,17 @@ readAddressIdCounter :: TxOutWorker -> IO Int64
 readAddressIdCounter = readIORef . twIdCounter
 
 -- ---------------------------------------------------------------------------
+-- * Diagnostics
+-- ---------------------------------------------------------------------------
+
+-- | @(in-flight jobs, queued jobs)@ snapshot for diagnostics.
+txOutWorkerDepths :: TxOutWorker -> IO (Int, Int)
+txOutWorkerDepths tw = STM.atomically $ do
+  inflight <- STM.readTVar (twInFlight tw)
+  queued   <- STM.lengthTBQueue (twQueue tw)
+  pure (inflight, fromIntegral queued)
+
+-- ---------------------------------------------------------------------------
 -- * Worker loop
 -- ---------------------------------------------------------------------------
 
@@ -312,7 +329,7 @@ runTxOutWorkerWith mTracer hooks queue inFlight =
   where
     loop = forever $ do
       job <- atomically $ readTBQueue queue
-      processTxOutJob hooks job
+      processTxOutJob mTracer hooks job
       atomically $ STM.modifyTVar' inFlight (\n -> n - 1)
       for_ mTracer $ \tracer ->
         traceWith tracer $ LogMsg Info "TxOutWorker"
@@ -328,12 +345,14 @@ runTxOutWorkerWith mTracer hooks queue inFlight =
 --   3. One bulk UPDATE fills @collateral_tx_out.address_id@.
 --   4. When 'tjConsumedBy' is 'Just', one bulk UPDATE fills
 --      @tx_out.consumed_by_tx_id@ from the producer/consumer pairs.
-processTxOutJob :: TxOutHooks -> TxOutJob -> IO ()
-processTxOutJob hooks job = do
+processTxOutJob :: Maybe AppTracer -> TxOutHooks -> TxOutJob -> IO ()
+processTxOutJob mTracer hooks job = do
   let addr      = tjAddress job
+      epoch     = tjEpoch job
       addrPairs = Map.toList (eabAddresses addr)
 
-  rawToId <- thBulkResolveAddresses hooks addrPairs
+  rawToId <- probeStep mTracer epoch "resolveAddresses" $
+    thBulkResolveAddresses hooks addrPairs
 
   let lookupOr msg key = case Map.lookup key rawToId of
         Just aid -> aid
@@ -348,14 +367,42 @@ processTxOutJob hooks job = do
         | (outId, key) <- Foldable.toList (eabCollateralTxOutAddresses addr)
         ]
 
-  thBulkUpdateTxOut hooks txOutPairs
-  thBulkUpdateCollateral hooks collPairs
+  probeStep mTracer epoch "updateTxOut" $ thBulkUpdateTxOut hooks txOutPairs
+  probeStep mTracer epoch "updateCollateral" $ thBulkUpdateCollateral hooks collPairs
 
   for_ (tjConsumedBy job) $ \cb -> do
     let consumedPairs = zip
           (Foldable.toList (ecbProducerTxOutIds cb))
           (Foldable.toList (ecbConsumerTxIds cb))
-    thBulkUpdateConsumedBy hooks consumedPairs
+    probeStep mTracer epoch "updateConsumedBy" $
+      thBulkUpdateConsumedBy hooks consumedPairs
+
+-- | Bracket a per-job step with RTS allocation / live-heap counters
+-- and emit a Debug line. No-op without a tracer; the line is dropped
+-- unless the backend min-severity is Debug. Also a no-op when the
+-- process runs without @+RTS -T@ (e.g. the in-process e2e test
+-- binary) — 'getRTSStats' throws there, and this worker thread is
+-- linked, so an unguarded call tears the whole pipeline down.
+probeStep :: Maybe AppTracer -> EpochNo -> Text -> IO a -> IO a
+probeStep Nothing _ _ act = act
+probeStep (Just tracer) epoch label act = do
+  enabled <- getRTSStatsEnabled
+  if not enabled
+    then act
+    else do
+      before <- getRTSStats
+      r <- act
+      after <- getRTSStats
+      let allocDelta = allocated_bytes after - allocated_bytes before
+          liveNow    = gcdetails_live_bytes (gc after)
+      traceWith tracer $ LogMsg Debug "TxOutProbe"
+        ( "epoch " <> show (unEpochNo epoch) <> " " <> label
+          <> " alloc=" <> mb allocDelta <> " live=" <> mb liveNow
+        ) Nothing
+      pure r
+
+mb :: Word64 -> Text
+mb b = show (b `div` 1048576) <> "MB"
 
 -- ---------------------------------------------------------------------------
 -- * Helpers

@@ -23,9 +23,7 @@ import qualified Cardano.Crypto as Crypto
 import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as Map
 import qualified Data.Sequence as Seq
-import qualified Data.Text.Encoding as Text
 
-import DbSync.Db.Schema.Address (Address (..))
 import DbSync.Db.Schema.Core (Block (..), SlotLeader (..), Tx (..))
 import DbSync.Db.Schema.UTxO (TxOut (..))
 import DbSync.Db.Types (DbLovelace (..))
@@ -78,13 +76,6 @@ insertByronGenesisDist cfg = do
     let val    = Byron.unsafeGetLovelace value
         txHash = Crypto.abstractHashToBytes (Crypto.serializeCborHash address)
         raw    = serialize' address
-        addr = Address
-          { addressAddress        = Text.decodeUtf8 (Byron.addrToBase58 address)
-          , addressRaw            = raw
-          , addressHasScript      = False
-          , addressPaymentCred    = Nothing
-          , addressStakeAddressId = Nothing
-          }
 
     txId <- liftIO $ assignTxId resolver
     liftIO $ writeTx writer txId Tx
@@ -115,7 +106,7 @@ insertByronGenesisDist cfg = do
       , txOutConsumedByTxId    = Nothing
       }
 
-    liftIO $ recordTxOutAddress resolver outId raw addr
+    liftIO $ recordTxOutAddress resolver outId raw Nothing
     liftIO $ recordTxOutputs resolver txHash UtxoTxEntry
       { uteTxId    = txId
       , uteOutputs = Seq.singleton (outId, DbLovelace val)

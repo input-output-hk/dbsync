@@ -29,7 +29,7 @@ import qualified Hasql.Connection as Conn
 import qualified Hasql.Pipeline as Pipeline
 
 import DbSync.Db.Schema.Address (Address)
-import DbSync.Db.Schema.Ids (AddressId, CollateralTxOutId, TxId, TxOutId)
+import DbSync.Db.Schema.Ids (AddressId, CollateralTxOutId, StakeAddressId, TxId, TxOutId)
 import DbSync.Db.Types (DbLovelace)
 import DbSync.Db.Statement.UTxO
   ( insertAddressRowStmt
@@ -58,11 +58,11 @@ import DbSync.Phase.Ingest.UtxoStore (UtxoTxEntry)
 -- | Follow extractors must call 'resolveAddressId' synchronously
 -- (and write the tx_out row with @address_id@ pre-populated). The
 -- async-worker entry points panic if reached.
-recordTxOutAddressFollow :: TxOutId -> ByteString -> Address -> IO ()
+recordTxOutAddressFollow :: TxOutId -> ByteString -> Maybe StakeAddressId -> IO ()
 recordTxOutAddressFollow _ _ _ =
   panic "Phase.Following.Resolver: recordTxOutAddress is Ingest-only"
 
-recordCollateralTxOutAddressFollow :: CollateralTxOutId -> ByteString -> Address -> IO ()
+recordCollateralTxOutAddressFollow :: CollateralTxOutId -> ByteString -> Maybe StakeAddressId -> IO ()
 recordCollateralTxOutAddressFollow _ _ _ =
   panic "Phase.Following.Resolver: recordCollateralTxOutAddress is Ingest-only"
 

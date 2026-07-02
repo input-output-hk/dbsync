@@ -81,7 +81,6 @@ padHash32 bs = bs <> BS.replicate (max 0 (32 - BS.length bs)) 0
 mkOut :: Word16 -> Word64 -> GenericTxOut
 mkOut idx value = GenericTxOut
   { txOutIndex       = idx
-  , txOutAddress     = "addr_test1xyz"
   , txOutAddressRaw  = sampleAddrRaw
   , txOutValue       = value
   , txOutDataHash    = Nothing

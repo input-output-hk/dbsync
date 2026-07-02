@@ -25,7 +25,7 @@ import Cardano.Prelude
 import Data.IORef (IORef)
 
 import DbSync.Db.Schema.Address (Address)
-import DbSync.Db.Schema.Ids (AddressId, CollateralTxOutId (..), TxId, TxOutId)
+import DbSync.Db.Schema.Ids (AddressId, CollateralTxOutId (..), StakeAddressId, TxId, TxOutId)
 import DbSync.Db.Types (DbLovelace)
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Phase.Ingest.Counter (IdCounters (..))
@@ -48,15 +48,15 @@ assignCollateralTxOutIdIngest extractStateRef =
 -- * Address buffering
 -- ---------------------------------------------------------------------------
 
--- | Queue @(tx_out_id, raw, derived address)@ for the
+-- | Queue @(tx_out_id, raw, resolved stake id)@ for the
 -- 'DbSync.Worker.TxOut.Worker' to bulk-fill @tx_out.address_id@ at
 -- end of epoch.
 recordTxOutAddressIngest
-  :: AddressBufferRef -> TxOutId -> ByteString -> Address -> IO ()
+  :: AddressBufferRef -> TxOutId -> ByteString -> Maybe StakeAddressId -> IO ()
 recordTxOutAddressIngest = recordTxOut
 
 recordCollateralTxOutAddressIngest
-  :: AddressBufferRef -> CollateralTxOutId -> ByteString -> Address -> IO ()
+  :: AddressBufferRef -> CollateralTxOutId -> ByteString -> Maybe StakeAddressId -> IO ()
 recordCollateralTxOutAddressIngest = recordCollateralTxOut
 
 -- | Follow-only entry point. Ingest extractors must record via the

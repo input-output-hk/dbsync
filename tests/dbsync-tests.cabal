@@ -35,6 +35,7 @@ common defaults
     DerivingStrategies
     GeneralizedNewtypeDeriving
     LambdaCase
+    ExplicitNamespaces
 
 -- ---------------------------------------------------------------------------
 -- Test helper library
@@ -213,6 +214,7 @@ test-suite dbsync-test
     , cardano-crypto-class
     , cardano-ledger-alonzo
     , cardano-ledger-binary
+    , cardano-ledger-byron:{cardano-ledger-byron, testlib}
     , cardano-ledger-conway
     , cardano-ledger-core
     , cardano-ledger-mary

@@ -473,7 +473,6 @@ sampleTx tag value = GenericTx
 sampleOut :: Word64 -> GenericTxOut
 sampleOut value = GenericTxOut
   { txOutIndex       = 0
-  , txOutAddress     = "addr_test1xyz"
   , txOutAddressRaw  = sampleAddrRaw
   , txOutValue       = value
   , txOutDataHash    = Nothing

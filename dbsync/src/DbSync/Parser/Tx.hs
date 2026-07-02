@@ -106,8 +106,6 @@ import DbSync.Db.Types (ScriptPurpose (..), ScriptType (..))
 
 import qualified Data.Map.Strict as Map
 
-import qualified Cardano.Chain.Common as Byron
-
 import Data.Array.Byte (ByteArray (..))
 import Data.ByteString.Short (ShortByteString (SBS))
 import qualified Data.ByteString.Short as SBS
@@ -120,7 +118,6 @@ import qualified Data.ByteString.Lazy as LBS
 import qualified DbSync.Parser.Metadata as Metadata
 import qualified DbSync.Parser.ParamProposal as PP
 import DbSync.Util (coinToWord64, jsonValueContainsNul)
-import DbSync.Util.Bech32 (serialiseShelleyAddrToBech32)
 
 import Ouroboros.Consensus.Cardano.Block
   ( AllegraEra
@@ -213,7 +210,6 @@ mkTxOutCoin txBody = zipWith fromCoinTxOut [0 ..] $ toList (txBody ^. Core.outpu
           !raw = Ledger.serialiseAddr addr
       in GenericTxOut
         { txOutIndex       = idx
-        , txOutAddress     = addrToText addr raw
         , txOutAddressRaw  = raw
         , txOutValue       = fromIntegral (unCoin (txOut ^. Core.valueTxOutL))
         , txOutDataHash    = Nothing
@@ -254,7 +250,6 @@ mkMaryTxOut datum idx txOut =
       (dataHash, inlineDatum) = datum txOut
   in GenericTxOut
     { txOutIndex       = idx
-    , txOutAddress     = addrToText addr raw
     , txOutAddressRaw  = raw
     , txOutValue       = fromIntegral (unCoin ada)
     , txOutDataHash    = dataHash
@@ -633,19 +628,6 @@ getCollateralOutput txBody =
     strictMaybeToMaybe (txBody ^. Core.collateralReturnTxBodyL)
   where
     collIdx = fromIntegral (length (toList (txBody ^. Core.outputsTxBodyL)))
-
--- | Render a Shelley+ payment address.
---
--- Shelley/Allegra/… addresses go through Bech32 (HRP @addr@ on
--- mainnet, @addr_test@ on testnet); Byron-shaped bootstrap addresses
--- (which can still appear as outputs in Shelley+ blocks) round-trip
--- through Base58. Takes the already-serialised address bytes so the
--- per-output 'Ledger.serialiseAddr' isn't run twice.
-addrToText :: Ledger.Addr -> ByteString -> Text
-addrToText (Ledger.AddrBootstrap (Ledger.BootstrapAddress byronAddr)) _raw =
-  Text.decodeUtf8 (Byron.addrToBase58 byronAddr)
-addrToText Ledger.Addr{} raw =
-  serialiseShelleyAddrToBech32 raw
 
 -- ---------------------------------------------------------------------------
 -- * Scripts, datums, redeemers

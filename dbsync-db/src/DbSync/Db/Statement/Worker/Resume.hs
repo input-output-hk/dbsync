@@ -19,7 +19,10 @@ module DbSync.Db.Statement.Worker.Resume
 
     -- * Dedup-map rebuild selects
   , selectDedupSingleStmt
-  , selectMultiAssetDedupStmt
+  , declareDedupSingleCursorStmt
+  , fetchDedupSinglePageStmt
+  , declareMultiAssetDedupCursorStmt
+  , fetchMultiAssetDedupPageStmt
   , selectDrepHashDedupStmt
   , selectCommitteeHashDedupStmt
   , selectVotingAnchorDedupStmt
@@ -168,18 +171,65 @@ selectDedupSingleStmt tableName keyCol =
         <$> D.column (D.nonNullable D.int8)
         <*> D.column (D.nonNullable D.bytea)
 
--- | The dedup key is @policy <> name@; the caller concatenates after
--- decoding.
-selectMultiAssetDedupStmt :: Stmt.Statement () [(Int64, ByteString, ByteString)]
-selectMultiAssetDedupStmt =
+-- | Declare a forward-only cursor over @(id, keyCol)@ for the boot
+-- dedup rebuild. Reads in physical heap order, so it needs no @id@
+-- index — the dedup tables have none until the Preparing phase.
+declareDedupSingleCursorStmt
+  :: Text -- ^ cursor name
+  -> Text -- ^ table name
+  -> Text -- ^ key column
+  -> Stmt.Statement () ()
+declareDedupSingleCursorStmt cursorName tableName keyCol =
+  Stmt.unpreparable sql E.noParams D.noResult
+  where
+    sql = T.concat
+      [ "DECLARE ", quoteIdent cursorName, " NO SCROLL CURSOR FOR "
+      , "SELECT id, ", quoteIdent keyCol
+      , " FROM ", quoteIdent tableName
+      ]
+
+-- | Fetch the next page from a dedup cursor. The row count is a SQL
+-- literal because @FETCH@ cannot bind parameters, so it is interpolated.
+fetchDedupSinglePageStmt
+  :: Text  -- ^ cursor name
+  -> Int64 -- ^ rows per fetch
+  -> Stmt.Statement () [(Int64, ByteString)]
+fetchDedupSinglePageStmt cursorName n =
   Stmt.unpreparable sql E.noParams decoder
   where
+    sql = T.concat
+      [ "FETCH FORWARD ", show n, " FROM ", quoteIdent cursorName ]
+    decoder = D.rowList $
+      (,)
+        <$> D.column (D.nonNullable D.int8)
+        <*> D.column (D.nonNullable D.bytea)
+
+-- | Multi-asset variant of 'declareDedupSingleCursorStmt'. The dedup
+-- key is @policy <> name@; the caller concatenates after decoding.
+declareMultiAssetDedupCursorStmt
+  :: Text -- ^ cursor name
+  -> Stmt.Statement () ()
+declareMultiAssetDedupCursorStmt cursorName =
+  Stmt.unpreparable sql E.noParams D.noResult
+  where
     sql = mconcat
-      [ "SELECT ", multiAssetCols.macId.tcName
+      [ "DECLARE ", quoteIdent cursorName, " NO SCROLL CURSOR FOR "
+      , "SELECT ", multiAssetCols.macId.tcName
       , ", ", multiAssetCols.macPolicy.tcName
       , ", ", multiAssetCols.macName.tcName
       , " FROM ", table multiAssetTableDef
       ]
+
+-- | Multi-asset variant of 'fetchDedupSinglePageStmt'.
+fetchMultiAssetDedupPageStmt
+  :: Text  -- ^ cursor name
+  -> Int64 -- ^ rows per fetch
+  -> Stmt.Statement () [(Int64, ByteString, ByteString)]
+fetchMultiAssetDedupPageStmt cursorName n =
+  Stmt.unpreparable sql E.noParams decoder
+  where
+    sql = T.concat
+      [ "FETCH FORWARD ", show n, " FROM ", quoteIdent cursorName ]
     decoder = D.rowList $
       (,,)
         <$> D.column (D.nonNullable D.int8)

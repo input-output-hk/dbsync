@@ -106,12 +106,10 @@ import DbSync.Parser.Types (CardanoPoint)
 import DbSync.App.Config.Genesis (GenesisConfig (..), ShelleyConfig (..))
 import DbSync.App.Env (HasReceiverChannels (..))
 import DbSync.Error (throwNetwork)
-import DbSync.Phase.Ingest.ReceiverStats (ReceiverStats, recordBlockReceived, recordWriteBlocked)
 import DbSync.ChainSync.Msg (ChainSyncMsg (..))
 import DbSync.StateQuery (StateQueryVar, localStateQueryHandler)
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
-import DbSync.Trace.Watchdog (Watchdog, bumpReceiver)
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -170,8 +168,6 @@ connectToNode iomgr topLevelCfg networkMagic socketPath intersect = do
   blockQueue        <- asks getBlockQueue
   mLedgerQueue      <- asks getLedgerQueue
   stateQueryVar     <- asks getStateQueryVar
-  receiverStats     <- asks getReceiverStats
-  watchdog          <- asks getWatchdog
   latestPointRef    <- asks getLatestPoint
   rollbackBoundary  <- asks getRollbackBoundary
   latestTipBlock    <- asks getLatestTipBlock
@@ -184,7 +180,7 @@ connectToNode iomgr topLevelCfg networkMagic socketPath intersect = do
         (supportedNodeToClientVersions (Proxy @(CardanoBlock StandardCrypto)))
         (subscriptionTracers tracer)
         subscriptionParams
-        (nodeProtocols tracer codecConfig blockQueue mLedgerQueue receiverStats watchdog stateQueryVar latestPointRef rollbackBoundary latestTipBlock kBlocks intersect)
+        (nodeProtocols tracer codecConfig blockQueue mLedgerQueue stateQueryVar latestPointRef rollbackBoundary latestTipBlock kBlocks intersect)
   where
     codecConfig :: CodecConfig (CardanoBlock StandardCrypto)
     codecConfig = configCodec topLevelCfg
@@ -264,8 +260,6 @@ nodeProtocols
   -> CodecConfig (CardanoBlock StandardCrypto)
   -> TBQueue ChainSyncMsg
   -> Maybe (TBQueue ChainSyncMsg)
-  -> ReceiverStats
-  -> Watchdog
   -> StateQueryVar
   -> IORef (Maybe CardanoPoint)
   -> TVar (Maybe BlockNo)
@@ -275,7 +269,7 @@ nodeProtocols
   -> Network.NodeToClientVersion
   -> BlockNodeToClientVersion (CardanoBlock StandardCrypto)
   -> NodeToClientProtocols 'Mux.InitiatorMode LocalAddress BSL.ByteString IO () Void
-nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats watchdog stateQueryVar latestPointRef rollbackBoundary latestTipBlock kBlocks intersect version blockVersion =
+nodeProtocols appTracer codecConfig blockQueue mLedgerQueue stateQueryVar latestPointRef rollbackBoundary latestTipBlock kBlocks intersect version blockVersion =
   NodeToClientProtocols
     { localChainSyncProtocol = chainSyncProtocol
     , localTxSubmissionProtocol = dummyTxSubmit
@@ -294,7 +288,7 @@ nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats watchd
             (cChainSyncCodec codecs)
             channel
             ( chainSyncClientPeerPipelined $
-                blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latestPointRef rollbackBoundary latestTipBlock kBlocks intersect
+                blockFetchClient appTracer blockQueue mLedgerQueue latestPointRef rollbackBoundary latestTipBlock kBlocks intersect
             )
         pure ((), Nothing)
 
@@ -326,10 +320,7 @@ nodeProtocols appTracer codecConfig blockQueue mLedgerQueue receiverStats watchd
 -- session. Created fresh inside 'blockFetchClient' on every
 -- (re)connection so both fields reset when a new session starts.
 --
--- Distinct from 'ReceiverStats' (which lives for the whole app and is
--- reset per epoch by the consumer) and from 'Watchdog' (cross-thread
--- liveness sampling). Both fields here are read and written only by
--- the receiver thread.
+-- Both fields here are read and written only by the receiver thread.
 data SessionState = SessionState
   { ssPostIntersect   :: !(IORef Bool)
     -- ^ 'True' once the first 'MsgRollForward' of this session has
@@ -388,8 +379,6 @@ blockFetchClient
   :: AppTracer
   -> TBQueue ChainSyncMsg                             -- ^ Main pipeline queue
   -> Maybe (TBQueue ChainSyncMsg)                     -- ^ Optional ledger worker queue
-  -> ReceiverStats
-  -> Watchdog
   -> IORef (Maybe CardanoPoint)                       -- ^ Latest received point, updated on each forward / rollback
   -> TVar (Maybe BlockNo)                             -- ^ Rollback boundary, updated on every tip observation
   -> TVar (Maybe BlockNo)                             -- ^ Latest server tip block number, updated on every tip observation
@@ -401,7 +390,7 @@ blockFetchClient
        (Tip (CardanoBlock StandardCrypto))
        IO
        ()
-blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latestPointRef rollbackBoundary latestTipBlock kBlocks intersect =
+blockFetchClient appTracer blockQueue mLedgerQueue latestPointRef rollbackBoundary latestTipBlock kBlocks intersect =
   ChainSyncClientPipelined $ do
     -- Per-session mutable bookkeeping. Bundled so callbacks pass one
     -- record instead of N independent IORefs.
@@ -511,8 +500,7 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
             -- first block has a large BlockNo that the historical
             -- "block 1" trigger missed. No per-block Debug trace:
             -- the message Text would be built (then dropped by the
-            -- phase filter) on every block of the bulk sync, and
-            -- liveness is already visible via 'bumpReceiver'. The
+            -- phase filter) on every block of the bulk sync. The
             -- counter is only touched on this thread, so the plain
             -- read costs nothing once it reaches zero.
             remaining <- readIORef (ssBlocksLeftToLog ss)
@@ -522,8 +510,6 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
                 ( "First post-intersect block at slot " <> show blkSlot
                     <> ", block " <> show bn
                 ) Nothing
-            recordBlockReceived receiverStats
-            bumpReceiver watchdog blkSlot
             -- Mark the post-intersect handshake as complete; any
             -- subsequent rollback is a real chain reorganisation.
             atomicWriteIORef (ssPostIntersect ss) True
@@ -532,7 +518,7 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
             -- block whose ancestor has already passed the boundary.
             publishTipMarkers tip
             let msg = MsgForward blk
-            enqueueWithBackpressure receiverStats blockQueue msg
+            enqueueWithBackpressure blockQueue msg
             -- Fan-out to the ledger worker (when enabled). The
             -- worker is a single consumer with a shallower queue, so
             -- we accept that the receiver may block here if the
@@ -595,27 +581,21 @@ blockFetchClient appTracer blockQueue mLedgerQueue receiverStats watchdog latest
         writeTVar latestTipBlock mTip
         writeTVar rollbackBoundary boundary
 
--- | Enqueue a 'ChainSyncMsg' on the consumer's block queue, counting
--- the moment-of-arrival fullness so 'ReceiverStats' can distinguish
--- "consumer is the bottleneck" from "upstream node is".
+-- | Enqueue a 'ChainSyncMsg' on the consumer's block queue.
 --
 -- 'stm' has 'tryReadTBQueue' but no 'tryWriteTBQueue', so the
 -- non-blocking probe is synthesised from 'isFullTBQueue' +
 -- 'writeTBQueue' inside a single STM transaction. On a full queue
--- we record the blocked write and fall back to a blocking
--- 'writeTBQueue' — back-pressure into the receiver is the right
--- response; dropping is not an option.
+-- we fall back to a blocking 'writeTBQueue' — back-pressure into the
+-- receiver is the right response; dropping is not an option.
 enqueueWithBackpressure
-  :: ReceiverStats
-  -> TBQueue ChainSyncMsg
+  :: TBQueue ChainSyncMsg
   -> ChainSyncMsg
   -> IO ()
-enqueueWithBackpressure stats queue msg = do
+enqueueWithBackpressure queue msg = do
   ok <- atomically $ do
     full <- isFullTBQueue queue
     if full
       then pure False
       else writeTBQueue queue msg >> pure True
-  unless ok $ do
-    recordWriteBlocked stats
-    atomically $ writeTBQueue queue msg
+  unless ok $ atomically $ writeTBQueue queue msg

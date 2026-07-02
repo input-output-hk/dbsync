@@ -73,9 +73,7 @@ import DbSync.StateQuery
   , getSlotDetailsIO
   , seedInterpreterFromLedgerState
   )
-import DbSync.StateQuery.Types (sdSlotNo)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..), logThreadExit)
-import DbSync.Trace.Watchdog (Watchdog, bumpWorker, setWorkerNote)
 
 -- ---------------------------------------------------------------------------
 -- * Hooks
@@ -93,39 +91,28 @@ data WorkerHooks blk = WorkerHooks
   }
 
 -- | Build the production hook set from a 'LedgerEnv', a
--- 'StateQueryVar', a 'Watchdog' handle, and the optional resume
--- replay boundary.
+-- 'StateQueryVar', and the optional resume replay boundary.
 --
 -- 'applyBlockAndSnapshot' receives the live 'SyncPhase' on every
 -- apply so the orchestrator can flip the snapshot cadence (Ingest =
 -- every 10 epochs, Follow = every epoch) just by transitioning the
 -- phase.
---
--- The 'Watchdog' note is stamped around each hook call so a hang
--- inside @applyBlockAndSnapshot@ or @seedInterpreterFromLedgerState@
--- is visible in the watchdog log line.
 realWorkerHooks
   :: LedgerEnv
   -> StateQueryVar
-  -> Watchdog
   -> Maybe SlotNo
   -> WorkerHooks (CardanoBlock StandardCrypto)
-realWorkerHooks env sqv wd mReplayBoundary =
+realWorkerHooks env sqv mReplayBoundary =
   WorkerHooks
-    { whGetSlotDetails = \blk -> do
-        setWorkerNote wd "worker: getSlotDetailsIO"
+    { whGetSlotDetails = \blk ->
         getSlotDetailsIO (leTracer env) sqv (leSystemStart env) (blockSlot blk)
     , whApplyAndSnapshot = \blk sd -> do
-        setWorkerNote wd "worker: applyBlockAndSnapshot"
         phase <- readCurrentPhase (leCurrentPhase env)
         result <- runAppM env (applyBlockAndSnapshot blk sd phase mReplayBoundary)
         -- Re-seed the cached HFC interpreter from the post-apply state so
         -- the next getSlotDetailsIO stays inside the summary's horizon.
-        setWorkerNote wd "worker: readCurrentStateUnsafe (re-seed)"
         newState <- runAppM env readCurrentStateUnsafe
-        setWorkerNote wd "worker: seedInterpreterFromLedgerState"
         seedInterpreterFromLedgerState (getTopLevelConfig env) newState sqv
-        setWorkerNote wd "worker: post-apply"
         pure result
     }
 
@@ -138,17 +125,16 @@ realWorkerHooks env sqv wd mReplayBoundary =
 -- hooks; 'MsgRollback' walks the in-memory buffer via
 -- 'loadLedgerAtPoint'.
 --
--- 'StateQueryVar' and 'Watchdog' live on 'IngestEnv' rather than
--- 'LedgerEnv', so the caller pairs them up and invokes
--- @runAppM env (runLedgerWorker mReplayBoundary sqv wd)@.
+-- 'StateQueryVar' lives on 'IngestEnv' rather than 'LedgerEnv', so
+-- the caller pairs them up and invokes
+-- @runAppM env (runLedgerWorker mReplayBoundary sqv)@.
 runLedgerWorker
   :: Maybe SlotNo
   -> StateQueryVar
-  -> Watchdog
   -> LedgerM ()
-runLedgerWorker mReplayBoundary sqv wd = do
+runLedgerWorker mReplayBoundary sqv = do
   env <- ask
-  liftIO $ chainSyncWorkerLoop env (realWorkerHooks env sqv wd mReplayBoundary) wd
+  liftIO $ chainSyncWorkerLoop env (realWorkerHooks env sqv mReplayBoundary)
 
 -- | Production loop: build per-message handlers from the LSM-backed
 -- 'LedgerEnv' and the block 'WorkerHooks', then drain the queue via
@@ -156,30 +142,26 @@ runLedgerWorker mReplayBoundary sqv wd = do
 chainSyncWorkerLoop
   :: LedgerEnv
   -> WorkerHooks (CardanoBlock StandardCrypto)
-  -> Watchdog
   -> IO ()
-chainSyncWorkerLoop env hooks wd = do
+chainSyncWorkerLoop env hooks = do
   traceWith (leTracer env) $ LogMsg Info "LedgerWorker"
     "starting (draining ledger queue)" Nothing
   chainSyncDispatchLoop
     (Just (leTracer env))
-    (applyForward env hooks wd)
-    (handleRollback env wd)
-    (Just wd)
+    (applyForward env hooks)
+    (handleRollback env)
     (leLedgerQueue env)
 
--- | Production forward handler: apply the block, bump the watchdog,
--- signal epoch boundaries, and clear any pending epoch-wait flag.
+-- | Production forward handler: apply the block, signal epoch
+-- boundaries, and clear any pending epoch-wait flag.
 applyForward
   :: LedgerEnv
   -> WorkerHooks (CardanoBlock StandardCrypto)
-  -> Watchdog
   -> CardanoBlock StandardCrypto
   -> IO ()
-applyForward env hooks wd blk = do
+applyForward env hooks blk = do
   sd <- whGetSlotDetails hooks blk
   result <- whApplyAndSnapshot hooks blk sd
-  bumpWorker wd (sdSlotNo sd)
   case apNewEpoch result of
     SMaybe.Just ne -> do
       _ <- atomically $ Strict.tryPutTMVar (leEpochReady env) (Generic.neEpoch ne)
@@ -194,17 +176,17 @@ applyForward env hooks wd blk = do
 -- @dbsync_sync_state.pending_rollback_slot@ and exit. The next boot
 -- sees the marker and runs the cascade + snapshot cleanup from a
 -- usable on-disk snapshot.
-handleRollback :: LedgerEnv -> Watchdog -> CardanoPoint -> IO ()
-handleRollback env wd p = do
-  setWorkerNote wd "worker: rollback (loadLedgerAtPoint)"
+handleRollback :: LedgerEnv -> CardanoPoint -> IO ()
+handleRollback env p = do
   result <- runAppM env (loadLedgerAtPoint p)
   case result of
-    Right _ -> do
+    Right _ ->
       traceWith (leTracer env) $ LogMsg Info "LedgerWorker"
         ("rolled back to " <> show p) Nothing
-      bumpWorker wd (pointSlotNo p)
     Left _ -> do
-      let SlotNo targetSlot = pointSlotNo p
+      let targetSlot = case pointSlot p of
+            Origin        -> 0
+            At (SlotNo s) -> s
       runAppM env (writePendingRollbackSlot targetSlot)
       traceWith (leTracer env) $ LogMsg Error "LedgerWorker"
         ( "chain rollback to " <> show p
@@ -231,28 +213,18 @@ chainSyncDispatchLoop
   :: Maybe AppTracer
   -> (CardanoBlock StandardCrypto -> IO ())
   -> (CardanoPoint -> IO ())
-  -> Maybe Watchdog
   -> TBQueue ChainSyncMsg
   -> IO ()
-chainSyncDispatchLoop mTracer forwardH rollbackH mWatchdog queue =
+chainSyncDispatchLoop mTracer forwardH rollbackH queue =
   loop `catch` \(e :: SomeException) -> do
     for_ mTracer (logThreadExit "LedgerWorker" e)
     throwIO e
   where
     loop = forever $ do
-      for_ mWatchdog $ \wd -> setWorkerNote wd "worker: readTBQueue (waiting for message)"
       msg <- atomically $ readTBQueue queue
       case msg of
         MsgForward  blk -> forwardH blk
         MsgRollback p   -> rollbackH p
-
--- | Slot of a 'CardanoPoint' for the watchdog bump. 'Origin'
--- (genesis) bumps with slot 0 — the watchdog only tracks monotonic
--- progress, not absolute values.
-pointSlotNo :: CardanoPoint -> SlotNo
-pointSlotNo p = case pointSlot p of
-  Origin -> SlotNo 0
-  At s   -> s
 
 -- | Generic worker loop, parameterised by the per-block hooks. Used
 -- by tests to inject a fake apply hook and exercise the coordination
@@ -262,31 +234,22 @@ pointSlotNo p = case pointSlot p of
 -- supplied) at 'Error' severity and re-thrown so the supervising
 -- 'Async' propagates the failure. Tests pass 'Nothing' to keep the
 -- output quiet.
---
--- When a 'Watchdog' handle is supplied, the worker bumps the
--- per-thread liveness counter after each successful apply. Tests
--- pass 'Nothing' so the loop runs unwatched.
 runLedgerWorkerWith
   :: Maybe AppTracer
   -> WorkerHooks blk
-  -> Maybe Watchdog
   -> TBQueue blk
   -> Strict.StrictTMVar IO EpochNo                   -- ^ epochReady (out)
   -> Strict.StrictTMVar IO EpochNo                   -- ^ epochWait  (in)
   -> IO ()
-runLedgerWorkerWith mTracer hooks mWatchdog queue epochReady epochWait =
+runLedgerWorkerWith mTracer hooks queue epochReady epochWait =
   loop `catch` \(e :: SomeException) -> do
     for_ mTracer (logThreadExit "LedgerWorker" e)
     throwIO e
   where
     loop = forever $ do
-      for_ mWatchdog $ \wd -> setWorkerNote wd "worker: readTBQueue (waiting for block)"
       blk <- atomically $ readTBQueue queue
       sd  <- whGetSlotDetails hooks blk
       result <- whApplyAndSnapshot hooks blk sd
-
-      -- Watchdog bump: one applied block.
-      for_ mWatchdog $ \wd -> bumpWorker wd (sdSlotNo sd)
 
       -- Signal epoch boundary if the apply call detected one.
       case apNewEpoch result of
@@ -305,20 +268,17 @@ runLedgerWorkerWith mTracer hooks mWatchdog queue epochReady epochWait =
 -- | Run the ledger worker + snapshot-writer asyncs for the duration
 -- of the inner action. No-op when the ledger feature is disabled.
 --
--- The two threads share the caller's 'Watchdog', so a single sampler
--- covers their progress alongside the receiver / consumer bumps.
 -- Cancellation propagates to both async children when the inner
 -- action exits or raises.
 withLedgerThreads
   :: HasLedgerEnv
   -> Maybe SlotNo
   -> StateQueryVar
-  -> Watchdog
   -> IO a
   -> IO a
-withLedgerThreads (LedgerDisabled _) _ _ _ inner = inner
-withLedgerThreads hasLE@(LedgerEnabled lenv) replayBoundary sqv wd inner =
-  withAsync (runAppM lenv (runLedgerWorker replayBoundary sqv wd)) $ \w -> do
+withLedgerThreads (LedgerDisabled _) _ _ inner = inner
+withLedgerThreads hasLE@(LedgerEnabled lenv) replayBoundary sqv inner =
+  withAsync (runAppM lenv (runLedgerWorker replayBoundary sqv)) $ \w -> do
     link w
     withAsync (runLedgerStateWriteThread hasLE) $ \s -> do
       link s

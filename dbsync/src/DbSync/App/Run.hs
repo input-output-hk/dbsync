@@ -6,7 +6,7 @@
 -- 'runApp' takes pre-parsed configuration ('AppArgs') and drives the
 -- full sync lifecycle: schema check, boot decision, ledger
 -- initialisation, Ingest → Prep → Follow handoff, and the receiver
--- / watchdog / ledger-worker async tree.
+-- / ledger-worker async tree.
 --
 -- The executable's @main@ is a thin shim that parses the CLI, reads
 -- the on-disk files, then calls 'runApp'. The test harness builds
@@ -90,9 +90,8 @@ import DbSync.Extractor.Registry (declaredSchemaFingerprint)
 import DbSync.Extractor (ExtractorDef (..))
 import DbSync.Phase.Ingest.DedupStore (DedupStores, closeStores)
 import DbSync.Phase.Ingest.Consumer (runConsumer)
+import DbSync.Phase.Ingest.Gauge (withPipelineGauge)
 import DbSync.Phase.Ingest.Genesis (insertByronGenesisDist)
-import DbSync.Phase.Ingest.PipelineStats (emptyPipelineStats)
-import DbSync.Phase.Ingest.ReceiverStats (newReceiverStats)
 import DbSync.Worker.Ledger.Fingerprint
   ( FingerprintCheck (..)
   , checkFingerprint
@@ -154,7 +153,7 @@ import DbSync.Phase.Ingest.LsmSession
   ( LsmSession
   , closeAndDeleteLsmSession
   , closeLsmSession
-  , lsmSessionTracerFromApp
+  , nullLsmSessionTracer
   , openLsmSession
   )
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
@@ -166,12 +165,6 @@ import DbSync.Trace.Types
   , logErrorIO
   , logInfoIO
   , logWarnIO
-  )
-import DbSync.Trace.Pulse (newPulse, runPulseIO)
-import DbSync.Trace.Watchdog
-  ( WatchdogIngestSamples (..)
-  , newWatchdog
-  , runWatchdogIO
   )
 import qualified DbSync.Phase.Ingest.Writer as IngestWriter
 
@@ -281,8 +274,11 @@ runApp tracer args = do
   -- own 'finally' still releases the on-disk lock. The closer is
   -- idempotent, so a later 'closeAndDeleteLsmSession' inside
   -- 'runPrep' is harmless.
+  -- 'nullLsmSessionTracer': lsm-tree's internal events add nothing at
+  -- normal severities; swap in 'lsmSessionTracerFromApp' when
+  -- debugging the store itself.
   bracket
-    (openLsmSession (lsmSessionTracerFromApp tracer) ledgerStateDir)
+    (openLsmSession nullLsmSessionTracer ledgerStateDir)
     (\sess ->
        closeLsmSession sess `catch` \(e :: SomeException) ->
          logErrorIO tracer "App" $
@@ -506,8 +502,8 @@ setupLedgerEnv tracer hasqlSettings coreEnv ledgerCfg
 -- | Run the Ingest → Prep → Follow pipeline for one boot.
 --
 --   1. Build the 'IngestEnv' from the resolved 'IngestBootState'.
---   2. Start the chainsync receiver + watchdog + pulse asyncs and
---      run 'runConsumer' until it exits at the rollback boundary.
+--   2. Start the chainsync receiver async and run 'runConsumer'
+--      until it exits at the rollback boundary.
 --   3. Cancel the receiver, run 'PreparingForVolatileTail' in its
 --      own connection, mark sync complete.
 --   4. Flip to 'FollowingVolatileTail' and hand off to
@@ -564,10 +560,6 @@ runIngestThenFollow
     -- sync the consumer is the bottleneck so a deep queue just sits
     -- full — at 500 that was a few hundred MB of standing heap.
     blockQueue       <- newTBQueueIO 150
-    receiverStats    <- newReceiverStats
-    pipelineStats    <- newIORef emptyPipelineStats
-    watchdog         <- newWatchdog (ceMinSeverity coreEnv)
-    pulse            <- newPulse (ceMinSeverity coreEnv)
     addrBuffer       <- newAddressBufferRef
     txOutWorker      <- mkTxOutWorker tracer hasqlSettings initialAddressId
     mPoolWorker      <-
@@ -603,13 +595,9 @@ runIngestThenFollow
           , ieResolver                = resolver
           , ieWriter                  = writer
           , ieExtractState            = extractStateRef
-          , ieReceiverStats           = receiverStats
-          , iePipelineStats           = pipelineStats
           , ieControlConnection       = consumerCtrlConn
           , ieLastCommittedSlotAtBoot = replayBoundary
           , ieReplayStartSlot         = replayStart
-          , ieWatchdog                = watchdog
-          , iePulse                   = pulse
           , ieLatestReceivedPoint     = latestPointRef
           , ieRollbackBoundary        = rollbackBoundary
           , ieLatestTipBlock          = latestTipBlock
@@ -635,32 +623,18 @@ runIngestThenFollow
         ingestAction               = runAppM ingestEnv runConsumer `finally` shutdownIngest
         shutdownPostIngest         = closePipelineResources tracer consumerCtrlConn lsmSession hasLedgerEnv mPoolWorker mVoteWorker
         runPrepAndMarkComplete     = runPrep tracer coreEnv hasqlSettings tableDefs lsmSession
-        mLedgerQueue               = case hasLedgerEnv of
-          LedgerEnabled lenv -> Just (leLedgerQueue lenv)
-          LedgerDisabled _   -> Nothing
-        watchdogSamples            = WatchdogIngestSamples
-          { wisPipelineStats = pipelineStats
-          , wisReceiverStats = receiverStats
-          , wisUtxoStore     = utxoStore
-          }
 
     -- The receiver / consumer / ledger-worker tree:
     --   * 'withLedgerThreads' spawns 'LedgerWorker' + snapshot writer.
     --     They live across the Ingest → Prep → Follow boundary so the
     --     in-RAM 'LedgerDB' keeps ticking while Prep runs.
-    --   * 'withAsyncs' spawns the watchdog + pulse samplers.
     --   * The innermost 'withAsync' is the chainsync receiver. We
     --     cancel it before Prep so the consumer queue stops growing.
     withIOManager (\iomgr ->
-      withLedgerThreads hasLedgerEnv replayBoundary stateQueryVar watchdog $
-        withAsyncs
-          [ runWatchdogIO tracer watchdog blockQueue mLedgerQueue (Just watchdogSamples)
-          , runPulseIO tracer pulse watchdog blockQueue 500 loaderStream
-          ]
-          $ do
+      withLedgerThreads hasLedgerEnv replayBoundary stateQueryVar $ do
           withAsync (runAppM ingestEnv $ connectToNode iomgr topLevelCfg networkMagic socketPath intersectReq) $ \nodeThread -> do
             link nodeThread
-            ingestAction
+            withPipelineGauge ingestEnv ingestAction
             cancel nodeThread
           runPrepAndMarkComplete
           runAppM coreEnv (setCurrentPhase (ceCurrentPhase coreEnv) FollowingVolatileTail)
@@ -764,30 +738,13 @@ runPrep tracer coreEnv hasqlSettings tableDefs lsmSession = do
 -- * Helpers
 -- ---------------------------------------------------------------------------
 
--- | Run a list of background 'IO' actions concurrently with the
--- inner @body@. Each background action is spawned via 'withAsync'
--- and 'link'ed to the calling thread, so an exception in any of
--- them propagates immediately. When @body@ exits — whether cleanly
--- or via an exception — every background async is cancelled by the
--- enclosing 'withAsync's' bracket.
---
--- All background actions share the same lifetime (that of @body@).
--- Use nested 'withAsync' calls directly when threads need to die
--- at different points.
-withAsyncs :: [IO ()] -> IO a -> IO a
-withAsyncs []       body = body
-withAsyncs (a : as) body =
-  withAsync a $ \th -> do
-    link th
-    withAsyncs as body
-
 -- | In-process Ingest → Prep → Follow handoff.
 --
 -- Called after 'PreparingForVolatileTail' has marked sync complete.
 -- Reads the just-written sync state, builds a 'ResumeContext', and
 -- spawns a fresh chainsync receiver bound to a 'FollowEnv' that
--- reuses the Ingest receiver-side state (block queue, watchdog,
--- ledger queue, control connection) via 'mkFollowEnvFromIngest'.
+-- reuses the Ingest receiver-side state (block queue, ledger queue,
+-- control connection) via 'mkFollowEnvFromIngest'.
 -- Any blocks the Ingest receiver queued past the rollback boundary
 -- before being cancelled stay in the queue and are processed by the
 -- Follow consumer.
@@ -846,9 +803,9 @@ handoffToFollow
     let rc = resumeContextFrom row Nothing
     intersectReq <- resolveIntersection tracer consumerCtrlConn rc
 
-    -- The receiver runs under 'followEnv' so its watchdog / block
-    -- queue / rollback boundary refs are the same ones IngestEnv
-    -- carried. The Ingest receiver was cancelled before Prep ran;
+    -- The receiver runs under 'followEnv' so its block queue /
+    -- rollback boundary refs are the same ones IngestEnv carried.
+    -- The Ingest receiver was cancelled before Prep ran;
     -- 'runFollowSession' opens a fresh one starting at the
     -- post-Ingest commit point.
     runFollowSession tracer "App" iomgr hasqlSettings topLevelCfg

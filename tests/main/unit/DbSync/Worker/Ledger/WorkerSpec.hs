@@ -30,7 +30,7 @@ import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import qualified Cardano.Ledger.BaseTypes as Ledger
 import Cardano.Slotting.Slot (EpochNo (..), EpochSize (..), SlotNo (..))
 import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
-import Ouroboros.Network.Block (pattern GenesisPoint)
+import Ouroboros.Network.Block (data GenesisPoint)
 
 import qualified DbSync.Worker.Ledger.EpochUpdate as Generic
 import qualified DbSync.Worker.Ledger.StakeDist as Generic
@@ -64,7 +64,7 @@ runLedgerWorkerWithSpec = describe "runLedgerWorkerWith" $ do
     epochWait   <- Strict.newEmptyTMVarIO
     callsRef    <- newIORef (0 :: Int)
     workerThread <- async $
-      runLedgerWorkerWith Nothing (countingHooks callsRef Nothing) Nothing
+      runLedgerWorkerWith Nothing (countingHooks callsRef Nothing)
         queue epochReady epochWait
 
     -- Push three "blocks". The fake hook treats any value that
@@ -92,7 +92,7 @@ runLedgerWorkerWithSpec = describe "runLedgerWorkerWith" $ do
         onEpochAt2 _ = SMaybe.Nothing
 
     workerThread <- async $
-      runLedgerWorkerWith Nothing (countingHooks callsRef (Just onEpochAt2)) Nothing
+      runLedgerWorkerWith Nothing (countingHooks callsRef (Just onEpochAt2))
         queue epochReady epochWait
 
     atomically $ do
@@ -112,7 +112,7 @@ runLedgerWorkerWithSpec = describe "runLedgerWorkerWith" $ do
     epochWait   <- Strict.newEmptyTMVarIO
     callsRef    <- newIORef (0 :: Int)
     workerThread <- async $
-      runLedgerWorkerWith Nothing (countingHooks callsRef Nothing) Nothing
+      runLedgerWorkerWith Nothing (countingHooks callsRef Nothing)
         queue epochReady epochWait
 
     -- No blocks pushed; the worker is blocked on the queue.
@@ -132,7 +132,7 @@ chainSyncDispatchLoopSpec = describe "chainSyncDispatchLoop" $ do
         rollbackH _p  = atomicModifyIORef' rollbackCalls (\n -> (n + 1, ()))
 
     workerThread <- async $
-      chainSyncDispatchLoop Nothing forwardH rollbackH Nothing queue
+      chainSyncDispatchLoop Nothing forwardH rollbackH queue
 
     -- Push three rollback markers (all at GenesisPoint — the handler
     -- only counts, so the point payload doesn't matter).
@@ -152,7 +152,7 @@ chainSyncDispatchLoopSpec = describe "chainSyncDispatchLoop" $ do
         rollbackH _p  = pure ()
 
     workerThread <- async $
-      chainSyncDispatchLoop Nothing forwardH rollbackH Nothing queue
+      chainSyncDispatchLoop Nothing forwardH rollbackH queue
 
     -- No messages pushed; the worker is blocked on the queue.
     cancel workerThread

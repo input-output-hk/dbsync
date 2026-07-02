@@ -61,6 +61,7 @@ module DbSync.StateQuery
   , ObservationResult (..)
   , ObservedTransition (..)
   , EraIdx (..)
+  , renderEraIdx
 
     -- * Snapshot-derived interpreter seeding (re-exports from .Seed)
   , seedInterpreterFromLedgerState
@@ -111,6 +112,7 @@ import DbSync.StateQuery.Handler (localStateQueryHandler)
 import DbSync.StateQuery.Observe (observeBlockSTM)
 import DbSync.StateQuery.ObservedSummary
   ( EraIdx (..)
+  , renderEraIdx
   , ObservationResult (..)
   , ObservedTransition (..)
   , currentInterpreter

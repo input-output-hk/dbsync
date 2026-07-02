@@ -26,7 +26,7 @@ import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import qualified Control.Concurrent.STM as STM
 import Control.Monad.IO.Unlift (withRunInIO)
 import Control.Tracer (traceWith)
-import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
 import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import Numeric (showFFloat)
 import qualified Hasql.Connection as Conn
@@ -43,6 +43,7 @@ import DbSync.Parser.Dispatch (parseBlock)
 import DbSync.Parser.Types (CardanoPoint, GenericBlock (..))
 import DbSync.Phase.Type (SyncPhase (..), renderPhase)
 import DbSync.Db.Run (useConn)
+import DbSync.Db.Statement.Core (queryLatestEpochNoStmt)
 import DbSync.Db.Statement.SyncState (writeSyncStateSlotStmt)
 import DbSync.Db.Statement.Transaction (beginSql, commitSql, rollbackSql)
 
@@ -52,7 +53,7 @@ import DbSync.App.Config.Types
   , DbSyncOptions (..)
   )
 import DbSync.App.Env (CoreEnv (..), FollowEnv (..), HasConfig (..), HasNetwork)
-import DbSync.Extractor (ExtractorDef (..), takeBlockLedgerData)
+import DbSync.Extractor (ExtractorDef (..), cborCaptureEnabled, takeBlockLedgerData)
 import DbSync.Extractor.EpochBoundary (runEpochBoundary)
 import DbSync.Extractor.Governance (runGovernanceBoundary)
 import DbSync.Extractor.PoolStats (runPoolStatsBoundary)
@@ -89,7 +90,6 @@ import DbSync.Db.Schema.Types (TableDef)
 import DbSync.Error (AppError (..))
 import DbSync.Trace.Timing (fmtCount, fmtDuration, fmtF2)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
-import DbSync.Trace.Watchdog (Watchdog, bumpConsumer, setConsumerNote)
 
 -- | Cadence for the periodic Follow-loop progress log while in
 -- 'FollowingVolatileTail'. In 'FollowingChainTip' the loop logs every
@@ -138,7 +138,7 @@ data FollowProgress = FollowProgress
 -- target slot.
 run :: FollowM ()
 run = do
-  FollowEnv{feCore, feBlockQueue, feReplayBootSlot} <- ask
+  FollowEnv{feCore, feBlockQueue, feReplayBootSlot, feHasqlConnection} <- ask
   let tracer   = ceTracer    feCore
       phaseRef = ceCurrentPhase feCore
   liftIO $ do
@@ -146,10 +146,16 @@ run = do
     traceWith tracer $ LogMsg Info component
       "consumer started; draining chainsync queue" Nothing
   startedAt <- liftIO getCurrentTime
+  -- Seed the previous-epoch marker from PG so the first processed
+  -- block can detect an epoch crossing; a crossing skipped here
+  -- leaves its 'BoundaryApplyData' in the queue and shifts every
+  -- later drain onto its predecessor's payload.
+  mDbEpoch <- useConn "Phase.Following.Run" feHasqlConnection
+    (Sess.statement () queryLatestEpochNoStmt)
   progressRef <- liftIO $ newIORef FollowProgress
     { fpWindowStart      = startedAt
     , fpBlocksThisWindow = 0
-    , fpLastEpoch        = Nothing
+    , fpLastEpoch        = mDbEpoch
     , fpLastBlockAt      = Nothing
     , fpLastSlot         = Nothing
     , fpEpochStart       = startedAt
@@ -166,7 +172,7 @@ run = do
       waitForMsgOrHeartbeat feBlockQueue phaseRef idleHeartbeatMicros
     case mMsg of
       Just (MsgForward  blk)   -> processForward progressRef replayRef blk
-      Just (MsgRollback point) -> processRollback point
+      Just (MsgRollback point) -> processRollback progressRef point
       Nothing                  -> emitIdleHeartbeat progressRef
 
 -- | Read the next message from the queue, or fall through with
@@ -205,8 +211,8 @@ readPhaseComponent = fmap renderPhase . readCurrentPhase
 --   * Replay window ('feReplayBootSlot' set, @slot <= bootSlot@) —
 --     the block is already in PG and the ledger worker is
 --     re-applying it via the receiver fan-out. The consumer just
---     bumps the watchdog, advances the replay-progress state
---     machine, and runs the phase-flip predicate.
+--     advances the replay-progress state machine and runs the
+--     phase-flip predicate.
 --
 --   * Normal — apply the block inside one PG transaction:
 --
@@ -230,7 +236,6 @@ processForward
 processForward progressRef replayRef cardanoBlock = do
   env@FollowEnv
     { feCore
-    , feWatchdog
     , feStateQueryVar
     , feHasqlConnection
     , feHasLedgerEnv
@@ -240,15 +245,11 @@ processForward progressRef replayRef cardanoBlock = do
   let slot     = blockSlot cardanoBlock
       tracer   = getTracer env
       phaseRef = ceCurrentPhase feCore
-  liftIO $ do
-    setConsumerNote feWatchdog "follow: processForward"
-    bumpConsumer feWatchdog slot
-    advanceAndLogReplay tracer replayRef feReplayStartSlot feReplayBootSlot slot
+  liftIO $ advanceAndLogReplay tracer replayRef feReplayStartSlot feReplayBootSlot slot
   case feReplayBootSlot of
     Just bootSlot | slot <= bootSlot -> do
       -- Replay window: PG already has the row and the ledger worker
       -- re-applies the block. Skip the INSERT + sync_state advance.
-      liftIO $ setConsumerNote feWatchdog "follow: replay-skip"
       -- The worker still enqueues a per-block ApplyResult for the
       -- replayed block; drain and discard so the queue stays empty.
       liftIO $ void $ takeBlockLedgerData feHasLedgerEnv
@@ -257,7 +258,8 @@ processForward progressRef replayRef cardanoBlock = do
       liftIO $ void $ atomically $ observeBlockSTM feStateQueryVar cardanoBlock
       sd <- getSlotDetails slot
       now <- liftIO getCurrentTime
-      let !genBlock = parseBlock sd cardanoBlock
+      let !cborEnabled = cborCaptureEnabled (ceExtractors feCore)
+          !genBlock = parseBlock cborEnabled sd cardanoBlock
           !curEpoch = unEpochNo (blkEpochNo genBlock)
           !counts   = countAssignableIds genBlock
           triple    = ( unSlotNo  (blkSlotNo  genBlock)
@@ -286,7 +288,7 @@ processForward progressRef replayRef cardanoBlock = do
         writes <- drain buf
         let flushAndAdvance =
               writes *> void (Pipeline.statement triple writeSyncStateSlotStmt)
-        runFollowBlockTx feHasqlConnection feWatchdog flushAndAdvance
+        runFollowBlockTx feHasqlConnection flushAndAdvance
       maybeFlipToTip (blkSlotNo genBlock) (blkBlockNo genBlock)
       maybeLogProgress progressRef now genBlock
 
@@ -360,14 +362,11 @@ advanceAndLogReplay tracer replayRef mReplayStart mReplayBoot slot = do
 -- @BEGIN@/@COMMIT@ envelope. A flush failure triggers a best-effort
 -- ROLLBACK so the open transaction doesn't leak, but the original
 -- exception still propagates.
-runFollowBlockTx :: Conn.Connection -> Watchdog -> Pipeline.Pipeline () -> IO ()
-runFollowBlockTx conn watchdog flush = do
-  setConsumerNote watchdog "follow: BEGIN"
+runFollowBlockTx :: Conn.Connection -> Pipeline.Pipeline () -> IO ()
+runFollowBlockTx conn flush = do
   useConn "Following.BEGIN" conn (Sess.script beginSql)
-  setConsumerNote watchdog "follow: flush pipeline"
   useConn "Following.flush" conn (Sess.pipeline flush)
     `onException` rollbackQuiet conn
-  setConsumerNote watchdog "follow: COMMIT"
   useConn "Following.COMMIT" conn (Sess.script commitSql)
 
 -- | Best-effort ROLLBACK. Swallows its own errors so a failed
@@ -562,19 +561,26 @@ fmtRate r
 -- cascade so the log identifies the run as catching up again.
 -- The cascade itself DELETEs every row past the target block and
 -- advances @last_committed_*@ to match, all in one PG transaction.
-processRollback :: CardanoPoint -> FollowM ()
-processRollback point = do
-  FollowEnv{feCore, feWatchdog} <- ask
+processRollback :: IORef FollowProgress -> CardanoPoint -> FollowM ()
+processRollback progressRef point = do
+  FollowEnv{feCore, feHasqlConnection} <- ask
   let tracer    = ceTracer    feCore
       phaseRef  = ceCurrentPhase feCore
       tableDefs = concatMap pdTables (ceExtractors feCore)
-  liftIO $ setConsumerNote feWatchdog "follow: processRollback"
   setCurrentPhase phaseRef FollowingVolatileTail
   liftIO $ do
     component <- readPhaseComponent phaseRef
     traceWith tracer $ LogMsg Info component
       ("rollback to " <> show point) Nothing
   rollbackWithRetry tableDefs point
+  -- The cascade may have deleted past an epoch boundary; re-seed the
+  -- previous-epoch marker from PG so the next forward block neither
+  -- fires a spurious boundary drain (which would block on an empty
+  -- queue) nor misses the real re-crossing when the chain advances
+  -- over the boundary again.
+  mDbEpoch <- useConn "Phase.Following.Run" feHasqlConnection
+    (Sess.statement () queryLatestEpochNoStmt)
+  liftIO $ modifyIORef' progressRef $ \p -> p { fpLastEpoch = mDbEpoch }
 
 -- | Total attempts (initial + retries) before a rollback failure
 -- surfaces. Reads are idempotent and writes run in one PG

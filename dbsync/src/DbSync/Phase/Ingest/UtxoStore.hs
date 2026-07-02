@@ -190,8 +190,8 @@ lookupInput cache hash idx = do
       pure Nothing
   where
     -- Plain (non-atomic) bumps: the consumer thread is the only
-    -- writer; the watchdog's cross-thread 'readStoreStats' tolerates
-    -- a marginally stale snapshot.
+    -- writer; a cross-thread 'readStoreStats' tolerates a marginally
+    -- stale snapshot.
     bumpHit  = modifyIORef' (usStats cache) $ \s ->
       s { ssHits   = ssHits   s + 1 }
     bumpMiss = modifyIORef' (usStats cache) $ \s ->
@@ -313,11 +313,16 @@ pokeWord64BE p off w =
 decodeOutput :: UtxoOutputBytes -> Maybe (TxId, TxOutId, DbLovelace)
 decodeOutput (UtxoOutputBytes sbs)
   | SBS.length sbs /= 24 = Nothing
-  | otherwise            = Just
-      ( TxId       (readInt64BE  sbs 0)
-      , TxOutId    (readInt64BE  sbs 8)
-      , DbLovelace (readWord64BE sbs 16)
-      )
+  | otherwise =
+      -- Decoded strictly: the ids can outlive this call by a whole
+      -- epoch (the ConsumedByBuffer holds one per resolved input
+      -- until the boundary handoff), and the newtypes would
+      -- otherwise carry a 'readInt64BE' thunk plus the 24-byte
+      -- payload per entry for that entire window.
+      let !tid = readInt64BE  sbs 0
+          !oid = readInt64BE  sbs 8
+          !val = readWord64BE sbs 16
+      in Just (TxId tid, TxOutId oid, DbLovelace val)
 
 readInt64BE :: ShortByteString -> Int -> Int64
 readInt64BE sbs off = fromIntegral (readWord64BE sbs off)

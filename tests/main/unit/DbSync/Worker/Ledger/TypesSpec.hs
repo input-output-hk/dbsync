@@ -20,9 +20,10 @@ import Cardano.Prelude
 
 import Cardano.Ledger.Coin (Coin (..))
 
+import qualified Data.Map.Lazy as LMap
 import qualified Data.Map.Strict as Map
 import qualified Data.Sequence.Strict as Seq
-import Test.Hspec (Spec, describe, it, shouldBe)
+import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldThrow)
 
 import DbSync.Worker.Ledger.Types
   ( DepositsMap (..)
@@ -51,6 +52,19 @@ spec = do
     it "lookupDepositsMap returns Nothing for a missing hash" $ do
       let m = DepositsMap (Map.fromList [("a", Coin 1), ("b", Coin 2)])
       lookupDepositsMap "c" m `shouldBe` Nothing
+
+  describe "NFData forcing reaches the leaves" $ do
+    -- Queued payloads rely on 'force' making them self-contained; a
+    -- value-lazy map slipping through would pin its closures for a
+    -- whole epoch. Data.Map.Lazy builds the same 'Map' type without
+    -- forcing values, standing in for any lazily-produced entry.
+    it "DepositsMap: a thunked deposit value explodes under force" $
+      evaluate (force (DepositsMap (LMap.singleton "h" (panic "unforced deposit"))))
+        `shouldThrow` anyException
+
+    it "DepositsMap: a fully-evaluated map survives force intact" $ do
+      m <- evaluate $ force $ DepositsMap (Map.fromList [("some-hash", Coin 2_000_000)])
+      lookupDepositsMap "some-hash" m `shouldBe` Just (Coin 2_000_000)
 
   describe "EpochBlockNo" $ do
     it "EpochBlockNo is ordered by its Word64 payload" $ do

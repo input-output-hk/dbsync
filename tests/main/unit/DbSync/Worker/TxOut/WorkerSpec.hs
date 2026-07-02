@@ -16,10 +16,9 @@ import qualified Data.ByteString.Short as SBS
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import qualified Data.Map.Strict as Map
 
-import Test.Hspec (Spec, describe, it, shouldBe)
+import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldThrow)
 
-import DbSync.Db.Schema.Address (Address (..))
-import DbSync.Db.Schema.Ids (AddressId (..), CollateralTxOutId (..), TxId (..), TxOutId (..))
+import DbSync.Db.Schema.Ids (AddressId (..), CollateralTxOutId (..), StakeAddressId, TxId (..), TxOutId (..))
 import DbSync.Worker.TxOut.AddressBuffer
   ( EpochAddressBuffer (..)
   , emptyEpochAddressBuffer
@@ -48,7 +47,7 @@ import qualified Data.ByteString as BS
 -- | Capture every bulk-hook invocation in an 'IORef' so tests can
 -- inspect the worker's effect after a job completes.
 data Captured = Captured
-  { capResolveCalls    :: ![[(ShortByteString, Address)]]
+  { capResolveCalls    :: ![[(ShortByteString, Maybe StakeAddressId)]]
     -- ^ One entry per bulk-resolve call, in invocation order.
   , capTxOutCalls      :: ![[(TxOutId, AddressId)]]
   , capCollCalls       :: ![[(CollateralTxOutId, AddressId)]]
@@ -102,15 +101,6 @@ addr1, addr2 :: ByteString
 addr1 = BS.pack [0xaa, 0x01]
 addr2 = BS.pack [0xaa, 0x02]
 
-mkAddr :: ByteString -> Address
-mkAddr raw = Address
-  { addressAddress        = "test-addr"
-  , addressRaw            = raw
-  , addressHasScript      = False
-  , addressPaymentCred    = Nothing
-  , addressStakeAddressId = Nothing
-  }
-
 -- ---------------------------------------------------------------------------
 -- * Spec
 -- ---------------------------------------------------------------------------
@@ -120,7 +110,7 @@ spec = do
   describe "EpochAddressBuffer" $ do
     it "recordTxOut adds a unique address and one tx_out pair" $ do
       ref <- newAddressBufferRef
-      recordTxOut ref (TxOutId 1) addr1 (mkAddr addr1)
+      recordTxOut ref (TxOutId 1) addr1 Nothing
       buf <- takeAndReset ref
       Map.size (eabAddresses buf) `shouldBe` 1
       length (eabTxOutAddresses buf) `shouldBe` 1
@@ -128,38 +118,47 @@ spec = do
 
     it "two tx_outs with the same raw share one address entry" $ do
       ref <- newAddressBufferRef
-      recordTxOut ref (TxOutId 1) addr1 (mkAddr addr1)
-      recordTxOut ref (TxOutId 2) addr1 (mkAddr addr1)
+      recordTxOut ref (TxOutId 1) addr1 Nothing
+      recordTxOut ref (TxOutId 2) addr1 Nothing
       buf <- takeAndReset ref
       Map.size (eabAddresses buf) `shouldBe` 1
       length (eabTxOutAddresses buf) `shouldBe` 2
 
     it "two tx_outs with different raws produce two address entries" $ do
       ref <- newAddressBufferRef
-      recordTxOut ref (TxOutId 1) addr1 (mkAddr addr1)
-      recordTxOut ref (TxOutId 2) addr2 (mkAddr addr2)
+      recordTxOut ref (TxOutId 1) addr1 Nothing
+      recordTxOut ref (TxOutId 2) addr2 Nothing
       buf <- takeAndReset ref
       Map.size (eabAddresses buf) `shouldBe` 2
       length (eabTxOutAddresses buf) `shouldBe` 2
 
     it "takeAndReset leaves the buffer empty" $ do
       ref <- newAddressBufferRef
-      recordTxOut ref (TxOutId 1) addr1 (mkAddr addr1)
+      recordTxOut ref (TxOutId 1) addr1 Nothing
       _ <- takeAndReset ref
       buf <- takeAndReset ref
       buf `shouldBe` emptyEpochAddressBuffer
 
     it "recordCollateralTxOut appends to the collateral list" $ do
       ref <- newAddressBufferRef
-      recordCollateralTxOut ref (CollateralTxOutId 7) addr1 (mkAddr addr1)
+      recordCollateralTxOut ref (CollateralTxOutId 7) addr1 Nothing
       buf <- takeAndReset ref
       length (eabCollateralTxOutAddresses buf) `shouldBe` 1
+
+    -- Entries live in this buffer for a whole epoch, so anything
+    -- unforced at record time pins its closure graph until the
+    -- boundary: a thunked input must blow up here, not an epoch
+    -- later.
+    it "recordTxOut forces the raw address bytes on entry (bomb)" $ do
+      ref <- newAddressBufferRef
+      recordTxOut ref (TxOutId 1) (panic "unforced raw address") Nothing
+        `shouldThrow` anyException
 
   describe "TxOutWorker loop (bulk hooks)" $ do
     it "folds one job into one bulk-resolve + one bulk-update call" $ do
       bufRef <- newAddressBufferRef
-      recordTxOut bufRef (TxOutId 10) addr1 (mkAddr addr1)
-      recordTxOut bufRef (TxOutId 11) addr2 (mkAddr addr2)
+      recordTxOut bufRef (TxOutId 10) addr1 Nothing
+      recordTxOut bufRef (TxOutId 11) addr2 Nothing
       buf <- takeAndReset bufRef
 
       capRef <- newIORef emptyCaptured
@@ -179,8 +178,8 @@ spec = do
 
     it "reuses the same AddressId for repeated raws in the same job" $ do
       bufRef <- newAddressBufferRef
-      recordTxOut bufRef (TxOutId 20) addr1 (mkAddr addr1)
-      recordTxOut bufRef (TxOutId 21) addr1 (mkAddr addr1)
+      recordTxOut bufRef (TxOutId 20) addr1 Nothing
+      recordTxOut bufRef (TxOutId 21) addr1 Nothing
       buf <- takeAndReset bufRef
 
       capRef <- newIORef emptyCaptured
@@ -229,9 +228,9 @@ spec = do
 
     it "passes the buffer's unique raws to the bulk-resolve hook" $ do
       bufRef <- newAddressBufferRef
-      recordTxOut bufRef (TxOutId 30) addr1 (mkAddr addr1)
-      recordTxOut bufRef (TxOutId 31) addr2 (mkAddr addr2)
-      recordCollateralTxOut bufRef (CollateralTxOutId 32) addr1 (mkAddr addr1)
+      recordTxOut bufRef (TxOutId 30) addr1 Nothing
+      recordTxOut bufRef (TxOutId 31) addr2 Nothing
+      recordCollateralTxOut bufRef (CollateralTxOutId 32) addr1 Nothing
       buf <- takeAndReset bufRef
 
       capRef <- newIORef emptyCaptured
@@ -310,6 +309,16 @@ spec = do
       _ <- ConsumedByBuffer.takeAndReset ref
       buf <- ConsumedByBuffer.takeAndReset ref
       buf `shouldBe` emptyEpochConsumedByBuffer
+
+    -- Same epoch-long lifetime as the address buffer: the argument
+    -- bangs force ids on entry, so a thunked id blows up at record
+    -- time rather than pinning its closure until the boundary.
+    it "recordConsumedBy forces both ids on entry (bomb)" $ do
+      ref <- ConsumedByBuffer.newConsumedByBufferRef
+      ConsumedByBuffer.recordConsumedBy ref (panic "unforced producer id") (TxId 10)
+        `shouldThrow` anyException
+      ConsumedByBuffer.recordConsumedBy ref (TxOutId 1) (panic "unforced consumer id")
+        `shouldThrow` anyException
 
 -- ---------------------------------------------------------------------------
 -- * Helpers

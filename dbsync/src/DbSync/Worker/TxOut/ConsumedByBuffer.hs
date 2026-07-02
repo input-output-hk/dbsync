@@ -21,9 +21,11 @@ module DbSync.Worker.TxOut.ConsumedByBuffer
 
   , recordConsumedBy
   , takeAndReset
+  , forceEpochConsumedByBuffer
   ) where
 
 import Cardano.Prelude
+import Prelude (seq) -- not re-exported by Cardano.Prelude
 
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.Sequence ((|>))
@@ -40,8 +42,7 @@ import DbSync.Db.Schema.Ids (TxId, TxOutId)
 -- Two parallel 'Seq's: producer @tx_out.id@s and the consumer @tx@s
 -- that spent them, in lockstep. The worker walks both with
 -- 'Foldable.toList' and feeds them to a Hasql @unnest($1, $2)@ bulk
--- UPDATE. 'Seq' gives O(1) snoc; the cardinality is one entry per
--- cache-hit input, so Conway-era epochs reach ~100k entries here.
+-- UPDATE.
 data EpochConsumedByBuffer = EpochConsumedByBuffer
   { ecbProducerTxOutIds :: !(Seq TxOutId)
   , ecbConsumerTxIds    :: !(Seq TxId)
@@ -64,13 +65,16 @@ emptyEpochConsumedByBuffer = EpochConsumedByBuffer Seq.empty Seq.empty
 -- * Mutation
 -- ---------------------------------------------------------------------------
 
--- | Append one pair. Order across calls is preserved.
+-- | Append one pair. Order across calls is preserved. Both ids are
+-- forced on entry: an entry lives in the buffer until the epoch's
+-- boundary handoff, so a thunk here would retain its closure (and
+-- whatever bytes it reads from) for the whole epoch.
 recordConsumedBy
   :: ConsumedByBufferRef
   -> TxOutId   -- ^ the producer output's tx_out.id
   -> TxId      -- ^ the consumer tx (the tx whose input is spending it)
   -> IO ()
-recordConsumedBy ref producerOutId consumerTxId =
+recordConsumedBy ref !producerOutId !consumerTxId =
   atomicModifyIORef' ref $ \buf ->
     let !buf' = buf
           { ecbProducerTxOutIds = ecbProducerTxOutIds buf |> producerOutId
@@ -82,3 +86,9 @@ recordConsumedBy ref producerOutId consumerTxId =
 takeAndReset :: ConsumedByBufferRef -> IO EpochConsumedByBuffer
 takeAndReset ref =
   atomicModifyIORef' ref $ \buf -> (emptyEpochConsumedByBuffer, buf)
+
+-- | Force every id to WHNF; diagnostic for the Ingest memory probe.
+forceEpochConsumedByBuffer :: EpochConsumedByBuffer -> ()
+forceEpochConsumedByBuffer b =
+  foldl' (\() i -> i `seq` ()) () (ecbProducerTxOutIds b)
+    `seq` foldl' (\() i -> i `seq` ()) () (ecbConsumerTxIds b)

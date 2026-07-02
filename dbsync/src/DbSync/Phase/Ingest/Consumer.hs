@@ -26,9 +26,6 @@
 -- is shorter than @k@. The @blk in X@ window spans the previous
 -- boundary's post-commit reset through this boundary's, so the rate
 -- reflects what the operator sees.
---
--- Pipeline-internal diagnostics (queue depths, drain distribution,
--- receiver writes-blocked counter) live on the watchdog at 'Debug'.
 module DbSync.Phase.Ingest.Consumer
   ( -- * Running
     runConsumer
@@ -55,12 +52,14 @@ import Control.Concurrent.STM (TBQueue, TVar, readTBQueue, readTVarIO, tryReadTB
 import Control.Tracer (traceWith)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', readIORef, writeIORef)
 import Data.Time.Clock (getCurrentTime)
+import GHC.Stats (RTSStats (..), GCDetails (..), getRTSStats, getRTSStatsEnabled)
+import System.Mem (performMajorGC)
 
 import DbSync.AppM (IngestM)
-import DbSync.App.Env (IngestEnv (..))
+import DbSync.App.Env (CoreEnv (..), IngestEnv (..))
 import DbSync.ChainSync.Msg (ChainSyncMsg (..))
 import DbSync.Db.Schema.Ids (BlockId (..))
-import DbSync.Extractor (ExtractState (..), takeBlockLedgerData)
+import DbSync.Extractor (ExtractState (..), cborCaptureEnabled, takeBlockLedgerData)
 import DbSync.Extractor.EpochBoundary (runEpochBoundary)
 import DbSync.Extractor.Governance (runGovernanceBoundary)
 import DbSync.Extractor.PoolStats (runPoolStatsBoundary)
@@ -74,8 +73,9 @@ import DbSync.Phase.Ingest.Boundary
   , handleEpochBoundary
   , newConsumerLoopState
   , readBoundaryApplyResult
+  , recordMemSample
+  , fmtBytes
   )
-import DbSync.Phase.Ingest.PipelineStats (PipelineStats (..))
 import DbSync.StateQuery
   ( ObservationResult (..)
   , ObservedTransition (..)
@@ -83,12 +83,12 @@ import DbSync.StateQuery
   , getSlotDetails
   , isInterpreterCached
   , observeBlockSTM
+  , renderEraIdx
   )
 import DbSync.SyncState.Manager (mkBoundarySyncStateRow)
 import DbSync.SyncState.Row (writeSyncState)
 import DbSync.Schema.Version (currentSchemaVersion)
 import DbSync.Trace (HasTracer (..))
-import DbSync.Trace.Pulse (bumpPulse)
 import DbSync.Trace.Replay
   ( ReplayAdvance (..)
   , ReplayLog (..)
@@ -98,7 +98,6 @@ import DbSync.Trace.Replay
   )
 import DbSync.Trace.Timing (fmtCount, fmtF2)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
-import DbSync.Trace.Watchdog (Watchdog, bumpConsumer, setConsumerNote)
 import DbSync.Db.Loader (LoaderStream (..))
 import DbSync.App.Config.Types
   ( LedgerConfig (..)
@@ -125,6 +124,18 @@ import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()  -- 'LedgerSupport
 -- * Running
 -- ---------------------------------------------------------------------------
 
+-- | Block stride (not a duration) between RTS memory samples feeding
+-- the per-epoch peak; coarse enough to keep 'getRTSStats' off the
+-- every-block path.
+memPeakSampleInterval :: Word64
+memPeakSampleInterval = 256
+
+-- | Block stride between mid-fill forced-major-GC probes.
+-- 'clsBlockCount' resets each boundary, so a probe fires this many
+-- blocks into every epoch.
+majorGcProbeInterval :: Word64
+majorGcProbeInterval = 5000
+
 -- | Run the consumer loop in 'IngestM'.
 --
 -- Drives a 'ConsumerLoopState' across the loop iterations; the inner
@@ -144,16 +155,6 @@ runConsumer = do
     loop tracer boundaryVar cls = do
       queue <- asks ieBlockQueue
       blocks <- liftIO $ drainTBQueue queue batchSize
-      let !drainSize = length blocks
-
-      statsRef <- asks iePipelineStats
-      liftIO $ modifyIORef' statsRef $ \ps -> ps
-        { psDrainTotal   = psDrainTotal ps + fromIntegral drainSize
-        , psDrainCount   = psDrainCount ps + 1
-        , psSingleDrains = psSingleDrains ps + if drainSize == 1 then 1 else 0
-        , psFullDrains   = psFullDrains ps + if drainSize >= batchSize then 1 else 0
-        }
-
       processBatch cls blocks
 
       reached <- liftIO $ rollbackBoundaryReached (clsLastBlock cls) boundaryVar
@@ -186,7 +187,6 @@ runConsumer = do
       let txOutWorker  = ieTxOutWorker ie
           mConsumedBuf = ieConsumedByBuffer ie
           loaderStream = ieLoaderStream ie
-          watchdog     = ieWatchdog ie
           ledgerEnabled = lcEnabled (scLedger (getConfig ie))
           schemaVersion = currentSchemaVersion
       -- Drain any residual mid-epoch consumed-by pairs via one last
@@ -201,7 +201,6 @@ runConsumer = do
           , tjAddress    = emptyEpochAddressBuffer
           , tjConsumedBy = Just cb
           }
-      liftIO $ setConsumerNote watchdog "consumer: final awaitTxOutDrained"
       liftIO $ awaitTxOutDrained txOutWorker
       addressIdCounter <- liftIO $ readAddressIdCounter txOutWorker
       mPending <- liftIO $ readIORef (clsPendingBoundary cls)
@@ -211,7 +210,6 @@ runConsumer = do
             (pbLastSlot pb) (pbLastBlockNo pb) (pbLastHash pb)
             (pbCounters pb) addressIdCounter
             schemaVersion ledgerEnabled
-      liftIO $ setConsumerNote watchdog "consumer: final lsCommit"
       liftIO $ lsCommit loaderStream
 
     processBatch :: ConsumerLoopState -> [ChainSyncMsg] -> IngestM ()
@@ -223,13 +221,12 @@ runConsumer = do
       panic (ingestRollbackPanicMessage point)
     processBatch cls (MsgForward cardanoBlock : rest) = do
       tracer        <- asks getTracer
+      minSev        <- asks (ceMinSeverity . ieCore)
       sqv           <- asks ieStateQueryVar
       hasLedger     <- asks ieHasLedgerEnv
       extractStRef  <- asks ieExtractState
       bootSlot      <- asks ieLastCommittedSlotAtBoot
       replayStart   <- asks ieReplayStartSlot
-      watchdog      <- asks ieWatchdog
-      pulse         <- asks iePulse
       let slot     = blockSlot cardanoBlock
           isReplay = case bootSlot of
             Just bs -> slot <= bs
@@ -245,14 +242,12 @@ runConsumer = do
 
       -- Replayed blocks are already in PG; skip processBlock.
       unless isReplay $ do
-        liftIO $ setConsumerNote watchdog "consumer: observeBlock"
         obsResult <- liftIO $ atomically $ observeBlockSTM sqv cardanoBlock
         logObservation tracer obsResult
 
-        liftIO $ setConsumerNote watchdog "consumer: getSlotDetails"
         sd <- getSlotDetails slot
-        liftIO $ setConsumerNote watchdog "consumer: parseBlock"
-        let !genBlock   = parseBlock sd cardanoBlock
+        cborEnabled <- asks (cborCaptureEnabled . ceExtractors . ieCore)
+        let !genBlock   = parseBlock cborEnabled sd cardanoBlock
             !blockEpoch = sdEpochNo sd
 
         prevEpoch <- liftIO $ readIORef (clsPrevEpoch cls)
@@ -267,15 +262,22 @@ runConsumer = do
             handleEpochBoundary cls prev slot
           _ -> pure ()
 
-        liftIO $ setConsumerNote watchdog "consumer: processBlock"
         processBlock genBlock
 
         -- Boundary-block extractor: epoch-table writes that depend
         -- on the ledger worker's @apNewEpoch@.
-        case prevEpoch of
-          Just prev | prev /= blockEpoch ->
-            runBoundaryExtractor watchdog hasLedger extractStRef
-          _ -> pure ()
+        --
+        -- The first processed block needs the same drain when it
+        -- crosses an epoch relative to the pre-boot chain (the
+        -- genesis block on a fresh boot; the first non-replay block
+        -- on resume): the worker enqueues a 'BoundaryApplyData' for
+        -- it too, and an unmatched payload shifts every later drain
+        -- onto its predecessor's payload.
+        boundaryBlock <- case prevEpoch of
+          Just prev -> pure (prev /= blockEpoch)
+          Nothing   -> bootBlockCrossesBoundary bootSlot blockEpoch
+        when boundaryBlock $
+          runBoundaryExtractor hasLedger extractStRef
 
         liftIO $ modifyIORef' (clsBlockCount cls) (+ 1)
         liftIO $ writeIORef (clsPrevEpoch cls) (Just blockEpoch)
@@ -285,11 +287,34 @@ runConsumer = do
           , blkHash genBlock
           )
 
-      -- Bump watchdog + pulse on every iteration, even during replay,
-      -- so the watchdog sees forward progress while 'processBlock' is
-      -- skipped. 'bumpPulse' is a no-op above 'Debug'.
-      liftIO $ bumpConsumer watchdog slot
-      liftIO $ bumpPulse pulse
+        -- Sample RTS memory for the per-epoch peak on a coarse block
+        -- stride so 'getRTSStats' stays off the every-block path.
+        liftIO $ do
+          n <- readIORef (clsBlockCount cls)
+          when (n `rem` memPeakSampleInterval == 0) $
+            recordMemSample (clsMemStats cls)
+
+        -- Mid-fill forced-major-GC probe (Debug-gated). Distinguishes
+        -- reachable per-epoch structure from floating garbage: force a
+        -- major GC partway through the fill and log live before/after.
+        -- liveAfter far below liveBefore ⇒ the growth was collectible;
+        -- liveAfter tracking liveBefore ⇒ a reachable structure.
+        -- naturalMajorGCs across lines (minus the one forced per
+        -- probe) shows whether GHC majors fire mid-fill.
+        -- performMajorGC always completes, so this cannot wedge the loop.
+        liftIO $ when (minSev <= Debug) $ do
+          n <- readIORef (clsBlockCount cls)
+          enabled <- getRTSStatsEnabled
+          when (enabled && n `rem` majorGcProbeInterval == 0) $ do
+            before <- getRTSStats
+            performMajorGC
+            after <- getRTSStats
+            traceWith tracer $ LogMsg Debug "MajorGcProbe"
+              ( "blk " <> show n
+                  <> " liveBefore=" <> fmtBytes (gcdetails_live_bytes (gc before))
+                  <> " liveAfter=" <> fmtBytes (gcdetails_live_bytes (gc after))
+                  <> " naturalMajorGCs=" <> show (major_gcs before)
+              ) Nothing
 
       processBatch cls rest
 
@@ -347,7 +372,7 @@ logObservation tracer = \case
   NewTransition t ->
     liftIO $ traceWith tracer $ LogMsg Info "StateQuery"
       ( "Observed era transition "
-          <> show (otFromEra t) <> " → " <> show (otToEra t)
+          <> renderEraIdx (otFromEra t) <> " → " <> renderEraIdx (otToEra t)
           <> " at slot " <> show (unSlotNo (otAtSlot t))
           <> " (epoch " <> show (unEpochNo (otAtEpoch t)) <> ")"
       ) Nothing
@@ -356,10 +381,25 @@ logObservation tracer = \case
     unless cached $
       liftIO $ traceWith tracer $ LogMsg Warning "StateQuery"
         ( "Observed era jump too large ("
-            <> show fromEra <> " → " <> show toEra
+            <> renderEraIdx fromEra <> " → " <> renderEraIdx toEra
             <> "); falling back to node interpreter"
         ) Nothing
   Unchanged -> pure ()
+
+-- | Whether the first processed block crosses an epoch boundary
+-- relative to the pre-boot chain. Mirrors the ledger worker's
+-- 'mkOnNewEpoch' enqueue condition: the genesis block of a fresh
+-- boot always crosses (into epoch 0); a resumed boot crosses exactly
+-- when this block's epoch is one past the boot slot's. Anything else
+-- (same epoch, or a gap the worker would not fire on) must not
+-- trigger a drain — 'readBoundaryApplyResult' blocks until a payload
+-- arrives, so an unmatched drain here would hang the consumer.
+bootBlockCrossesBoundary :: Maybe SlotNo -> EpochNo -> IngestM Bool
+bootBlockCrossesBoundary mBootSlot blockEpoch = case mBootSlot of
+  Nothing -> pure True
+  Just bs -> do
+    bootSd <- getSlotDetails bs
+    pure (unEpochNo blockEpoch == 1 + unEpochNo (sdEpochNo bootSd))
 
 -- | Drain the worker's next boundary 'ApplyResult' and run the
 -- governance and epoch-boundary extractors against it. No-op when
@@ -374,14 +414,12 @@ logObservation tracer = \case
 -- @(Nothing, Nothing, Nothing)@ and 'runEpochBoundary' writes NULLs
 -- into @epoch_state@'s three governance FK columns.
 runBoundaryExtractor
-  :: Watchdog
-  -> HasLedgerEnv
+  :: HasLedgerEnv
   -> IORef ExtractState
   -> IngestM ()
-runBoundaryExtractor watchdog hasLedger extractStRef = case hasLedger of
+runBoundaryExtractor hasLedger extractStRef = case hasLedger of
   LedgerDisabled _   -> pure ()
   LedgerEnabled lenv -> do
-    liftIO $ setConsumerNote watchdog "consumer: readBoundaryApplyResult"
     applyResult  <- liftIO $ readBoundaryApplyResult lenv
     mLastBlockId <- liftIO $ esLastBlockId <$> readIORef extractStRef
     governanceOn <- asks (prEnabled . pcGovernance . scOptions . getConfig)
@@ -392,16 +430,12 @@ runBoundaryExtractor watchdog hasLedger extractStRef = case hasLedger of
       -- enacted-state ids and apGovExpiresAfter on ExtractState that
       -- EpochBoundary then reads when it constructs the epoch_state
       -- row.
-      when governanceOn $ do
-        liftIO $ setConsumerNote watchdog "consumer: runGovernanceBoundary"
+      when governanceOn $
         runGovernanceBoundary applyResult (BlockId lastBid)
-      liftIO $ setConsumerNote watchdog "consumer: runEpochBoundary"
       runEpochBoundary applyResult (BlockId lastBid)
-      when poolStatsOn $ do
-        liftIO $ setConsumerNote watchdog "consumer: runPoolStatsBoundary"
+      when poolStatsOn $
         runPoolStatsBoundary applyResult (BlockId lastBid)
-      when sdlOn $ do
-        liftIO $ setConsumerNote watchdog "consumer: runStakeDelegationLedgerBoundary"
+      when sdlOn $
         runStakeDelegationLedgerBoundary applyResult (BlockId lastBid)
 
 -- ---------------------------------------------------------------------------

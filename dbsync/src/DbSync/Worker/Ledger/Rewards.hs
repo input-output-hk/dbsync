@@ -79,6 +79,22 @@ newtype PotRewards = PotRewards
   deriving stock (Eq, Show)
 
 -- ---------------------------------------------------------------------------
+-- * NFData instances
+-- ---------------------------------------------------------------------------
+
+instance NFData Reward where
+  rnf (Reward a b c) = rnf (a, b, c)
+
+instance NFData Rewards where
+  rnf (Rewards m) = rnf m
+
+instance NFData PotReward where
+  rnf (PotReward a b) = rnf (a, b)
+
+instance NFData PotRewards where
+  rnf (PotRewards m) = rnf m
+
+-- ---------------------------------------------------------------------------
 -- * Helpers
 -- ---------------------------------------------------------------------------
 

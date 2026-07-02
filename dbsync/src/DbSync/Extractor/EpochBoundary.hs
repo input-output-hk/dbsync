@@ -65,7 +65,7 @@ import DbSync.Db.Schema.Ids
 import DbSync.Db.Types (DbWord64 (..))
 import DbSync.Extractor (ExtractorDef (..))
 import qualified DbSync.Worker.Ledger.ProtoParams as Proto
-import DbSync.Worker.Ledger.Types (ApplyResult (..))
+import DbSync.Worker.Ledger.Types (BoundaryApplyData (..))
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
 import DbSync.StateQuery (SlotDetails (..))
 import DbSync.Util (coinToDbLovelace, nonceToBytes, unitIntervalToDouble)
@@ -116,11 +116,11 @@ epochBoundaryExtractor = ExtractorDef
 -- for the same boundary writes duplicate rows.
 runEpochBoundary
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
-  => ApplyResult
+  => BoundaryApplyData
   -> BlockId
   -> m ()
 runEpochBoundary applyResult blockId =
-  case apNewEpoch applyResult of
+  case bndNewEpoch applyResult of
     Strict.Nothing -> pure ()
     Strict.Just newEpoch -> do
       writeBoundaryAdaPots applyResult newEpoch blockId
@@ -134,7 +134,7 @@ runEpochBoundary applyResult blockId =
 -- ledger reported any pots data.
 writeBoundaryAdaPots
   :: (HasWriter env, MonadReader env m, MonadIO m)
-  => ApplyResult
+  => BoundaryApplyData
   -> Generic.NewEpoch
   -> BlockId
   -> m ()
@@ -157,14 +157,14 @@ writeBoundaryAdaPots applyResult newEpoch blockId =
 -- already applied the @fixUTxOPots@ correction so that the sum of
 -- pots equals @maxLovelaceSupply@.
 mkAdaPotsRow
-  :: ApplyResult
+  :: BoundaryApplyData
   -> Generic.NewEpoch
   -> BlockId
   -> Shelley.AdaPots
   -> AdaPots
 mkAdaPotsRow applyResult newEpoch blockId pots =
   AdaPots
-    { adaPotsSlotNo            = unSlotNo (sdSlotNo (apSlotDetails applyResult))
+    { adaPotsSlotNo            = unSlotNo (sdSlotNo (bndSlotDetails applyResult))
     , adaPotsEpochNo           = unEpochNo (Generic.neEpoch newEpoch)
     , adaPotsTreasury          = coinToDbLovelace (Shelley.treasuryAdaPot pots)
     , adaPotsReserves          = coinToDbLovelace (Shelley.reservesAdaPot pots)

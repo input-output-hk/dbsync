@@ -154,6 +154,27 @@ toOrdering = \case
   LedgerNewEpoch {}           -> 10
 
 -- ---------------------------------------------------------------------------
+-- * NFData instances
+-- ---------------------------------------------------------------------------
+
+instance NFData GovActionRefunded where
+  rnf (GovActionRefunded a b c d) = rnf (a, b, c, d)
+
+instance NFData LedgerEvent where
+  rnf = \case
+    LedgerMirDist a               -> rnf a
+    LedgerPoolReap a b            -> rnf (a, b)
+    LedgerIncrementalRewards a b  -> rnf (a, b)
+    LedgerDeltaRewards a b        -> rnf (a, b)
+    LedgerRestrainedRewards a b c -> rnf (a, b, c)
+    LedgerTotalRewards a b        -> rnf (a, b)
+    LedgerAdaPots a               -> rnf a
+    LedgerGovInfo a b c d         -> rnf (a, b, c, d)
+    LedgerDeposits a b            -> rnf (a, b)
+    LedgerStartAtEpoch a          -> rnf a
+    LedgerNewEpoch a b            -> rnf (a, b)
+
+-- ---------------------------------------------------------------------------
 -- * Conversion from consensus events
 -- ---------------------------------------------------------------------------
 
@@ -387,12 +408,18 @@ mkTreasuryReward c =
 -- | Convert a pool-rewards map (keyed by stake cred) into our
 -- 'Rewards' shape, mapping each ledger 'Ledger.Reward' onto a
 -- 'Generic.Reward'.
+--
+-- Strict 'Map.map' (a bare @map@ here is the lazy 'fmap' regardless
+-- of the strict import): the result rides in queued boundary
+-- payloads, so the values must not be left as thunks over the
+-- ledger's reward sets — that safety should not depend on a
+-- downstream 'rnf'.
 convertPoolRewards
   :: Map StakeCred (Set Ledger.Reward)
   -> Generic.Rewards
 convertPoolRewards rmap =
   Generic.Rewards $
-    map (Set.map convertReward) rmap
+    Map.map (Set.map convertReward) rmap
   where
     convertReward :: Ledger.Reward -> Generic.Reward
     convertReward sr =

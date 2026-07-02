@@ -69,6 +69,16 @@ data EpochUpdate = EpochUpdate
   }
 
 -- ---------------------------------------------------------------------------
+-- * NFData instances
+-- ---------------------------------------------------------------------------
+
+instance NFData EpochUpdate where
+  rnf (EpochUpdate a b) = rnf (a, b)
+
+instance NFData NewEpoch where
+  rnf (NewEpoch a b c d e f g) = rnf ((a, b, c, d), (e, f, g))
+
+-- ---------------------------------------------------------------------------
 -- * Projections
 -- ---------------------------------------------------------------------------
 

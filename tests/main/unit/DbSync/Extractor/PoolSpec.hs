@@ -8,10 +8,11 @@ import Cardano.Prelude
 
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
-import Data.IORef (newIORef, readIORef)
+import Data.IORef (modifyIORef', newIORef, readIORef)
 
 import Data.List ((!!))
 import qualified Data.ByteString as BS
+import qualified Data.Set as Set
 
 import Test.Hspec (Spec, describe, it, shouldBe)
 
@@ -58,9 +59,12 @@ spec = do
       SP.poolUpdateActiveEpochNo pu `shouldBe` 7
 
     it "is epoch + 3 on a re-registration of the same pool" $ do
-      written <- runPoolTwoBlocks
-                   (blockWithPoolReg poolHashA 5)
-                   (blockWithPoolReg poolHashA 6)
+      -- Ledger ON: block 6 sees poolHashA already registered (from
+      -- block 5), exactly as the worker reports it in production.
+      written <- runPoolBlocksLedger emptyLedgerOutputs
+                   [ blockWithPoolReg poolHashA 5
+                   , blockWithPoolReg poolHashA 6
+                   ]
       let updates = twPoolUpdates written
       length updates `shouldBe` 2
       SP.poolUpdateActiveEpochNo (snd (updates !! 0)) `shouldBe` 7  -- 5 + 2
@@ -98,10 +102,10 @@ spec = do
       SP.poolUpdateDeposit pu `shouldBe` Just (DbLovelace 500_000_000)
 
     it "is NULL on a re-registration even when ledger ON" $ do
-      let bld = LedgerDataOn $ emptyLedgerOutputs
-            { loPoolDeposit = Just (Coin 500_000_000)
-            }
-      written <- runPoolWithBlocks bld
+      -- Block 6 re-registers poolHashA, which the ledger already lists
+      -- as registered (from block 5); no fresh deposit is charged.
+      written <- runPoolBlocksLedger
+                   (emptyLedgerOutputs { loPoolDeposit = Just (Coin 500_000_000) })
                    [blockWithPoolReg poolHashA 5, blockWithPoolReg poolHashA 6]
       let updates = twPoolUpdates written
       length updates `shouldBe` 2
@@ -145,6 +149,45 @@ runPoolWithBlocks bld blocks = withTestIngestStores $ \utxoStore dedupStores -> 
               (\_ -> pure bld) IngestChainHistory
   for_ blocks $ \b -> runReaderT (processBlock b) env
   readIORef wrRef
+
+-- | Run several blocks through a ledger that accumulates registered
+-- pools across blocks, exactly as the worker feeds the extractor in
+-- production. 'base' seeds the non-pool ledger outputs (e.g. the pool
+-- deposit protocol param).
+runPoolBlocksLedger :: LedgerOutputs -> [GenericBlock] -> IO TestWriterState
+runPoolBlocksLedger base blocks = withTestIngestStores $ \utxoStore dedupStores -> do
+  stRef    <- newIORef freshExtractState
+  addrBuf  <- newAddressBufferRef
+  wrRef    <- newIORef emptyTestWriterState
+  provider <- mkLedgerProvider base
+  let env = mkTestPipelineEnvWith Mainnet
+              (mkIngestResolver stRef dedupStores addrBuf utxoStore Nothing) (mkTestWriter wrRef)
+              [coreExtractor, stakeDelegationExtractor, poolExtractor]
+              provider IngestChainHistory
+  for_ blocks $ \b -> runReaderT (processBlock b) env
+  readIORef wrRef
+
+-- | A ledger-data provider that mirrors the ledger worker: each block
+-- sees the pools registered in /earlier/ blocks via 'loRegisteredPools'
+-- (the pre-block ledger state 'getRegisteredPools' reports). 'base'
+-- supplies the non-pool fields.
+mkLedgerProvider :: LedgerOutputs -> IO (GenericBlock -> IO BlockLedgerData)
+mkLedgerProvider base = do
+  seenRef <- newIORef Set.empty
+  pure $ \gb -> do
+    registeredBefore <- readIORef seenRef
+    modifyIORef' seenRef (Set.union (blockPoolRegistrations gb))
+    pure $ LedgerDataOn (base { loRegisteredPools = registeredBefore })
+
+-- | Pool key-hashes registered by the valid txs in a block.
+blockPoolRegistrations :: GenericBlock -> Set.Set ByteString
+blockPoolRegistrations gb = Set.fromList
+  [ prdPoolHash prd
+  | tx   <- blkTxs gb
+  , txValidContract tx
+  , cert <- txCertificates tx
+  , CertPoolRegistration prd <- [txCertAction cert]
+  ]
 
 -- ---------------------------------------------------------------------------
 -- Fixtures

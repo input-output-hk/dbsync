@@ -52,6 +52,9 @@ module DbSync.Worker.Ledger.Types
     -- * Block application plumbing
   , ApplyResult (..)
   , defaultApplyResult
+  , BlockApplyData (..)
+  , BoundaryApplyData (..)
+  , RegisteredPoolsCache (..)
   , DepositsMap (..)
   , lookupDepositsMap
   , emptyDepositsMap
@@ -78,6 +81,7 @@ import Cardano.Ledger.Shelley.LedgerState (NewEpochState)
 import Cardano.Slotting.Slot (EpochNo (..))
 import Control.Concurrent.Class.MonadSTM.Strict (StrictTMVar, StrictTVar, newTVarIO)
 import Control.Concurrent.STM.TBQueue (TBQueue)
+import Data.IORef (IORef)
 import qualified Data.Map.Strict as Map
 
 import DbSync.Worker.Ledger.DepositAccumulator (EpochParamsRef)
@@ -88,6 +92,7 @@ import Data.Sequence.Strict (StrictSeq)
 import qualified Data.Set as Set
 import qualified Data.Strict.Maybe as Strict
 import Lens.Micro (Traversal', (^.))
+import System.Mem.StableName (StableName)
 import Ouroboros.Consensus.BlockchainTime.WallClock.Types (SystemStart)
 import Ouroboros.Consensus.Cardano.Block
   ( AllegraEra
@@ -228,16 +233,22 @@ data LedgerEnv = LedgerEnv
     -- ^ Latest 'ApplyResult' produced by the worker. Overwritten on
     -- every applied block; used as a slot-reached barrier by
     -- 'waitForApplyResultAt' and by Follow's per-block reads.
-  , leBoundaryApplyResults :: !(TBQueue ApplyResult)
-    -- ^ FIFO of boundary 'ApplyResult' values (those with
-    -- @apNewEpoch = Just@). Drained one per boundary by the
-    -- consumer; the worker enqueues independently of 'apply' rate.
-  , leBlockApplyResults    :: !(TBQueue ApplyResult)
-    -- ^ FIFO of per-block 'ApplyResult' values. The worker enqueues
-    -- one entry per applied block; the consumer drains one per
-    -- processed block (replay-window blocks drain and discard).
-    -- Bounded so the worker creates back-pressure when the consumer
-    -- falls behind.
+  , leBoundaryApplyResults :: !(TBQueue BoundaryApplyData)
+    -- ^ FIFO of boundary projections, one per epoch boundary. Each
+    -- entry is forced to normal form before enqueue, so a queued
+    -- boundary never pins the 'NewEpochState' generation it was
+    -- derived from. Drained one per boundary by the consumer; the
+    -- worker enqueues independently of 'apply' rate.
+  , leBlockApplyResults    :: !(TBQueue BlockApplyData)
+    -- ^ FIFO of per-block consumer projections. The worker enqueues
+    -- one fully-forced entry per applied block; the consumer drains
+    -- one per processed block (replay-window blocks drain and
+    -- discard). Bounded so the worker creates back-pressure when the
+    -- consumer falls behind.
+  , leRegisteredPoolsCache :: !(IORef (Maybe RegisteredPoolsCache))
+    -- ^ Worker-private pointer-identity cache backing
+    -- 'DbSync.Worker.Ledger.State.getRegisteredPools'; see
+    -- 'RegisteredPoolsCache'. Only the worker thread touches it.
   , leDepositAccumulator   :: !EpochParamsRef
     -- ^ Per-epoch protocol-param deposit values (stake_key /
     -- pool). The worker writes to this on every applied non-replay
@@ -412,6 +423,9 @@ newtype DepositsMap = DepositsMap
   }
   deriving stock (Eq, Show)
 
+instance NFData DepositsMap where
+  rnf (DepositsMap m) = rnf m
+
 -- | 'Just' the deposit for this tx-body hash, or 'Nothing' if no
 -- deposit event was observed (plain transfer).
 lookupDepositsMap :: ByteString -> DepositsMap -> Maybe Coin
@@ -460,6 +474,51 @@ defaultApplyResult slotDetails =
     , apDepositsMap     = emptyDepositsMap
     , apPoolsRegistered = Set.empty
     }
+
+-- | Pointer-identity cache for the registered-pools projection
+-- ('DbSync.Worker.Ledger.State.getRegisteredPools'). The ledger's
+-- registered-pool 'Map' is structure-shared across every block that
+-- carries no pool certificate, so the projected hash-bytes set only
+-- needs rebuilding when the underlying 'Map' object actually
+-- changes. Keyed on the 'StableName' of that 'Map'; a false negative
+-- (fresh object, same contents — e.g. across an era transition)
+-- merely rebuilds.
+data RegisteredPoolsCache =
+  forall pools. RegisteredPoolsCache !(StableName pools) !(Set.Set ByteString)
+
+-- | Per-block projection the consumer needs, carved out of the full
+-- 'ApplyResult'. Built and forced to normal form before being
+-- enqueued on 'leBlockApplyResults' so a buffered entry never pins
+-- the ledger state it was derived from.
+data BlockApplyData = BlockApplyData
+  { badDepositsMap     :: !DepositsMap
+  , badStakeSlice      :: !Generic.StakeSliceRes
+  , badPoolsRegistered :: !(Set.Set ByteString)
+  , badGovExpiresAfter :: !(Strict.Maybe Ledger.EpochInterval)
+  }
+
+instance NFData BlockApplyData where
+  rnf (BlockApplyData depositsMap stakeSlice poolsRegistered govExpiresAfter) =
+    rnf (depositsMap, stakeSlice, poolsRegistered, govExpiresAfter)
+
+-- | Per-boundary projection the epoch-boundary consumer needs, carved
+-- out of the full 'ApplyResult'. Built from the finalised ledger
+-- state (so any DRep pulser is already complete) and forced to normal
+-- form before being enqueued on 'leBoundaryApplyResults', so a queued
+-- entry never pins the 'NewEpochState' generation it was derived from.
+data BoundaryApplyData = BoundaryApplyData
+  { bndNewEpoch        :: !(Strict.Maybe Generic.NewEpoch)
+  , bndEvents          :: ![LedgerEvent]
+  , bndGovActionState  :: !(Maybe (ConwayGovState ConwayEra))
+  , bndGovExpiresAfter :: !(Strict.Maybe Ledger.EpochInterval)
+  , bndSlotDetails     :: !SlotDetails
+  }
+
+instance NFData BoundaryApplyData where
+  -- 'bndSlotDetails' is a strict field of small scalars (already WHNF when
+  -- the record is), so only the heavy projections need forcing to normal form.
+  rnf (BoundaryApplyData newEpoch events govActionState govExpiresAfter _slotDetails) =
+    rnf ((newEpoch, events), (govActionState, govExpiresAfter))
 
 -- | Target epoch at which a governance-action deposit will expire,
 -- given the current epoch and the 'apGovExpiresAfter' delta.

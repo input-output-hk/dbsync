@@ -8,6 +8,7 @@ module DbSync.Extractor
   ( -- * Types
     ExtractorDef (..)
   , ProcessBlockFn
+  , cborCaptureEnabled
 
     -- * Block context (pre-assigned shared IDs)
   , BlockContext (..)
@@ -51,7 +52,7 @@ import DbSync.Db.Schema.Ids (BlockId, PoolHashId, SlotLeaderId, StakeAddressId, 
 import DbSync.Db.Schema.Types (TableDef)
 import qualified DbSync.Worker.Ledger.StakeDist as Generic
 import DbSync.Worker.Ledger.Types
-  ( ApplyResult (..)
+  ( BlockApplyData (..)
   , DepositsMap
   , HasLedgerEnv (..)
   , LedgerEnv (..)
@@ -84,6 +85,12 @@ data ExtractorDef = ExtractorDef
   , pdProcess :: ProcessBlockFn
       -- ^ Process a block: extract data, resolve IDs, write rows
   }
+
+-- | Whether the @cbor@ extractor is active. It is the only consumer of a
+-- parsed transaction's raw-CBOR field, so the parser uses this to skip
+-- building (and retaining) @tx_cbor@ payloads when nothing will read them.
+cborCaptureEnabled :: [ExtractorDef] -> Bool
+cborCaptureEnabled = any ((== "cbor") . pdName)
 
 -- | Process a single block through this extractor.
 --
@@ -237,7 +244,7 @@ blockGovExpiresAfter = \case
   LedgerDataOff   -> Nothing
   LedgerDataOn lo -> loGovExpiresAfter lo
 
--- | Drain the worker's next per-block 'ApplyResult' and project it
+-- | Drain the worker's next per-block 'BlockApplyData' and project it
 -- onto 'BlockLedgerData'. Blocks until one is available; the
 -- ledger-OFF arm returns 'emptyBlockLedgerData' without touching any
 -- queue.
@@ -245,16 +252,16 @@ takeBlockLedgerData :: HasLedgerEnv -> IO BlockLedgerData
 takeBlockLedgerData = \case
   LedgerDisabled _   -> pure emptyBlockLedgerData
   LedgerEnabled lenv -> do
-    appResult <- Strict.atomically (readTBQueue (leBlockApplyResults lenv))
+    blockData <- Strict.atomically (readTBQueue (leBlockApplyResults lenv))
     pure $ LedgerDataOn LedgerOutputs
-      { loDepositsMap     = apDepositsMap appResult
+      { loDepositsMap     = badDepositsMap blockData
       , loStakeKeyDeposit = Nothing
       , loPoolDeposit     = Nothing
-      , loStakeSlice      = apStakeSlice appResult
-      , loRegisteredPools = apPoolsRegistered appResult
+      , loStakeSlice      = badStakeSlice blockData
+      , loRegisteredPools = badPoolsRegistered blockData
       , loGovExpiresAfter =
           SMaybe.maybe Nothing (\(EpochInterval n) -> Just (fromIntegral n))
-            (apGovExpiresAfter appResult)
+            (badGovExpiresAfter blockData)
       }
 
 -- ---------------------------------------------------------------------------

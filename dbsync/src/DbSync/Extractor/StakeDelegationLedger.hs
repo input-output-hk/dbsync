@@ -84,7 +84,7 @@ import DbSync.Worker.Ledger.StakeDist
   ( StakeSlice (..)
   , StakeSliceRes (..)
   )
-import DbSync.Worker.Ledger.Types (ApplyResult (..))
+import DbSync.Worker.Ledger.Types (BoundaryApplyData (..))
 import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- ---------------------------------------------------------------------------
@@ -158,12 +158,12 @@ runStakeDelegationLedgerBoundary
      , MonadReader env m
      , MonadIO m
      )
-  => ApplyResult -> BlockId -> m ()
+  => BoundaryApplyData -> BlockId -> m ()
 runStakeDelegationLedgerBoundary applyResult _blockId =
-  case apNewEpoch applyResult of
+  case bndNewEpoch applyResult of
     Strict.Nothing       -> pure ()
     Strict.Just newEpoch ->
-      forM_ (apEvents applyResult)
+      forM_ (bndEvents applyResult)
         (processEvent (unEpochNo (Generic.neEpoch newEpoch)))
 
 processEvent

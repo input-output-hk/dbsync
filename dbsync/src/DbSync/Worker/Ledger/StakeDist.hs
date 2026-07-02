@@ -90,6 +90,13 @@ data StakeSlice = StakeSlice
 emptySlice :: EpochNo -> StakeSlice
 emptySlice epoch = StakeSlice epoch []
 
+instance NFData StakeSliceRes where
+  rnf (Slice slice lastFlag) = rnf (slice, lastFlag)
+  rnf NoSlices               = ()
+
+instance NFData StakeSlice where
+  rnf (StakeSlice epoch distr) = rnf (epoch, distr)
+
 -- | Whether the slice computation is running for steady-state
 -- ingestion or for an era-migration backfill (the first Shelley
 -- block following the Byron tail).

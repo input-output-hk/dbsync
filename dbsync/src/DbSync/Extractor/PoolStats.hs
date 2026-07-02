@@ -33,7 +33,7 @@ import DbSync.Extractor (ExtractorDef (..))
 import DbSync.Extractor.SharedDedup (resolveAndWritePoolHash)
 import DbSync.Resolver (HasResolver)
 import DbSync.Worker.Ledger.Keys (PoolKeyHash)
-import DbSync.Worker.Ledger.Types (ApplyResult (..))
+import DbSync.Worker.Ledger.Types (BoundaryApplyData (..))
 import DbSync.Writer (HasWriter (..), Writer (..))
 
 import qualified Cardano.Crypto.Hash as Crypto
@@ -55,7 +55,7 @@ poolStatsExtractor = ExtractorDef
 -- ---------------------------------------------------------------------------
 
 -- | Emit one @pool_stat@ row per pool in the post-epoch stake
--- distribution. No-op when 'apNewEpoch' is 'Strict.Nothing'
+-- distribution. No-op when 'bndNewEpoch' is 'Strict.Nothing'
 -- (mid-epoch block) or 'nePoolDistr' is 'Strict.Nothing' (Byron
 -- boundary).
 --
@@ -63,9 +63,9 @@ poolStatsExtractor = ExtractorDef
 -- boundary handlers.
 runPoolStatsBoundary
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
-  => ApplyResult -> BlockId -> m ()
+  => BoundaryApplyData -> BlockId -> m ()
 runPoolStatsBoundary applyResult _blockId =
-  case apNewEpoch applyResult of
+  case bndNewEpoch applyResult of
     Strict.Nothing       -> pure ()
     Strict.Just newEpoch -> case Generic.nePoolDistr newEpoch of
       Strict.Nothing                       -> pure ()

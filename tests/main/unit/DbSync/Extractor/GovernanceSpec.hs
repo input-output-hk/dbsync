@@ -146,10 +146,16 @@ spec = do
 
     it "UpdateCommittee with 2 added members writes committee + 2 committee_member" $ do
       let action = GovUpdateCommittee Nothing Set.empty
-                    [(coldKey, 200), (hotKey, 201)] 2 3
+                    [(CredHash coldKey False, 200), (CredHash hotKey True, 201)] 2 3
       written <- runGovernance [txWithProposal (proposal action)]
       length (twCommittees written) `shouldBe` 1
       length (twCommitteeMembers written) `shouldBe` 2
+      -- A script-tagged added member keeps has_script=True rather than
+      -- collapsing onto a defaulted key header (which would duplicate
+      -- the committee_hash row against the auth/resign path).
+      sort [ (SG.committeeHashRaw c, SG.committeeHashHasScript c)
+           | (_, c) <- twCommitteeHashes written ]
+        `shouldBe` sort [(coldKey, False), (hotKey, True)]
 
   describe "Pre-Conway update-proposal pass" $ do
     it "update proposal writes param_proposal with target epoch and genesis key, no gov_action_proposal" $ do

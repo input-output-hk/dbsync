@@ -128,6 +128,24 @@ spec = do
       let (_, blk) = headDef (panic "no block") (twBlocks w2)
       blockPreviousId blk `shouldBe` Just (BlockId 1)
 
+    it "keeps block_no/slot_no/epoch_slot_no set for a non-EBB block" $ do
+      written <- runCore emptyBlock
+      let (_, blk) = headDef (panic "no block") (twBlocks written)
+      blockBlockNo blk `shouldBe` Just 1
+      blockSlotNo blk `shouldBe` Just 100
+      blockEpochSlotNo blk `shouldBe` Just 100
+      blockEpochNo blk `shouldBe` Just 5
+
+    it "leaves block_no/slot_no/epoch_slot_no NULL for an EBB, keeping epoch_no" $ do
+      -- The fixture keeps non-zero slot/block inputs so the nulling is
+      -- attributable to the EBB flag, not to zeroed input values.
+      written <- runCore ebbBlock
+      let (_, blk) = headDef (panic "no block") (twBlocks written)
+      blockBlockNo blk `shouldBe` Nothing
+      blockSlotNo blk `shouldBe` Nothing
+      blockEpochSlotNo blk `shouldBe` Nothing
+      blockEpochNo blk `shouldBe` Just 5
+
   describe "extraction: tx row correctness" $ do
     it "block_id in tx rows matches the block's ID" $ do
       written <- runCore blockWith3Txs
@@ -404,6 +422,18 @@ byronBlock = emptyBlock
   , blkVrfKey        = Nothing
   , blkOpCert        = Nothing
   , blkOpCertCounter = Nothing
+  }
+
+-- | A Byron Epoch Boundary Block: no transactions, synthetic null
+-- leader, and no real block or slot number. Inherits the non-zero
+-- slot/block inputs so the block-row nulling is proven to follow the
+-- 'blkIsEBB' flag rather than zeroed inputs.
+ebbBlock :: GenericBlock
+ebbBlock = byronBlock
+  { blkHash       = BS.replicate 32 0xe0
+  , blkSlotLeader = BS.replicate 28 0
+  , blkIsEBB      = True
+  , blkTxs        = []
   }
 
 blockWith3Txs :: GenericBlock

@@ -660,7 +660,7 @@ committeeMemberTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys = []
+  , tdForeignKeys = [ForeignKey "committee_id" "committee" "id"]
   }
 
 committeeRegistrationTableDef :: TableDef

@@ -24,10 +24,13 @@ import DbSync.Parser.Types
   , GenericTx (..)
   , GenericTxIn (..)
   , GenericTxOut (..)
+  , GenericTxScript (..)
   )
 import DbSync.Db.Schema.Address (Address (..), addressFromRaw)
 import DbSync.Db.Schema.Ids (AddressId (..))
+import qualified DbSync.Db.Schema.ScriptsDatums as SS
 import qualified DbSync.Db.Schema.UTxO as SU
+import DbSync.Db.Types (ScriptType (..))
 import DbSync.Extractor (freshExtractState)
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
@@ -234,6 +237,21 @@ spec = do
       -- Both outputs reference the same StakeAddressId.
       headDef (panic "no sa") saIds `shouldBe` headDef (panic "no sa") (drop 1 saIds)
 
+  describe "processBlock: tx_out.reference_script_id" $ do
+    it "writes the script row and links reference_script_id" $ do
+      written <- runFullPipeline (blockWithRefScriptOutput (mkBaseAddr 0x00))
+      let (sid, script) = headDef (panic "no script") (twScripts written)
+      length (twScripts written) `shouldBe` 1
+      SS.scriptHash script `shouldBe` gtsHash refScriptFixture
+      SU.txOutReferenceScriptId (snd (headDef (panic "no tx_out") (twTxOuts written)))
+        `shouldBe` Just sid
+
+    it "leaves reference_script_id NULL without a reference script" $ do
+      written <- runFullPipeline (blockWithOutput (mkBaseAddr 0x00))
+      length (twScripts written) `shouldBe` 0
+      SU.txOutReferenceScriptId (snd (headDef (panic "no tx_out") (twTxOuts written)))
+        `shouldBe` Nothing
+
   describe "processUTxO: tx_in resolution via UtxoCache" $ do
     it "writes tx_in.tx_out_id from the cache when the producer is in-block" $ do
       written <- runFullPipeline twoTxsInputSpendsFirst
@@ -351,6 +369,25 @@ blockWithOutput rawAddr =
   shelleyEmptyBlock
     { blkTxs = [singleOutputTx rawAddr 5_000_000]
     }
+
+-- | Like 'blockWithOutput' but the output carries a reference script.
+blockWithRefScriptOutput :: ByteString -> GenericBlock
+blockWithRefScriptOutput rawAddr =
+  shelleyEmptyBlock
+    { blkTxs = [withRefScript (singleOutputTx rawAddr 5_000_000)]
+    }
+  where
+    withRefScript tx =
+      tx { txOutputs = map (\o -> o { txOutRefScript = Just refScriptFixture }) (txOutputs tx) }
+
+refScriptFixture :: GenericTxScript
+refScriptFixture = GenericTxScript
+  { gtsHash           = BS.replicate 28 0x5c
+  , gtsType           = PlutusV2
+  , gtsJson           = Nothing
+  , gtsBytes          = Just (BS.pack [0x01, 0x02])
+  , gtsSerialisedSize = Just 2
+  }
 
 -- | A block carrying two outputs that share the same stake credential
 -- (same raw address, different output indexes).

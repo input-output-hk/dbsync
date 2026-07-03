@@ -39,7 +39,7 @@ import DbSync.Extractor
 import DbSync.Extractor.SharedDedup
   ( resolveAndWriteDatum
   , resolveAndWriteRedeemerData
-  , resolveAndWriteScript
+  , resolveAndWriteTxScript
   )
 import DbSync.Parser.Types
   ( GenericTx (..)
@@ -84,17 +84,7 @@ processScriptsDatums ctx =
 writeScriptEntry
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
   => TxId -> GenericTxScript -> m ()
-writeScriptEntry txId gts = do
-  let row = Script
-        { scriptTxId           = txId
-        , scriptHash           = gtsHash gts
-        , scriptType           = gtsType gts
-        , scriptJson           = gtsJson gts
-        , scriptBytes          = gtsBytes gts
-        , scriptSerialisedSize = gtsSerialisedSize gts
-        }
-  _ <- resolveAndWriteScript (gtsHash gts) row
-  pure ()
+writeScriptEntry txId gts = void $ resolveAndWriteTxScript txId gts
 
 writeDatumEntry
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)

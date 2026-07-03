@@ -151,6 +151,24 @@ spec = do
       length (twCommittees written) `shouldBe` 1
       length (twCommitteeMembers written) `shouldBe` 2
 
+  describe "Pre-Conway update-proposal pass" $ do
+    it "update proposal writes param_proposal with target epoch and genesis key, no gov_action_proposal" $ do
+      let gpp = emptyParamProposal { gppEpochNo = Just 365, gppKey = Just coldKey }
+      written <- runGovernance [(emptyTx ()) { txParamProposal = [gpp] }]
+      length (twParamProposals written) `shouldBe` 1
+      let (_, pp) = headDef (panic "expected param_proposal") (twParamProposals written)
+      SG.paramProposalEpochNo pp `shouldBe` Just 365
+      SG.paramProposalKey pp `shouldBe` Just coldKey
+      length (twGovActionProposals written) `shouldBe` 0
+
+    it "one proposal per genesis key in the same tx" $ do
+      let gpps =
+            [ emptyParamProposal { gppEpochNo = Just 365, gppKey = Just coldKey }
+            , emptyParamProposal { gppEpochNo = Just 365, gppKey = Just hotKey }
+            ]
+      written <- runGovernance [(emptyTx ()) { txParamProposal = gpps }]
+      length (twParamProposals written) `shouldBe` 2
+
   describe "Vote pass" $ do
     it "drep voter writes voting_procedure with drep_voter populated" $ do
       let propTx = txWithProposal (proposal GovInfoAction)

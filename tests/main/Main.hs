@@ -103,6 +103,7 @@ import qualified DbSync.Schema.InitSpec as SchemaInitSpec
 import qualified DbSync.Schema.Migration.LadderSpec as SchemaMigrationLadderSpec
 
 -- End-to-end
+import qualified DbSync.ChainSync.DeliverSpec as ChainSyncDeliverSpec
 import qualified DbSync.Phase.FollowAtTipSpec as PhaseFollowAtTipSpec
 import qualified DbSync.Phase.FollowEpochBoundarySpec as PhaseFollowEpochBoundarySpec
 import qualified DbSync.Phase.FollowEpochSyncStatsSpec as PhaseFollowEpochSyncStatsSpec
@@ -115,6 +116,7 @@ import qualified DbSync.Phase.FollowPerfSpec as PhaseFollowPerfSpec
 import qualified DbSync.Phase.FollowReplayOnBootSpec as PhaseFollowReplayOnBootSpec
 import qualified DbSync.Phase.FollowReplayWindowSpec as PhaseFollowReplayWindowSpec
 import qualified DbSync.Phase.FollowRestartSpec as PhaseFollowRestartSpec
+import qualified DbSync.Phase.HandoffRedeliverySpec as PhaseHandoffRedeliverySpec
 import qualified DbSync.Phase.IngestPrepFollowSpec as PhaseIngestPrepFollowSpec
 import qualified DbSync.Phase.RecomputeInvariantsSpec as PhaseRecomputeInvariantsSpec
 import qualified DbSync.Phase.IngestRestartSpec as PhaseIngestRestartSpec
@@ -226,7 +228,9 @@ main = hspec $ do
     SchemaMigrationLadderSpec.spec
 
   describe "End-to-end" $ withTimeoutSeconds e2eTimeoutSeconds $ do
+    ChainSyncDeliverSpec.spec
     PhaseIngestPrepFollowSpec.spec
+    PhaseHandoffRedeliverySpec.spec
     PhaseIngestRestartSpec.spec
     PhaseLsmLifecycleSpec.spec
     PhaseFollowRestartSpec.spec

@@ -223,18 +223,20 @@ isHotPathLsmTrace _ = False
 --   * 'LSMTree.CompactIndex' — every key in this session is a
 --     blake2b hash concatenated with a 2-byte output index; the
 --     high 64 bits remain uniformly distributed.
---   * 'LSMTree.DiskCacheLevelOneTo' 1 — cache only the hottest, top
---     on-disk level in the OS page cache. The deep levels stay
---     uncached, capping page-cache RSS, and unlike 'DiskCacheNone'
---     this policy works on macOS.
 --   * 'LSMTree.Incremental' — spread merge work across operations
 --     instead of doing it all at one level overflow.
+--
+-- 'LSMTree.confDiskCachePolicy' is pinned to 'LSMTree.DiskCacheAll'
+-- (the library default): every on-disk level is admitted to the OS
+-- page cache, so deep-level lookups avoid raw disk reads on macOS's
+-- serial blockio. Page-cache pages are OS memory, reclaimable under
+-- pressure — they never appear on the GHC heap.
 defaultIngestTableConfig :: LSMTree.TableConfig
 defaultIngestTableConfig = LSMTree.defaultTableConfig
   { LSMTree.confWriteBufferAlloc  = LSMTree.AllocNumEntries 200_000
   , LSMTree.confBloomFilterAlloc  = LSMTree.AllocRequestFPR 1e-3
   , LSMTree.confFencePointerIndex = LSMTree.CompactIndex
-  , LSMTree.confDiskCachePolicy   = LSMTree.DiskCacheLevelOneTo 1
+  , LSMTree.confDiskCachePolicy   = LSMTree.DiskCacheAll
   , LSMTree.confMergeSchedule     = LSMTree.Incremental
   }
 

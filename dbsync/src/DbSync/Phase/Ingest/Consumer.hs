@@ -18,7 +18,7 @@
 -- At each boundary 'handleEpochBoundary' emits one summary line:
 --
 -- @
--- Epoch 265 | 21,427 blk in 41s (526 blk/s) | utxo HR=99.92% | [63.21%]
+-- Epoch 265 | 21,427 blk in 41s (526 blk/s) | utxo hitrate=99.92% | peak mem=2.3GB | [63.21%]
 -- @
 --
 -- The bracketed percentage is the current block's position relative

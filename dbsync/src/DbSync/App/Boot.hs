@@ -55,7 +55,6 @@ import Control.Concurrent.STM (TVar, newTBQueueIO, newTVarIO, readTVar)
 import qualified Data.Text as T
 import qualified Hasql.Connection as Conn
 import qualified Hasql.Connection.Settings as HasqlSettings
-import Data.IORef (newIORef)
 
 import Cardano.Network.NodeToClient (IOManager, withIOManager)
 import Cardano.Slotting.Block (BlockNo (..))
@@ -914,11 +913,11 @@ runBootFollowRestart
           (mapM_ closeOffChainVoteWorker) $ \mVoteWorker -> do
           -- A fresh receiver-side state. Ingest has been bypassed on this
           -- restart path, so none of it is inherited from an upstream env.
-          -- Queue depth matches the Ingest path in App.Run: deep
-          -- enough for scheduling jitter, shallow enough that a full
-          -- queue of decoded blocks doesn't pin hundreds of MB.
-          blockQueue       <- newTBQueueIO 150
-          latestPointRef   <- newIORef Nothing
+          -- Queue depth matches the Ingest path in App.Run, where
+          -- the sizing rationale lives; a Follow-mode queue stays
+          -- near-empty regardless.
+          blockQueue       <- newTBQueueIO 300
+          latestPointRef   <- newTVarIO Nothing
           rollbackBoundary <- newTVarIO Nothing
           latestTipBlock   <- newTVarIO Nothing
 

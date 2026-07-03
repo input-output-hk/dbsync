@@ -15,6 +15,13 @@ module DbSync.ChainSync.Connection
     -- * Running
   , connectToNode
   , getNetworkMagic
+
+    -- * Block delivery
+    --
+    -- Exported for the delivery-atomicity tests; production code
+    -- reaches them only through 'blockFetchClient'.
+  , deliverForwardBlock
+  , deliverRollback
   ) where
 
 import Cardano.Prelude hiding ((%), Nat)
@@ -27,8 +34,7 @@ import Cardano.Client.Subscription
   , subscribe
   )
 import Control.Concurrent.Async (AsyncCancelled (..))
-import Control.Concurrent.STM (TBQueue, TVar, writeTBQueue, writeTVar)
-import Control.Concurrent.STM.TBQueue (isFullTBQueue)
+import Control.Concurrent.STM (TBQueue, TVar, readTVarIO, writeTBQueue, writeTVar)
 import Control.Tracer (contramap, nullTracer, traceWith)
 import qualified Data.ByteString.Lazy as BSL
 import Data.IORef (IORef, atomicModifyIORef', atomicWriteIORef, newIORef, readIORef, writeIORef)
@@ -261,7 +267,7 @@ nodeProtocols
   -> TBQueue ChainSyncMsg
   -> Maybe (TBQueue ChainSyncMsg)
   -> StateQueryVar
-  -> IORef (Maybe CardanoPoint)
+  -> TVar (Maybe CardanoPoint)
   -> TVar (Maybe BlockNo)
   -> TVar (Maybe BlockNo)
   -> Word64
@@ -362,7 +368,7 @@ firstBlocksToLog = 3
 --     'IntersectGenesis' (first connection on a fresh DB) or
 --     'IntersectAt' (resume from snapshot candidates).
 --
--- Without the IORef-tracked latest point, a @cardano-node@ restart
+-- Without the TVar-tracked latest point, a @cardano-node@ restart
 -- mid-sync would re-use the boot-time intersect — for a fresh sync
 -- that is Origin, so the node rolls our chain pointer back to
 -- genesis and the LedgerWorker crashes when the genesis block
@@ -379,7 +385,7 @@ blockFetchClient
   :: AppTracer
   -> TBQueue ChainSyncMsg                             -- ^ Main pipeline queue
   -> Maybe (TBQueue ChainSyncMsg)                     -- ^ Optional ledger worker queue
-  -> IORef (Maybe CardanoPoint)                       -- ^ Latest received point, updated on each forward / rollback
+  -> TVar (Maybe CardanoPoint)                        -- ^ Latest received point, updated on each forward / rollback
   -> TVar (Maybe BlockNo)                             -- ^ Rollback boundary, updated on every tip observation
   -> TVar (Maybe BlockNo)                             -- ^ Latest server tip block number, updated on every tip observation
   -> Word64                                           -- ^ Protocol security parameter @k@
@@ -395,7 +401,7 @@ blockFetchClient appTracer blockQueue mLedgerQueue latestPointRef rollbackBounda
     -- Per-session mutable bookkeeping. Bundled so callbacks pass one
     -- record instead of N independent IORefs.
     ss <- newSessionState
-    mLatest <- readIORef latestPointRef
+    mLatest <- readTVarIO latestPointRef
     let (intersectPoints, isResume) = case mLatest of
           Just p  -> ([p], True)
           Nothing -> (bootIntersectPoints, False)
@@ -517,21 +523,7 @@ blockFetchClient appTracer blockQueue mLedgerQueue latestPointRef rollbackBounda
             -- it before enqueuing so a slow consumer never sees a
             -- block whose ancestor has already passed the boundary.
             publishTipMarkers tip
-            let msg = MsgForward blk
-            enqueueWithBackpressure blockQueue msg
-            -- Fan-out to the ledger worker (when enabled). The
-            -- worker is a single consumer with a shallower queue, so
-            -- we accept that the receiver may block here if the
-            -- worker has fallen behind — preferable to dropping
-            -- blocks silently.
-            for_ mLedgerQueue $ \ledgerQueue ->
-              atomically $ writeTBQueue ledgerQueue msg
-            -- Record the latest accepted point so a reconnect resumes
-            -- here instead of replaying from the boot-time intersect.
-            -- Written only after both queue writes succeed, so a
-            -- block we crash before delivering doesn't advance the
-            -- recorded position.
-            atomicWriteIORef latestPointRef (Just (blockPoint blk))
+            deliverForwardBlock blockQueue mLedgerQueue latestPointRef blk
             pure $ goTip ss mkDecision n (At bn) tip
         , recvMsgRollBackward = \point tip -> do
             -- The first MsgRollBackward after MsgIntersectFound is the
@@ -553,13 +545,9 @@ blockFetchClient appTracer blockQueue mLedgerQueue latestPointRef rollbackBounda
                   | otherwise =
                       "Rollback to " <> show point
             traceWith appTracer $ LogMsg sev "ChainSync" logText Nothing
-            atomicWriteIORef latestPointRef (Just point)
             publishTipMarkers tip
-            unless isConfirmingRollback $ do
-              let msg = MsgRollback point
-              atomically $ writeTBQueue blockQueue msg
-              for_ mLedgerQueue $ \ledgerQueue ->
-                atomically $ writeTBQueue ledgerQueue msg
+            deliverRollback blockQueue mLedgerQueue latestPointRef
+              isConfirmingRollback point
             pure $ goTip ss mkDecision n Origin tip
         }
 
@@ -581,21 +569,58 @@ blockFetchClient appTracer blockQueue mLedgerQueue latestPointRef rollbackBounda
         writeTVar latestTipBlock mTip
         writeTVar rollbackBoundary boundary
 
--- | Enqueue a 'ChainSyncMsg' on the consumer's block queue.
+-- | Hand one forward block to the consumer queues and record it as
+-- the latest received point — all in a single STM transaction.
 --
--- 'stm' has 'tryReadTBQueue' but no 'tryWriteTBQueue', so the
--- non-blocking probe is synthesised from 'isFullTBQueue' +
--- 'writeTBQueue' inside a single STM transaction. On a full queue
--- we fall back to a blocking 'writeTBQueue' — back-pressure into the
--- receiver is the right response; dropping is not an option.
-enqueueWithBackpressure
-  :: TBQueue ChainSyncMsg
-  -> ChainSyncMsg
+-- Atomicity is load-bearing, not style: the receiver is killed with
+-- an async exception at the Ingest → Follow handoff (and on node
+-- reconnects), and the ledger-queue write can block for seconds when
+-- the worker is behind. With separate transactions a kill landing
+-- after the main-queue write but before the point write leaves the
+-- block queued yet unrecorded; the next session then re-requests it
+-- and the Follow consumer applies it twice — the @tx@ unique
+-- constraint aborts the app (the @block@ table has no unique
+-- constraint to object sooner). In one transaction the kill either
+-- lands before commit (nothing delivered, nothing recorded — the
+-- next session re-fetches the block) or after (everything
+-- consistent).
+--
+-- The transaction retries until every queue involved has space, so
+-- backpressure into the receiver is preserved: it may not out-run
+-- the slower of the two consumers.
+deliverForwardBlock
+  :: TBQueue ChainSyncMsg          -- ^ Main pipeline queue
+  -> Maybe (TBQueue ChainSyncMsg)  -- ^ Ledger worker queue, when enabled
+  -> TVar (Maybe CardanoPoint)     -- ^ Latest received point
+  -> CardanoBlock StandardCrypto
   -> IO ()
-enqueueWithBackpressure queue msg = do
-  ok <- atomically $ do
-    full <- isFullTBQueue queue
-    if full
-      then pure False
-      else writeTBQueue queue msg >> pure True
-  unless ok $ atomically $ writeTBQueue queue msg
+deliverForwardBlock blockQueue mLedgerQueue latestPointVar blk =
+  atomically $ do
+    let msg = MsgForward blk
+    writeTBQueue blockQueue msg
+    for_ mLedgerQueue $ \ledgerQueue -> writeTBQueue ledgerQueue msg
+    writeTVar latestPointVar (Just (blockPoint blk))
+
+-- | Rollback counterpart of 'deliverForwardBlock': record the
+-- rollback target as the latest received point and — for a real
+-- chain reorganisation — enqueue the 'MsgRollback' marker on both
+-- queues, in one STM transaction for the same kill-safety reason.
+-- Losing the marker while still recording the point would leave
+-- rolled-back rows in PG forever.
+--
+-- A confirming rollback (the protocol's echo of the chosen
+-- intersection point) only moves the point; no marker is delivered.
+deliverRollback
+  :: TBQueue ChainSyncMsg
+  -> Maybe (TBQueue ChainSyncMsg)
+  -> TVar (Maybe CardanoPoint)
+  -> Bool                          -- ^ confirming rollback (suppress marker)?
+  -> CardanoPoint
+  -> IO ()
+deliverRollback blockQueue mLedgerQueue latestPointVar isConfirming point =
+  atomically $ do
+    unless isConfirming $ do
+      let msg = MsgRollback point
+      writeTBQueue blockQueue msg
+      for_ mLedgerQueue $ \ledgerQueue -> writeTBQueue ledgerQueue msg
+    writeTVar latestPointVar (Just point)

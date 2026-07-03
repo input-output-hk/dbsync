@@ -1079,9 +1079,10 @@ fromAlonzoTx (blkIndex, tx) =
     , txTreasuryDonation = 0
     , txInvalidBefore    = invBefore
     , txInvalidHereafter = invAfter
-    , txInputs           = mkTxIn txBody
-      -- Failed phase-2 produces no on-chain outputs — Alonzo has no
-      -- collateral-return field, so collateral inputs are simply burnt.
+      -- Failed phase-2 txs consume collateral, not the declared inputs, so
+      -- tx_in carries the collateral set (matching Babbage+); Alonzo has no
+      -- collateral-return field, so there are no on-chain outputs.
+    , txInputs           = if isValid then mkTxIn txBody else collIns
     , txOutputs          = if isValid then outputs else []
     , txCollateralInputs = collIns
     , txReferenceInputs  = []

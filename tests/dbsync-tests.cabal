@@ -178,6 +178,7 @@ test-suite dbsync-test
     DbSync.Phase.Following.RollbackSpec
     DbSync.Phase.Following.RunSpec
     DbSync.Phase.FollowAtTipSpec
+    DbSync.Phase.AlonzoInvalidTxSpec
     DbSync.Phase.FollowEpochBoundarySpec
     DbSync.Phase.FollowEpochSyncStatsSpec
     DbSync.Phase.FollowGovernanceSpec
@@ -229,6 +230,7 @@ test-suite dbsync-test
     , filepath
     , io-classes:strict-stm
     , lsm-tree
+    , microlens
     , optparse-applicative
     , ouroboros-consensus
     , ouroboros-consensus:cardano

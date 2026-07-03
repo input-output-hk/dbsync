@@ -13,6 +13,7 @@ module DbSync.Test.E2E
   ( -- * Common constants
     conwayConfigDir
   , conwayRewardsConfigDir
+  , alonzoConfigDir
 
     -- * App-session brackets
   , withAppSession
@@ -71,6 +72,13 @@ conwayConfigDir = "data/config-conway"
 -- specs that assert on the @reward@ or @pot_reward@ tables.
 conwayRewardsConfigDir :: FilePath
 conwayRewardsConfigDir = "data/config-conway-rewards"
+
+-- | Alonzo test config. Identical to 'conwayConfigDir' but defers the
+-- Babbage and Conway hard forks to epoch 100, so the chain forges in
+-- the Alonzo era. Use for specs that must exercise Alonzo-only parser
+-- paths (e.g. phase-2 invalid-tx input handling).
+alonzoConfigDir :: FilePath
+alonzoConfigDir = "data/config-alonzo"
 
 -- ---------------------------------------------------------------------------
 -- * App-session brackets

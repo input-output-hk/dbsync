@@ -60,6 +60,10 @@ spec = do
       written <- runOne (txWithScripts [sampleNativeScript, sampleNativeScript])
       length (twScripts written) `shouldBe` 1
 
+    it "skips a phase-2 failed tx entirely" $ do
+      written <- runOne ((txWithScripts [sampleNativeScript]) { txValidContract = False })
+      length (twScripts written) `shouldBe` 0
+
   describe "datums" $ do
 
     it "writes one datum row and dedups by hash" $ do

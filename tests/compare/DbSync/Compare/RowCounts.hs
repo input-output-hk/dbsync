@@ -186,7 +186,10 @@ data Anchors = Anchors
   , anTxOut :: !Int64
   , anPoolUpdate :: !Int64
   , anGovAction :: !Int64
-  , anEpoch :: !Int64 -- ^ Epoch of the cutoff block, for epoch-scoped tables.
+  , anEpoch :: !Int64
+      -- ^ Last completed epoch below the cutoff. The in-progress epoch
+      -- is excluded: the two databases legitimately diverge inside it
+      -- (per-epoch snapshots land at different times).
   }
 
 -- The block id anchor is the lowest id at the cutoff block_no, so the cut lands
@@ -200,7 +203,7 @@ computeAnchors conn blockCeiling = do
   pu <- maxId "pool_update" ("registered_tx_id <= " <> show t)
   g <- maxId "gov_action_proposal" ("tx_id <= " <> show t)
   e <- fromMaybe 0 <$> queryMaybeInt conn ("SELECT max(epoch_no)::bigint FROM block WHERE block_no <= " <> show blockCeiling)
-  pure (Anchors b blockCeiling t o pu g e)
+  pure (Anchors b blockCeiling t o pu g (max 0 (e - 1)))
   where
     maxId table cond =
       fromMaybe 0 <$> queryMaybeInt conn ("SELECT max(id) FROM " <> table <> " WHERE " <> cond)

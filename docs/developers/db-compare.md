@@ -11,15 +11,13 @@ original [cardano-db-sync](https://github.com/IntersectMBO/cardano-db-sync) by
 comparing two local PostgreSQL databases — an old-implementation snapshot and a
 new-implementation sync — table by table and row by row.
 
-It is **library-first**: the comparison logic lives in the `dbsync-compare-lib`
-sublibrary so the test suite can assert on its results, and a thin CLI wraps it
-for ad-hoc runs.
+It is a **standalone tool**: the CLI and all comparison logic live together
+under `tests/compare/`, built as the `dbsync-compare` executable.
 
 | Component | Location |
 |---|---|
-| Library | [`tests/compare-lib/DbSync/Compare/`](https://github.com/input-output-hk/dbsync/tree/main/tests/compare-lib/DbSync/Compare) |
-| CLI | [`tests/compare/Main.hs`](https://github.com/input-output-hk/dbsync/blob/main/tests/compare/Main.hs) |
-| Cabal stanzas | [`tests/dbsync-tests.cabal`](https://github.com/input-output-hk/dbsync/blob/main/tests/dbsync-tests.cabal) |
+| Tool (CLI + modules) | [`tests/compare/`](https://github.com/input-output-hk/dbsync/tree/main/tests/compare) |
+| Cabal stanza | [`tests/dbsync-tests.cabal`](https://github.com/input-output-hk/dbsync/blob/main/tests/dbsync-tests.cabal) |
 
 ## Running it
 
@@ -43,6 +41,7 @@ default to the same trust-auth setup the sync uses.
 | `--eras` | all | Restrict to a comma list, e.g. `byron,babbage` |
 | `--row-counts` | off | Also run the slow epoch-bounded row counts |
 | `--no-spot-check` | on | Disable the per-era content check |
+| `--no-structure` | on | Disable the schema structure comparison |
 
 ## What it checks
 
@@ -52,6 +51,27 @@ Classifies every table in the old database as **comparable** (present and
 populated on both sides) or **skipped** (absent in new, empty on one side,
 new-only, …), and flags schema drift — an old table that maps to nothing in the
 new schema. The run exits non-zero if a comparable table regresses.
+
+### Schema structure (default)
+
+Compares the physical shape of every table present on both sides:
+
+- **Columns** — name by name (rename map applied: `dvt_p_p_*` → `dvt_pp_*`),
+  with types collapsed to coarse buckets so domain and width differences
+  (`lovelace` vs `bigint`) do not register while real shape changes
+  (`bytea` vs `text`) do. An old column with no new counterpart fails the
+  run; new-only columns are noted informationally. Known intentional
+  differences are allowlisted: the inline address columns replaced by
+  `address_id`, and protocol-parameter ratios stored as text.
+- **Foreign keys** — the old database's FK constraints against the new
+  schema's *declared* `ForeignKey` metadata plus any physical constraints
+  (the new schema never emits `REFERENCES` constraints). An old FK edge
+  with no new counterpart fails.
+- **Unique constraints** — the old database's unique indexes/constraints
+  against the new schema's declared unique constraints plus physical
+  unique indexes (built late, in `PreparingForVolatileTail`).
+
+Disable with `--no-structure`.
 
 ### Spot check (default)
 
@@ -69,12 +89,12 @@ and its stored contents are stable. The **ceiling** is `min(old, new)` max epoch
 − 1, and only blocks at or below it are sampled, so a mid-sync new database (or
 one that is still behind) never causes spurious misses.
 
-:::note Index-aware coverage
-The new database builds most secondary indexes late in the sync. A per-tx query
-against an unindexed child table would sequentially scan a 100M-row table, so the
-spot check first introspects the new database and **skips** any child table whose
-scope column is not yet indexed, listing them under `skipped (no index on new)`.
-Coverage widens automatically as the sync finishes building indexes.
+:::note Index-independent scoping
+The new database builds most secondary indexes late in the sync, so every scope
+predicate is phrased over primary-key id ranges (block ids, then tx ids derived
+from the cumulative `block.tx_count`). No query depends on a secondary index on
+`block_no`, `epoch_no`, or `block_id`, so coverage does not depend on how far
+index creation has progressed.
 :::
 
 ### Row counts (opt-in)
@@ -114,11 +134,11 @@ than fixed in the tool. They are catalogued with file/line evidence in
 
 ## Extending coverage
 
-To compare another child table, add a `ChildSpec` to `childSpecs` in
-[`SpotCheck.hs`](https://github.com/input-output-hk/dbsync/blob/main/tests/compare-lib/DbSync/Compare/SpotCheck.hs):
-give its scope column (must be indexed on the new database), the natural-key
-columns, and the value columns — translating any foreign keys to the parent's
-natural key. The index filter and per-era rendering pick it up automatically.
+To compare another child table, add a `TableSpec` to `tableSpecs` in
+[`SpotCheck.hs`](https://github.com/input-output-hk/dbsync/blob/main/tests/compare/DbSync/Compare/SpotCheck.hs):
+give its scope column, the natural-key columns, and the value columns —
+translating any foreign keys to the parent's natural key. The per-era
+rendering picks it up automatically.
 
 ## Related pages
 

@@ -25,6 +25,7 @@ data Config = Config
   , cfgEras :: !(Maybe [Text]) -- ^ Restrict the spot-check to these eras; Nothing means all.
   , cfgRowCounts :: !Bool -- ^ Run the block-bounded row counts and dedup content checks (off by default; full-table scans).
   , cfgSpotCheck :: !Bool -- ^ Run the per-era content spot-check (on by default).
+  , cfgStructure :: !Bool -- ^ Compare schema structure: columns, foreign keys, uniques (on by default).
   , cfgStatementTimeout :: !Int -- ^ Per-statement timeout in seconds; a slow query fails instead of hanging.
   , cfgVerbose :: !Bool -- ^ Echo every SQL statement to stderr before running it.
   }
@@ -62,6 +63,7 @@ configParser =
     <*> optional (splitEras <$> strOption (long "eras" <> metavar "ERAS" <> help "Comma-separated eras to spot-check (default: all)"))
     <*> flag False True (long "row-counts" <> help "Run the block-bounded row counts and dedup content checks (slow; full-table scans)")
     <*> flag True False (long "no-spot-check" <> help "Skip the per-era content spot-check")
+    <*> flag True False (long "no-structure" <> help "Skip the schema structure comparison (columns, foreign keys, uniques)")
     <*> option auto (long "statement-timeout" <> metavar "SECONDS" <> value 120 <> showDefault <> help "Per-statement timeout; a slow query fails instead of hanging")
     <*> flag False True (long "verbose" <> help "Echo each SQL statement to stderr before running it")
 

@@ -28,13 +28,16 @@ data DedupReferrer = DedupReferrer
   }
   deriving stock (Eq, Show)
 
+-- An anchor edge beats an epoch bound: it cuts at the exact shared
+-- chain point, while an epoch bound necessarily includes the
+-- in-progress epoch's rows on whichever side is further ahead.
 boundFor :: Text -> Bound
 boundFor name
   | name == "epoch_finalized" = Unbounded
   | name == "block" = BoundBlock
   | Just referrers <- lookup name dedupReferrers = BoundDedup referrers
-  | "epoch_no" `elem` columnsOf name = BoundEpoch
   | Just (col, parent) <- anchorEdge name = BoundAnchor col parent
+  | "epoch_no" `elem` columnsOf name = BoundEpoch
   | otherwise = Unbounded
 
 -- ---------------------------------------------------------------------------

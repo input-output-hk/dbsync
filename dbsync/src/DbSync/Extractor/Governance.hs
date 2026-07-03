@@ -187,6 +187,7 @@ processGovernance ctx =
   forM_ (bcTxs ctx) $ \tc -> when (txValidContract (tcGenTx tc)) $ do
     processCerts ctx tc
     processProposals ctx tc
+    processParamUpdates tc
     processVotes ctx tc
 
 -- ---------------------------------------------------------------------------
@@ -501,6 +502,21 @@ writeParamProposalRow txId gpp = do
     , paramProposalMinFeeRefScriptCostPerByte = gppMinFeeRefScriptCostPerByte gpp
     }
   pure ppId
+
+-- | Shelley- through Babbage-era update proposals: one
+-- @param_proposal@ row per proposing genesis key, carrying the target
+-- epoch and key. Conway parameter changes arrive as governance
+-- actions instead ('processProposals').
+processParamUpdates
+  :: ( HasResolver env
+     , HasWriter env
+     , MonadReader env m
+     , MonadIO m
+     )
+  => TxContext -> m ()
+processParamUpdates tc =
+  forM_ (txParamProposal (tcGenTx tc)) $
+    void . writeParamProposalRow (tcTxId tc)
 
 -- ---------------------------------------------------------------------------
 -- * Vote pass

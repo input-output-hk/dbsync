@@ -14,6 +14,7 @@ module DbSync.Extractor.SharedDedup
   , resolveAndWriteMultiAsset
   , resolveAndWriteDatum
   , resolveAndWriteScript
+  , resolveAndWriteTxScript
   , resolveAndWriteRedeemerData
 
     -- Governance
@@ -49,13 +50,14 @@ import DbSync.Db.Schema.Ids
   , RedeemerDataId
   , ScriptId
   , StakeAddressId
+  , TxId
   , VotingAnchorId
   )
 import DbSync.Db.Schema.MultiAsset (MultiAsset (..))
 import DbSync.Db.Schema.Core (PoolHash (..), StakeAddress (..))
-import DbSync.Db.Schema.ScriptsDatums (Datum, RedeemerData, Script)
+import DbSync.Db.Schema.ScriptsDatums (Datum, RedeemerData, Script (..))
 import DbSync.Db.Types (AnchorType, VoteUrl (..))
-import DbSync.Parser.Types (CredHash (..))
+import DbSync.Parser.Types (CredHash (..), GenericTxScript (..))
 import DbSync.App.Env (HasNetwork (..))
 import qualified DbSync.Extractor.EpochBoundary as EB
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
@@ -211,6 +213,24 @@ resolveAndWriteScript hash row = do
   (sid, isNew) <- liftIO $ resolveScript resolver hash row
   when isNew $ liftIO $ writeScript writer sid row
   pure sid
+
+-- | Resolve a parsed script (witness, aux-data, or output reference)
+-- by hash, writing the @script@ row — attributed to the carrying tx —
+-- on first sighting.
+resolveAndWriteTxScript
+  :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
+  => TxId
+  -> GenericTxScript
+  -> m ScriptId
+resolveAndWriteTxScript txId gts =
+  resolveAndWriteScript (gtsHash gts) Script
+    { scriptTxId           = txId
+    , scriptHash           = gtsHash gts
+    , scriptType           = gtsType gts
+    , scriptJson           = gtsJson gts
+    , scriptBytes          = gtsBytes gts
+    , scriptSerialisedSize = gtsSerialisedSize gts
+    }
 
 -- | Resolve a redeemer-data payload by 32-byte hash, writing the
 -- @redeemer_data@ row on first sighting.

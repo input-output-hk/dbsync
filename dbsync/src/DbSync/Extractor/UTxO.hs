@@ -27,12 +27,12 @@ import DbSync.Parser.Types (CredHash (..), GenericTx (..), GenericTxDatum (..), 
 import qualified DbSync.Parser.Types as G
 import DbSync.Phase.Type (SyncPhase, isFollowPath)
 import DbSync.Db.Schema.Address (addressFromRaw, addressTableDef, extractPaymentCred, rawHasScript)
-import DbSync.Db.Schema.Ids (AddressId, DatumId, StakeAddressId, TxId (..))
+import DbSync.Db.Schema.Ids (AddressId, DatumId, ScriptId, StakeAddressId, TxId (..))
 import DbSync.Db.Schema.ScriptsDatums (Datum (..))
 import DbSync.Db.Schema.UTxO
 import DbSync.Db.Types (DbLovelace (..))
 import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
-import DbSync.Extractor.SharedDedup (resolveAndWriteDatum, resolveStakeCred)
+import DbSync.Extractor.SharedDedup (resolveAndWriteDatum, resolveAndWriteTxScript, resolveStakeCred)
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
 import DbSync.Writer (HasWriter (..), Writer (..))
 
@@ -82,7 +82,8 @@ processUTxO ctx = do
       let raw = G.txOutAddressRaw gout
       mAid       <- followAddressId phase resolver raw mStakeId
       mInlineId  <- resolveInlineDatum txId gout
-      liftIO $ writeTxOut writer outId (mkTxOut txId mAid mStakeId mInlineId gout)
+      mRefSid    <- resolveRefScript txId gout
+      liftIO $ writeTxOut writer outId (mkTxOut txId mAid mStakeId mInlineId mRefSid gout)
       unless followPath $
         liftIO $ recordTxOutAddress resolver outId raw mStakeId
 
@@ -114,7 +115,8 @@ processUTxO ctx = do
         let raw = G.txOutAddressRaw gout
         mAid      <- followAddressId phase resolver raw mStakeId
         mInlineId <- resolveInlineDatum txId gout
-        liftIO $ writeCollateralTxOut writer outId (mkCollateralTxOut txId mAid mStakeId mInlineId gout)
+        mRefSid   <- resolveRefScript txId gout
+        liftIO $ writeCollateralTxOut writer outId (mkCollateralTxOut txId mAid mStakeId mInlineId mRefSid gout)
         unless followPath $
           liftIO $ recordCollateralTxOutAddress resolver outId raw mStakeId
 
@@ -141,6 +143,18 @@ processUTxO ctx = do
         Nothing  -> pure Nothing
         Just gtd -> Just <$> resolveAndWriteDatum (gtdHash gtd) (mkDatum txId gtd)
 
+    -- Write the deduplicated 'script' row for a Babbage+ output
+    -- reference script and return its id for @reference_script_id@.
+    -- The id is forced before entering the row: ScriptId is a newtype,
+    -- so an unforced id would smuggle the resolver's closure into the
+    -- long-lived row buffers.
+    resolveRefScript txId gout =
+      case G.txOutRefScript gout of
+        Nothing  -> pure Nothing
+        Just gts -> do
+          !sid <- resolveAndWriteTxScript txId gts
+          pure (Just sid)
+
     -- Extract just the producer tx_id (for tx_in.tx_out_id) from the
     -- cache lookup's full result.
     producerTxIdFrom = fmap (\(producerTxId, _, _) -> producerTxId)
@@ -161,8 +175,14 @@ followAddressId phase resolver raw mStakeId
 -- ---------------------------------------------------------------------------
 
 mkTxOut
-  :: TxId -> Maybe AddressId -> Maybe StakeAddressId -> Maybe DatumId -> G.GenericTxOut -> TxOut
-mkTxOut txId addrId mStakeId mInlineId gout = TxOut
+  :: TxId
+  -> Maybe AddressId
+  -> Maybe StakeAddressId
+  -> Maybe DatumId
+  -> Maybe ScriptId
+  -> G.GenericTxOut
+  -> TxOut
+mkTxOut txId addrId mStakeId mInlineId mRefScriptId gout = TxOut
   { txOutTxId              = txId
   , txOutIndex             = fromIntegral (G.txOutIndex gout)
   , txOutAddressId         = addrId  -- 'Nothing' until the AddressResolver worker fills it in
@@ -170,7 +190,7 @@ mkTxOut txId addrId mStakeId mInlineId gout = TxOut
   , txOutValue             = DbLovelace (G.txOutValue gout)
   , txOutDataHash          = G.txOutDataHash gout
   , txOutInlineDatumId     = mInlineId
-  , txOutReferenceScriptId = Nothing  -- resolved by ScriptsDatums extractor
+  , txOutReferenceScriptId = mRefScriptId
   , txOutConsumedByTxId    = Nothing  -- resolved post-load
   }
 
@@ -216,9 +236,10 @@ mkCollateralTxOut
   -> Maybe AddressId
   -> Maybe StakeAddressId
   -> Maybe DatumId
+  -> Maybe ScriptId
   -> G.GenericTxOut
   -> CollateralTxOut
-mkCollateralTxOut txId addrId mStakeId mInlineId gout = CollateralTxOut
+mkCollateralTxOut txId addrId mStakeId mInlineId mRefScriptId gout = CollateralTxOut
   { collateralTxOutTxId              = txId
   , collateralTxOutIndex             = fromIntegral (G.txOutIndex gout)
   , collateralTxOutAddressId         = addrId  -- 'Nothing' until the AddressResolver worker fills it in
@@ -230,7 +251,7 @@ mkCollateralTxOut txId addrId mStakeId mInlineId gout = CollateralTxOut
     -- the body declared. Failed txs always produce @[]@ here.
   , collateralTxOutMultiAssetsDescr  = show (G.txOutMultiAssets gout)
   , collateralTxOutInlineDatumId     = mInlineId
-  , collateralTxOutReferenceScriptId = Nothing
+  , collateralTxOutReferenceScriptId = mRefScriptId
   }
 
 -- ---------------------------------------------------------------------------

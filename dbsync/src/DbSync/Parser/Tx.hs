@@ -222,16 +222,17 @@ mkTxOutCoin txBody = zipWith fromCoinTxOut [0 ..] $ toList (txBody ^. Core.outpu
 --
 -- The datum extractor varies by era: Mary uses @\\_ -> (Nothing, Nothing)@,
 -- Alonzo uses 'getAlonzoDatum', Babbage+ uses 'getBabbageDatum'. It
--- returns @(data_hash, inline_datum)@. 'txOutRefScript' is owned by a
--- different extractor and is not populated from this path.
+-- returns @(data_hash, inline_datum)@. The reference-script extractor
+-- is @const Nothing@ before Babbage and 'outputRefScript' after.
 mkTxOutMaryValue ::
   forall l era.
   (Core.EraTxBody era, Core.Value era ~ MaryValue) =>
   (Core.TxOut era -> (Maybe ByteString, Maybe GenericTxDatum)) ->
+  (Core.TxOut era -> Maybe GenericTxScript) ->
   Core.TxBody l era ->
   [GenericTxOut]
-mkTxOutMaryValue datum txBody =
-  zipWith (mkMaryTxOut datum) [0 ..] $ toList (txBody ^. Core.outputsTxBodyL)
+mkTxOutMaryValue datum refScript txBody =
+  zipWith (mkMaryTxOut datum refScript) [0 ..] $ toList (txBody ^. Core.outputsTxBodyL)
 
 -- | Build one Mary-shape 'GenericTxOut' from a ledger TxOut and a
 -- datum extractor.  Reused by 'mkTxOutMaryValue' and by the
@@ -240,10 +241,11 @@ mkMaryTxOut ::
   forall era.
   (Core.EraTxOut era, Core.Value era ~ MaryValue) =>
   (Core.TxOut era -> (Maybe ByteString, Maybe GenericTxDatum)) ->
+  (Core.TxOut era -> Maybe GenericTxScript) ->
   Word16 ->
   Core.TxOut era ->
   GenericTxOut
-mkMaryTxOut datum idx txOut =
+mkMaryTxOut datum refScript idx txOut =
   let MaryValue ada multiAsset = txOut ^. Core.valueTxOutL
       addr = txOut ^. Core.addrTxOutL
       !raw = Ledger.serialiseAddr addr
@@ -254,7 +256,7 @@ mkMaryTxOut datum idx txOut =
     , txOutValue       = fromIntegral (unCoin ada)
     , txOutDataHash    = dataHash
     , txOutInlineDatum = inlineDatum
-    , txOutRefScript   = Nothing
+    , txOutRefScript   = refScript txOut
     , txOutMultiAssets = flattenMultiAsset multiAsset
     }
 
@@ -621,10 +623,11 @@ getCollateralOutput
      , Core.Value era ~ MaryValue
      , Core.TxOut era ~ Babbage.BabbageTxOut era
      )
-  => Core.TxBody Core.TopTx era
+  => (Core.TxOut era -> Maybe GenericTxScript)
+  -> Core.TxBody Core.TopTx era
   -> Maybe GenericTxOut
-getCollateralOutput txBody =
-  fmap (mkMaryTxOut getBabbageDatum collIdx) $
+getCollateralOutput refScript txBody =
+  fmap (mkMaryTxOut getBabbageDatum refScript collIdx) $
     strictMaybeToMaybe (txBody ^. Core.collateralReturnTxBodyL)
   where
     collIdx = fromIntegral (length (toList (txBody ^. Core.outputsTxBodyL)))
@@ -704,27 +707,10 @@ alonzoEraScripts
   -> Core.Tx Core.TopTx era
   -> [GenericTxScript]
 alonzoEraScripts mkPlutusType tx =
-  map fromScript $
+  map (fromAlonzoEraScript mkPlutusType) $
     Map.toList (tx ^. Core.witsTxL . Core.scriptTxWitsL)
       <> auxScripts (tx ^. Core.auxDataTxL)
   where
-    fromScript :: (Core.ScriptHash, Alonzo.AlonzoScript era) -> GenericTxScript
-    fromScript (h, sc) = case sc of
-      Alonzo.NativeScript ns -> GenericTxScript
-        { gtsHash           = scriptHashBytes h
-        , gtsType           = Timelock
-        , gtsJson           = Just (Script.timelockToJson ns)
-        , gtsBytes          = Nothing
-        , gtsSerialisedSize = Nothing
-        }
-      Alonzo.PlutusScript ps -> GenericTxScript
-        { gtsHash           = scriptHashBytes h
-        , gtsType           = mkPlutusType ps
-        , gtsJson           = Nothing
-        , gtsBytes          = Just (Core.originalBytes sc)
-        , gtsSerialisedSize = Just (plutusBinarySize ps)
-        }
-
     auxScripts :: StrictMaybe (Alonzo.AlonzoTxAuxData era)
                -> [(Core.ScriptHash, Alonzo.AlonzoScript era)]
     auxScripts = maybe [] indexed . strictMaybeToMaybe
@@ -734,11 +720,35 @@ alonzoEraScripts mkPlutusType tx =
           | s <- toList (Alonzo.getAlonzoTxAuxDataScripts auxData)
           ]
 
-    plutusBinarySize :: Alonzo.PlutusScript era -> Word64
-    plutusBinarySize ps =
-      fromIntegral
-        . SBS.length
-        $ Alonzo.unPlutusBinary (Alonzo.plutusScriptBinary ps)
+-- | Convert one Alonzo-family script — from a witness set, auxiliary
+-- data, or a Babbage+ output reference — with the era's
+-- Plutus-version mapping.
+fromAlonzoEraScript
+  :: forall era.
+     ( Alonzo.AlonzoEraScript era
+     , Core.NativeScript era ~ Allegra.Timelock era
+     , Core.Script era ~ Alonzo.AlonzoScript era
+     )
+  => (Alonzo.PlutusScript era -> ScriptType)
+  -> (Core.ScriptHash, Alonzo.AlonzoScript era)
+  -> GenericTxScript
+fromAlonzoEraScript mkPlutusType (h, sc) = case sc of
+  Alonzo.NativeScript ns -> GenericTxScript
+    { gtsHash           = scriptHashBytes h
+    , gtsType           = Timelock
+    , gtsJson           = Just (Script.timelockToJson ns)
+    , gtsBytes          = Nothing
+    , gtsSerialisedSize = Nothing
+    }
+  Alonzo.PlutusScript ps -> GenericTxScript
+    { gtsHash           = scriptHashBytes h
+    , gtsType           = mkPlutusType ps
+    , gtsJson           = Nothing
+    , gtsBytes          = Just (Core.originalBytes sc)
+    , gtsSerialisedSize = Just
+        (fromIntegral . SBS.length $
+          Alonzo.unPlutusBinary (Alonzo.plutusScriptBinary ps))
+    }
 
 -- | Dijkstra has its own native script that does not have a JSON
 -- encoder; the row stores CBOR bytes instead.
@@ -753,29 +763,10 @@ dijkstraEraScripts
   -> Core.Tx Core.TopTx era
   -> [GenericTxScript]
 dijkstraEraScripts mkPlutusType tx =
-  map fromScript $
+  map (fromDijkstraEraScript mkPlutusType) $
     Map.toList (tx ^. Core.witsTxL . Core.scriptTxWitsL)
       <> auxScripts (tx ^. Core.auxDataTxL)
   where
-    fromScript :: (Core.ScriptHash, Alonzo.AlonzoScript era) -> GenericTxScript
-    fromScript (h, sc) = case sc of
-      Alonzo.NativeScript {} -> GenericTxScript
-        { gtsHash           = scriptHashBytes h
-        , gtsType           = Timelock
-        , gtsJson           = Nothing
-        , gtsBytes          = Just (Core.originalBytes sc)
-        , gtsSerialisedSize = Nothing
-        }
-      Alonzo.PlutusScript ps -> GenericTxScript
-        { gtsHash           = scriptHashBytes h
-        , gtsType           = mkPlutusType ps
-        , gtsJson           = Nothing
-        , gtsBytes          = Just (Core.originalBytes sc)
-        , gtsSerialisedSize = Just
-            (fromIntegral . SBS.length $
-              Alonzo.unPlutusBinary (Alonzo.plutusScriptBinary ps))
-        }
-
     auxScripts :: StrictMaybe (Alonzo.AlonzoTxAuxData era)
                -> [(Core.ScriptHash, Alonzo.AlonzoScript era)]
     auxScripts = maybe [] indexed . strictMaybeToMaybe
@@ -784,6 +775,45 @@ dijkstraEraScripts mkPlutusType tx =
           [ (Core.hashScript @era s, s)
           | s <- toList (Alonzo.getAlonzoTxAuxDataScripts auxData)
           ]
+
+-- | Dijkstra variant of 'fromAlonzoEraScript': the native script has
+-- no JSON encoder, so the row stores CBOR bytes instead.
+fromDijkstraEraScript
+  :: forall era.
+     ( Alonzo.AlonzoEraScript era
+     , Core.Script era ~ Alonzo.AlonzoScript era
+     )
+  => (Alonzo.PlutusScript era -> ScriptType)
+  -> (Core.ScriptHash, Alonzo.AlonzoScript era)
+  -> GenericTxScript
+fromDijkstraEraScript mkPlutusType (h, sc) = case sc of
+  Alonzo.NativeScript {} -> GenericTxScript
+    { gtsHash           = scriptHashBytes h
+    , gtsType           = Timelock
+    , gtsJson           = Nothing
+    , gtsBytes          = Just (Core.originalBytes sc)
+    , gtsSerialisedSize = Nothing
+    }
+  Alonzo.PlutusScript ps -> GenericTxScript
+    { gtsHash           = scriptHashBytes h
+    , gtsType           = mkPlutusType ps
+    , gtsJson           = Nothing
+    , gtsBytes          = Just (Core.originalBytes sc)
+    , gtsSerialisedSize = Just
+        (fromIntegral . SBS.length $
+          Alonzo.unPlutusBinary (Alonzo.plutusScriptBinary ps))
+    }
+
+-- | The Babbage+ output reference script, converted with the era's
+-- script builder ('fromAlonzoEraScript' / 'fromDijkstraEraScript').
+outputRefScript
+  :: Core.BabbageEraTxOut era
+  => ((Core.ScriptHash, Core.Script era) -> GenericTxScript)
+  -> Core.TxOut era
+  -> Maybe GenericTxScript
+outputRefScript fromSc txOut =
+  (\sc -> fromSc (Core.hashScript sc, sc))
+    <$> strictMaybeToMaybe (txOut ^. Core.referenceScriptTxOutL)
 
 -- | Map an era's Plutus script constructor to its 'ScriptType'.
 -- Each era exposes only the Plutus versions it supports.
@@ -988,7 +1018,7 @@ fromAllegraTx (blkIndex, tx) =
 fromMaryTx :: (Word64, Core.Tx Core.TopTx MaryEra) -> GenericTx
 fromMaryTx (blkIndex, tx) =
   let txBody = tx ^. Core.bodyTxL
-      outputs = mkTxOutMaryValue (\_ -> (Nothing, Nothing)) txBody
+      outputs = mkTxOutMaryValue (\_ -> (Nothing, Nothing)) (const Nothing) txBody
       fee = txBody ^. Core.feeTxBodyL
       (invBefore, invAfter) = getInterval txBody
   in GenericTx
@@ -1031,7 +1061,7 @@ fromAlonzoTx :: (Word64, Core.Tx Core.TopTx AlonzoEra) -> GenericTx
 fromAlonzoTx (blkIndex, tx) =
   let txBody = tx ^. Core.bodyTxL
       Alonzo.IsValid isValid = tx ^. Alonzo.isValidTxL
-      outputs = mkTxOutMaryValue getAlonzoDatum txBody
+      outputs = mkTxOutMaryValue getAlonzoDatum (const Nothing) txBody
       fee = txBody ^. Core.feeTxBodyL
       (invBefore, invAfter) = getInterval txBody
       collIns = mkCollTxIn txBody
@@ -1081,12 +1111,13 @@ fromBabbageTx :: (Word64, Core.Tx Core.TopTx BabbageEra) -> GenericTx
 fromBabbageTx (blkIndex, tx) =
   let txBody = tx ^. Core.bodyTxL
       Alonzo.IsValid isValid = tx ^. Alonzo.isValidTxL
-      outputs = mkTxOutMaryValue getBabbageDatum txBody
+      refScript = outputRefScript (fromAlonzoEraScript babbagePlutusType)
+      outputs = mkTxOutMaryValue getBabbageDatum refScript txBody
       fee = txBody ^. Core.feeTxBodyL
       (invBefore, invAfter) = getInterval txBody
       collIns = mkCollTxIn txBody
       refIns = mkRefTxIn txBody
-      collOut = getCollateralOutput txBody
+      collOut = getCollateralOutput refScript txBody
   in GenericTx
     { txHash             = txHashId tx
     , txBlockIndex       = blkIndex
@@ -1128,12 +1159,13 @@ fromConwayTx :: (Word64, Core.Tx Core.TopTx ConwayEra) -> GenericTx
 fromConwayTx (blkIndex, tx) =
   let txBody = tx ^. Core.bodyTxL
       Alonzo.IsValid isValid = tx ^. Alonzo.isValidTxL
-      outputs = mkTxOutMaryValue getBabbageDatum txBody
+      refScript = outputRefScript (fromAlonzoEraScript conwayPlutusType)
+      outputs = mkTxOutMaryValue getBabbageDatum refScript txBody
       fee = txBody ^. Core.feeTxBodyL
       (invBefore, invAfter) = getInterval txBody
       collIns = mkCollTxIn txBody
       refIns = mkRefTxIn txBody
-      collOut = getCollateralOutput txBody
+      collOut = getCollateralOutput refScript txBody
       Coin donation = ctbTreasuryDonation txBody
   in GenericTx
     { txHash             = txHashId tx
@@ -1180,12 +1212,13 @@ fromDijkstraTx :: (Word64, Core.Tx Core.TopTx DijkstraEra) -> GenericTx
 fromDijkstraTx (blkIndex, tx) =
   let txBody = tx ^. Core.bodyTxL
       Alonzo.IsValid isValid = tx ^. Alonzo.isValidTxL
-      outputs = mkTxOutMaryValue getBabbageDatum txBody
+      refScript = outputRefScript (fromDijkstraEraScript dijkstraPlutusType)
+      outputs = mkTxOutMaryValue getBabbageDatum refScript txBody
       fee = txBody ^. Core.feeTxBodyL
       (invBefore, invAfter) = getInterval txBody
       collIns = mkCollTxIn txBody
       refIns = mkRefTxIn txBody
-      collOut = getCollateralOutput txBody
+      collOut = getCollateralOutput refScript txBody
       Coin donation = dtbTreasuryDonation txBody
   in GenericTx
     { txHash             = txHashId tx

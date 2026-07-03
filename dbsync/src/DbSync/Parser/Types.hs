@@ -262,7 +262,9 @@ data GenericTxOut = GenericTxOut
       -- ^ Babbage+ inline datum (hash + CBOR + JSON), 'Nothing' for a
       -- hash-only or datum-less output. Drives @tx_out.inline_datum_id@
       -- and the deduplicated @datum@ row.
-  , txOutRefScript   :: !(Maybe ByteString)
+  , txOutRefScript   :: !(Maybe GenericTxScript)
+      -- ^ Babbage+ output reference script. Drives
+      -- @tx_out.reference_script_id@ and the deduplicated @script@ row.
   , txOutMultiAssets  :: ![(ByteString, ByteString, Integer)]
       -- ^ [(policy_id, asset_name, quantity)]
   }

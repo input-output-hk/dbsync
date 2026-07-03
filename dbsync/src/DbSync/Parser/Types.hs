@@ -437,7 +437,7 @@ data GenericGovAction
       !(Maybe GovActionRef)
       !(Set.Set ByteString)
         -- ^ Cold keys to remove (28-byte credential hashes).
-      ![(ByteString, Word64)]
+      ![(CredHash, Word64)]
         -- ^ Members to add: @(cold-key cred, expiration epoch)@.
       !Word64 !Word64
         -- ^ Quorum @(numerator, denominator)@.

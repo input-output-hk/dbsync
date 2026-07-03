@@ -93,10 +93,11 @@ spec = describe "Ingest LSM session lifecycle" $ do
         tracer <- quietTracer
         withAppSession tracer defaultTestProfile mn ledgerDir $ \_ -> do
           waitForSyncComplete 60
-          -- Sync is complete: 'runPrepAndMarkComplete' has run, and
-          -- 'closeAndDeleteLsmSession' fired at the end of it.
-          present <- ingestLsmExists ledgerDir
-          present `shouldBe` False
+          -- 'markSyncComplete' fires just before 'closeAndDeleteLsmSession'
+          -- on the Prep thread, so the removal races 'waitForSyncComplete'.
+          -- Poll for the directory to disappear rather than reading once.
+          waitFor "ingest-lsm/ dir to be deleted after Prep"
+            (not <$> ingestLsmExists ledgerDir) 30
 
   -- Covers invariant 3: every per-table snapshot refresh is
   -- delete-then-save, so the @snapshots/@ subdirectory holds exactly
@@ -165,11 +166,12 @@ spec = describe "Ingest LSM session lifecycle" $ do
         -- moment later; probe before opening a fresh session.
         waitForLsmLockReleased ledgerDir 10
 
-        withAppSessionResume tracer defaultTestProfile mn ledgerDir $ \_ ->
+        withAppSessionResume tracer defaultTestProfile mn ledgerDir $ \_ -> do
           waitForSyncComplete 120
-
-        finalPresent <- ingestLsmExists ledgerDir
-        finalPresent `shouldBe` False
+          -- Same post-Prep deletion race as the happy path: poll for the
+          -- directory to disappear rather than reading once.
+          waitFor "ingest-lsm/ dir to be deleted after the resumed Prep"
+            (not <$> ingestLsmExists ledgerDir) 30
 
 -- ---------------------------------------------------------------------------
 -- Cancellation helpers

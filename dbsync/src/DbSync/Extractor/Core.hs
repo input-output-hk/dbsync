@@ -198,14 +198,16 @@ affectsDeposit = \case
 -- * Record builders (pure, shared across phases)
 -- ---------------------------------------------------------------------------
 
--- | Build a 'Block' record from a 'GenericBlock'.
+-- | Build a 'Block' record from a 'GenericBlock'. Epoch Boundary
+-- Blocks carry no real block or slot number, so those columns are
+-- left NULL; only the epoch number is meaningful for an EBB.
 mkBlock :: GenericBlock -> Maybe BlockId -> SlotLeaderId -> Block
 mkBlock gb prevId slId = Block
   { blockHash          = blkHash gb
   , blockEpochNo       = Just (unEpochNo $ blkEpochNo gb)
-  , blockSlotNo        = Just (unSlotNo $ blkSlotNo gb)
-  , blockEpochSlotNo   = Just (blkEpochSlotNo gb)
-  , blockBlockNo       = Just (unBlockNo $ blkBlockNo gb)
+  , blockSlotNo        = notEbb (unSlotNo $ blkSlotNo gb)
+  , blockEpochSlotNo   = notEbb (blkEpochSlotNo gb)
+  , blockBlockNo       = notEbb (unBlockNo $ blkBlockNo gb)
   , blockPreviousId    = prevId
   , blockSlotLeaderId  = slId
   , blockSize          = blkSize gb
@@ -217,6 +219,9 @@ mkBlock gb prevId slId = Block
   , blockOpCert        = blkOpCert gb
   , blockOpCertCounter = blkOpCertCounter gb
   }
+  where
+    notEbb :: a -> Maybe a
+    notEbb x = if blkIsEBB gb then Nothing else Just x
 
 -- | Build a 'SlotLeader' record.
 --

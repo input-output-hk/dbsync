@@ -396,7 +396,7 @@ processProposals ctx tc =
           , committeeQuorumDenominator   = qDen
           }
         forM_ added $ \(coldKey, expiry) -> do
-          chId <- resolveAndWriteCommitteeHash coldKey False
+          chId <- resolveAndWriteCommitteeHash (chHash coldKey) (chIsScript coldKey)
           liftIO $ writeCommitteeMember writer CommitteeMember
             { committeeMemberCommitteeId     = cId
             , committeeMemberCommitteeHashId = chId

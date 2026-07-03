@@ -1336,7 +1336,7 @@ convertGovAction = \case
     GovUpdateCommittee
       (govPurposeRef <$> strictMaybeToMaybe prev)
       (Set.map credBytes remove)
-      [ (credBytes cred, unEpochNo expiry)
+      [ (credToCredHash cred, unEpochNo expiry)
       | (cred, expiry) <- Map.toList add
       ]
       (fromIntegral (numerator (Ledger.unboundRational quorum)))

@@ -495,11 +495,13 @@ data BlockApplyData = BlockApplyData
   , badStakeSlice      :: !Generic.StakeSliceRes
   , badPoolsRegistered :: !(Set.Set ByteString)
   , badGovExpiresAfter :: !(Strict.Maybe Ledger.EpochInterval)
+  , badStakeKeyDeposit :: !(Strict.Maybe Coin)
+  , badPoolDeposit     :: !(Strict.Maybe Coin)
   }
 
 instance NFData BlockApplyData where
-  rnf (BlockApplyData depositsMap stakeSlice poolsRegistered govExpiresAfter) =
-    rnf (depositsMap, stakeSlice, poolsRegistered, govExpiresAfter)
+  rnf (BlockApplyData depositsMap stakeSlice poolsRegistered govExpiresAfter stakeKeyDeposit poolDeposit) =
+    rnf (depositsMap, stakeSlice, poolsRegistered, govExpiresAfter, stakeKeyDeposit, poolDeposit)
 
 -- | Per-boundary projection the epoch-boundary consumer needs, carved
 -- out of the full 'ApplyResult'. Built from the finalised ledger

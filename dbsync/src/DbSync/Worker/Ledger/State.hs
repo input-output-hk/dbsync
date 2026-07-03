@@ -663,12 +663,13 @@ applyBlock blk slotDetails suppressBoundary = do
           else pure Nothing
       poolsRegistered <-
         liftIO $ getRegisteredPools (leRegisteredPoolsCache env) oldCls
-      let appResult =
+      let mDeposits = Generic.getDeposits finalState
+          appResult =
             ApplyResult
               { apPrices          = getPrices newCls'
               , apGovExpiresAfter = getGovExpiration newCls'
               , apNewEpoch        = maybeToStrictMaybe newEpoch
-              , apDeposits        = maybeToStrictMaybe (Generic.getDeposits finalState)
+              , apDeposits        = maybeToStrictMaybe mDeposits
               , apSlotDetails     = slotDetails
               -- Never read from 'leLatestApplyResult'; the live copies
               -- travel via 'blockData' / 'boundaryData'.
@@ -684,6 +685,8 @@ applyBlock blk slotDetails suppressBoundary = do
               , badStakeSlice      = getStakeSlice env newCls' Generic.SteadyStateSlice
               , badPoolsRegistered = poolsRegistered
               , badGovExpiresAfter = getGovExpiration newCls'
+              , badStakeKeyDeposit = maybeToStrictMaybe (Generic.stakeKeyDeposit <$> mDeposits)
+              , badPoolDeposit     = maybeToStrictMaybe (Generic.poolDeposit <$> mDeposits)
               }
           boundaryData =
             BoundaryApplyData

@@ -215,8 +215,14 @@ anchorMax anchors = \case
 
 countSql :: Text -> Bound -> Anchors -> Text
 countSql root bound anchors =
-  "SELECT COUNT(*)::bigint FROM " <> quoteIdent root <> clause
+  "SELECT " <> selected <> "::bigint FROM " <> quoteIdent root <> clause
   where
+    -- Byron EBBs carry a duplicated block_no in the new schema and a
+    -- NULL one in the old, so counting distinct block_no values gives
+    -- the same cut under either encoding.
+    selected = case bound of
+      BoundBlock -> "COUNT(DISTINCT block_no)"
+      _ -> "COUNT(*)"
     clause = case bound of
       BoundBlock -> " WHERE block_no <= " <> show (anBlockNo anchors)
       BoundEpoch -> " WHERE epoch_no <= " <> show (anEpoch anchors)

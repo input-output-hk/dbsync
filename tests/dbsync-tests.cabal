@@ -246,23 +246,30 @@ test-suite dbsync-test
     , wide-word
 
 -- ---------------------------------------------------------------------------
--- Database comparison library
+-- Database comparison CLI
 -- ---------------------------------------------------------------------------
-library dbsync-compare-lib
-  import:          warnings, defaults
-  hs-source-dirs:  compare-lib
-  exposed-modules:
+--
+-- Standalone tool: everything (CLI, connection layer, schema coverage,
+-- row counts, spot checks) lives under @compare/@.
+executable dbsync-compare
+  import:         warnings, defaults
+  hs-source-dirs: compare
+  main-is:        Main.hs
+  ghc-options:    -threaded
+  other-modules:
     DbSync.Compare.Check
     DbSync.Compare.Connect
     DbSync.Compare.FkGraph
     DbSync.Compare.Introspect
     DbSync.Compare.Normalize
+    DbSync.Compare.Options
     DbSync.Compare.Report
     DbSync.Compare.RowCompare
     DbSync.Compare.RowCounts
     DbSync.Compare.Schema
     DbSync.Compare.SchemaCoverage
     DbSync.Compare.SpotCheck
+    DbSync.Compare.Structure
   build-depends:
       base
     , cardano-prelude
@@ -270,21 +277,6 @@ library dbsync-compare-lib
     , dbsync
     , dbsync-db
     , hasql
-    , random
-    , text
-
--- ---------------------------------------------------------------------------
--- Database comparison CLI
--- ---------------------------------------------------------------------------
-executable dbsync-compare
-  import:         warnings, defaults
-  hs-source-dirs: compare
-  main-is:        Main.hs
-  ghc-options:    -threaded
-  other-modules:
-    DbSync.Compare.Options
-  build-depends:
-      cardano-prelude
-    , dbsync-tests:dbsync-compare-lib
     , optparse-applicative
+    , random
     , text

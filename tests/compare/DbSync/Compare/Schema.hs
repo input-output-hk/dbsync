@@ -2,6 +2,7 @@ module DbSync.Compare.Schema
   ( StaticClass (..)
   , staticClassify
   , renamedOldName
+  , renamedNewName
   , newTableNames
   , tableToExtractor
   , oldOnlyTables
@@ -28,12 +29,20 @@ tableToExtractor =
 -- * Old vs new divergences
 -- ---------------------------------------------------------------------------
 
--- Map a new table name to its old-schema name. Only renamed tables differ.
+-- Renamed tables as (new name, old name); everything else maps to itself.
+tableRenames :: [(Text, Text)]
+tableRenames =
+  [ ("pot_reward", "reward_rest")
+  , ("epoch_finalized", "epoch")
+  ]
+
+-- Map a new table name to its old-schema name.
 renamedOldName :: Text -> Text
-renamedOldName = \case
-  "pot_reward" -> "reward_rest"
-  "epoch_finalized" -> "epoch"
-  other -> other
+renamedOldName t = fromMaybe t (lookup t tableRenames)
+
+-- Map an old table name to its new-schema name.
+renamedNewName :: Text -> Text
+renamedNewName t = fromMaybe t (lookup t [(o, n) | (n, o) <- tableRenames])
 
 data StaticClass
   = StaticSkip Text -- ^ Definite skip with reason; never probed.

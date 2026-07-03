@@ -13,6 +13,7 @@ import DbSync.Compare.SchemaCoverage
   , schemaCoverageHasRegressions
   )
 import DbSync.Compare.SpotCheck (SpotCheckConfig (..), spotCheckChecks)
+import DbSync.Compare.Structure (structureChecks)
 
 main :: IO ()
 main = do
@@ -29,6 +30,10 @@ main = do
       coverage <- runSchemaCoverage oldConn newConn oldFacts newFacts epochCeiling
       renderSchemaCoverage coverage
 
+      structItems <-
+        if cfgStructure cfg
+          then structureChecks oldConn newConn
+          else pure []
       rowItems <-
         if cfgRowCounts cfg
           then do
@@ -43,7 +48,7 @@ main = do
               epochCeiling
           else pure []
 
-      checksBad <- runChecks oldConn newConn (rowItems <> spotItems)
+      checksBad <- runChecks oldConn newConn (structItems <> rowItems <> spotItems)
       if schemaCoverageHasRegressions coverage || checksBad
         then exitFailure
         else exitSuccess

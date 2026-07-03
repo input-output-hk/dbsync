@@ -255,8 +255,8 @@ takeBlockLedgerData = \case
     blockData <- Strict.atomically (readTBQueue (leBlockApplyResults lenv))
     pure $ LedgerDataOn LedgerOutputs
       { loDepositsMap     = badDepositsMap blockData
-      , loStakeKeyDeposit = Nothing
-      , loPoolDeposit     = Nothing
+      , loStakeKeyDeposit = SMaybe.maybe Nothing Just (badStakeKeyDeposit blockData)
+      , loPoolDeposit     = SMaybe.maybe Nothing Just (badPoolDeposit blockData)
       , loStakeSlice      = badStakeSlice blockData
       , loRegisteredPools = badPoolsRegistered blockData
       , loGovExpiresAfter =

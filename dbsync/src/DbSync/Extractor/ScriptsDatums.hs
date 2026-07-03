@@ -71,9 +71,12 @@ scriptsDatumsExtractor = ExtractorDef
 -- * Processing
 -- ---------------------------------------------------------------------------
 
+-- Phase-2 failures are skipped: the ledger never applies an invalid
+-- tx's witnesses, so its scripts, datums, and redeemers are not
+-- on-chain data.
 processScriptsDatums :: ProcessBlockFn
 processScriptsDatums ctx =
-  forM_ (bcTxs ctx) $ \tc -> do
+  forM_ (bcTxs ctx) $ \tc -> when (txValidContract (tcGenTx tc)) $ do
     let txId = tcTxId tc
         gtx  = tcGenTx tc
     forM_ (txScripts gtx)           (writeScriptEntry txId)

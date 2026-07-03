@@ -33,7 +33,6 @@ module DbSync.Phase.Ingest.Boundary
   , renderUtxoHitRate
   , renderDedupCounts
   , renderMemCurve
-  , renderBufferSizes
   , recordMemSample
   , sampleHeapBytes
   , fmtBytes
@@ -85,8 +84,7 @@ import DbSync.Worker.Ledger.Types
   , LedgerEnv (..)
   )
 import DbSync.Worker.TxOut.AddressBuffer
-  ( addressBufferCounts
-  , forceEpochAddressBuffer
+  ( forceEpochAddressBuffer
   , takeAndReset
   )
 import qualified DbSync.Worker.TxOut.ConsumedByBuffer as ConsumedByBuffer
@@ -154,9 +152,10 @@ data ConsumerLoopState = ConsumerLoopState
     -- with a replay window, 'NoReplay' otherwise.
   , clsMemStats        :: !(IORef MemStats)
     -- ^ Per-epoch @(in-use, live)@ samples + running peaks, taken on the
-    -- consumer's sample stride. Rendered as a curve+peak readout and
-    -- reset at each boundary. Empty until first sampled (or without
-    -- @+RTS -T@).
+    -- consumer's sample stride. The in-use peak feeds the summary
+    -- line's @peak mem@ segment; the full curve is a Debug-only
+    -- readout. Reset at each boundary. Empty until first sampled
+    -- (or without @+RTS -T@).
   }
 
 -- | Allocate a fresh 'ConsumerLoopState'. The replay machine is
@@ -317,13 +316,13 @@ handleEpochBoundary cls prev slot = do
   memStats   <- liftIO $ readIORef (clsMemStats cls)
 
   let summary = renderEpochSummary prev blockCount elapsedSec blocksPerSec
-                  storeStats mBoundary securityParam
+                  storeStats (msPeakInUse memStats) mBoundary securityParam
                   (fmap (\(_, b, _) -> b) mLastBlock)
-                  <> renderBufferSizes (addressBufferCounts buf)
 
   liftIO $ traceWith tracer $ LogMsg Info "Ingest" summary Nothing
-  liftIO $ for_ (renderMemCurve prev memStats) $ \line ->
-    traceWith tracer $ LogMsg Info "Ingest" line Nothing
+  when (minSev <= Debug) $ liftIO $
+    for_ (renderMemCurve prev memStats) $ \line ->
+      traceWith tracer $ LogMsg Debug "Ingest" line Nothing
 
   -- Dedup-store size + heap diagnostic. Gated on Debug because
   -- sampling 'getRTSStats' isn't free.
@@ -423,24 +422,33 @@ compactIngestStores utxoStore dedupStores lsm prev = do
       else DedupStore.persistDedupStore store lsm
 
 -- | Build the operator-facing per-epoch summary line:
--- @"Epoch N | M blk in Ts (R blk/s) [| utxo HR=…%] [| (~P%)]"@.
+-- @"Epoch N | M blk in Ts (R blk/s) [| utxo hitrate=…%] [| peak mem=…] [| (~P%)]"@.
 renderEpochSummary
   :: EpochNo
   -> Word64                   -- ^ blocks this epoch
   -> Double                   -- ^ elapsed seconds
   -> Double                   -- ^ blocks per second
   -> UtxoStore.StoreStats     -- ^ for the hit-rate segment
+  -> Word64                   -- ^ peak in-use bytes (0 when unsampled)
   -> Maybe BlockNo            -- ^ rollback boundary
   -> Word64                   -- ^ security parameter @k@
   -> Maybe Word64             -- ^ current block number (for the % segment)
   -> Text
 renderEpochSummary prev blockCount elapsedSec blocksPerSec storeStats
-                   mBoundary securityParam mCurBlock =
+                   peakInUse mBoundary securityParam mCurBlock =
   "Epoch " <> show (unEpochNo prev)
     <> " | " <> fmtCount blockCount <> " blk in " <> fmtDuration elapsedSec
     <> " (" <> show (round blocksPerSec :: Int) <> " blk/s)"
     <> renderUtxoHitRate storeStats
+    <> renderPeakMem peakInUse
     <> renderBoundaryPercent mBoundary securityParam mCurBlock
+
+-- | Render the epoch's peak in-use memory as @" | peak mem=X.YGB"@.
+-- Empty when unsampled (without @+RTS -T@, or before any sample).
+renderPeakMem :: Word64 -> Text
+renderPeakMem b
+  | b == 0    = ""
+  | otherwise = " | peak mem=" <> fmtBytes b
 
 -- | Inline copy of 'DbSync.Phase.Ingest.Consumer.renderBoundaryPercent'
 -- used by 'renderEpochSummary' so the public version stays in
@@ -456,16 +464,16 @@ renderBoundaryPercent (Just (BlockNo boundary)) k (Just curBlock)
     tip = boundary + k
 renderBoundaryPercent _ _ _ = ""
 
--- | Render the UtxoStore lifetime hit rate as @" | utxo HR=X.YY%"@.
--- Empty until the first lookup so the boot epoch isn't tagged
--- @0.00%@.
+-- | Render the UtxoStore lifetime hit rate as
+-- @" | utxo hitrate=X.YY%"@. Empty until the first lookup so the
+-- boot epoch isn't tagged @0.00%@.
 renderUtxoHitRate :: UtxoStore.StoreStats -> Text
 renderUtxoHitRate s
   | looked == 0 = ""
   | otherwise   =
       let pct = fromIntegral (UtxoStore.ssHits s) * 100
               / fromIntegral looked :: Double
-      in " | utxo HR=" <> fmtF2 pct <> "%"
+      in " | utxo hitrate=" <> fmtF2 pct <> "%"
   where
     looked = UtxoStore.ssHits s + UtxoStore.ssMisses s
 
@@ -498,12 +506,6 @@ downsampleN k xs
     n    = length xs
     step = fromIntegral (n - 1) / fromIntegral (k - 1) :: Double
     idxs = [ round (fromIntegral j * step) | j <- [0 .. k - 1] ] :: [Int]
-
--- | Render the per-epoch buffer cardinalities as @" | addrs N out N"@
--- (unique addresses, tx_out rows recorded this epoch).
-renderBufferSizes :: (Int, Int) -> Text
-renderBufferSizes (addrs, outs) =
-  " | addrs " <> fmtCount addrs <> " out " <> fmtCount outs
 
 -- | Render @[(name, count)]@ as @"name=N1,234 …"@.
 renderDedupCounts :: [(Text, Int)] -> Text

@@ -26,7 +26,7 @@ import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import qualified Control.Concurrent.STM as STM
 import Control.Monad.IO.Unlift (withRunInIO)
 import Control.Tracer (traceWith)
-import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import Numeric (showFFloat)
 import qualified Hasql.Connection as Conn
@@ -167,13 +167,51 @@ run = do
   replayRef <- liftIO $ newIORef $ case feReplayBootSlot of
     Just _  -> ReplayPending
     Nothing -> NoReplay
+  -- Monotonic delivery guard: block number of the last block this
+  -- consumer applied to PG. The receiver's delivery contract is
+  -- at-least-once across session boundaries (handoff, node
+  -- reconnect), so a non-advancing forward is a re-delivered block
+  -- that must be dropped, not re-inserted — the @block@ table has no
+  -- unique constraint, and the @tx@ one aborts the whole app.
+  -- Reset by 'processRollback': post-rollback forwards legitimately
+  -- carry lower block numbers.
+  lastAppliedRef <- liftIO $ newIORef Nothing
   forever $ do
     mMsg <- liftIO $
       waitForMsgOrHeartbeat feBlockQueue phaseRef idleHeartbeatMicros
     case mMsg of
-      Just (MsgForward  blk)   -> processForward progressRef replayRef blk
-      Just (MsgRollback point) -> processRollback progressRef point
-      Nothing                  -> emitIdleHeartbeat progressRef
+      Just (MsgForward blk) -> do
+        redelivered <- liftIO $
+          dropRedeliveredForward tracer phaseRef lastAppliedRef blk
+        unless redelivered $
+          processForward progressRef replayRef lastAppliedRef blk
+      Just (MsgRollback point) ->
+        processRollback progressRef lastAppliedRef point
+      Nothing -> emitIdleHeartbeat progressRef
+
+-- | 'True' when this forward block is at or below the last applied
+-- block number — a re-delivered block the consumer must not apply
+-- again. Logs at 'Warning': with atomic receiver-side delivery this
+-- should never fire, so an occurrence is worth an operator's
+-- attention even though it is handled.
+dropRedeliveredForward
+  :: AppTracer
+  -> CurrentPhase
+  -> IORef (Maybe BlockNo)
+  -> CardanoBlock StandardCrypto
+  -> IO Bool
+dropRedeliveredForward tracer phaseRef lastAppliedRef blk = do
+  mLastApplied <- readIORef lastAppliedRef
+  case mLastApplied of
+    Just lastBn | blockNo blk <= lastBn -> do
+      component <- readPhaseComponent phaseRef
+      traceWith tracer $ LogMsg Warning component
+        ( "dropping re-delivered block " <> show (unBlockNo (blockNo blk))
+            <> " (slot " <> show (unSlotNo (blockSlot blk))
+            <> "); already applied up to block " <> show (unBlockNo lastBn)
+        ) Nothing
+      pure True
+    _ -> pure False
 
 -- | Read the next message from the queue, or fall through with
 -- 'Nothing' after the heartbeat timer expires. Only fires the timer
@@ -231,9 +269,10 @@ readPhaseComponent = fmap renderPhase . readCurrentPhase
 processForward
   :: IORef FollowProgress
   -> IORef ReplayLogState
+  -> IORef (Maybe BlockNo)   -- ^ re-delivery guard; written after commit
   -> CardanoBlock StandardCrypto
   -> FollowM ()
-processForward progressRef replayRef cardanoBlock = do
+processForward progressRef replayRef lastAppliedRef cardanoBlock = do
   env@FollowEnv
     { feCore
     , feStateQueryVar
@@ -289,6 +328,10 @@ processForward progressRef replayRef cardanoBlock = do
         let flushAndAdvance =
               writes *> void (Pipeline.statement triple writeSyncStateSlotStmt)
         runFollowBlockTx feHasqlConnection flushAndAdvance
+        -- Only advance the re-delivery guard once the block's PG
+        -- transaction has committed; a crash before this point must
+        -- leave the guard at the previous block.
+        writeIORef lastAppliedRef (Just (blkBlockNo genBlock))
       maybeFlipToTip (blkSlotNo genBlock) (blkBlockNo genBlock)
       maybeLogProgress progressRef now genBlock
 
@@ -561,8 +604,12 @@ fmtRate r
 -- cascade so the log identifies the run as catching up again.
 -- The cascade itself DELETEs every row past the target block and
 -- advances @last_committed_*@ to match, all in one PG transaction.
-processRollback :: IORef FollowProgress -> CardanoPoint -> FollowM ()
-processRollback progressRef point = do
+processRollback
+  :: IORef FollowProgress
+  -> IORef (Maybe BlockNo)   -- ^ re-delivery guard; reset by the rollback
+  -> CardanoPoint
+  -> FollowM ()
+processRollback progressRef lastAppliedRef point = do
   FollowEnv{feCore, feHasqlConnection} <- ask
   let tracer    = ceTracer    feCore
       phaseRef  = ceCurrentPhase feCore
@@ -573,6 +620,10 @@ processRollback progressRef point = do
     traceWith tracer $ LogMsg Info component
       ("rollback to " <> show point) Nothing
   rollbackWithRetry tableDefs point
+  -- The fork's replacement blocks arrive with block numbers at or
+  -- below the last applied one; disarm the re-delivery guard until
+  -- the next forward block re-seeds it.
+  liftIO $ writeIORef lastAppliedRef Nothing
   -- The cascade may have deleted past an epoch boundary; re-seed the
   -- previous-epoch marker from PG so the next forward block neither
   -- fires a spurious boundary drain (which would block on an empty

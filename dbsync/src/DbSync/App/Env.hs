@@ -97,7 +97,7 @@ class HasReceiverChannels env where
   getBlockQueue       :: env -> TBQueue ChainSyncMsg
   getLedgerQueue      :: env -> Maybe (TBQueue ChainSyncMsg)
   getStateQueryVar    :: env -> StateQueryVar
-  getLatestPoint      :: env -> IORef (Maybe CardanoPoint)
+  getLatestPoint      :: env -> TVar (Maybe CardanoPoint)
   getRollbackBoundary :: env -> TVar (Maybe BlockNo)
   getLatestTipBlock   :: env -> TVar (Maybe BlockNo)
 
@@ -219,7 +219,7 @@ data IngestEnv = IngestEnv
     -- ^ Lower edge of the replay window (the chosen snapshot's
     -- slot). Drives the percentage in the consumer\'s replay
     -- progress log. 'Nothing' otherwise.
-  , ieLatestReceivedPoint     :: !(IORef (Maybe CardanoPoint))
+  , ieLatestReceivedPoint     :: !(TVar (Maybe CardanoPoint))
     -- ^ The latest chain point the receiver has accepted (forward
     -- or rollback). Read on every (re)connection so the chainsync
     -- client resumes at our current position rather than the
@@ -229,6 +229,9 @@ data IngestEnv = IngestEnv
     -- genesis; the LedgerWorker then crashes with a hash mismatch
     -- when the genesis block arrives over our advanced state.
     -- 'Nothing' on first connection (before any block is received).
+    -- A 'TVar' so the receiver can update it in the same STM
+    -- transaction as the queue writes — a point must never be
+    -- recorded without its block being enqueued, or vice versa.
   , ieRollbackBoundary        :: !(TVar (Maybe BlockNo))
     -- ^ Latest @nodeTip − k@ observed by the receiver, where @k@ is
     -- the protocol security parameter. Below this block number the
@@ -267,7 +270,7 @@ data FollowEnv = FollowEnv
     -- ^ Slot-to-time interpreter, used by 'parseBlock'.
   , feSystemStart         :: !SystemStart
     -- ^ Network system-start time; drives slot-to-time conversion.
-  , feLatestReceivedPoint :: !(IORef (Maybe CardanoPoint))
+  , feLatestReceivedPoint :: !(TVar (Maybe CardanoPoint))
     -- ^ Latest chainsync point accepted; preserved across the phase flip.
   , feHasqlConnection     :: !Conn.Connection
     -- ^ Dedicated Follow connection — drives the resolver and writer

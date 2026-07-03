@@ -554,12 +554,14 @@ runIngestThenFollow
     -- were opened by the caller.
     extractStateRef  <- newIORef initialExtractState
     loaderStream     <- mkLoaderStream connStr tableDefs
-    -- 150 ≈ 1.5 consumer drain batches of headroom. Deliberately not
-    -- deeper: each slot can pin a fully-decoded block (several
-    -- hundred KB of heap for a dense Conway block), and during bulk
-    -- sync the consumer is the bottleneck so a deep queue just sits
-    -- full — at 500 that was a few hundred MB of standing heap.
-    blockQueue       <- newTBQueueIO 150
+    -- 300 ≈ 3 consumer drain batches of headroom, enough to absorb
+    -- consumer boundary stalls without starving the receiver.
+    -- Deliberately not deeper: each slot can pin a fully-decoded
+    -- block (several hundred KB of heap for a dense Conway block),
+    -- and during bulk sync the consumer is the bottleneck so a deep
+    -- queue just sits full — at 500 that is a few hundred MB of
+    -- standing heap.
+    blockQueue       <- newTBQueueIO 300
     addrBuffer       <- newAddressBufferRef
     txOutWorker      <- mkTxOutWorker tracer hasqlSettings initialAddressId
     mPoolWorker      <-
@@ -570,7 +572,7 @@ runIngestThenFollow
     let consumedByOn = uoConsumedByTxId (pcUtxo (scOptions validProfile))
     mConsumedByBuf <-
       if consumedByOn then Just <$> newConsumedByBufferRef else pure Nothing
-    latestPointRef   <- newIORef Nothing
+    latestPointRef   <- newTVarIO Nothing
     rollbackBoundary <- newTVarIO Nothing
     latestTipBlock   <- newTVarIO Nothing
 

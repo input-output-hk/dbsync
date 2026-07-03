@@ -129,11 +129,10 @@ chunkBytes :: Int
 chunkBytes = 64 * 1024
 
 -- | Chunks a table's queue may hold before the producer blocks:
--- 16 × ~64KB ≈ 1MB per table regardless of row size. (The previous
--- row-denominated bounds let @tx_cbor@ queue ~20MB of hex-doubled
--- CBOR.)
+-- 64 × ~64KB ≈ 4MB per table regardless of row size, enough to keep
+-- COPY fed across PostgreSQL latency spikes.
 chunkQueueBound :: Natural
-chunkQueueBound = 16
+chunkQueueBound = 64
 
 -- ---------------------------------------------------------------------------
 -- * Construction

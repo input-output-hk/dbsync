@@ -215,11 +215,15 @@ ledgerDbCheckpointBufferSize = 100
 -- | Buffer cap during 'IngestChainHistory'. Rollbacks are impossible
 -- below @nodeTip − k@ (the consumer panics on one), so the buffer is
 -- pure overhead during ingest — and each retained ref pins an open
--- LSM tables handle. A small cushion is kept rather than none; the
--- buffer grows to 'ledgerDbCheckpointBufferSize' naturally within
--- ~100 blocks of the Follow handoff.
+-- LSM tables handle. Two slots rather than one: while a snapshot
+-- write holds the oldest generation open (via @srCanClose@), the
+-- worker can still advance into the spare slot instead of blocking
+-- for the whole write; the extra generation is only held while a
+-- snapshot writes. The buffer grows to
+-- 'ledgerDbCheckpointBufferSize' naturally within ~100 blocks of
+-- the Follow handoff.
 ingestLedgerDbCheckpointBufferSize :: Int
-ingestLedgerDbCheckpointBufferSize = 1
+ingestLedgerDbCheckpointBufferSize = 2
 
 -- | Push a new 'DbSyncStateRef' onto the newest end of the
 -- 'LedgerDB', then prune any entries that fall outside the supplied
@@ -461,11 +465,13 @@ mkHasLedgerEnv
     boundaryQueueBound = 4
 
     -- One slot per worker-side look-ahead block. Each entry is a
-    -- small, fully-forced projection, so this bound is pure
-    -- back-pressure: kept modest so the worker cannot race far ahead
-    -- of a stalled consumer and pin many ledger generations.
+    -- small, fully-forced projection, so even a full queue holds
+    -- only a few MB; the bound is pure back-pressure so the worker
+    -- cannot run arbitrarily far ahead of a stalled consumer, while
+    -- staying deep enough that boundary-length consumer stalls do
+    -- not throttle the worker.
     blockApplyQueueBound :: Natural
-    blockApplyQueueBound = 16
+    blockApplyQueueBound = 64
 
 -- | Seed the in-memory 'LedgerDB' buffer with the genesis state on
 -- a fresh boot. The resume path uses 'initLedgerDbFromSnapshot'

@@ -360,14 +360,11 @@ executable dbsync
   hs-source-dirs: app
   main-is:        Main.hs
   -- Baked-in RTS: -A64m/-N6 64MB nurseries across six capabilities;
-  -- -c compacts the oldest generation in place instead of copying;
-  -- -F1.2 major-GCs once the old generation passes 1.2x the last
-  -- live figure, keeping heap close to live data; -T enables RTS
-  -- stats for the memory gauges; -I0 disables idle GC (the sync
-  -- loop never idles).
+  -- -T enables RTS stats for the memory gauges; -I0 disables idle
+  -- GC (the sync loop never idles).
   ghc-options:
     -threaded -rtsopts
-    "-with-rtsopts=-A64m -N6 -c -F1.2 -T -I0 --disable-delayed-os-memory-return"
+    "-with-rtsopts=-A64m -N6 -T -I0 --disable-delayed-os-memory-return"
   build-depends:
       dbsync
     , cardano-prelude

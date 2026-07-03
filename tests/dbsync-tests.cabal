@@ -108,6 +108,7 @@ test-suite dbsync-test
   other-modules:
     DbSync.AppSpec
     DbSync.App.CliSpec
+    DbSync.ChainSync.DeliverSpec
     DbSync.App.Config.TypesSpec
     DbSync.App.Config.NodeSpec
     DbSync.App.Config.ValidationSpec
@@ -186,6 +187,7 @@ test-suite dbsync-test
     DbSync.Phase.FollowPerfRealisticSpec
     DbSync.Phase.FollowPerfSpec
     DbSync.Phase.FollowRestartSpec
+    DbSync.Phase.HandoffRedeliverySpec
     DbSync.Phase.FollowReplayOnBootSpec
     DbSync.Phase.FollowReplayWindowSpec
     DbSync.Phase.IngestPrepFollowSpec

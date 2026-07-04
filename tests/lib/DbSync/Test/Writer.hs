@@ -60,7 +60,7 @@ import DbSync.Db.Schema.Ids
   , VotingAnchorId
   )
 import DbSync.Db.Schema.Metadata (TxMetadata)
-import DbSync.Db.Schema.MultiAsset (MaTxMint)
+import DbSync.Db.Schema.MultiAsset (MaTxMint, MaTxOut)
 import DbSync.Db.Schema.Pool (PoolStat, PoolUpdate)
 import DbSync.Db.Schema.ScriptsDatums
   ( Datum, ExtraKeyWitness, Redeemer, RedeemerData, Script )
@@ -102,6 +102,7 @@ data TestWriterState = TestWriterState
   , twPoolStats         :: ![PoolStat]
   , twTxMetadata        :: ![TxMetadata]
   , twMaTxMints         :: ![MaTxMint]
+  , twMaTxOuts          :: ![MaTxOut]
   , twPotTransfers      :: ![PotTransfer]
   , twTreasuries        :: ![Treasury]
   , twReserves          :: ![Reserve]
@@ -158,6 +159,7 @@ emptyTestWriterState = TestWriterState
   , twPoolStats         = []
   , twTxMetadata        = []
   , twMaTxMints         = []
+  , twMaTxOuts          = []
   , twPotTransfers     = []
   , twTreasuries       = []
   , twReserves         = []
@@ -237,7 +239,9 @@ mkTestWriter ref = Writer
   , writeMaTxMint = \m ->
       atomicModifyIORef' ref $ \s ->
         (s { twMaTxMints = twMaTxMints s ++ [m] }, ())
-  , writeMaTxOut = \_ -> pure ()
+  , writeMaTxOut = \m ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twMaTxOuts = twMaTxOuts s ++ [m] }, ())
 
     -- StakeDelegation
   , writeStakeAddress = \said sa ->

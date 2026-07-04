@@ -147,6 +147,7 @@ test-suite dbsync-test
     DbSync.Extractor.EpochBoundarySpec
     DbSync.Extractor.EpochSpec
     DbSync.Extractor.GovernanceSpec
+    DbSync.Extractor.MultiAssetSpec
     DbSync.Extractor.OffChainPoolsSpec
     DbSync.Extractor.OffChainVotesSpec
     DbSync.Extractor.PipelineSpec

@@ -165,7 +165,9 @@ spec = describe "Follow governance writes" $ do
           -- Cert tables.
           (followDrepH    - baselineDrepH)    `shouldSatisfy` (>= 1)
           (followDrepReg  - baselineDrepReg)  `shouldSatisfy` (>= 1)
-          (followCommH    - baselineCommH)    `shouldSatisfy` (>= 2)  -- cold + hot
+          -- Only the hot key is new; the cold key is a genesis committee
+          -- member seeded during Ingest, so its committee_hash pre-exists.
+          (followCommH    - baselineCommH)    `shouldSatisfy` (>= 1)
           (followCommReg  - baselineCommReg)  `shouldSatisfy` (>= 1)
           -- Proposal tables.
           (followGap      - baselineGap)      `shouldSatisfy` (>= 2)  -- ParameterChange + TreasuryWithdrawals

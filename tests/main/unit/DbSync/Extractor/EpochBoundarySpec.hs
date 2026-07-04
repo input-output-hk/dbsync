@@ -125,12 +125,15 @@ spec = do
       twEpochStates written `shouldBe` []
       twCostModels  written `shouldBe` []
 
-    it "populated euProtoParams (no cost models) writes 1 epoch_param + 1 epoch_state" $ do
+    -- epoch_state is gated on Conway gov state; these fixtures carry
+    -- none (apGovActionState = Nothing), so no epoch_state row is
+    -- written. The Conway path is covered by GovernanceGenesisSpec.
+    it "populated euProtoParams writes 1 epoch_param, no epoch_state without gov state" $ do
       written <- runBoundary $
         mkApplyResult $ Strict.Just $
           mkNewEpochWith (EpochNo 1) (Strict.Just dummyProtoParams)
       length (twEpochParams written) `shouldBe` 1
-      length (twEpochStates written) `shouldBe` 1
+      length (twEpochStates written) `shouldBe` 0
       length (twCostModels  written) `shouldBe` 0
 
     it "populated euProtoParams with cost models writes 1 cost_model" $ do
@@ -140,7 +143,7 @@ spec = do
           mkNewEpochWith (EpochNo 1) (Strict.Just params)
       length (twCostModels  written) `shouldBe` 1
       length (twEpochParams written) `shouldBe` 1
-      length (twEpochStates written) `shouldBe` 1
+      length (twEpochStates written) `shouldBe` 0
 
     it "two boundaries with the same cost models write only one cost_model row" $ do
       let params = dummyProtoParams { Proto.ppCostmdls = Just Map.empty }
@@ -150,7 +153,7 @@ spec = do
       written <- runBoundaries [boundary (EpochNo 1), boundary (EpochNo 2)]
       length (twCostModels  written) `shouldBe` 1
       length (twEpochParams written) `shouldBe` 2
-      length (twEpochStates written) `shouldBe` 2
+      length (twEpochStates written) `shouldBe` 0
 
 -- ---------------------------------------------------------------------------
 -- Test fixtures

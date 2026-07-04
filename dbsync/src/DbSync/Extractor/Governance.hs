@@ -49,6 +49,7 @@ import qualified Cardano.Ledger.TxIn as Ledger
 import Cardano.Slotting.Slot (EpochNo (..))
 import qualified Data.Map.Strict as Map
 import qualified Data.Strict.Maybe as Strict
+import Lens.Micro ((^.))
 import Ouroboros.Consensus.Cardano.Block (ConwayEra)
 
 import DbSync.Db.Schema.Governance
@@ -90,6 +91,8 @@ import DbSync.Db.Schema.Ids
   , PoolHashId
   , TxId
   , VotingAnchorId
+  , getCommitteeId
+  , getConstitutionId
   , getGovActionProposalId
   )
 import DbSync.Db.Types
@@ -120,6 +123,7 @@ import DbSync.Extractor.SharedDedup
   )
 import qualified DbSync.Parser.Types as G
 import DbSync.Parser.ParamProposal (GenericParamProposal (..))
+import DbSync.Parser.Tx (anchorData, credToCredHash, scriptHashBytes)
 import DbSync.Parser.Types
   ( AnchorData (..)
   , CertAction (..)
@@ -632,13 +636,17 @@ runGovernanceBoundary
   => BoundaryApplyData
   -> BlockId
   -> m ()
-runGovernanceBoundary applyResult _blockId = do
+runGovernanceBoundary applyResult blockId = do
   resolver <- asks getResolver
   liftIO $ writeGovExpiresAfter resolver $
     case bndGovExpiresAfter applyResult of
       Strict.Just (Ledger.EpochInterval n) -> Just (fromIntegral n)
       Strict.Nothing                       -> Nothing
-  refreshEnactedEpochStateIds applyResult
+  (genCommitteeId, genConstitutionId) <-
+    case bndGovActionState applyResult of
+      Nothing  -> pure (Nothing, Nothing)
+      Just cgs -> seedGenesisGovIfNeeded cgs blockId
+  refreshEnactedEpochStateIds applyResult genCommitteeId genConstitutionId
   case bndNewEpoch applyResult of
     Strict.Nothing -> pure ()
     Strict.Just newEpoch -> do
@@ -699,8 +707,11 @@ refreshEnactedEpochStateIds
      , MonadReader env m
      , MonadIO m
      )
-  => BoundaryApplyData -> m ()
-refreshEnactedEpochStateIds applyResult = case bndGovActionState applyResult of
+  => BoundaryApplyData
+  -> Maybe Int64  -- ^ Bootstrap committee id (no enacting proposal), for genesis territory.
+  -> Maybe Int64  -- ^ Bootstrap constitution id, before the first enacted constitution.
+  -> m ()
+refreshEnactedEpochStateIds applyResult genCommitteeId genConstitutionId = case bndGovActionState applyResult of
   Nothing  -> pure ()
   Just cgs -> do
     resolver <- asks getResolver
@@ -716,10 +727,14 @@ refreshEnactedEpochStateIds applyResult = case bndGovActionState applyResult of
 
     mCommitteeId <-
       if hasCommittee
-        then queryCommitteeByProposal (join mCommitteeProp)
+        then case join mCommitteeProp of
+          Just prop -> queryCommitteeByProposal (Just prop)
+          Nothing   -> pure genCommitteeId
         else pure Nothing
     let mNoConfId = if hasCommittee then Nothing else join mCommitteeProp
-    mConstitutionId <- queryConstitutionByProposal (join mConstProp)
+    mConstitutionId <- case join mConstProp of
+      Just prop -> queryConstitutionByProposal (Just prop)
+      Nothing   -> pure genConstitutionId
 
     liftIO $ writeEnactedEpochStateIds resolver
       (mCommitteeId, mNoConfId, mConstitutionId)
@@ -728,6 +743,65 @@ refreshEnactedEpochStateIds applyResult = case bndGovActionState applyResult of
       let (txHashBs, ix) = govActionIdParts gaId
       mGid <- liftIO $ lookupGovActionProposalId resolver txHashBs ix
       pure $ fmap getGovActionProposalId mGid
+
+-- | Seed the Conway bootstrap committee and constitution — the ones
+-- with no enacting proposal — on the first Conway boundary, so
+-- @epoch_state@'s gov FKs and @committee_member@ populate from the
+-- bootstrap epoch, matching the enacted snapshot. SELECT-guarded on
+-- the NULL-proposal row, so it runs once and is resume-safe. Returns
+-- the ids for the caller to thread into 'refreshEnactedEpochStateIds'
+-- as the genesis fallback for the same boundary — the just-written
+-- rows are not yet flushed for a SELECT during bulk ingest.
+seedGenesisGovIfNeeded
+  :: ( HasResolver env
+     , HasWriter env
+     , HasControlConnection env
+     , MonadReader env m
+     , MonadIO m
+     )
+  => Gov.ConwayGovState ConwayEra
+  -> BlockId
+  -> m (Maybe Int64, Maybe Int64)
+seedGenesisGovIfNeeded cgs blockId = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
+  mCommitteeId <- queryCommitteeByProposal Nothing >>= \case
+    Just cid -> pure (Just cid)
+    Nothing  -> case Gov.cgsCommittee cgs of
+      Ledger.SNothing -> pure Nothing
+      Ledger.SJust (Gov.Committee members threshold) -> do
+        cId <- liftIO $ assignCommitteeId resolver
+        let rat = Ledger.unboundRational threshold
+        liftIO $ writeCommittee writer cId Committee
+          { committeeGovActionProposalId = Nothing
+          , committeeQuorumNumerator     = fromIntegral (numerator rat)
+          , committeeQuorumDenominator   = fromIntegral (denominator rat)
+          }
+        forM_ (Map.toList members) $ \(cred, expiry) -> do
+          let ch = credToCredHash cred
+          chId <- resolveAndWriteCommitteeHash (chHash ch) (chIsScript ch)
+          liftIO $ writeCommitteeMember writer CommitteeMember
+            { committeeMemberCommitteeId     = cId
+            , committeeMemberCommitteeHashId = chId
+            , committeeMemberExpirationEpoch = unEpochNo expiry
+            }
+        pure (Just (getCommitteeId cId))
+  mConstitutionId <- queryConstitutionByProposal Nothing >>= \case
+    Just cid -> pure (Just cid)
+    Nothing  -> do
+      let constitution = Gov.cgsConstitution cgs
+          ad           = anchorData (Gov.constitutionAnchor constitution)
+          mScript      = scriptHashBytes
+            <$> Ledger.strictMaybeToMaybe (constitution ^. Gov.constitutionGuardrailsScriptHashL)
+      cAnchorId <- resolveAndWriteVotingAnchor (adUrl ad) (adHash ad) ConstitutionAnchor blockId
+      cId <- liftIO $ assignConstitutionId resolver
+      liftIO $ writeConstitution writer cId Constitution
+        { constitutionGovActionProposalId = Nothing
+        , constitutionVotingAnchorId      = cAnchorId
+        , constitutionScriptHash          = mScript
+        }
+      pure (Just (getConstitutionId cId))
+  pure (mCommitteeId, mConstitutionId)
 
 emitDrepDistrAndRatify
   :: ( HasResolver env

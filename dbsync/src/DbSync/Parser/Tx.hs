@@ -27,7 +27,9 @@ module DbSync.Parser.Tx
   , anchorData
   , conwayDelegAction
   , conwayGovAction
+  , credToCredHash
   , dijkstraDelegAction
+  , scriptHashBytes
   , shelleyCertToAction
   ) where
 

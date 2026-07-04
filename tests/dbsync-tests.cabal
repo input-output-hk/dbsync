@@ -183,6 +183,7 @@ test-suite dbsync-test
     DbSync.Phase.FollowEpochBoundarySpec
     DbSync.Phase.FollowEpochSyncStatsSpec
     DbSync.Phase.FollowGovernanceSpec
+    DbSync.Phase.GovernanceGenesisSpec
     DbSync.Phase.FollowPoolStatsSpec
     DbSync.Phase.FollowScriptsDatumsSpec
     DbSync.Phase.FollowStakeDelegationLedgerSpec

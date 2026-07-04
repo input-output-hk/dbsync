@@ -25,6 +25,7 @@ module DbSync.Extractor
   , blockStakeSlice
   , blockRegisteredPools
   , blockGovExpiresAfter
+  , blockCommitteeMembers
   , takeBlockLedgerData
 
     -- * Accessor classes
@@ -43,6 +44,7 @@ import Cardano.Ledger.BaseTypes (EpochInterval (..), Network)
 import Cardano.Ledger.Coin (Coin)
 import qualified Control.Concurrent.Class.MonadSTM.Strict as Strict
 import Control.Concurrent.STM.TBQueue (readTBQueue)
+import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Strict.Maybe as SMaybe
 
@@ -56,6 +58,7 @@ import DbSync.Worker.Ledger.Types
   , DepositsMap
   , HasLedgerEnv (..)
   , LedgerEnv (..)
+  , ProposedCommitteeMember (..)
   , emptyDepositsMap
   )
 import DbSync.Phase.Type (SyncPhase)
@@ -173,21 +176,24 @@ data BlockLedgerData
 
 -- | Per-block ledger output when the ledger feature is on.
 data LedgerOutputs = LedgerOutputs
-  { loDepositsMap     :: !DepositsMap
+  { loDepositsMap      :: !DepositsMap
       -- ^ Per-tx deposits, keyed by tx-body hash.
-  , loStakeKeyDeposit :: !(Maybe Coin)
+  , loStakeKeyDeposit  :: !(Maybe Coin)
       -- ^ Protocol-param stake-key deposit at this block.
-  , loPoolDeposit     :: !(Maybe Coin)
+  , loPoolDeposit      :: !(Maybe Coin)
       -- ^ Protocol-param pool deposit at this block.
-  , loStakeSlice      :: !Generic.StakeSliceRes
+  , loStakeSlice       :: !Generic.StakeSliceRes
       -- ^ Per-block slice of the "mark" stake distribution.
-  , loRegisteredPools :: !(Set.Set ByteString)
+  , loRegisteredPools  :: !(Set.Set ByteString)
       -- ^ Raw pool-hash bytes registered in the ledger before this
       -- block; used to decide the pool_update.active_epoch_no offset.
-  , loGovExpiresAfter :: !(Maybe Word64)
+  , loGovExpiresAfter  :: !(Maybe Word64)
       -- ^ Gov-action lifetime (in epochs) from this block's protocol
       -- params; 'Nothing' outside Conway. Drives
       -- gov_action_proposal.expiration.
+  , loCommitteeMembers :: !(Map.Map (ByteString, Word64) [ProposedCommitteeMember])
+      -- ^ Full resolved committee per committee-updating proposal in
+      -- this block, keyed by @(proposal tx hash, proposal index)@.
   }
 
 -- | Default for the ledger-disabled case.
@@ -197,12 +203,13 @@ emptyBlockLedgerData = LedgerDataOff
 -- | All-zero/Nothing 'LedgerOutputs'.
 emptyLedgerOutputs :: LedgerOutputs
 emptyLedgerOutputs = LedgerOutputs
-  { loDepositsMap     = emptyDepositsMap
-  , loStakeKeyDeposit = Nothing
-  , loPoolDeposit     = Nothing
-  , loStakeSlice      = Generic.NoSlices
-  , loRegisteredPools = Set.empty
-  , loGovExpiresAfter = Nothing
+  { loDepositsMap      = emptyDepositsMap
+  , loStakeKeyDeposit  = Nothing
+  , loPoolDeposit      = Nothing
+  , loStakeSlice       = Generic.NoSlices
+  , loRegisteredPools  = Set.empty
+  , loGovExpiresAfter  = Nothing
+  , loCommitteeMembers = Map.empty
   }
 
 -- | Per-tx deposits map; 'emptyDepositsMap' when ledger is off.
@@ -244,6 +251,14 @@ blockGovExpiresAfter = \case
   LedgerDataOff   -> Nothing
   LedgerDataOn lo -> loGovExpiresAfter lo
 
+-- | Full resolved committee per committee-updating proposal in this
+-- block; empty when ledger is off or outside Conway.
+blockCommitteeMembers
+  :: BlockLedgerData -> Map.Map (ByteString, Word64) [ProposedCommitteeMember]
+blockCommitteeMembers = \case
+  LedgerDataOff   -> Map.empty
+  LedgerDataOn lo -> loCommitteeMembers lo
+
 -- | Drain the worker's next per-block 'BlockApplyData' and project it
 -- onto 'BlockLedgerData'. Blocks until one is available; the
 -- ledger-OFF arm returns 'emptyBlockLedgerData' without touching any
@@ -254,14 +269,15 @@ takeBlockLedgerData = \case
   LedgerEnabled lenv -> do
     blockData <- Strict.atomically (readTBQueue (leBlockApplyResults lenv))
     pure $ LedgerDataOn LedgerOutputs
-      { loDepositsMap     = badDepositsMap blockData
-      , loStakeKeyDeposit = SMaybe.maybe Nothing Just (badStakeKeyDeposit blockData)
-      , loPoolDeposit     = SMaybe.maybe Nothing Just (badPoolDeposit blockData)
-      , loStakeSlice      = badStakeSlice blockData
-      , loRegisteredPools = badPoolsRegistered blockData
-      , loGovExpiresAfter =
+      { loDepositsMap      = badDepositsMap blockData
+      , loStakeKeyDeposit  = SMaybe.maybe Nothing Just (badStakeKeyDeposit blockData)
+      , loPoolDeposit      = SMaybe.maybe Nothing Just (badPoolDeposit blockData)
+      , loStakeSlice       = badStakeSlice blockData
+      , loRegisteredPools  = badPoolsRegistered blockData
+      , loGovExpiresAfter  =
           SMaybe.maybe Nothing (\(EpochInterval n) -> Just (fromIntegral n))
             (badGovExpiresAfter blockData)
+      , loCommitteeMembers = badCommitteeMembers blockData
       }
 
 -- ---------------------------------------------------------------------------

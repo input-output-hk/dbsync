@@ -23,12 +23,17 @@ import Cardano.Ledger.Coin (Coin (..))
 import qualified Data.Map.Lazy as LMap
 import qualified Data.Map.Strict as Map
 import qualified Data.Sequence.Strict as Seq
+import qualified Data.Set as Set
+import qualified Data.Strict.Maybe as Strict
 import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldThrow)
 
+import qualified DbSync.Worker.Ledger.StakeDist as Generic
 import DbSync.Worker.Ledger.Types
-  ( DepositsMap (..)
+  ( BlockApplyData (..)
+  , DepositsMap (..)
   , EpochBlockNo (..)
   , LedgerDB (..)
+  , ProposedCommitteeMember (..)
   , emptyDepositsMap
   , lookupDepositsMap
   )
@@ -65,6 +70,21 @@ spec = do
     it "DepositsMap: a fully-evaluated map survives force intact" $ do
       m <- evaluate $ force $ DepositsMap (Map.fromList [("some-hash", Coin 2_000_000)])
       lookupDepositsMap "some-hash" m `shouldBe` Just (Coin 2_000_000)
+
+    it "BlockApplyData: a thunked committee member explodes under force" $
+      let bomb =
+            BlockApplyData
+              { badDepositsMap      = emptyDepositsMap
+              , badStakeSlice       = Generic.NoSlices
+              , badPoolsRegistered  = Set.empty
+              , badGovExpiresAfter  = Strict.Nothing
+              , badStakeKeyDeposit  = Strict.Nothing
+              , badPoolDeposit      = Strict.Nothing
+              , badCommitteeMembers =
+                  Map.singleton ("tx", 0)
+                    [ProposedCommitteeMember (panic "unforced cold key") False 0]
+              }
+       in evaluate (force bomb) `shouldThrow` anyException
 
   describe "EpochBlockNo" $ do
     it "EpochBlockNo is ordered by its Word64 payload" $ do

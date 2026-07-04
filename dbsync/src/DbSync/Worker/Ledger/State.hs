@@ -90,8 +90,10 @@ import qualified Cardano.Ledger.BaseTypes as Ledger
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway.Core as Shelley
 import Cardano.Ledger.Conway.Governance
+import Cardano.Ledger.Credential (Credential (..))
 import Cardano.Ledger.Shelley.AdaPots (AdaPots (..), sumAdaPots)
 import qualified Cardano.Ledger.Shelley.LedgerState as Shelley
+import Cardano.Ledger.TxIn (TxId (..))
 import Cardano.Slotting.EpochInfo (EpochInfo, epochInfoEpoch)
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..), WithOrigin (..))
 import Control.Concurrent.Class.MonadSTM.Strict
@@ -167,6 +169,7 @@ import DbSync.Worker.Ledger.Types
   ( ApplyResult (..)
   , BlockApplyData (..)
   , BoundaryApplyData (..)
+  , ProposedCommitteeMember (..)
   , CardanoLedgerState (..)
   , ConsensusStateRef
   , DbSyncStateRef (..)
@@ -681,12 +684,13 @@ applyBlock blk slotDetails suppressBoundary = do
               }
           blockData =
             BlockApplyData
-              { badDepositsMap     = DepositsMap deposits
-              , badStakeSlice      = getStakeSlice env newCls' Generic.SteadyStateSlice
-              , badPoolsRegistered = poolsRegistered
-              , badGovExpiresAfter = getGovExpiration newCls'
-              , badStakeKeyDeposit = maybeToStrictMaybe (Generic.stakeKeyDeposit <$> mDeposits)
-              , badPoolDeposit     = maybeToStrictMaybe (Generic.poolDeposit <$> mDeposits)
+              { badDepositsMap      = DepositsMap deposits
+              , badStakeSlice       = getStakeSlice env newCls' Generic.SteadyStateSlice
+              , badPoolsRegistered  = poolsRegistered
+              , badGovExpiresAfter  = getGovExpiration newCls'
+              , badStakeKeyDeposit  = maybeToStrictMaybe (Generic.stakeKeyDeposit <$> mDeposits)
+              , badPoolDeposit      = maybeToStrictMaybe (Generic.poolDeposit <$> mDeposits)
+              , badCommitteeMembers = maybe Map.empty resolveBlockCommittees (getGovState finalState)
               }
           boundaryData =
             BoundaryApplyData
@@ -1076,6 +1080,43 @@ findProposedCommittee gaId cgs = do
         Left "findProposedCommittee: unexpected gov action in committee update chain"
 
     fromNothing err = maybe (Left err) Right
+
+-- | Resolve the full committee membership for every committee-updating
+-- proposal pending in this block's gov state, keyed by
+-- @(proposal tx hash, proposal index)@ so the proposal pass can write
+-- the complete @committee_member@ set rather than only the tx-body
+-- delta. A proposal that fails to resolve is dropped, and the extractor
+-- falls back to the added-members delta.
+resolveBlockCommittees
+  :: ConwayGovState ConwayEra
+  -> Map.Map (ByteString, Word64) [ProposedCommitteeMember]
+resolveBlockCommittees cgs =
+  Map.fromList
+    [ (govActionIdKey gaId, map projectMember (Map.toList (committeeMembers committee)))
+    | gas <- toList (proposalsActions (cgsProposals cgs))
+    , let gaId = gasId gas
+    , UpdateCommittee {} <- [pProcGovAction (gasProposalProcedure gas)]
+    , Right (Just committee) <- [findProposedCommittee gaId cgs]
+    ]
+  where
+    projectMember (cred, expiry) =
+      ProposedCommitteeMember (credHashBytes cred) (isScriptCred cred) (unEpochNo expiry)
+
+    credHashBytes :: Credential kr -> ByteString
+    credHashBytes = \case
+      KeyHashObj    (KeyHash h)    -> Crypto.hashToBytes h
+      ScriptHashObj (ScriptHash h) -> Crypto.hashToBytes h
+
+    isScriptCred :: Credential kr -> Bool
+    isScriptCred = \case
+      KeyHashObj {}    -> False
+      ScriptHashObj {} -> True
+
+-- | Project a ledger 'GovActionId' to the @(tx hash, proposal index)@
+-- key the proposal pass looks its committee membership up by.
+govActionIdKey :: GovActionId -> (ByteString, Word64)
+govActionIdKey (GovActionId (TxId h) (GovActionIx ix)) =
+  (Crypto.hashToBytes (extractHash h), fromIntegral ix)
 
 -- | Governance-action-deposit lifetime, in epochs, as of this
 -- ledger state. 'Strict.Nothing' for pre-Conway eras.

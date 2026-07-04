@@ -109,6 +109,7 @@ import DbSync.Extractor
   , HasNetwork
   , ProcessBlockFn
   , TxContext (..)
+  , blockCommitteeMembers
   , blockGovExpiresAfter
   )
 import DbSync.Worker.Ledger.EpochUpdate (NewEpoch (..))
@@ -151,7 +152,7 @@ import DbSync.Worker.Ledger.Event
   ( GovActionRefunded (..)
   , LedgerEvent (..)
   )
-import DbSync.Worker.Ledger.Types (BoundaryApplyData (..))
+import DbSync.Worker.Ledger.Types (BoundaryApplyData (..), ProposedCommitteeMember (..))
 import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- ---------------------------------------------------------------------------
@@ -399,8 +400,18 @@ processProposals ctx tc =
           , committeeQuorumNumerator     = qNum
           , committeeQuorumDenominator   = qDen
           }
-        forM_ added $ \(coldKey, expiry) -> do
-          chId <- resolveAndWriteCommitteeHash (chHash coldKey) (chIsScript coldKey)
+        -- Prefer the worker's fully resolved membership (prior set
+        -- minus removals plus additions); fall back to the tx-body
+        -- additions when the resolver carries no entry for this proposal.
+        let members =
+              case Map.lookup (proposingTx, ggapTxIndex prop)
+                     (blockCommitteeMembers (bcLedgerData ctx)) of
+                Just resolved ->
+                  [ (pcmColdKeyHash m, pcmIsScript m, pcmExpiryEpoch m) | m <- resolved ]
+                Nothing ->
+                  [ (chHash coldKey, chIsScript coldKey, expiry) | (coldKey, expiry) <- added ]
+        forM_ members $ \(coldKeyHash, isScript, expiry) -> do
+          chId <- resolveAndWriteCommitteeHash coldKeyHash isScript
           liftIO $ writeCommitteeMember writer CommitteeMember
             { committeeMemberCommitteeId     = cId
             , committeeMemberCommitteeHashId = chId

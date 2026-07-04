@@ -54,6 +54,7 @@ module DbSync.Worker.Ledger.Types
   , defaultApplyResult
   , BlockApplyData (..)
   , BoundaryApplyData (..)
+  , ProposedCommitteeMember (..)
   , RegisteredPoolsCache (..)
   , DepositsMap (..)
   , lookupDepositsMap
@@ -486,22 +487,40 @@ defaultApplyResult slotDetails =
 data RegisteredPoolsCache =
   forall pools. RegisteredPoolsCache !(StableName pools) !(Set.Set ByteString)
 
+-- | A committee member resolved from the ledger for a committee-updating
+-- proposal, projected to the fields @committee_member@ needs so the
+-- queued value holds no reference to the ledger state it came from.
+data ProposedCommitteeMember = ProposedCommitteeMember
+  { pcmColdKeyHash :: !ByteString
+  , pcmIsScript    :: !Bool
+  , pcmExpiryEpoch :: !Word64
+  }
+
+instance NFData ProposedCommitteeMember where
+  rnf (ProposedCommitteeMember coldKeyHash isScript expiryEpoch) =
+    rnf (coldKeyHash, isScript, expiryEpoch)
+
 -- | Per-block projection the consumer needs, carved out of the full
 -- 'ApplyResult'. Built and forced to normal form before being
 -- enqueued on 'leBlockApplyResults' so a buffered entry never pins
 -- the ledger state it was derived from.
 data BlockApplyData = BlockApplyData
-  { badDepositsMap     :: !DepositsMap
-  , badStakeSlice      :: !Generic.StakeSliceRes
-  , badPoolsRegistered :: !(Set.Set ByteString)
-  , badGovExpiresAfter :: !(Strict.Maybe Ledger.EpochInterval)
-  , badStakeKeyDeposit :: !(Strict.Maybe Coin)
-  , badPoolDeposit     :: !(Strict.Maybe Coin)
+  { badDepositsMap      :: !DepositsMap
+  , badStakeSlice       :: !Generic.StakeSliceRes
+  , badPoolsRegistered  :: !(Set.Set ByteString)
+  , badGovExpiresAfter  :: !(Strict.Maybe Ledger.EpochInterval)
+  , badStakeKeyDeposit  :: !(Strict.Maybe Coin)
+  , badPoolDeposit      :: !(Strict.Maybe Coin)
+  , badCommitteeMembers :: !(Map.Map (ByteString, Word64) [ProposedCommitteeMember])
+      -- ^ Full resolved committee per committee-updating proposal in
+      -- this block, keyed by @(proposal tx hash, proposal index)@.
   }
 
 instance NFData BlockApplyData where
-  rnf (BlockApplyData depositsMap stakeSlice poolsRegistered govExpiresAfter stakeKeyDeposit poolDeposit) =
-    rnf (depositsMap, stakeSlice, poolsRegistered, govExpiresAfter, stakeKeyDeposit, poolDeposit)
+  rnf (BlockApplyData depositsMap stakeSlice poolsRegistered govExpiresAfter stakeKeyDeposit poolDeposit committeeMembers) =
+    rnf ( (depositsMap, stakeSlice, poolsRegistered)
+        , (govExpiresAfter, stakeKeyDeposit, poolDeposit, committeeMembers)
+        )
 
 -- | Per-boundary projection the epoch-boundary consumer needs, carved
 -- out of the full 'ApplyResult'. Built from the finalised ledger

@@ -317,7 +317,7 @@ spec = describe "DbSync.Phase.Preparing.Run" $
 
       it "tx_out (tx_id, index) is indexed for consumed-by + backfill JOINs" $ do
         result <- T.strip <$> queryTestDb
-          (indexExistsSql txOutTableDef "tx_out_tx_id_index_idx")
+          (indexExistsSql txOutTableDef "tx_out_unique_1_idx")
         result `shouldBe` "1"
 
       -- The four perf indexes that support the rewritten backfill

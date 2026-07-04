@@ -276,9 +276,9 @@ spec = describe "DbSync.Db.Statement.Worker.Backfill" $
         plan <- explainOf backfillPhaseTwoFeeSql
         plan `shouldMention` "tx_in_tx_in_id_idx"
 
-      it "looks up the producing outputs via tx_out_tx_id_index_idx" $ do
+      it "looks up the producing outputs via tx_out_unique_1_idx" $ do
         plan <- explainOf backfillPhaseTwoFeeSql
-        plan `shouldMention` "tx_out_tx_id_index_idx"
+        plan `shouldMention` "tx_out_unique_1_idx"
 
     describe "backfillByronFeeStmt plan" $ do
       it "drives off the block.vrf_key filter, not the tx_in aggregate" $ do

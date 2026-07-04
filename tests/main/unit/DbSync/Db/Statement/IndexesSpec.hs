@@ -168,7 +168,7 @@ spec = describe "DbSync.Db.Statement.Indexes" $ do
       preResolveIndexStatements `shouldBe`
         [ "CREATE UNIQUE INDEX IF NOT EXISTS \"tx_unique_1_idx\""
             <> " ON \"tx\" (\"hash\")"
-        , "CREATE INDEX IF NOT EXISTS \"tx_out_tx_id_index_idx\""
+        , "CREATE UNIQUE INDEX IF NOT EXISTS \"tx_out_unique_1_idx\""
             <> " ON \"tx_out\" (\"tx_id\", \"index\")"
         , "CREATE INDEX IF NOT EXISTS \"collateral_tx_out_tx_id_idx\""
             <> " ON \"collateral_tx_out\" (\"tx_id\")"

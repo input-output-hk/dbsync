@@ -340,7 +340,8 @@ rewardTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
-  , tdUniqueConstraints = []
+    -- Natural key: one reward per (addr, type, earned epoch, pool).
+  , tdUniqueConstraints = ["addr_id" :| ["type", "earned_epoch", "pool_id"]]
   , tdGeneratedColumns =
       [ ( "earned_epoch"
         , "(CASE WHEN (type='refund') then spendable_epoch \

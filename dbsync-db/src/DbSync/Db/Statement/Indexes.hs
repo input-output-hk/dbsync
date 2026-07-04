@@ -368,8 +368,8 @@ preResolveIndexStatements =
       (uniqueConstraintIndexName txTableDef 1)
       (tdName txTableDef)
       [txCols.tcHash.tcName]
-  , renderIndex NonConcurrent NonUnique
-      "tx_out_tx_id_index_idx"
+  , renderIndex NonConcurrent Unique
+      (uniqueConstraintIndexName txOutTableDef 1)
       (tdName txOutTableDef)
       [txOutCols.tocTxId.tcName, txOutCols.tocIndex.tcName]
   , renderIndex NonConcurrent NonUnique

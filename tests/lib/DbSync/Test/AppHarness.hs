@@ -224,7 +224,7 @@ tableIndexNames td =
 preResolveIndexNames :: [Text]
 preResolveIndexNames =
   [ "tx_unique_1_idx"
-  , "tx_out_tx_id_index_idx"
+  , "tx_out_unique_1_idx"
   , "collateral_tx_out_tx_id_idx"
   , "withdrawal_tx_id_idx"
   , "tx_in_tx_in_id_idx"

@@ -196,7 +196,8 @@ txOutTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
-  , tdUniqueConstraints = []
+    -- One row per (tx, output index).
+  , tdUniqueConstraints = ["tx_id" :| ["index"]]
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
   , tdForeignKeys =

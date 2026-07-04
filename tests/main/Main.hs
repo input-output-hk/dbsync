@@ -110,6 +110,7 @@ import qualified DbSync.Phase.FollowAtTipSpec as PhaseFollowAtTipSpec
 import qualified DbSync.Phase.FollowEpochBoundarySpec as PhaseFollowEpochBoundarySpec
 import qualified DbSync.Phase.FollowEpochSyncStatsSpec as PhaseFollowEpochSyncStatsSpec
 import qualified DbSync.Phase.FollowGovernanceSpec as PhaseFollowGovernanceSpec
+import qualified DbSync.Phase.GovernanceGenesisSpec as PhaseGovernanceGenesisSpec
 import qualified DbSync.Phase.FollowPoolStatsSpec as PhaseFollowPoolStatsSpec
 import qualified DbSync.Phase.FollowScriptsDatumsSpec as PhaseFollowScriptsDatumsSpec
 import qualified DbSync.Phase.FollowStakeDelegationLedgerSpec as PhaseFollowStakeDelegationLedgerSpec
@@ -245,6 +246,7 @@ main = hspec $ do
     PhaseFollowEpochSyncStatsSpec.spec
     PhaseFollowScriptsDatumsSpec.spec
     PhaseFollowGovernanceSpec.spec
+    PhaseGovernanceGenesisSpec.spec
     PhaseFollowPoolStatsSpec.spec
     PhaseFollowStakeDelegationLedgerSpec.spec
     PhaseFollowPerfSpec.spec

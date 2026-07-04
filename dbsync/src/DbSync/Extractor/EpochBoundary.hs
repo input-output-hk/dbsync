@@ -107,10 +107,11 @@ epochBoundaryExtractor = ExtractorDef
 --     cost models (Alonzo onward); deduped by Blake2b hash of the
 --     canonical CBOR encoding.
 --   * @epoch_param@ — every Shelley-onward boundary.
---   * @epoch_state@ — every Shelley-onward boundary. The three
---     governance FK columns are written 'Nothing' until the
---     governance writers produce committee \/ no-confidence \/
---     constitution IDs.
+--   * @epoch_state@ — every Conway-onward boundary (the enacted
+--     governance snapshot). The three governance FK columns are
+--     written 'Nothing' until the governance boundary pass resolves
+--     committee \/ no-confidence \/ constitution IDs. Pre-Conway
+--     boundaries emit no row.
 --
 -- Idempotency is the caller's responsibility — invoking this twice
 -- for the same boundary writes duplicate rows.
@@ -125,6 +126,8 @@ runEpochBoundary applyResult blockId =
     Strict.Just newEpoch -> do
       writeBoundaryAdaPots applyResult newEpoch blockId
       writeBoundaryProtoParams newEpoch blockId
+      when (isJust (bndGovActionState applyResult)) $
+        writeBoundaryEpochState newEpoch
 
 -- ---------------------------------------------------------------------------
 -- * AdaPots
@@ -182,12 +185,12 @@ mkAdaPotsRow applyResult newEpoch blockId pots =
     oblgs = Shelley.obligationsPot pots
 
 -- ---------------------------------------------------------------------------
--- * Protocol parameters (cost_model, epoch_param, epoch_state)
+-- * Protocol parameters and epoch state
 -- ---------------------------------------------------------------------------
 
--- | Build and dispatch the cost_model, epoch_param, and epoch_state
--- rows for the boundary. No-op if the ledger emitted no protocol
--- params (Byron boundaries).
+-- | Build and dispatch the cost_model and epoch_param rows for the
+-- boundary. No-op if the ledger emitted no protocol params (Byron
+-- boundaries).
 writeBoundaryProtoParams
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
   => Generic.NewEpoch
@@ -202,10 +205,25 @@ writeBoundaryProtoParams newEpoch blockId =
       let epoch = unEpochNo (Generic.neEpoch newEpoch)
           nonce = Generic.euNonce (Generic.neEpochUpdate newEpoch)
       mCostModelId <- writeBoundaryCostModel resolver writer (Proto.ppCostmdls params)
-      (mCommitteeId, mNoConfId, mConstId) <- liftIO $ readEnactedEpochStateIds resolver
       liftIO $ writeEpochParam writer (mkEpochParamRow params epoch blockId nonce mCostModelId)
-      liftIO $ writeEpochState writer
-        (mkEpochStateRow epoch mCommitteeId mNoConfId mConstId)
+
+-- | Write the @epoch_state@ row for a Conway-onward boundary. The
+-- enacted committee \/ no-confidence \/ constitution ids come from the
+-- governance boundary pass, which runs first and stashes them on the
+-- resolver scratchpad. The caller gates on the ledger reporting Conway
+-- governance state, so @epoch_state@ begins at the Conway bootstrap
+-- epoch — the enacted snapshot it represents does not exist earlier.
+writeBoundaryEpochState
+  :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
+  => Generic.NewEpoch
+  -> m ()
+writeBoundaryEpochState newEpoch = do
+  resolver <- asks getResolver
+  writer   <- asks getWriter
+  let epoch = unEpochNo (Generic.neEpoch newEpoch)
+  (mCommitteeId, mNoConfId, mConstId) <- liftIO $ readEnactedEpochStateIds resolver
+  liftIO $ writeEpochState writer
+    (mkEpochStateRow epoch mCommitteeId mNoConfId mConstId)
 
 -- | Dedup-write a cost_model row. Returns the (possibly already
 -- existing) row id when cost models are present in the protocol

@@ -49,6 +49,7 @@ module Cardano.Mock.Forging.Tx.Conway (
   mkDelegTxCert,
   mkRegDelegTxCert,
   mkAddCommitteeTx,
+  mkUpdateCommitteeTx,
   mkTreasuryWithdrawalTx,
   mkParamChangeTx,
   mkHardForkInitTx,
@@ -554,6 +555,24 @@ mkAddCommitteeTx prevGovAction cred = mkGovActionProposalTx govAction
     govAction = Governance.UpdateCommittee prevGovAction' mempty newMembers threshold
     prevGovAction' = maybeToStrictMaybe prevGovAction
     newMembers = Map.singleton cred (EpochNo 20)
+    threshold = fromJust $ boundRational (1 % 1)
+
+-- | An @UpdateCommittee@ proposal that removes and adds members in one
+-- action, exercising the resolved-membership path (existing set minus
+-- removals plus additions) rather than a pure addition.
+mkUpdateCommitteeTx ::
+  Maybe (Governance.GovPurposeId 'Governance.CommitteePurpose) ->
+  Set.Set (Credential ColdCommitteeRole) ->
+  [(Credential ColdCommitteeRole, EpochNo)] ->
+  Core.Tx Core.TopTx ConwayEra
+mkUpdateCommitteeTx prevGovAction toRemove toAdd = mkGovActionProposalTx govAction
+  where
+    govAction =
+      Governance.UpdateCommittee
+        (maybeToStrictMaybe prevGovAction)
+        toRemove
+        (Map.fromList toAdd)
+        threshold
     threshold = fromJust $ boundRational (1 % 1)
 
 mkNewConstitutionTx ::

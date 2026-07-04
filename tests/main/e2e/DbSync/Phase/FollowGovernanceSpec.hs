@@ -29,17 +29,21 @@ module DbSync.Phase.FollowGovernanceSpec (spec) where
 
 import Cardano.Prelude
 
+import qualified Data.Set as Set
 import qualified Data.Text as T
 
+import Cardano.Crypto.Hash (hashToTextAsHex)
 import Cardano.Ledger.Address (AccountAddress (..), AccountId (..), Withdrawals (..))
-import Cardano.Ledger.BaseTypes (Network (..), StrictMaybe (..), textToUrl)
+import Cardano.Ledger.BaseTypes (EpochNo (..), Network (..), StrictMaybe (..), textToUrl)
 import Cardano.Ledger.Coin (Coin (..))
 import qualified Cardano.Ledger.Conway.Governance as Governance
 import Cardano.Ledger.Conway.Tx (AlonzoTx (..), Tx (..))
 import Cardano.Ledger.Conway.TxCert (Delegatee (..))
 import qualified Cardano.Ledger.Core as Core
-import Cardano.Ledger.Credential (Credential)
+import Cardano.Ledger.Credential (Credential (..))
 import qualified Cardano.Ledger.DRep as Ledger
+import Cardano.Ledger.Hashes (ScriptHash (..))
+import Cardano.Ledger.Keys (KeyHash (..))
 import Ouroboros.Consensus.Shelley.Eras (ConwayEra)
 
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
@@ -57,6 +61,7 @@ import DbSync.Db.Schema.Core (blockTableDef)
 import DbSync.Db.Schema.EpochBoundary (epochParamTableDef)
 import DbSync.Db.Schema.Governance
   ( committeeHashTableDef
+  , committeeMemberTableDef
   , committeeRegistrationTableDef
   , committeeTableDef
   , constitutionTableDef
@@ -324,6 +329,77 @@ spec = describe "Follow governance writes" $ do
           (followComm - baselineComm) `shouldSatisfy` (>= 2)
           (followProp - baselineProp) `shouldSatisfy` (>= 2)
 
+          -- The latest committee row carries the full resolved membership
+          -- (bootstrap members plus cred1 and cred2), not just the single
+          -- added member p2's tx body carries.
+          latestMembers <- T.strip <$> queryTestDb
+            ( "SELECT count(*) FROM " <> tdName committeeMemberTableDef
+                <> " WHERE committee_id = (SELECT max(id) FROM "
+                <> tdName committeeTableDef <> ")"
+            )
+          let latestMemberCount = fromMaybe 0 (readMaybe (T.unpack latestMembers)) :: Int
+          latestMemberCount `shouldSatisfy` (>= 2)
+
+  it "resolves full committee membership across an add-then-remove chain" $
+    withMockNode conwayConfigDir $ \mn ->
+      withTempDir "dbsync-test-follow-gov-committee-members" $ \ledgerDir -> do
+        tracer <- quietTracer
+        _ <- forgeAndPushBlocks mn 250
+        withAppSession tracer governanceTestProfile mn ledgerDir $ \_ -> do
+          waitForSyncComplete 120
+
+          bootstrapGovernance mn
+
+          (cred1, cred2) <- case Generic.unregisteredCommitteeCreds of
+            a : b : _ -> pure (a, b)
+            _ -> panic "unregisteredCommitteeCreds has fewer than 2 entries"
+          let genesisCred = case Generic.bootstrapCommitteeCreds of
+                (cold, _) : _ -> cold
+                [] -> panic "bootstrapCommitteeCreds is empty"
+
+          baselineComm <- countRows (tdName committeeTableDef)
+          genesisMembers <- committeeMemberCount
+            ( "(SELECT id FROM " <> tdName committeeTableDef
+                <> " WHERE gov_action_proposal_id IS NULL LIMIT 1)"
+            )
+
+          -- p1 adds cred1 on top of the genesis committee.
+          let p1 = Conway.mkAddCommitteeTx Nothing cred1
+              p1Gaid = govActionIdFor p1 0
+          voteP1 <- voteAllOnAction mn p1Gaid
+          _ <- forgeAndPush mn [Mock.TxConway p1, voteP1]
+          crossEnactmentBoundaries mn
+
+          -- p2 removes cred1 and adds cred2, chained on p1.
+          let p2 =
+                Conway.mkUpdateCommitteeTx
+                  (Just (Governance.GovPurposeId p1Gaid))
+                  (Set.singleton cred1)
+                  [(cred2, EpochNo 20)]
+              p2Gaid = govActionIdFor p2 0
+          voteP2 <- voteAllOnAction mn p2Gaid
+          _ <- forgeAndPush mn [Mock.TxConway p2, voteP2]
+          crossEnactmentBoundaries mn
+
+          waitFor
+            (tdName committeeTableDef <> " count reaches baseline+2")
+            (do n <- countRows (tdName committeeTableDef); pure (n >= baselineComm + 2))
+            120
+
+          -- The p2 committee row carries the full resolved set: every
+          -- genesis member survives both updates, cred2 is added and
+          -- cred1 removed — not the single-member tx-body delta.
+          latestMembers <- committeeMemberCount
+            ("(SELECT max(id) FROM " <> tdName committeeTableDef <> ")")
+          latestMembers `shouldBe` genesisMembers + 1
+
+          cred2Present <- latestCommitteeHasMember (credColdKeyHex cred2)
+          cred2Present `shouldBe` True
+          cred1Present <- latestCommitteeHasMember (credColdKeyHex cred1)
+          cred1Present `shouldBe` False
+          genesisPresent <- latestCommitteeHasMember (credColdKeyHex genesisCred)
+          genesisPresent `shouldBe` True
+
   it "lands epoch_param row reflecting parameterChange enactment at tip" $
     withMockNode conwayConfigDir $ \mn ->
       withTempDir "dbsync-test-follow-gov-paramchange" $ \ledgerDir -> do
@@ -502,6 +578,34 @@ buildRegDelegVoteTx cred drep =
 queryDrepHashNullRawCount :: IO Text
 queryDrepHashNullRawCount =
   T.strip <$> queryTestDb "SELECT count(*) FROM drep_hash WHERE raw IS NULL"
+
+-- | Member count of the committee selected by the given @id@ subquery.
+committeeMemberCount :: Text -> IO Int
+committeeMemberCount committeeIdExpr = do
+  t <- T.strip <$> queryTestDb
+    ( "SELECT count(*) FROM " <> tdName committeeMemberTableDef
+        <> " WHERE committee_id = " <> committeeIdExpr
+    )
+  pure (fromMaybe 0 (readMaybe (T.unpack t)))
+
+-- | Whether the latest committee has a member whose cold-key hash
+-- matches the given hex.
+latestCommitteeHasMember :: Text -> IO Bool
+latestCommitteeHasMember hashHex = do
+  t <- T.strip <$> queryTestDb
+    ( "SELECT count(*) FROM " <> tdName committeeMemberTableDef <> " cm JOIN "
+        <> tdName committeeHashTableDef <> " ch ON ch.id = cm.committee_hash_id "
+        <> "WHERE cm.committee_id = (SELECT max(id) FROM " <> tdName committeeTableDef
+        <> ") AND encode(ch.raw, 'hex') = '" <> hashHex <> "'"
+    )
+  pure (fromMaybe (0 :: Int) (readMaybe (T.unpack t)) > 0)
+
+-- | Cold-key hash (hex) of a committee credential, matching the
+-- @encode(raw, 'hex')@ form stored in @committee_hash@.
+credColdKeyHex :: Credential kr -> Text
+credColdKeyHex cred = case cred of
+  KeyHashObj (KeyHash h) -> hashToTextAsHex h
+  ScriptHashObj (ScriptHash h) -> hashToTextAsHex h
 
 -- ---------------------------------------------------------------------------
 -- * Pure txid derivation

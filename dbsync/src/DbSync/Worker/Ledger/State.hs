@@ -448,10 +448,12 @@ mkHasLedgerEnv
           , leCurrentPhase         = phaseRef
           }
   where
-    -- Shallow — the worker is a single consumer and we want strong
-    -- back-pressure into the receiver as soon as it falls behind.
+    -- The receiver enqueues each block to the main block queue and
+    -- this queue atomically, so the shallower bound caps its
+    -- prefetch window. Matches the block queue's 300; entries alias
+    -- the same blocks, so the depth adds no extra retained heap.
     ledgerQueueBound :: Natural
-    ledgerQueueBound = 100
+    ledgerQueueBound = 300
 
     -- One slot per retained snapshot (the manager keeps three) plus
     -- a little slack so a mid-write snapshot doesn't block the worker.
@@ -461,20 +463,20 @@ mkHasLedgerEnv
     -- Each entry is a small, NF-forced 'BoundaryApplyData' projection
     -- (never a full 'ApplyResult'), and the replay window suppresses
     -- the enqueue, so this only absorbs the rare case where the
-    -- consumer briefly lags a boundary. Receiver-to-worker look-ahead
-    -- is capped at 100 blocks (<< a mainnet epoch), so at most one
-    -- boundary is ever in flight; 4 is ample slack.
+    -- consumer briefly lags a boundary. Look-ahead is capped by the
+    -- receiver-to-worker queue, so few boundaries are ever in
+    -- flight; 4 is ample slack.
     boundaryQueueBound :: Natural
     boundaryQueueBound = 4
 
-    -- One slot per worker-side look-ahead block. Each entry is a
-    -- small, fully-forced projection, so even a full queue holds
-    -- only a few MB; the bound is pure back-pressure so the worker
-    -- cannot run arbitrarily far ahead of a stalled consumer, while
-    -- staying deep enough that boundary-length consumer stalls do
-    -- not throttle the worker.
+    -- One slot per worker-side look-ahead block; entries are small,
+    -- fully-forced projections, so a full queue is a few MB. Deep
+    -- enough that the consumer (one pop per block) keeps draining
+    -- banked results while the worker pauses for its epoch-boundary
+    -- tick; a bound below the consumer's drain batch (100) turns
+    -- every worker pause into per-block consumer stalls.
     blockApplyQueueBound :: Natural
-    blockApplyQueueBound = 64
+    blockApplyQueueBound = 256
 
 -- | Seed the in-memory 'LedgerDB' buffer with the genesis state on
 -- a fresh boot. The resume path uses 'initLedgerDbFromSnapshot'

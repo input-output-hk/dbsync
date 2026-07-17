@@ -40,7 +40,7 @@ import qualified Hasql.Connection as Conn
 import qualified Hasql.Session as Sess
 
 import DbSync.Db.Run (useConn)
-import DbSync.Db.Statement.Indexes (ingestResolveIndexStatements)
+import DbSync.Db.Statement.Indexes (IndexStatement (..), ingestResolveIndexStatements)
 import DbSync.Trace.Timing (timedTraceIO_)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 
@@ -59,7 +59,7 @@ createIngestResolveIndexes :: AppTracer -> Conn.Connection -> IO ()
 createIngestResolveIndexes tracer conn = do
   traceWith tracer $ LogMsg Info component
     "building per-epoch resolver indexes" Nothing
-  for_ (zip [1 :: Int ..] ingestResolveIndexStatements) $ \(i, ddl) ->
+  for_ ingestResolveIndexStatements $ \ix ->
     timedTraceIO_ tracer component
-      ("ingest-resolve index " <> show i)
-      (useConn "Phase.Ingest.IngestIndexes" conn (Sess.script ddl))
+      ("ingest-resolve index " <> isName ix)
+      (useConn "Phase.Ingest.IngestIndexes" conn (Sess.script (isSql ix)))

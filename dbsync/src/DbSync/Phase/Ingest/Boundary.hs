@@ -47,6 +47,7 @@ import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import qualified Control.Concurrent.Class.MonadSTM.Strict as Strict
 import Control.Concurrent.STM (readTVarIO)
 import Control.Concurrent.STM.TBQueue (readTBQueue)
+import Control.Monad.IO.Unlift (withRunInIO)
 import Control.Tracer (traceWith)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import qualified Data.Strict.Maybe as SMaybe
@@ -156,6 +157,10 @@ data ConsumerLoopState = ConsumerLoopState
     -- line's @peak mem@ segment; the full curve is a Debug-only
     -- readout. Reset at each boundary. Empty until first sampled
     -- (or without @+RTS -T@).
+  , clsLastGcLive      :: !(IORef (Maybe Word64))
+    -- ^ Live bytes right after the previous boundary major GC; the
+    -- growth baseline gating the next one. 'Nothing' until the
+    -- first boundary GC (or without @+RTS -T@).
   }
 
 -- | Allocate a fresh 'ConsumerLoopState'. The replay machine is
@@ -173,6 +178,7 @@ newConsumerLoopState bootSlot = do
                     Just _  -> ReplayPending
                     Nothing -> NoReplay)
     <*> newIORef emptyMemStats
+    <*> newIORef Nothing
 
 -- ---------------------------------------------------------------------------
 -- * Boundary handler
@@ -192,10 +198,12 @@ newConsumerLoopState bootSlot = do
 --   7. Stash the snapshot for the /next/ boundary's @sync_state@ write.
 --   8. Reopen the loader stream for the next epoch.
 --   9. Persist the LSM tables (snapshot refresh; full
---      reopen-compaction every 'ingestCompactEveryEpochs').
+--      reopen-compaction every 'ingestCompactEveryEpochs') — spawned
+--      before step 1, runs concurrently with the cascade, awaited
+--      here.
 --
 -- Followed by the per-epoch summary log, optional dedup-debug log,
--- and a major GC on epochs above 10s wall-clock.
+-- and a growth-gated major GC on epochs above 10s wall-clock.
 handleEpochBoundary
   :: ConsumerLoopState
   -> EpochNo        -- ^ epoch just completed
@@ -231,65 +239,75 @@ handleEpochBoundary cls prev slot = do
   -- the consumer's sample cadence) still contributes to the curve.
   liftIO $ recordMemSample (clsMemStats cls)
 
-  -- Steps 1–4: drain the existing pipeline so the resolver can run
-  -- in parallel with the next epoch's ingest.
-  (buf, mConsumedSnap) <- liftIO $ do
-    lsCommit loaderStream
-    b <- takeAndReset addressBuffer
-    cb <- case mConsumedBuf of
-      Just ref -> Just <$> ConsumedByBuffer.takeAndReset ref
-      Nothing  -> pure Nothing
-    awaitTxOutDrained txOutWorker
-    flushPendingDeposits hasLedger prev slot ctrlConn
-    pure (b, cb)
+  -- Step 9 runs first and concurrently: the stores are quiescent
+  -- across the cascade (steps 1–8 are PG round-trips and worker
+  -- waits), so the persist — and, on compaction epochs, the
+  -- CRC-heavy reopen — overlaps it. 'withAsync' scopes the work to
+  -- the cascade: a cancelled consumer cancels the compaction too,
+  -- and the per-table masked delete-then-save keeps exactly one
+  -- snapshot per table on disk whichever way it exits.
+  withRunInIO $ \runInIO ->
+    withAsync (compactIngestStores utxoStore dedupStores lsm prev) $
+      \compactAsync -> runInIO $ do
+        -- Steps 1–4: drain the existing pipeline so the resolver can
+        -- run in parallel with the next epoch's ingest.
+        (buf, mConsumedSnap) <- liftIO $ do
+          lsCommit loaderStream
+          b <- takeAndReset addressBuffer
+          cb <- case mConsumedBuf of
+            Just ref -> Just <$> ConsumedByBuffer.takeAndReset ref
+            Nothing  -> pure Nothing
+          awaitTxOutDrained txOutWorker
+          flushPendingDeposits hasLedger prev slot ctrlConn
+          pure (b, cb)
 
-  -- Boundary probe (Debug-gated): brackets the buffer force with
-  -- per-step logs and a timeout, so a wedged force surfaces as a log
-  -- line instead of a hung pipeline. No performMajorGC here (it
-  -- cannot be interrupted).
-  when (minSev <= Debug) $ liftIO $ do
-    let tag m = traceWith tracer $ LogMsg Debug "TxOutProbe"
-          ("epoch " <> show (unEpochNo prev) <> " " <> m) Nothing
-    l0 <- sampleHeapBytes
-    tag ("preForce live=" <> maybe "n/a" fmtBytes l0)
-    r <- Timeout.timeout 60000000 $ do
-      _ <- evaluate (forceEpochAddressBuffer buf)
-      for_ mConsumedSnap (evaluate . ConsumedByBuffer.forceEpochConsumedByBuffer)
-      pure ()
-    tag (maybe "force TIMEOUT(60s)" (const "force done") r)
+        -- Boundary probe (Debug-gated): brackets the buffer force
+        -- with per-step logs and a timeout, so a wedged force
+        -- surfaces as a log line instead of a hung pipeline. No
+        -- performMajorGC here (it cannot be interrupted).
+        when (minSev <= Debug) $ liftIO $ do
+          let tag m = traceWith tracer $ LogMsg Debug "TxOutProbe"
+                ("epoch " <> show (unEpochNo prev) <> " " <> m) Nothing
+          l0 <- sampleHeapBytes
+          tag ("preForce live=" <> maybe "n/a" fmtBytes l0)
+          r <- Timeout.timeout 60000000 $ do
+            _ <- evaluate (forceEpochAddressBuffer buf)
+            for_ mConsumedSnap (evaluate . ConsumedByBuffer.forceEpochConsumedByBuffer)
+            pure ()
+          tag (maybe "force TIMEOUT(60s)" (const "force done") r)
 
-  -- Step 5: advance @sync_state@ for the previously snapshotted
-  -- epoch. The address counter reflects rows just drained in step 3.
-  addressIdCounter <- liftIO $ readAddressIdCounter txOutWorker
-  mPending         <- liftIO $ readIORef (clsPendingBoundary cls)
-  for_ mPending $ \pb ->
-    writeSyncState $
-      mkBoundarySyncStateRow
-        (pbLastSlot pb) (pbLastBlockNo pb) (pbLastHash pb)
-        (pbCounters pb) addressIdCounter
-        schemaVersion ledgerEnabled
+        -- Step 5: advance @sync_state@ for the previously
+        -- snapshotted epoch. The address counter reflects rows just
+        -- drained in step 3.
+        addressIdCounter <- liftIO $ readAddressIdCounter txOutWorker
+        mPending         <- liftIO $ readIORef (clsPendingBoundary cls)
+        for_ mPending $ \pb ->
+          writeSyncState $
+            mkBoundarySyncStateRow
+              (pbLastSlot pb) (pbLastBlockNo pb) (pbLastHash pb)
+              (pbCounters pb) addressIdCounter
+              schemaVersion ledgerEnabled
 
-  -- Step 6: queue the just-finished epoch for the worker.
-  liftIO $ enqueueTxOutJob txOutWorker (TxOutJob prev buf mConsumedSnap)
+        -- Step 6: queue the just-finished epoch for the worker.
+        liftIO $ enqueueTxOutJob txOutWorker (TxOutJob prev buf mConsumedSnap)
 
-  -- Step 7: stash the snapshot for the next boundary.
-  liftIO $ for_ mLastBlock $ \(lastSlot, lastBlockNo, lastHash) ->
-    writeIORef (clsPendingBoundary cls) $ Just PendingBoundary
-      { pbEpoch       = prev
-      , pbLastSlot    = lastSlot
-      , pbLastBlockNo = lastBlockNo
-      , pbLastHash    = lastHash
-      , pbCounters    = counters
-      }
+        -- Step 7: stash the snapshot for the next boundary.
+        liftIO $ for_ mLastBlock $ \(lastSlot, lastBlockNo, lastHash) ->
+          writeIORef (clsPendingBoundary cls) $ Just PendingBoundary
+            { pbEpoch       = prev
+            , pbLastSlot    = lastSlot
+            , pbLastBlockNo = lastBlockNo
+            , pbLastHash    = lastHash
+            , pbCounters    = counters
+            }
 
-  -- Step 8: reopen loader streams for the next epoch.
-  liftIO $ lsReopen loaderStream
+        -- Step 8: reopen loader streams for the next epoch.
+        liftIO $ lsReopen loaderStream
 
-  -- Step 9: persist the LSM-backed Ingest tables (snapshot refresh
-  -- for restart-resume); every 'ingestCompactEveryEpochs' the cycle
-  -- also reopens each table from its snapshot to cap active runs
-  -- and open fds.
-  liftIO $ compactIngestStores utxoStore dedupStores lsm prev
+        -- Step 9 lands: the stores must be settled before the
+        -- boundary extractors (rewards, stake slices) resolve
+        -- against them.
+        liftIO $ wait compactAsync
 
   -- Per-epoch stats row + summary log.
   epochEnd <- liftIO getCurrentTime
@@ -309,7 +327,18 @@ handleEpochBoundary cls prev slot = do
     , epochSyncStatsPhase           = renderPhase IngestChainHistory
     }
 
-  when (elapsedSec > 10.0) $ liftIO performMajorGC
+  -- Major GC only once the live heap has outgrown the last boundary
+  -- collection's baseline; without @+RTS -T@ the growth signal is
+  -- missing and every >10s epoch collects.
+  when (elapsedSec > 10.0) $ liftIO $ do
+    mLive <- sampleHeapBytes
+    mBase <- readIORef (clsLastGcLive cls)
+    let grown = case (mLive, mBase) of
+          (Just live, Just base) -> 2 * live >= 3 * base
+          _                      -> True
+    when grown $ do
+      performMajorGC
+      sampleHeapBytes >>= writeIORef (clsLastGcLive cls)
 
   mBoundary  <- liftIO $ readTVarIO boundaryVar
   storeStats <- liftIO $ UtxoStore.readStoreStats utxoStore
@@ -404,7 +433,8 @@ ingestCompactEveryEpochs = 20
 -- | Persist every LSM-backed Ingest table (cheap snapshot refresh);
 -- on every 'ingestCompactEveryEpochs'-th epoch also reopen each
 -- table from its snapshot to collapse the active run set and cap
--- open fds.
+-- open fds. The stores must stay untouched while this runs; the
+-- boundary handler overlaps it with the PG-bound cascade.
 compactIngestStores
   :: UtxoStore.UtxoStore
   -> DedupStores

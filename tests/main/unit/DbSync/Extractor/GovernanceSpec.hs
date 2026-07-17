@@ -8,12 +8,15 @@ module DbSync.Extractor.GovernanceSpec (spec) where
 
 import Cardano.Prelude
 
+import Cardano.Ledger.Alonzo.Scripts (CostModel, mkCostModel)
 import qualified Cardano.Ledger.BaseTypes as Ledger
+import Cardano.Ledger.Plutus.Language (Language (PlutusV2))
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), EpochSize (..), SlotNo (..))
 import qualified Data.ByteString as BS
 import Data.IORef (newIORef, readIORef)
 import Data.List ((!!))
+import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Strict.Maybe as Strict
 import Data.Time.Calendar (fromGregorian)
@@ -175,6 +178,22 @@ spec = do
       written <- runGovernance [(emptyTx ()) { txParamProposal = gpps }]
       length (twParamProposals written) `shouldBe` 2
 
+    it "update proposal carrying a cost model writes cost_model and sets param_proposal.cost_model_id" $ do
+      let costModels :: Map.Map Language CostModel
+          costModels = Map.singleton PlutusV2 sampleCostModel
+          gpp = emptyParamProposal
+                  { gppEpochNo  = Just 365
+                  , gppKey      = Just coldKey
+                  , gppCostmdls = Just costModels
+                  }
+      written <- runGovernance [(emptyTx ()) { txParamProposal = [gpp] }]
+      length (twCostModels written) `shouldBe` 1
+      length (twParamProposals written) `shouldBe` 1
+      let (cmId, _) = headDef (panic "expected cost_model") (twCostModels written)
+          (_, pp)   = headDef (panic "expected param_proposal") (twParamProposals written)
+      SG.paramProposalCostModelId pp `shouldBe` Just cmId
+      length (twGovActionProposals written) `shouldBe` 0
+
   describe "Vote pass" $ do
     it "drep voter writes voting_procedure with drep_voter populated" $ do
       let propTx = txWithProposal (proposal GovInfoAction)
@@ -266,6 +285,12 @@ coldKey = BS.replicate 28 0xc1
 
 hotKey :: ByteString
 hotKey = BS.replicate 28 0x71
+
+-- A well-formed PlutusV2 cost model; only its presence matters for the
+-- cost_model dedup assertion, so the parameter values are arbitrary.
+sampleCostModel :: CostModel
+sampleCostModel =
+  fromRight (panic "sampleCostModel: malformed") (mkCostModel PlutusV2 (replicate 175 0))
 
 anchorHashA :: ByteString
 anchorHashA = BS.replicate 32 0xe1

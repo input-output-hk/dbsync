@@ -12,10 +12,10 @@ module DbSync.Phase.Preparing.Backfill
 
 import Cardano.Prelude
 
+import Control.Monad.IO.Unlift (MonadUnliftIO)
 import qualified Hasql.Session as Sess
 import qualified Hasql.Statement as Stmt
 
-import DbSync.AppM (LoggingM)
 import DbSync.Db.Run (useConn)
 import DbSync.Db.Statement.Worker.Backfill
   ( backfillByronFeeStmt
@@ -30,23 +30,24 @@ import DbSync.Db.Statement.Worker.EpochParamPending
   , truncateEpochParamPendingStmt
   )
 import DbSync.Db.Transaction (HasHasqlConnection (..))
-import DbSync.Trace.Timing (timedTrace, timedTrace_)
+import DbSync.Phase.Preparing.Step (StepKind (..), step, stepRows)
+import DbSync.Trace (HasTracer (..))
 
 -- | Execute the four backfill UPDATEs. Must run after
 -- 'DbSync.Phase.Preparing.Resolve.resolveForeignKeys' so
 -- that @tx_in.tx_out_id@ / @collateral_tx_in.tx_out_id@ are
 -- populated.
 backfillTxColumns
-  :: (LoggingM env m, HasHasqlConnection env)
+  :: (HasTracer env, HasHasqlConnection env, MonadReader env m, MonadUnliftIO m)
   => m Int64
 backfillTxColumns = do
-  n1 <- timedTrace "PreparingForVolatileTail" "backfill phase-2 tx.fee" $
+  n1 <- stepRows BackfillStep "tx.fee (phase-2 failed txs)" $
           runRowsAffected backfillPhaseTwoFeeStmt
-  n2 <- timedTrace "PreparingForVolatileTail" "backfill Byron tx.fee" $
+  n2 <- stepRows BackfillStep "tx.fee (Byron txs)" $
           runRowsAffected backfillByronFeeStmt
-  n3 <- timedTrace "PreparingForVolatileTail" "backfill phase-2 tx.deposit" $
+  n3 <- stepRows BackfillStep "tx.deposit (phase-2 failed txs)" $
           runRowsAffected backfillPhaseTwoDepositStmt
-  n4 <- timedTrace "PreparingForVolatileTail" "backfill valid-contract tx.deposit" $
+  n4 <- stepRows BackfillStep "tx.deposit (valid-contract txs)" $
           runRowsAffected backfillValidContractDepositStmt
   pure (n1 + n2 + n3 + n4)
 
@@ -55,12 +56,12 @@ backfillTxColumns = do
 -- so they never overwrite an extractor-written value (Conway+
 -- inline stake-registration deposits).
 applyDepositPending
-  :: (LoggingM env m, HasHasqlConnection env)
+  :: (HasTracer env, HasHasqlConnection env, MonadReader env m, MonadUnliftIO m)
   => m Int64
 applyDepositPending = do
-  n1 <- timedTrace "PreparingForVolatileTail" "apply pool_update.deposit" $
+  n1 <- stepRows BackfillStep "pool_update.deposit (from epoch_param_pending)" $
           runRowsAffected applyPoolUpdateDepositStmt
-  n2 <- timedTrace "PreparingForVolatileTail" "apply stake_registration.deposit" $
+  n2 <- stepRows BackfillStep "stake_registration.deposit (from epoch_param_pending)" $
           runRowsAffected applyStakeRegistrationDepositStmt
   pure (n1 + n2)
 
@@ -78,11 +79,15 @@ truncateDepositPending = do
 -- every closed epoch in @block@. Run by 'Phase.Preparing.Run' when
 -- the @epoch@ extractor is enabled. The current (open) epoch stays
 -- in @epoch_current@'s domain.
+--
+-- Must run after the production index build: the statement upserts
+-- via @ON CONFLICT ("no")@, which requires the unique index on
+-- @epoch_finalized.no@.
 backfillEpochFinalized
-  :: (LoggingM env m, HasHasqlConnection env)
+  :: (HasTracer env, HasHasqlConnection env, MonadReader env m, MonadUnliftIO m)
   => m ()
 backfillEpochFinalized =
-  timedTrace_ "PreparingForVolatileTail" "backfill epoch_finalized" $ do
+  step BackfillStep "epoch_finalized (aggregate closed epochs)" $ do
     conn <- asks getHasqlConnection
     useConn "Phase.Preparing.Backfill.backfillEpochFinalized" conn
       (Sess.statement () backfillEpochFinalizedStmt)

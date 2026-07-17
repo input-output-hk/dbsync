@@ -80,23 +80,27 @@ a parallel pool for the heavy work.
 
 What it does, in order:
 
-1. **Pre-resolve indexes** — temporary indexes on the still-UNLOGGED tables
-   so the next step's join-on-hash UPDATEs use index lookups rather than
-   hash-joining heap-to-heap.
+1. **Pre-resolve indexes** — scaffolding indexes on the still-UNLOGGED
+   tables so the resolve and backfill UPDATEs use index lookups rather
+   than hash-joining heap-to-heap.
 2. **Resolve FKs** — `tx_in.tx_out_id`, `collateral_tx_in.tx_out_id`,
    `reference_tx_in.tx_out_id`. These were left NULL during Ingest because
    the producer rows hadn't been written yet at COPY time.
 3. **Backfill** — three `tx` columns the body alone can't supply (phase-2
    fee, phase-2 deposit, ledger-disabled valid-contract deposit), plus the
    `tx_out.consumed_by_tx_id` column if it's enabled.
-4. **Schema-mode flip** — `ALTER TABLE … SET LOGGED` per table. The flip
-   rewrites the heap; on a profile where `wal_level = minimal` PostgreSQL
-   skips writing the rewrite to WAL.
-5. **Sequence attach + setval** — attach sequences to the columns Follow
-   will allocate from and advance them past the Ingest-assigned IDs.
-6. **Index build** — the full production index set.
-7. **ANALYZE** — give the query planner accurate stats before Follow starts
-   running queries.
+4. **Drop scaffolding indexes** — `ALTER TABLE … SET LOGGED` rebuilds every
+   index on the table inside the ALTER, so any index alive at flip time is
+   paid for twice. Bare heaps flip fastest.
+5. **Schema-mode flip + sequence attach** — `ALTER TABLE … SET LOGGED` per
+   table, fanned out across a pool. The flip rewrites the heap; on a
+   profile where `wal_level = minimal` PostgreSQL skips writing the
+   rewrite to WAL.
+6. **Index build** — the full production index set, built exactly once,
+   fanned out per index across the pool.
+7. **ANALYZE + sequence setval** — give the query planner accurate stats
+   and advance the sequences past the Ingest-assigned IDs before Follow
+   starts running queries.
 
 Step ordering matters — see [PreparingForVolatileTail](preparing) for the
 constraints between steps and the timing characteristics.

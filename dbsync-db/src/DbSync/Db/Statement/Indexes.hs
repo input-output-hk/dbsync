@@ -16,20 +16,30 @@
 --   * 'tableIndexStatements' — per table, the PK and unique
 --     constraints (from 'tdPrimaryKey' and 'tdUniqueConstraints')
 --     plus the FK/scope indexes from 'foreignKeyIndexStatements'.
---     @IF NOT EXISTS@ dedupes against the pre/post-resolve passes.
+--     @IF NOT EXISTS@ makes a crash-rerun of the pass a no-op.
+--
+-- Every index the resolve passes create is dropped again before the
+-- UNLOGGED → LOGGED flip ('resolveScaffoldingIndexNames' +
+-- 'dropIndexSql'): @ALTER TABLE … SET LOGGED@ rewrites the heap and
+-- rebuilds every index on the table inside the ALTER, so any index
+-- alive at flip time is paid for twice. The production pass after
+-- the flip rebuilds the shapes Follow needs exactly once.
 module DbSync.Db.Statement.Indexes
-  ( tableIndexStatements
+  ( IndexStatement (..)
+  , tableIndexStatements
   , foreignKeyIndexStatements
   , ingestResolveIndexStatements
   , preResolveIndexStatements
   , postResolveIndexStatements
+  , resolveScaffoldingIndexNames
+  , dropIndexSql
   , uniqueConstraintIndexName
   , Concurrency (..)
   ) where
 
 import Cardano.Prelude
 
-import Data.List (lookup)
+import Data.List (lookup, nub)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Text as T
 
@@ -151,12 +161,21 @@ import DbSync.Db.Schema.UTxO
   )
 import DbSync.Db.Sql (quoteIdent)
 
+-- | A named @CREATE INDEX@ DDL statement. The name is carried
+-- alongside the SQL so log lines and @DROP INDEX@ statements can
+-- refer to the index without parsing DDL.
+data IndexStatement = IndexStatement
+  { isName :: !Text
+  , isSql  :: !Text
+  }
+  deriving stock (Eq, Show)
+
 -- | One entry for the primary key (defaulting to @id@ when
 -- 'tdPrimaryKey' is 'Nothing') plus one per unique constraint.
 -- 'Concurrent' = @CREATE INDEX CONCURRENTLY@ (live database, no
 -- @ShareLock@); 'NonConcurrent' = full parallel maintenance worker
 -- support.
-tableIndexStatements :: Concurrency -> TableDef -> [Text]
+tableIndexStatements :: Concurrency -> TableDef -> [IndexStatement]
 tableIndexStatements conc td =
   pkStatement : uniqueStatements <> foreignKeyIndexStatements conc td
   where
@@ -191,7 +210,7 @@ uniqueConstraintIndexName td n =
 -- already covered by 'preResolveIndexStatements' /
 -- 'postResolveIndexStatements' (the @tx_id@ / @tx_in_id@ scope
 -- indexes) are omitted here.
-foreignKeyIndexStatements :: Concurrency -> TableDef -> [Text]
+foreignKeyIndexStatements :: Concurrency -> TableDef -> [IndexStatement]
 foreignKeyIndexStatements conc td =
   [ renderIndex conc NonUnique (fkIndexName td cols) (tdName td) cols
   | cols <- maybe [] (map (map tcName)) (lookup (tdName td) fkIndexColumns)
@@ -334,7 +353,7 @@ fkIndexColumns =
 -- Without these, every per-epoch resolve scans the full @tx_out@
 -- heap — the visible cause of @awaitTxOutDrained (epoch N-1)@ stalls
 -- late in Ingest.
-ingestResolveIndexStatements :: [Text]
+ingestResolveIndexStatements :: [IndexStatement]
 ingestResolveIndexStatements =
   [ -- 'bulkUpdateTxOutAddressIdsStmt' and 'bulkUpdateConsumedByTxIdStmt'
     -- match by 'tx_out.id' (PK). The worker counter assigns ids
@@ -362,7 +381,7 @@ ingestResolveIndexStatements =
 -- tables the CTAS does not rebuild (so they survive). Non-concurrent
 -- because tables are still UNLOGGED: skips WAL and the second-pass
 -- scan.
-preResolveIndexStatements :: [Text]
+preResolveIndexStatements :: [IndexStatement]
 preResolveIndexStatements =
   [ renderIndex NonConcurrent Unique
       (uniqueConstraintIndexName txTableDef 1)
@@ -385,7 +404,7 @@ preResolveIndexStatements =
 -- | Built /after/ the CTAS rebuilds. The CTAS DROPs and replaces
 -- @tx_in@ and @collateral_tx_in@, so any index on those tables built
 -- earlier would be lost.
-postResolveIndexStatements :: [Text]
+postResolveIndexStatements :: [IndexStatement]
 postResolveIndexStatements =
   [ renderIndex NonConcurrent NonUnique
       "tx_in_tx_in_id_idx"
@@ -396,6 +415,26 @@ postResolveIndexStatements =
       (tdName collateralTxInTableDef)
       [collateralTxInCols.cticTxInId.tcName]
   ]
+
+-- ---------------------------------------------------------------------------
+-- * Scaffolding teardown
+-- ---------------------------------------------------------------------------
+
+-- | Every index name the ingest-time and pre/post-resolve passes may
+-- have created. Dropped in one pass right before the UNLOGGED →
+-- LOGGED flip so the flip rewrites bare heaps; the production index
+-- pass afterwards rebuilds the shapes Follow needs (under the same
+-- names) exactly once, with per-index pool fan-out and parallel
+-- maintenance workers instead of serially inside each table's ALTER.
+resolveScaffoldingIndexNames :: [Text]
+resolveScaffoldingIndexNames =
+  nub $ map isName $
+    ingestResolveIndexStatements
+      <> preResolveIndexStatements
+      <> postResolveIndexStatements
+
+dropIndexSql :: Text -> Text
+dropIndexSql idxName = "DROP INDEX IF EXISTS " <> quoteIdent idxName
 
 -- ---------------------------------------------------------------------------
 -- * Internals
@@ -409,9 +448,9 @@ data Concurrency = Concurrent | NonConcurrent
 
 data Uniqueness  = Unique | NonUnique
 
-renderIndex :: Concurrency -> Uniqueness -> Text -> Text -> [Text] -> Text
+renderIndex :: Concurrency -> Uniqueness -> Text -> Text -> [Text] -> IndexStatement
 renderIndex conc uniq idxName tableName cols =
-  T.unwords $ filter (not . T.null)
+  IndexStatement idxName $ T.unwords $ filter (not . T.null)
     [ "CREATE"
     , case uniq of Unique -> "UNIQUE INDEX"; NonUnique -> "INDEX"
     , case conc of Concurrent -> "CONCURRENTLY"; NonConcurrent -> ""

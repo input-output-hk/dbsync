@@ -22,6 +22,7 @@ Epoch-aligned commits use a sentinel\/barrier pattern:
      'Nothing' to all queues
   2. Each writer drains remaining chunks, ends its stream, signals ready
   3. Parser waits for all writers, then @COMMIT@ on all connections
+     concurrently
   4. Parser calls 'lsReopen' to start new streams for the next epoch
 
 Errors from worker threads propagate to the parent via @async@ + @link@.
@@ -39,6 +40,7 @@ module DbSync.Db.Loader
 
 import Cardano.Prelude
 
+import Control.Concurrent.Async (mapConcurrently_)
 import Control.Concurrent.STM (TBQueue, lengthTBQueue, newTBQueueIO, readTBQueue, writeTBQueue)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 
@@ -192,19 +194,22 @@ mkLoaderStream connStr tableDefs = do
           -- 2. Wait for all writers to signal ready (drained + endStream)
           forM_ channelMap $ \ch ->
             takeMVar (chReady ch)
-          -- 3. COMMIT on all connections
-          forM_ channelMap $ \ch ->
-            commitTransaction (chConnection ch)
+          -- 3. COMMIT on all connections; safe concurrently because
+          -- each channel owns its connection and its writer exited.
+          mapConcurrently_ (commitTransaction . chConnection)
+            (Map.elems channelMap)
 
     , lsReopen = do
         -- Begin new transaction + loader stream on each connection.
         -- Buffers are empty here (lsCommit flushed them); the reset
         -- is defensive.
-        forM_ channelMap $ \ch -> do
+        flip mapConcurrently_ (Map.elems channelMap) $ \ch -> do
           writeIORef (chBuffer ch) emptyChunkBuffer
           beginTransaction (chConnection ch)
           beginStream (chConnection ch)
-        -- Restart worker threads (old ones exited after sentinel)
+        -- Restart worker threads (old ones exited after sentinel);
+        -- link must run on the consumer thread for exceptions to
+        -- propagate to it.
         forM_ channelMap $ \ch -> do
           worker' <- async $
             streamWorkerLoop (chConnection ch) (chQueue ch) (chReady ch)

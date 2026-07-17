@@ -178,6 +178,7 @@ library
     DbSync.Phase.Preparing.Resolve
     DbSync.Phase.Preparing.Run
     DbSync.Phase.Preparing.Sequences
+    DbSync.Phase.Preparing.Step
     DbSync.Phase.Preparing.Tuning
 
     -- Phase: Following

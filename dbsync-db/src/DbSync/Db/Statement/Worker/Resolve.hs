@@ -4,8 +4,8 @@
 --
 -- During Ingest the 'UtxoStore' resolves most inputs at COPY time;
 -- cache-misses land with @tx_out_id = NULL@. This module rebuilds
--- those tables via @CREATE … LIKE@ + @INSERT … SELECT LEFT JOIN@ +
--- @DROP@ + @RENAME@ to fill the NULLs in one sequential pass.
+-- those tables via @CREATE TABLE … AS SELECT LEFT JOIN@ + @DROP@ +
+-- @RENAME@ to fill the NULLs in one pass.
 --
 -- CTAS is preferred over UPDATE because:
 --
@@ -15,6 +15,15 @@
 --   * Sequential writes hit a multiple of the random-write rate.
 --   * @LEFT JOIN@ preserves orphan inputs (no matching @tx.hash@) as
 --     @tx_out_id = NULL@.
+--
+-- True CTAS rather than @CREATE … LIKE@ + @INSERT … SELECT@ because
+-- PostgreSQL never parallelises a query that writes through
+-- @INSERT@, while a CTAS @SELECT@ is eligible for a parallel plan
+-- (per server parallel-worker settings). The price is that CTAS
+-- carries no constraints: NOT NULL, defaults, checks, and identity
+-- are re-attached from the 'TableDef' after the rename — one
+-- combined validation scan, no rewrite — and the recreated identity
+-- sequence is repositioned by Prep's final sequence-reset step.
 --
 -- @tx_out.consumed_by_tx_id@ stays on an UPDATE: it touches a much
 -- smaller residual (only what 'ConsumedByWorker' didn't write live)
@@ -36,7 +45,7 @@ import qualified Hasql.Decoders as D
 import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
-import DbSync.Db.Schema.Types (TableColumn (..), TableDef (..))
+import DbSync.Db.Schema.Types (ColumnDef (..), TableColumn (..), TableDef (..))
 import DbSync.Db.Schema.UTxO
   ( CollateralTxInCols (..)
   , ReferenceTxInCols (..)
@@ -55,7 +64,7 @@ import DbSync.Db.Sql.Refs (col, qcol, table)
 
 resolveTxInScript :: Text
 resolveTxInScript =
-  ctasScript (tdName txInTableDef)
+  ctasScript txInTableDef
     [ txInCols.ticId.tcName
     , txInCols.ticTxInId.tcName
     , txInCols.ticTxOutIndex.tcName
@@ -66,7 +75,7 @@ resolveTxInScript =
 -- | Same shape as 'resolveTxInScript' minus @redeemer_id@.
 resolveCollateralTxInScript :: Text
 resolveCollateralTxInScript =
-  ctasScript (tdName collateralTxInTableDef)
+  ctasScript collateralTxInTableDef
     [ collateralTxInCols.cticId.tcName
     , collateralTxInCols.cticTxInId.tcName
     , collateralTxInCols.cticTxOutIndex.tcName
@@ -76,7 +85,7 @@ resolveCollateralTxInScript =
 -- | Same shape as 'resolveCollateralTxInScript'.
 resolveReferenceTxInScript :: Text
 resolveReferenceTxInScript =
-  ctasScript (tdName referenceTxInTableDef)
+  ctasScript referenceTxInTableDef
     [ referenceTxInCols.rticId.tcName
     , referenceTxInCols.rticTxInId.tcName
     , referenceTxInCols.rticTxOutIndex.tcName
@@ -112,24 +121,50 @@ resolveConsumedByTxIdStmt =
 -- | @passthrough@ is every column except @tx_out_id@. @tx_out_id@ is
 -- resolved via @COALESCE(orig.tx_out_id, tx.id)@: cache hits keep
 -- their pre-populated value, misses get the join result, orphans
--- stay NULL.
-ctasScript :: Text -> [Text] -> Text
-ctasScript tbl passthrough = T.unlines
-  [ "CREATE UNLOGGED TABLE " <> newName <> " (LIKE " <> tbl
-      <> " INCLUDING DEFAULTS INCLUDING IDENTITY);"
-  , "INSERT INTO " <> newName <> " (" <> T.intercalate ", " allCols <> ")"
+-- stay NULL. The SELECT keeps the original column order, so the
+-- rebuilt table is column-identical to its 'TableDef'.
+ctasScript :: TableDef -> [Text] -> Text
+ctasScript td passthrough = T.unlines $
+  [ "CREATE UNLOGGED TABLE " <> newName <> " AS"
   , "SELECT " <> T.intercalate ", " selExprs
   , "  FROM " <> tbl <> " src"
   , "  LEFT JOIN tx ON tx.hash = src.tx_out_hash;"
   , "DROP TABLE " <> tbl <> ";"
   , "ALTER TABLE " <> newName <> " RENAME TO " <> tbl <> ";"
   ]
+  <> notNullDdl <> defaultDdl <> checkDdl <> identityDdl
   where
+    tbl     = tdName td
     newName = tbl <> "_new"
     insertIdx = 2  -- "id", "tx_in_id", THEN tx_out_id
     (before, after) = splitAt insertIdx passthrough
-    allCols = before ++ ["tx_out_id"] ++ after
     selExprs =
       map (\c -> "src." <> c) before
         ++ ["COALESCE(src.tx_out_id, tx.id) AS tx_out_id"]
         ++ map (\c -> "src." <> c) after
+
+    -- Constraint re-attachment, derived from the TableDef so the
+    -- rebuilt table cannot drift from the declared schema.
+    notNullCols = [cdName c | c <- tdColumns td, not (cdNullable c)]
+    notNullDdl
+      | null notNullCols = []
+      | otherwise =
+          [ "ALTER TABLE " <> tbl <> " "
+              <> T.intercalate ", "
+                   ["ALTER COLUMN " <> c <> " SET NOT NULL" | c <- notNullCols]
+              <> ";"
+          ]
+    defaultDdl =
+      [ "ALTER TABLE " <> tbl <> " ALTER COLUMN " <> c
+          <> " SET DEFAULT " <> expr <> ";"
+      | (c, expr) <- tdColumnDefaults td
+      ]
+    checkDdl =
+      [ "ALTER TABLE " <> tbl <> " ADD CHECK (" <> expr <> ");"
+      | expr <- tdChecks td
+      ]
+    identityDdl =
+      [ "ALTER TABLE " <> tbl <> " ALTER COLUMN " <> c
+          <> " ADD GENERATED BY DEFAULT AS IDENTITY;"
+      | c <- tdIdentityColumns td
+      ]

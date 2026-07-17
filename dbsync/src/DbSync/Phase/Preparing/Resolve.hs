@@ -8,11 +8,19 @@ module DbSync.Phase.Preparing.Resolve
 
 import Cardano.Prelude
 
+import Control.Monad.IO.Unlift (MonadUnliftIO)
 import qualified Hasql.Session as Sess
 
-import DbSync.AppM (LoggingM)
 import DbSync.App.Config.Types (SyncConfig (..), DbSyncOptions (..), UtxoOption (..))
+import DbSync.App.Env (HasConfig (..))
 import DbSync.Db.Run (useConn)
+import DbSync.Db.Schema.Init (analyzeSql)
+import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Schema.UTxO
+  ( collateralTxInTableDef
+  , referenceTxInTableDef
+  , txInTableDef
+  )
 import DbSync.Db.Statement.Worker.Resolve
   ( resolveCollateralTxInScript
   , resolveConsumedByTxIdStmt
@@ -20,29 +28,40 @@ import DbSync.Db.Statement.Worker.Resolve
   , resolveTxInScript
   )
 import DbSync.Db.Transaction (HasHasqlConnection (..))
-import DbSync.App.Env (HasConfig (..))
-import DbSync.Trace.Timing (timedTrace_, timedTrace)
+import DbSync.Phase.Preparing.Step (StepKind (..), step, stepRows)
+import DbSync.Trace (HasTracer (..))
 
--- | CTAS the three input tables, then fill the consumed-by
--- residual when 'uoConsumedByTxId' is on (the per-epoch worker
--- handles the bulk during Ingest; this catches cache-misses).
+-- | Rebuild the three input tables with resolved @tx_out_id@, then
+-- fill the consumed-by residual when 'uoConsumedByTxId' is on (the
+-- per-epoch worker handles the bulk during Ingest; this catches
+-- cache-misses).
+--
+-- The rebuilt tables are ANALYZEd before the residual UPDATE plans
+-- against them: a freshly created table has no statistics at all,
+-- and the UPDATE's join order degrades badly on default estimates.
 resolveForeignKeys
-  :: (LoggingM env m, HasHasqlConnection env, HasConfig env)
+  :: (HasTracer env, HasHasqlConnection env, HasConfig env, MonadReader env m, MonadUnliftIO m)
   => m ()
 resolveForeignKeys = do
   utxoOpts <- asks (pcUtxo . scOptions . getConfig)
-  timedTrace_ "PreparingForVolatileTail" "resolve tx_in.tx_out_id (CTAS)" $
+  step ResolveStep "tx_in.tx_out_id (table rebuild)" $
     runScript resolveTxInScript
-  timedTrace_ "PreparingForVolatileTail" "resolve collateral_tx_in.tx_out_id (CTAS)" $
+  step ResolveStep "collateral_tx_in.tx_out_id (table rebuild)" $
     runScript resolveCollateralTxInScript
-  timedTrace_ "PreparingForVolatileTail" "resolve reference_tx_in.tx_out_id (CTAS)" $
+  step ResolveStep "reference_tx_in.tx_out_id (table rebuild)" $
     runScript resolveReferenceTxInScript
-  when (uoConsumedByTxId utxoOpts) $ do
-    _ <- timedTrace "PreparingForVolatileTail" "resolve tx_out.consumed_by_tx_id" $ do
+  step AnalyzeStep "rebuilt input tables" $
+    for_ rebuiltTables (runScript . analyzeSql . tdName)
+  when (uoConsumedByTxId utxoOpts) $
+    void $ stepRows ResolveStep "tx_out.consumed_by_tx_id (residual)" $ do
       conn <- asks getHasqlConnection
       useConn "Phase.Preparing.Resolve" conn
         (Sess.statement () resolveConsumedByTxIdStmt)
-    pure ()
+
+-- | The tables the CTAS resolves replace; fresh heaps with no
+-- planner statistics until the ANALYZE step above runs.
+rebuiltTables :: [TableDef]
+rebuiltTables = [txInTableDef, collateralTxInTableDef, referenceTxInTableDef]
 
 runScript
   :: (HasHasqlConnection env, MonadReader env m, MonadIO m)

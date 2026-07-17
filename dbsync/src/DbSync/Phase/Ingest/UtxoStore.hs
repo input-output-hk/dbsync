@@ -243,7 +243,7 @@ persistUtxoStore store lsm = mask_ $ do
 -- a coarse epoch cadence and 'persistUtxoStore' alone on every
 -- other boundary.
 --
--- Synchronous on the consumer thread.
+-- The store must be quiescent for the duration of the call.
 compactUtxoStore :: UtxoStore -> LsmSession -> IO ()
 compactUtxoStore store lsm = mask_ $ do
   persistUtxoStore store lsm

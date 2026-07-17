@@ -34,7 +34,6 @@ module DbSync.Db.Schema.Init
   , createIdSequenceSql
   , attachIdDefaultSql
   , analyzeSql
-  , vacuumSql
 
     -- * psql helpers (exported for tests)
   , execPsql
@@ -259,13 +258,6 @@ attachIdDefaultSql tableName =
 analyzeSql :: Text -> Text
 analyzeSql tableName =
   "ANALYZE " <> quoteIdent tableName
-
--- | @VACUUM@ on a single table. Used between resolve and the LOGGED
--- flip to reclaim dead tuples left by the resolve UPDATEs, so the
--- subsequent heap rewrite doesn't drag them along.
-vacuumSql :: Text -> Text
-vacuumSql tableName =
-  "VACUUM " <> quoteIdent tableName
 
 -- ---------------------------------------------------------------------------
 -- * Extractor presence

@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -40,11 +41,12 @@ import qualified Cardano.Ledger.Core as Core
 import qualified Cardano.Ledger.Keys as Ledger
 import qualified Cardano.Ledger.Rewards as Ledger
 import Cardano.Slotting.Slot (EpochNo (..))
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Strict.Maybe as Strict
 
-import DbSync.Db.Schema.Ids (BlockId)
+import DbSync.Db.Schema.Ids (BlockId, PoolHashId)
 import DbSync.Db.Schema.StakeDelegation
   ( EpochStake (..)
   , EpochStakeProgress (..)
@@ -162,9 +164,10 @@ runStakeDelegationLedgerBoundary
 runStakeDelegationLedgerBoundary applyResult _blockId =
   case bndNewEpoch applyResult of
     Strict.Nothing       -> pure ()
-    Strict.Just newEpoch ->
+    Strict.Just newEpoch -> do
+      poolCache <- liftIO $ newIORef Map.empty
       forM_ (bndEvents applyResult)
-        (processEvent (unEpochNo (Generic.neEpoch newEpoch)))
+        (processEvent poolCache (unEpochNo (Generic.neEpoch newEpoch)))
 
 processEvent
   :: ( HasResolver env
@@ -173,12 +176,12 @@ processEvent
      , MonadReader env m
      , MonadIO m
      )
-  => Word64 -> LedgerEvent -> m ()
-processEvent currentEpoch = \case
+  => IORef (Map ByteString PoolHashId) -> Word64 -> LedgerEvent -> m ()
+processEvent poolCache currentEpoch = \case
   LedgerTotalRewards e rewardsMap ->
-    emitLedgerRewards (unEpochNo e) rewardsMap
+    emitLedgerRewards poolCache (unEpochNo e) rewardsMap
   LedgerPoolReap e (Generic.Rewards rewardsMap) ->
-    emitGenericRewards (unEpochNo e) rewardsMap
+    emitGenericRewards poolCache (unEpochNo e) rewardsMap
   LedgerMirDist potMap ->
     emitMirDist (currentEpoch + 1) potMap
   LedgerGovInfo enacted _dropped _expired _uncl ->
@@ -199,15 +202,16 @@ emitLedgerRewards
      , MonadReader env m
      , MonadIO m
      )
-  => Word64
+  => IORef (Map ByteString PoolHashId)
+  -> Word64
   -> Map StakeCred (Set Ledger.Reward)
   -> m ()
-emitLedgerRewards spendable rewardsMap = do
+emitLedgerRewards poolCache spendable rewardsMap = do
   writer <- asks getWriter
   forM_ (Map.toList rewardsMap) $ \(stakeCred, rewardSet) -> do
     saId <- resolveStakeCred (stakeCredHash stakeCred)
     forM_ (Set.toList rewardSet) $ \r -> do
-      phId <- resolveAndWritePoolHash (poolKeyHashBytes (Ledger.rewardPool r))
+      phId <- memoPoolHash poolCache (poolKeyHashBytes (Ledger.rewardPool r))
       liftIO $ writeReward writer Reward
         { rewardAddrId         = saId
         , rewardType           = rewardTypeToSource (Ledger.rewardType r)
@@ -227,15 +231,16 @@ emitGenericRewards
      , MonadReader env m
      , MonadIO m
      )
-  => Word64
+  => IORef (Map ByteString PoolHashId)
+  -> Word64
   -> Map StakeCred (Set Generic.Reward)
   -> m ()
-emitGenericRewards spendable rewardsMap = do
+emitGenericRewards poolCache spendable rewardsMap = do
   writer <- asks getWriter
   forM_ (Map.toList rewardsMap) $ \(stakeCred, rewardSet) -> do
     saId <- resolveStakeCred (stakeCredHash stakeCred)
     forM_ (Set.toList rewardSet) $ \r -> do
-      phId <- resolveAndWritePoolHash (poolKeyHashBytes (Generic.rewardPool r))
+      phId <- memoPoolHash poolCache (poolKeyHashBytes (Generic.rewardPool r))
       liftIO $ writeReward writer Reward
         { rewardAddrId         = saId
         , rewardType           = Generic.rewardSource r
@@ -298,6 +303,24 @@ emitGovInfoTreasury spendable enacted = do
             , potRewardSpendableEpoch = spendable
             , potRewardEarnedEpoch    = 0
             }
+
+-- | 'resolveAndWritePoolHash' through a boundary-local cache. The
+-- rewards map has one entry per credential but draws from the far
+-- smaller set of registered pools, so the memo collapses repeated
+-- LSM lookups into map hits.
+memoPoolHash
+  :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
+  => IORef (Map ByteString PoolHashId)
+  -> ByteString
+  -> m PoolHashId
+memoPoolHash ref key = do
+  cache <- liftIO $ readIORef ref
+  case Map.lookup key cache of
+    Just phId -> pure phId
+    Nothing   -> do
+      !phId <- resolveAndWritePoolHash key
+      liftIO $ modifyIORef' ref (Map.insert key phId)
+      pure phId
 
 -- ---------------------------------------------------------------------------
 -- * Key extraction helpers

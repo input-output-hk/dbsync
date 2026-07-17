@@ -16,10 +16,16 @@ module DbSync.Db.Pool
 
     -- * Session runner
   , usePool
+
+    -- * Bounded fan-out
+  , forPooled_
   ) where
 
 import Cardano.Prelude
 
+import Control.Concurrent.Async (replicateConcurrently_)
+import Control.Monad.IO.Unlift (MonadUnliftIO, withRunInIO)
+import Data.IORef (atomicModifyIORef', newIORef)
 import Data.Time.Clock (DiffTime)
 import qualified Hasql.Connection.Settings as ConnSettings
 import qualified Hasql.Pool as Pool
@@ -113,3 +119,25 @@ usePool
 usePool ctx session = do
   pool <- asks getPool
   usePoolSession ("DbSync.Db.Pool." <> ctx) pool session
+
+-- | Run one action per item on exactly @n@ worker threads that pop
+-- items in list order.
+--
+-- Unlike a plain @forConcurrently_@ over the whole list, this keeps
+-- the caller's priority order (front of the list starts first) and
+-- avoids parking one blocked thread per item on the pool's
+-- acquisition queue. Sized to the pool so every worker holds a
+-- backend whenever work remains.
+forPooled_ :: MonadUnliftIO m => Int -> [a] -> (a -> m ()) -> m ()
+forPooled_ n items run = do
+  queue <- liftIO (newIORef items)
+  withRunInIO $ \runInIO ->
+    replicateConcurrently_ (max 1 n) (runInIO (worker queue))
+  where
+    worker queue = loop
+      where
+        loop = do
+          next <- liftIO $ atomicModifyIORef' queue $ \case
+            []       -> ([], Nothing)
+            (x : xs) -> (xs, Just x)
+          for_ next $ \x -> run x >> loop

@@ -92,10 +92,12 @@ data BlockLedgerData
 isn't even running. With `LedgerDataOn`, extractors read deposits and
 deposit parameters directly off the context.
 
-During `IngestChainHistory`, `HasLedgerData IngestEnv` returns
-`emptyBlockLedgerData` even when the worker is on: the per-block
-deposits aren't yet routed through the consumer, and protocol-param
-deposits accumulate into `epoch_param_pending` at epoch boundaries.
+During `IngestChainHistory` with the worker on, `HasLedgerData
+IngestEnv` blocks on the worker's per-block apply-result queue
+(`takeBlockLedgerData`): the consumer never runs ahead of the ledger,
+and a worker pause longer than the queue's banked results stalls block
+processing. Protocol-param deposits additionally accumulate into
+`epoch_param_pending` at epoch boundaries;
 [`PreparingForVolatileTail`](phases/preparing) backfills the affected
 columns once Ingest exits.
 

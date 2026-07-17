@@ -21,10 +21,13 @@ import DbSync.Db.Schema.Types
   )
 import DbSync.Db.Statement.Indexes
   ( Concurrency (..)
+  , IndexStatement (..)
+  , dropIndexSql
   , foreignKeyIndexStatements
   , ingestResolveIndexStatements
   , postResolveIndexStatements
   , preResolveIndexStatements
+  , resolveScaffoldingIndexNames
   , tableIndexStatements
   , uniqueConstraintIndexName
   )
@@ -89,51 +92,63 @@ spec = describe "DbSync.Db.Statement.Indexes" $ do
   describe "tableIndexStatements Concurrent" $ do
     it "defaults Nothing PK to id" $
       tableIndexStatements Concurrent plainTable `shouldBe`
-        [ "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"plain_pkey_idx\""
-            <> " ON \"plain\" (\"id\")"
+        [ IndexStatement "plain_pkey_idx" $
+            "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"plain_pkey_idx\""
+              <> " ON \"plain\" (\"id\")"
         ]
 
     it "emits a single PK index for a PK-only table" $
       tableIndexStatements Concurrent pkTable `shouldBe`
-        [ "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"pk_only_pkey_idx\""
-            <> " ON \"pk_only\" (\"id\")"
+        [ IndexStatement "pk_only_pkey_idx" $
+            "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"pk_only_pkey_idx\""
+              <> " ON \"pk_only\" (\"id\")"
         ]
 
     it "emits the default PK plus one UNIQUE INDEX per single-column constraint" $
       tableIndexStatements Concurrent uniqueOneCol `shouldBe`
-        [ "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"uniq_one_pkey_idx\""
-            <> " ON \"uniq_one\" (\"id\")"
-        , "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"uniq_one_unique_1_idx\""
-            <> " ON \"uniq_one\" (\"hash\")"
+        [ IndexStatement "uniq_one_pkey_idx" $
+            "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"uniq_one_pkey_idx\""
+              <> " ON \"uniq_one\" (\"id\")"
+        , IndexStatement "uniq_one_unique_1_idx" $
+            "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"uniq_one_unique_1_idx\""
+              <> " ON \"uniq_one\" (\"hash\")"
         ]
 
     it "lists every column of a multi-column UNIQUE in order" $
       tableIndexStatements Concurrent uniqueMultiCol `shouldBe`
-        [ "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"uniq_multi_pkey_idx\""
-            <> " ON \"uniq_multi\" (\"id\")"
-        , "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"uniq_multi_unique_1_idx\""
-            <> " ON \"uniq_multi\" (\"addr_id\", \"pool_id\", \"epoch_no\")"
+        [ IndexStatement "uniq_multi_pkey_idx" $
+            "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"uniq_multi_pkey_idx\""
+              <> " ON \"uniq_multi\" (\"id\")"
+        , IndexStatement "uniq_multi_unique_1_idx" $
+            "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"uniq_multi_unique_1_idx\""
+              <> " ON \"uniq_multi\" (\"addr_id\", \"pool_id\", \"epoch_no\")"
         ]
 
     it "emits PK first, then numbered UNIQUE indexes" $
       tableIndexStatements Concurrent pkAndUniques `shouldBe`
-        [ "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"many_pkey_idx\""
-            <> " ON \"many\" (\"id\")"
-        , "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"many_unique_1_idx\""
-            <> " ON \"many\" (\"name\")"
-        , "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"many_unique_2_idx\""
-            <> " ON \"many\" (\"policy\", \"asset_name\")"
+        [ IndexStatement "many_pkey_idx" $
+            "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"many_pkey_idx\""
+              <> " ON \"many\" (\"id\")"
+        , IndexStatement "many_unique_1_idx" $
+            "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"many_unique_1_idx\""
+              <> " ON \"many\" (\"name\")"
+        , IndexStatement "many_unique_2_idx" $
+            "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"many_unique_2_idx\""
+              <> " ON \"many\" (\"policy\", \"asset_name\")"
         ]
 
   describe "tableIndexStatements NonConcurrent" $
     it "drops the CONCURRENTLY keyword across every emission path" $
       tableIndexStatements NonConcurrent pkAndUniques `shouldBe`
-        [ "CREATE UNIQUE INDEX IF NOT EXISTS \"many_pkey_idx\""
-            <> " ON \"many\" (\"id\")"
-        , "CREATE UNIQUE INDEX IF NOT EXISTS \"many_unique_1_idx\""
-            <> " ON \"many\" (\"name\")"
-        , "CREATE UNIQUE INDEX IF NOT EXISTS \"many_unique_2_idx\""
-            <> " ON \"many\" (\"policy\", \"asset_name\")"
+        [ IndexStatement "many_pkey_idx" $
+            "CREATE UNIQUE INDEX IF NOT EXISTS \"many_pkey_idx\""
+              <> " ON \"many\" (\"id\")"
+        , IndexStatement "many_unique_1_idx" $
+            "CREATE UNIQUE INDEX IF NOT EXISTS \"many_unique_1_idx\""
+              <> " ON \"many\" (\"name\")"
+        , IndexStatement "many_unique_2_idx" $
+            "CREATE UNIQUE INDEX IF NOT EXISTS \"many_unique_2_idx\""
+              <> " ON \"many\" (\"policy\", \"asset_name\")"
         ]
 
   describe "uniqueConstraintIndexName" $ do
@@ -147,12 +162,15 @@ spec = describe "DbSync.Db.Statement.Indexes" $ do
   describe "ingestResolveIndexStatements" $ do
     it "indexes the columns the per-epoch resolver matches on" $
       ingestResolveIndexStatements `shouldBe`
-        [ "CREATE UNIQUE INDEX IF NOT EXISTS \"tx_out_pkey_idx\""
-            <> " ON \"tx_out\" (\"id\")"
-        , "CREATE UNIQUE INDEX IF NOT EXISTS \"collateral_tx_out_pkey_idx\""
-            <> " ON \"collateral_tx_out\" (\"id\")"
-        , "CREATE UNIQUE INDEX IF NOT EXISTS \"address_unique_1_idx\""
-            <> " ON \"address\" (\"raw_hash\")"
+        [ IndexStatement "tx_out_pkey_idx" $
+            "CREATE UNIQUE INDEX IF NOT EXISTS \"tx_out_pkey_idx\""
+              <> " ON \"tx_out\" (\"id\")"
+        , IndexStatement "collateral_tx_out_pkey_idx" $
+            "CREATE UNIQUE INDEX IF NOT EXISTS \"collateral_tx_out_pkey_idx\""
+              <> " ON \"collateral_tx_out\" (\"id\")"
+        , IndexStatement "address_unique_1_idx" $
+            "CREATE UNIQUE INDEX IF NOT EXISTS \"address_unique_1_idx\""
+              <> " ON \"address\" (\"raw_hash\")"
         ]
 
     it "names the address-raw-hash index to match the later concurrent rebuild" $
@@ -166,14 +184,18 @@ spec = describe "DbSync.Db.Statement.Indexes" $ do
   describe "preResolveIndexStatements" $ do
     it "covers tx.hash plus the lookups the CTAS join and backfills need" $
       preResolveIndexStatements `shouldBe`
-        [ "CREATE UNIQUE INDEX IF NOT EXISTS \"tx_unique_1_idx\""
-            <> " ON \"tx\" (\"hash\")"
-        , "CREATE UNIQUE INDEX IF NOT EXISTS \"tx_out_unique_1_idx\""
-            <> " ON \"tx_out\" (\"tx_id\", \"index\")"
-        , "CREATE INDEX IF NOT EXISTS \"collateral_tx_out_tx_id_idx\""
-            <> " ON \"collateral_tx_out\" (\"tx_id\")"
-        , "CREATE INDEX IF NOT EXISTS \"withdrawal_tx_id_idx\""
-            <> " ON \"withdrawal\" (\"tx_id\")"
+        [ IndexStatement "tx_unique_1_idx" $
+            "CREATE UNIQUE INDEX IF NOT EXISTS \"tx_unique_1_idx\""
+              <> " ON \"tx\" (\"hash\")"
+        , IndexStatement "tx_out_unique_1_idx" $
+            "CREATE UNIQUE INDEX IF NOT EXISTS \"tx_out_unique_1_idx\""
+              <> " ON \"tx_out\" (\"tx_id\", \"index\")"
+        , IndexStatement "collateral_tx_out_tx_id_idx" $
+            "CREATE INDEX IF NOT EXISTS \"collateral_tx_out_tx_id_idx\""
+              <> " ON \"collateral_tx_out\" (\"tx_id\")"
+        , IndexStatement "withdrawal_tx_id_idx" $
+            "CREATE INDEX IF NOT EXISTS \"withdrawal_tx_id_idx\""
+              <> " ON \"withdrawal\" (\"tx_id\")"
         ]
 
     it "names the tx-hash index to match the later concurrent rebuild" $
@@ -185,26 +207,52 @@ spec = describe "DbSync.Db.Statement.Indexes" $ do
   describe "postResolveIndexStatements" $
     it "covers the input-table indexes the CTAS rebuilds drop" $
       postResolveIndexStatements `shouldBe`
-        [ "CREATE INDEX IF NOT EXISTS \"tx_in_tx_in_id_idx\""
-            <> " ON \"tx_in\" (\"tx_in_id\")"
-        , "CREATE INDEX IF NOT EXISTS \"collateral_tx_in_tx_in_id_idx\""
-            <> " ON \"collateral_tx_in\" (\"tx_in_id\")"
+        [ IndexStatement "tx_in_tx_in_id_idx" $
+            "CREATE INDEX IF NOT EXISTS \"tx_in_tx_in_id_idx\""
+              <> " ON \"tx_in\" (\"tx_in_id\")"
+        , IndexStatement "collateral_tx_in_tx_in_id_idx" $
+            "CREATE INDEX IF NOT EXISTS \"collateral_tx_in_tx_in_id_idx\""
+              <> " ON \"collateral_tx_in\" (\"tx_in_id\")"
         ]
 
   describe "foreignKeyIndexStatements" $ do
     it "emits one named index per FK / scope column of a known table" $
       foreignKeyIndexStatements NonConcurrent delegationTableDef `shouldBe`
-        [ "CREATE INDEX IF NOT EXISTS \"delegation_tx_id_idx\""
-            <> " ON \"delegation\" (\"tx_id\")"
-        , "CREATE INDEX IF NOT EXISTS \"delegation_addr_id_idx\""
-            <> " ON \"delegation\" (\"addr_id\")"
-        , "CREATE INDEX IF NOT EXISTS \"delegation_pool_hash_id_idx\""
-            <> " ON \"delegation\" (\"pool_hash_id\")"
-        , "CREATE INDEX IF NOT EXISTS \"delegation_redeemer_id_idx\""
-            <> " ON \"delegation\" (\"redeemer_id\")"
-        , "CREATE INDEX IF NOT EXISTS \"delegation_active_epoch_no_idx\""
-            <> " ON \"delegation\" (\"active_epoch_no\")"
+        [ IndexStatement "delegation_tx_id_idx" $
+            "CREATE INDEX IF NOT EXISTS \"delegation_tx_id_idx\""
+              <> " ON \"delegation\" (\"tx_id\")"
+        , IndexStatement "delegation_addr_id_idx" $
+            "CREATE INDEX IF NOT EXISTS \"delegation_addr_id_idx\""
+              <> " ON \"delegation\" (\"addr_id\")"
+        , IndexStatement "delegation_pool_hash_id_idx" $
+            "CREATE INDEX IF NOT EXISTS \"delegation_pool_hash_id_idx\""
+              <> " ON \"delegation\" (\"pool_hash_id\")"
+        , IndexStatement "delegation_redeemer_id_idx" $
+            "CREATE INDEX IF NOT EXISTS \"delegation_redeemer_id_idx\""
+              <> " ON \"delegation\" (\"redeemer_id\")"
+        , IndexStatement "delegation_active_epoch_no_idx" $
+            "CREATE INDEX IF NOT EXISTS \"delegation_active_epoch_no_idx\""
+              <> " ON \"delegation\" (\"active_epoch_no\")"
         ]
 
     it "emits nothing for a table with no FK / scope targets" $
       foreignKeyIndexStatements NonConcurrent plainTable `shouldBe` []
+
+  describe "resolveScaffoldingIndexNames" $
+    it "lists every ingest-time and pre/post-resolve index name" $
+      resolveScaffoldingIndexNames `shouldBe`
+        [ "tx_out_pkey_idx"
+        , "collateral_tx_out_pkey_idx"
+        , "address_unique_1_idx"
+        , "tx_unique_1_idx"
+        , "tx_out_unique_1_idx"
+        , "collateral_tx_out_tx_id_idx"
+        , "withdrawal_tx_id_idx"
+        , "tx_in_tx_in_id_idx"
+        , "collateral_tx_in_tx_in_id_idx"
+        ]
+
+  describe "dropIndexSql" $
+    it "emits an idempotent quoted DROP" $
+      dropIndexSql "tx_out_pkey_idx"
+        `shouldBe` "DROP INDEX IF EXISTS \"tx_out_pkey_idx\""

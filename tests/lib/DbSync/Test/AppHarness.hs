@@ -19,6 +19,7 @@ module DbSync.Test.AppHarness
     -- * Profile introspection
   , profileTableNames
   , profileExpectedIndexes
+  , droppedScaffoldingIndexes
 
     -- * AppArgs builders
   , mkAppArgsFromMockNode
@@ -181,25 +182,19 @@ profileTableNames cfg = case buildExtractors (scOptions cfg) of
 -- | Names of every index that 'PreparingForVolatileTail' should have
 -- created by the time it marks @sync_complete = true@.
 --
--- Derived from two sources:
+-- Derived from 'TableDef' metadata on the active extractor tables:
+-- primary keys yield @<table>_pkey_idx@ (defaulting to @id@, exactly
+-- as 'DbSync.Db.Statement.Indexes.tableIndexStatements' does); each
+-- entry in 'tdUniqueConstraints' yields @<table>_unique_N_idx@.
 --
---   * 'TableDef' metadata on the active extractor tables — primary
---     keys yield @<table>_pkey_idx@; each entry in
---     'tdUniqueConstraints' yields @<table>_unique_N_idx@.
---   * 'preResolveIndexNames' below — the static perf indexes
---     'DbSync.Phase.Preparing.PreResolveIndexes' builds
---     unconditionally, irrespective of which extractors are on.
---
--- Names are deduplicated since the @tx_unique_1_idx@ entry is built
--- by both paths (pre-resolve emits it with @IF NOT EXISTS@ so the
--- schema-driven pass is a no-op).
+-- The resolve-support scaffolding is intentionally absent: Prep
+-- drops it before the UNLOGGED → LOGGED flip
+-- ('droppedScaffoldingIndexes').
 profileExpectedIndexes :: SyncConfig -> [Text]
 profileExpectedIndexes cfg = case buildExtractors (scOptions cfg) of
   Left _err  -> []
   Right exts ->
-    List.nub (schemaIndexes <> ingestResolveIndexNames <> preResolveIndexNames)
-    where
-      schemaIndexes = concatMap tableIndexNames (concatMap pdTables exts)
+    List.nub (concatMap tableIndexNames (concatMap pdTables exts))
 
 -- | Index names a single 'TableDef' contributes to the post-Prep
 -- schema. Mirrors 'DbSync.Db.Statement.Indexes.tableIndexStatements'
@@ -208,42 +203,26 @@ tableIndexNames :: TableDef -> [Text]
 tableIndexNames td =
   pkIdx <> uniqueIdxs
   where
-    pkIdx = case tdPrimaryKey td of
-      Nothing -> []
-      Just _  -> [tdName td <> "_pkey_idx"]
+    pkIdx = [tdName td <> "_pkey_idx"]
     uniqueIdxs =
       zipWith
         (\n _ -> uniqueConstraintIndexName td n)
         [1 ..]
         (tdUniqueConstraints td)
 
--- | Indexes the pre- and post-resolve perf-index passes build
--- unconditionally. Kept in sync by hand with
--- 'DbSync.Db.Statement.Indexes.preResolveIndexStatements' and
--- 'DbSync.Db.Statement.Indexes.postResolveIndexStatements'.
-preResolveIndexNames :: [Text]
-preResolveIndexNames =
-  [ "tx_unique_1_idx"
-  , "tx_out_unique_1_idx"
-  , "collateral_tx_out_tx_id_idx"
+-- | Resolve-support indexes that must /not/ survive Prep: the drop
+-- step removes them before the flip and the production pass never
+-- re-creates these shapes. Kept in sync by hand with the
+-- scaffolding-only entries of
+-- 'DbSync.Db.Statement.Indexes.resolveScaffoldingIndexNames' (the
+-- rest of that list — pkey / unique shapes — is rebuilt by the
+-- production pass under the same names).
+droppedScaffoldingIndexes :: [Text]
+droppedScaffoldingIndexes =
+  [ "collateral_tx_out_tx_id_idx"
   , "withdrawal_tx_id_idx"
   , "tx_in_tx_in_id_idx"
   , "collateral_tx_in_tx_in_id_idx"
-  ]
-
--- | Indexes 'DbSync.Phase.Ingest.Indexes.createIngestResolveIndexes'
--- builds at the start of @IngestChainHistory@ on the still-UNLOGGED
--- tables. Kept in sync by hand with
--- 'DbSync.Db.Statement.Indexes.ingestResolveIndexStatements'.
---
--- They survive into the post-Prep schema (the schema-driven Prep
--- pass emits the same names with @IF NOT EXISTS@), so they are
--- listed in 'profileExpectedIndexes' alongside the pre-resolve set.
-ingestResolveIndexNames :: [Text]
-ingestResolveIndexNames =
-  [ "tx_out_pkey_idx"
-  , "collateral_tx_out_pkey_idx"
-  , "address_unique_1_idx"
   ]
 
 -- ---------------------------------------------------------------------------

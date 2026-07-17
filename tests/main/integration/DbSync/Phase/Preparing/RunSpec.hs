@@ -305,43 +305,45 @@ spec = describe "DbSync.Phase.Preparing.Run" $
           (indexExistsSql addressTableDef "address_unique_1_idx")
         result `shouldBe` "1"
 
-      -- The next three assertions confirm the pre-resolve index build
-      -- runs before the resolves: each index name must exist on disk
-      -- after Prep.run returns. The unique tx.hash index is also
-      -- emitted by the later concurrent pass under the same name; the
-      -- IF NOT EXISTS guard makes the second emission a no-op.
-      it "tx (hash) is indexed for the post-load join-on-hash UPDATEs" $ do
+      -- Declared unique shapes: built as resolve scaffolding, dropped
+      -- before the flip, and rebuilt once by the production pass
+      -- under the same names.
+      it "tx (hash) is uniquely indexed" $ do
         result <- T.strip <$> queryTestDb
           (indexExistsSql txTableDef "tx_unique_1_idx")
         result `shouldBe` "1"
 
-      it "tx_out (tx_id, index) is indexed for consumed-by + backfill JOINs" $ do
+      it "tx_out (tx_id, index) is uniquely indexed" $ do
         result <- T.strip <$> queryTestDb
           (indexExistsSql txOutTableDef "tx_out_unique_1_idx")
         result `shouldBe` "1"
 
-      -- The four perf indexes that support the rewritten backfill
-      -- UPDATEs. A missing entry here means a backfill regresses to
-      -- aggregate-then-filter and the post-load pass hangs at scale.
-      it "collateral_tx_in (tx_in_id) is indexed for phase-2 fee lookup" $ do
+      -- FK / scope indexes from the production pass.
+      it "tx_in (tx_out_id) is indexed for Follow lookups" $ do
         result <- T.strip <$> queryTestDb
-          (indexExistsSql collateralTxInTableDef "collateral_tx_in_tx_in_id_idx")
+          (indexExistsSql txInTableDef "tx_in_tx_out_id_idx")
         result `shouldBe` "1"
 
-      it "collateral_tx_out (tx_id) is indexed for phase-2 fee lookup" $ do
+      it "withdrawal (addr_id) is indexed for Follow lookups" $ do
         result <- T.strip <$> queryTestDb
-          (indexExistsSql collateralTxOutTableDef "collateral_tx_out_tx_id_idx")
+          (indexExistsSql withdrawalTableDef "withdrawal_addr_id_idx")
         result `shouldBe` "1"
 
-      it "tx_in (tx_in_id) is indexed for Byron fee + deposit lookup" $ do
+      -- The resolve-support scaffolding must be gone: it exists only
+      -- for the resolve + backfill UPDATEs and is dropped before the
+      -- flip so the heap rewrite doesn't rebuild it.
+      it "resolve-support scaffolding indexes are dropped" $ do
         result <- T.strip <$> queryTestDb
-          (indexExistsSql txInTableDef "tx_in_tx_in_id_idx")
-        result `shouldBe` "1"
-
-      it "withdrawal (tx_id) is indexed for deposit lookup" $ do
-        result <- T.strip <$> queryTestDb
-          (indexExistsSql withdrawalTableDef "withdrawal_tx_id_idx")
-        result `shouldBe` "1"
+          (T.unwords
+            [ "SELECT count(*) FROM pg_indexes"
+            , "WHERE indexname IN ("
+            , "  'collateral_tx_in_tx_in_id_idx',"
+            , "  'collateral_tx_out_tx_id_idx',"
+            , "  'tx_in_tx_in_id_idx',"
+            , "  'withdrawal_tx_id_idx'"
+            , ")"
+            ])
+        result `shouldBe` "0"
 
     describe "sequence reset" $ do
       it "tx_id_seq's next value is MAX(id) + 1" $ do

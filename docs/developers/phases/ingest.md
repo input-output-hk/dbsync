@@ -110,7 +110,8 @@ The consumer detects an epoch transition by comparing `sdEpochNo` between
 adjacent blocks. On a cross, control passes to `handleEpochBoundary`, which
 runs a **pipelined cascade**:
 
-1. Flush the loader stream — commit every per-table COPY in flight.
+1. Flush the loader stream — commit every per-table COPY in flight
+   (the commits fan out concurrently, one round-trip per connection).
 2. Snapshot the per-epoch buffers (address buffer, consumed-by buffer) and
    hand them to the tx-out worker as a job.
 3. Await the tx-out worker (it's draining the *previous* epoch's job — see
@@ -118,8 +119,11 @@ runs a **pipelined cascade**:
 4. Advance `dbsync_sync_state` for the previous pending epoch.
 5. Enqueue the just-finished epoch as the new pending one.
 6. Reopen the loader stream for the next epoch.
-7. Compact the LSM tables (dedup + UTxO).
-8. Emit the per-epoch summary log line.
+7. Await the LSM persist/compaction (dedup + UTxO) — spawned before
+   step 1, it overlaps the PG-bound steps above and must settle before
+   the boundary block's extractors resolve against the stores.
+8. Emit the per-epoch summary log line, then a major GC gated on live-heap
+   growth since the last boundary collection.
 
 The **one-epoch lag** is deliberate. `sync_state` always reflects the last
 epoch the tx-out worker has fully resolved, so a crash mid-epoch can be

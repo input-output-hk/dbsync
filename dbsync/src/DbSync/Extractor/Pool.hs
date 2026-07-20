@@ -148,7 +148,7 @@ processPool ctx = do
                 }
           liftIO $ writePoolUpdate writer puId pu
 
-          -- 5. Write pool owners
+          -- Write pool owners
           forM_ (prdOwners prd) $ \ownerHash -> do
             ownerAddrId <- resolveStakeCred (CredHash ownerHash False)
             liftIO $ writePoolOwner writer PoolOwner
@@ -156,7 +156,7 @@ processPool ctx = do
               , poolOwnerPoolUpdateId = puId
               }
 
-          -- 6. Write pool relays
+          -- Write pool relays
           forM_ (prdRelays prd) $ \relayData ->
             liftIO $ writePoolRelay writer (mkPoolRelay puId relayData)
 

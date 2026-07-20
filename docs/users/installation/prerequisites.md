@@ -12,7 +12,7 @@ What you need installed before building or running dbsync.
 
 | Tool | Version |
 |---|---|
-| GHC | 9.8.4 |
+| GHC | 9.14.1 |
 | cabal-install | ≥ 3.6 |
 | PostgreSQL | ≥ 16 |
 

@@ -4,10 +4,8 @@
 -- | Schema for the @address@ dedup table.
 --
 -- Addresses are normalised: each unique raw payment-address byte-string
--- gets a single row, and @tx_out.address_id@ references it. This
--- replaces the original inline columns @tx_out.address@,
--- @tx_out.address_has_script@, @tx_out.payment_cred@, eliminating the
--- duplication that those columns produced across millions of outputs.
+-- gets a single row that @tx_out.address_id@ references, avoiding
+-- duplication across outputs.
 --
 -- Owned by the @utxo@ extractor — every @tx_out@ depends on an
 -- @address@ row, so the two tables must be populated by the same

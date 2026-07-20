@@ -3,17 +3,11 @@
 
 -- | Schema type for the @ada_pots@ table.
 --
--- Records the protocol-level ada accounting at each epoch boundary:
--- treasury, reserves, rewards, utxo, fees, and the various deposit
--- pots. Populated by the @EpochBoundary@ extractor when the ledger
--- subsystem reports a 'NewEpoch' event with attached
--- @AdaPots@ data.
---
--- Per upstream's documentation:
---
--- > This is only populated for the Shelley and later eras, and only on
--- > epoch boundaries. The treasury and rewards fields will be correct
--- > for the whole epoch, but all other fields change block by block.
+-- Protocol-level ada accounting at each epoch boundary (treasury,
+-- reserves, rewards, utxo, fees, deposit pots). Populated by the
+-- @EpochBoundary@ extractor on a 'NewEpoch' event. Shelley and later
+-- only; treasury and rewards hold for the whole epoch, the other
+-- fields change block by block.
 module DbSync.Db.Schema.AdaPots
   ( -- * Schema type
     AdaPots (..)
@@ -76,8 +70,8 @@ data AdaPots = AdaPots
   , adaPotsReserves          :: !DbLovelace
   , adaPotsRewards           :: !DbLovelace
   , adaPotsUtxo              :: !DbLovelace
-      -- ^ Note: upstream applies a @fixUTxOPots@ correction at apply
-      -- time so this matches @maxLovelaceSupply - sum(other pots)@.
+      -- ^ Corrected via @fixUTxOPots@ at apply time so this equals
+      -- @maxLovelaceSupply - sum(other pots)@.
   , adaPotsDepositsStake     :: !DbLovelace
   , adaPotsFees              :: !DbLovelace
   , adaPotsBlockId           :: !BlockId
@@ -93,9 +87,7 @@ data AdaPots = AdaPots
 -- * Table definition
 -- ---------------------------------------------------------------------------
 
--- | DDL definition for the @ada_pots@ table.
---
--- UNLOGGED during 'IngestChainHistory' (matches the rest of the
+-- | UNLOGGED during 'IngestChainHistory' (matches the rest of the
 -- extractor tables). The PK and FK to @block@ are added later in
 -- 'PreparingForVolatileTail' alongside indexes.
 adaPotsTableDef :: TableDef
@@ -191,9 +183,7 @@ adaPotsColumnRecords =
 -- * COPY encoding
 -- ---------------------------------------------------------------------------
 
--- | Encode an 'AdaPots' record as a single COPY text row.
---
--- Field order must match 'adaPotsTableDef' exactly.
+-- | Field order must match 'adaPotsTableDef' exactly.
 encodeAdaPotsCopy :: AdaPots -> ByteString
 encodeAdaPotsCopy pots =
   buildCopyRow

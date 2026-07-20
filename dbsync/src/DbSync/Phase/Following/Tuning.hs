@@ -29,10 +29,10 @@ import DbSync.Db.Transaction (HasHasqlConnection (..))
 
 -- | Tuning applied when the Follow connection is opened.
 data FollowTuning = FollowTuning
-  { -- | @True@ → @synchronous_commit = off@. Trades a fraction of a
-    -- second of crash-recovery durability for substantially faster
-    -- per-block COMMITs. Safe because each per-block transaction is
-    -- atomic in writes + sync-state.
+  { -- | @True@ → @synchronous_commit = off@. Trades a window of
+    -- crash-recovery durability for faster per-block COMMITs. Safe
+    -- because each per-block transaction is atomic in writes +
+    -- sync-state.
     ftAsyncCommit :: !Bool
   }
   deriving stock (Eq, Show)

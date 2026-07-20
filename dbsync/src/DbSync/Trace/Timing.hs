@@ -11,7 +11,7 @@
 -- Each helper has two flavours:
 --
 --   * @withHeartbeat@ / @timedTrace@ / @timedTrace_@ — polymorphic
---     over an 'AppM env' that satisfies 'HasTracer'. New code.
+--     over an 'AppM env' that satisfies 'HasTracer'.
 --   * @*IO@ siblings — take the tracer explicitly. For boot code
 --     that hasn't built an env yet.
 module DbSync.Trace.Timing

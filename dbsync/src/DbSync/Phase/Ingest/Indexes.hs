@@ -6,29 +6,18 @@
 -- @lsm-tree@ and the COPY path want unindexed heaps for throughput,
 -- but the per-epoch address-resolver worker
 -- ('DbSync.Worker.TxOut.Worker') issues bulk @UPDATE tx_out@ /
--- @UPDATE collateral_tx_out@ / @SELECT address@ statements that match
+-- @UPDATE collateral_tx_out@ / @SELECT address@ statements matching
 -- by id (PK) or @raw_hash@. Without indexes those degrade to a hash
--- join against the full heap; cost grows linearly with chain history
--- and produces the long CPU-idle stretches an operator sees at epoch
--- boundaries late in 'IngestChainHistory' (the
--- @awaitTxOutDrained (epoch N-1)@ stall).
+-- join against the full heap whose cost grows with chain history,
+-- producing the CPU-idle stretches seen at epoch boundaries late in
+-- 'IngestChainHistory'.
 --
--- Indexes built here:
---
---   * @tx_out_pkey_idx@ — used by the two bulk @UPDATE tx_out@.
---   * @collateral_tx_out_pkey_idx@ — used by the bulk
---     @UPDATE collateral_tx_out@.
---   * @address_unique_1_idx@ — used by the bulk @SELECT address@
---     that resolves existing addresses by their @md5(raw)@ hash.
---
--- All three use @IF NOT EXISTS@ so a resumed boot is a no-op, and
--- their names match what 'Phase.Preparing.Indexes' would emit later
--- — so the schema-driven full pass during
--- 'PreparingForVolatileTail' dedupes against them.
---
--- Tables are UNLOGGED at this point, so the index build is one-pass
--- (no WAL, no second validation scan) and runs to completion before
--- the consumer starts.
+-- Builds @tx_out_pkey_idx@, @collateral_tx_out_pkey_idx@ and
+-- @address_unique_1_idx@, all with @IF NOT EXISTS@ (a resumed boot is
+-- a no-op). Their names match what 'Phase.Preparing.Indexes' emits,
+-- so the schema-driven pass during 'PreparingForVolatileTail'
+-- dedupes against them. UNLOGGED tables make the build one-pass (no
+-- WAL, no second validation scan).
 module DbSync.Phase.Ingest.Indexes
   ( createIngestResolveIndexes
   ) where

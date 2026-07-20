@@ -8,8 +8,8 @@
 -- 'rollbackToPoint' resolves the target to a @block_id@, computes
 -- the per-FK-family minimum ids that mark the threshold past which
 -- rows are to be deleted, then runs the cascade and the sync-state
--- advance inside one PG transaction. Mirrors the original
--- cardano-db-sync's @deleteBlocksBlockId@ — slow path only.
+-- advance inside one PG transaction. Mirrors upstream
+-- cardano-db-sync's @deleteBlocksBlockId@; slow path only.
 --
 -- The cascade tables come from each 'TableDef'\'s 'tdForeignKeys' so
 -- the rollback automatically picks up new dependent tables when they
@@ -149,9 +149,8 @@ rollbackToPoint tableDefs point = case point of
             (i, deleteWhereGteStmt tbl col)
 
       -- PoolUpdate-keyed cascade. The pool_update parent itself is
-      -- also deleted here because removing the children first lets
-      -- the parent delete proceed without violating any future FK
-      -- constraint additions.
+      -- also deleted here; removing the children first keeps the
+      -- parent delete safe against FK constraints.
       for_ mMinPoolUpdateId $ \minPoolUpdateId -> do
         let !i      = getPoolUpdateId minPoolUpdateId
             poolTbl = tdName Pool.poolUpdateTableDef

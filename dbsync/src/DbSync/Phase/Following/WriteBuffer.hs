@@ -2,11 +2,10 @@
 
 -- | Per-block 'Hasql.Pipeline' accumulator.
 --
--- Replaces the per-row @Conn.use Sess.statement@ call site in the
--- Follow writer: every @writeXxx@ appends a @Pipeline.statement@
--- action to a single 'IORef' instead of issuing a network
--- round-trip. The orchestrator flushes the whole pipeline in one
--- 'Sess.pipeline' call at end of block.
+-- Every @writeXxx@ appends a @Pipeline.statement@ action to a single
+-- 'IORef' instead of issuing a network round-trip; the orchestrator
+-- flushes the whole pipeline in one 'Sess.pipeline' call at end of
+-- block.
 --
 -- The buffer is intentionally a single @IORef (Pipeline ())@ rather
 -- than a record of per-table queues. Pipeline is 'Applicative', so

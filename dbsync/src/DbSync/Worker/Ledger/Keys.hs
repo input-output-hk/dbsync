@@ -1,15 +1,8 @@
 {-# LANGUAGE DataKinds #-}
 
-{- |
-Module      : DbSync.Worker.Ledger.Keys
-Description : Shared aliases for ledger key / credential types.
-
-Three tiny aliases used throughout the ledger code and most
-extractors. Collected here so callers don't have to import
-@Cardano.Ledger.Keys@ / @Cardano.Ledger.Credential@ /
-@Cardano.Ledger.Hashes@ piecemeal, and so a future rename (say,
-@PoolKeyHash@ → @StakePoolHash@) is a one-line change.
--}
+-- | Shared aliases for ledger key / credential types, collected so
+-- callers don't import @Cardano.Ledger.Keys@ /
+-- @Cardano.Ledger.Credential@ / @Cardano.Ledger.Hashes@ piecemeal.
 module DbSync.Worker.Ledger.Keys
   ( StakeCred
   , PoolKeyHash

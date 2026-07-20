@@ -9,11 +9,10 @@
 -- per-statement @SET LOCAL@.
 --
 -- Why @SET@, not @SET LOCAL@: @SET LOCAL@ scopes to the current
--- transaction. Each step in 'Phase.Preparing.Run.run' goes through
--- its own implicit transaction (in fact @CREATE INDEX CONCURRENTLY@
--- in a hypothetical Follow-time variant /must/ run outside a
--- transaction block). Session-scoped @SET@ persists for the
--- connection's lifetime, which exactly matches the pass.
+-- transaction, and each step in 'Phase.Preparing.Run.run' goes
+-- through its own implicit transaction. Session-scoped @SET@
+-- persists for the connection's lifetime, which exactly matches the
+-- pass.
 module DbSync.Phase.Preparing.Tuning
   ( PrepTuning (..)
   , defaultPrepTuning
@@ -55,9 +54,9 @@ data PrepTuning = PrepTuning
   }
   deriving stock (Eq, Show)
 
--- | Defaults for a 4-core / 16 GB box. With 4 GB shared_buffers and
--- ~4 GB OS page cache, 2 GB maintenance_work_mem leaves room for
--- one Prep backend plus the cardano-node IPC traffic.
+-- | Defaults for a 4-core / 16 GB box: 2 GB maintenance_work_mem
+-- alongside a typical shared_buffers leaves room for one Prep backend
+-- plus the cardano-node IPC traffic.
 defaultPrepTuning :: PrepTuning
 defaultPrepTuning = PrepTuning
   { ptMaintenanceWorkMem     = "2GB"

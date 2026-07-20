@@ -4,23 +4,18 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-{- |
-Module      : DbSync.Worker.Ledger.StakeDist
-Description : Era-agnostic stake-distribution slice types and helpers.
-
-Two halves to this module:
-
-  * 'StakeSlice' / 'StakeSliceRes' — the era-collapsed shape in which
-    we incrementally insert stake-distribution rows across the blocks
-    of an epoch.
-  * 'getStakeSlice', 'countEpochStake', 'fullEpochStake',
-    'getPoolDistr' — projections that slice the @ssStakeMark@ snapshot
-    out of a Shelley-family 'ExtLedgerState'.
-
-Slices are anchored on the /next/ epoch: we read the \"mark\" snapshot
-whose values activate on @current epoch + 1@, so the 'sliceEpochNo'
-returned by every helper is @nesEL + 1@.
--}
+-- | Era-agnostic stake-distribution slice types and helpers.
+--
+--   * 'StakeSlice' / 'StakeSliceRes' — the era-collapsed shape for
+--     incrementally inserting stake-distribution rows across the blocks
+--     of an epoch.
+--   * 'getStakeSlice', 'countEpochStake', 'fullEpochStake',
+--     'getPoolDistr' — projections that slice the @ssStakeMark@ snapshot
+--     out of a Shelley-family 'ExtLedgerState'.
+--
+-- Slices are anchored on the /next/ epoch: the \"mark\" snapshot's
+-- values activate on @current epoch + 1@, so 'sliceEpochNo' is
+-- @nesEL + 1@.
 module DbSync.Worker.Ledger.StakeDist
   ( -- * Types
     StakeSliceRes (..)
@@ -123,17 +118,13 @@ getSecurityParameter = maxRollbacks . configSecurityParam . pInfoConfig
 -- * Slicing across an epoch
 -- ---------------------------------------------------------------------------
 
-{- |
-Compute the stake slice for a single block of an epoch.
-
-'sliceIndex' can match the @epochBlockNo@ for every block.
-
-'minSliceSize' has to be constant or it could cause missing data. If
-the value is too small it is bumped to a @defaultEpochSliceSize@ big
-enough to cover all delegations. On mainnet, @minSliceSize = 2000@
-holds until delegations grow past ~8.6M, at which point the size is
-adjusted.
--}
+-- | Compute the stake slice for a single block of an epoch.
+--
+-- 'sliceIndex' can match the @epochBlockNo@ for every block.
+--
+-- 'minSliceSize' has to be constant or it could cause missing data; if
+-- too small it is bumped to a @defaultEpochSliceSize@ big enough to
+-- cover all delegations.
 getStakeSlice
   :: ConsensusProtocol (BlockProtocol blk)
   => ProtocolInfo blk

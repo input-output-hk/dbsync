@@ -4,7 +4,7 @@
 -- | Schema for the @epoch_finalized@ table plus the @epoch_current@
 -- and @epoch@ views.
 --
--- The @epoch@ table the original project ships is replaced here by:
+-- The public @epoch@ series is assembled from:
 --
 --   * @epoch_finalized@ — a LOGGED table holding every epoch except
 --     the current one. Populated by SQL @INSERT … SELECT@ at end of
@@ -78,10 +78,8 @@ type instance Key EpochFinalized = EpochId
 -- * Schema type
 -- ---------------------------------------------------------------------------
 
--- | One finalised epoch's aggregate. Mirrors the original project's
--- @epoch@ record exactly; the new name reflects that this row only
--- holds completed epochs (the active one comes from the
--- @epoch_current@ view).
+-- | One finalised epoch's aggregate. Holds only completed epochs; the
+-- active epoch comes from the @epoch_current@ view.
 data EpochFinalized = EpochFinalized
   { epochFinalizedOutSum    :: !Word128
   , epochFinalizedFees      :: !DbLovelace
@@ -220,7 +218,7 @@ epochViewName = "epoch"
 -- non-contiguous finalised set.
 --
 -- @epoch@ is a plain @UNION ALL@ of the two so the public-facing
--- name behaves like the original project's @epoch@ table.
+-- @epoch@ name exposes the full series to consumers.
 createEpochViewsSql :: Text
 createEpochViewsSql = T.unlines
   [ "CREATE VIEW " <> epochCurrentViewName <> " AS"

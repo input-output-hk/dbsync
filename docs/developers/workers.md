@@ -17,8 +17,9 @@ Three subsystems, each with its own module root under
   per-block and per-epoch ledger-derived state.
 - **TxOut Worker** — drains per-epoch buffers from Ingest's main loop and
   back-fills FK columns the COPY path couldn't.
-- **OffChain Fetcher** — HTTP fetcher for pool / Conway-vote metadata.
-  Reserved; not yet implemented.
+- **OffChain Fetcher** — background HTTP fetchers for pool and
+  Conway-vote metadata. Run when `off_chain_pools` / `off_chain_votes`
+  are enabled; misses never block ingest.
 
 ## Ledger Worker
 
@@ -168,18 +169,38 @@ buffered writer writes `address_id` synchronously in the per-block
 
 ## OffChain Fetcher
 
-Lives under `DbSync.Worker.OffChain.*`.
+Lives under [`DbSync.Worker.OffChain.*`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/Worker/OffChain/Fetcher.hs).
+Two independent workers — one for pool metadata, one for Conway
+governance-vote metadata — spawned only when the matching extractor
+(`off_chain_pools` / `off_chain_votes`) is enabled. Each owns its own
+PG connection and its own HTTP connection pool.
 
-:::warning Reserved — not yet implemented
-The module slot exists with skeleton types but no fetcher loop. The
-wiring points are obvious; the implementation is the open piece.
-:::
+### What they do
 
-When wired up it will:
+The two workers share a generic loop (`OffChainWorker`). Each cycle:
 
-- Dereference URLs from `pool_metadata_ref` rows (pool metadata JSON).
-- Dereference governance vote anchors (Conway era).
-- Write results into `pool_offline_metadata`,
-  `pool_offline_fetch_error`, and the equivalent vote-metadata tables.
-- Run rate-limited with retry/backoff so an unreachable host doesn't
-  spam the network.
+1. Loads a batch of pending refs from PG — anchors observed by the
+   `off_chain_pools` / `off_chain_votes` extractors, plus earlier
+   failures whose retry time has come due.
+2. Fetches each over HTTP through a pluggable per-domain hook.
+3. Persists the outcome: a data row on success, a fetch-error row on
+   failure.
+
+The pool worker writes `off_chain_pool_data` /
+`off_chain_pool_fetch_error`; the vote worker writes the seven
+`off_chain_vote_*` tables. Because the work is off the hot path, a
+slow or unreachable host never blocks the consumer.
+
+### Fetching safely
+
+`newRestrictedManager` refuses to connect to private or loopback
+addresses (SSRF / DNS-rebinding defence), and the URL validator allows
+only `http(s)` GETs to non-localhost hosts. Payloads are size-capped
+and hash-checked; the vote decoder understands the CIP-100 / 108 / 119
+envelope and rewrites `ipfs://` URLs through configured gateways.
+
+### Retry
+
+Failed fetches back off exponentially, growing quickly over the first
+few attempts and capping at one day. A permanently unreachable host
+settles into one attempt per day rather than spamming the network.

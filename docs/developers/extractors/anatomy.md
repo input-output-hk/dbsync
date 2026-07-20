@@ -7,8 +7,8 @@ sidebar_position: 1
 # Extractor anatomy
 
 An extractor is the unit of modular extraction. Each one owns a set of
-PostgreSQL tables, declares its dependencies, and defines a single
-per-block processing function that runs in both
+PostgreSQL tables and defines a single per-block processing function
+that runs in both
 [`IngestChainHistory`](../phases/ingest) and
 [`FollowingVolatileTail`](../phases/following-volatile-tail). The same
 body works in both phases because the env it consumes is
@@ -22,11 +22,9 @@ The definition lives in
 
 ```haskell
 data ExtractorDef = ExtractorDef
-  { pdName         :: !Text
-  , pdVersion      :: !Int
-  , pdDependencies :: ![(Text, Int)]
-  , pdTables       :: ![TableDef]
-  , pdProcess      :: ProcessBlockFn
+  { pdName    :: !Text
+  , pdTables  :: ![TableDef]
+  , pdProcess :: ProcessBlockFn
   }
 
 type ProcessBlockFn =
@@ -37,8 +35,9 @@ type ProcessBlockFn =
   => BlockContext -> m ()
 ```
 
-Five fields, no surprises. `pdTables` is the canonical schema for
-this extractor's tables; `pdProcess` is the per-block body.
+Three fields, no surprises. `pdName` is the profile key that enables
+the extractor; `pdTables` is the canonical schema for the tables it
+owns; `pdProcess` is the per-block body.
 
 ## Why the polymorphism
 
@@ -93,7 +92,7 @@ extractors.
 That's what makes extractors textually independent. None of them have
 to look at each other's output to discover the parent row's ID —
 those IDs are already known. The dispatcher then iterates through
-each enabled extractor in topological order.
+each enabled extractor in registration order.
 
 ## Ledger data
 
@@ -111,7 +110,7 @@ deposits, protocol-param deposits, or other ledger-derived data
 pattern-match this; extractors that don't (`utxo`, `metadata`,
 `cbor`, etc.) ignore it entirely.
 
-## Tables, dependencies, versions
+## Tables and dependencies
 
 `pdTables` is a list of `TableDef`s the extractor owns. The schema
 layer ([`dbsync-db`](../schema-layer)) generates `CREATE TABLE` DDL
@@ -119,17 +118,22 @@ from each one at boot. Tables an extractor doesn't claim never get
 created — disabling an extractor at the profile level skips both the
 work and the schema.
 
-`pdDependencies` is a list of `(name, minVersion)` pairs. The Pool
-extractor declares `[("core", 1), ("stake_delegation", 1)]` because
-its rows FK into `stake_address` via pool reward addresses and
-owners. The validator in
-[`DbSync.App.Setup.validateExtractorDeps`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/App/Setup.hs)
-rejects a profile that enables Pool without StakeDelegation with an
-operator-readable message.
+Dependencies between extractors aren't declared on `ExtractorDef`.
+They're enforced by the config validator in
+[`DbSync.App.Config.Validation`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/App/Config/Validation.hs),
+which collects every violation in one pass and aborts boot with an
+operator-readable message. The rules:
 
-`pdVersion` bumps when an extractor's table shapes change in a
-breaking way. Lower-than-required versions in the dependency check
-abort boot with the version mismatch in the message.
+- `multi_asset` requires `utxo` (its rows FK into `tx_out`).
+- `off_chain_pools` requires `pool`; `off_chain_votes` requires
+  `governance` (each fetches metadata for rows the other writes).
+- `stake_delegation_ledger`, `pool_stats`, `epoch_boundary`, and
+  `current_state` require `ledger.enabled = true` — their rows are
+  derived from ledger state.
+
+Schema versioning is global rather than per-extractor: a fingerprint
+over every declared table detects drift at boot. See
+[Schema versioning](../schema-versioning).
 
 ## Shared dedup helpers
 
@@ -149,14 +153,17 @@ Ingest, `SELECT … WHERE hash = ?` in Follow).
 
 Extractors are wired up in
 [`DbSync.App.Setup.buildExtractors`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/App/Setup.hs)
-by name. The `core` extractor is unconditional; the rest are
-resolved from a `(name, enabled?)` table built from the profile's
-`db_options`. Unknown names get a no-op stub — useful when a
-projection's schema is in place but its body hasn't landed yet.
+by name. The `core` extractor is unconditional and leads the list;
+the rest are resolved from a `(name, enabled?)` table built from the
+profile's `db_options` against the registry in
+[`DbSync.Extractor.Registry`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/Extractor/Registry.hs).
+A name with no implementation (today only `current_state`) resolves to
+a no-op stub, so enabling it is accepted but writes nothing.
 
-`buildExtractors` also validates dependencies and topologically sorts
-the result so producers run before consumers. The order is stable for
-a given profile so logs and per-extractor traces stay readable.
+The list order is the fixed declaration order in `allKnownExtractors`,
+arranged so shared-dedup producers (e.g. `stake_delegation`) precede
+their consumers (`pool`). Dependency validation happens separately, in
+the config validator.
 
 ## Non-block-driven extractors
 

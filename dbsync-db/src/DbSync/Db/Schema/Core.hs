@@ -1,26 +1,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 
-{- |
-Module      : DbSync.Db.Schema.Core
-Description : Schema types for the @core@ extractor.
-
-The @core@ extractor owns seven tables:
-
-  * @block@, @tx@, @slot_leader@ — block extraction (always-on).
-  * @stake_address@, @pool_hash@ — shared dedup tables. Written
-    unconditionally by the block pipeline (every tx output carrying a
-    stake credential, every block's slot leader), so they must exist
-    regardless of which optional extractors are enabled.
-  * @meta@ — chain metadata (network name, version, start time).
-    Written once at startup.
-  * @reverse_index@ — per-block min-FK watermarks. Required by every
-    other extractor for rollback safety.
-
-Records are the single canonical Haskell representation of each
-table — used for COPY encoding during 'IngestChainHistory' and
-hasql INSERT\/SELECT during 'FollowingChainTip'.
--}
+-- | Schema types for the @core@ extractor, which owns seven tables:
+--
+--   * @block@, @tx@, @slot_leader@ — block extraction (always-on).
+--   * @stake_address@, @pool_hash@ — shared dedup tables, written
+--     unconditionally by the block pipeline so they exist regardless
+--     of which optional extractors are enabled.
+--   * @meta@ — chain metadata (network name, version, start time),
+--     written once at startup.
+--   * @reverse_index@ — per-block min-FK watermarks, required by every
+--     other extractor for rollback safety.
 module DbSync.Db.Schema.Core
   ( -- * Schema types
     Block (..)
@@ -214,7 +204,7 @@ data Tx = Tx
 data SlotLeader = SlotLeader
   { slotLeaderHash        :: !ByteString       -- ^ hash28type
   , slotLeaderPoolHashId  :: !(Maybe PoolHashId) -- ^ non-null when block mined by pool
-  , slotLeaderDescription :: !Text             -- ^ description of the slot leader
+  , slotLeaderDescription :: !Text
   }
   deriving stock (Eq, Show)
 
@@ -257,8 +247,7 @@ data ReverseIndex = ReverseIndex
 -- * Table definitions
 -- ---------------------------------------------------------------------------
 
--- | Table definition for the @block@ table.
--- Created as UNLOGGED during 'IngestChainHistory'.
+-- | Created as UNLOGGED during 'IngestChainHistory'.
 blockTableDef :: TableDef
 blockTableDef = TableDef
   { tdName    = "block"
@@ -290,7 +279,6 @@ blockTableDef = TableDef
   , tdForeignKeys = []
   }
 
--- | Table definition for the @tx@ table.
 txTableDef :: TableDef
 txTableDef = TableDef
   { tdName    = "tx"
@@ -324,7 +312,6 @@ txTableDef = TableDef
       ]
   }
 
--- | Table definition for the @slot_leader@ table.
 slotLeaderTableDef :: TableDef
 slotLeaderTableDef = TableDef
   { tdName    = "slot_leader"
@@ -385,7 +372,7 @@ poolHashTableDef = TableDef
   , tdForeignKeys = []
   }
 
--- | Table definition for the @meta@ table. Unique on @start_time@.
+-- | Unique on @start_time@.
 metaTableDef :: TableDef
 metaTableDef = TableDef
   { tdName    = "meta"
@@ -405,7 +392,6 @@ metaTableDef = TableDef
   , tdForeignKeys = []
   }
 
--- | Table definition for the @reverse_index@ table.
 reverseIndexTableDef :: TableDef
 reverseIndexTableDef = TableDef
   { tdName    = "reverse_index"
@@ -679,8 +665,6 @@ coreColumnRecords =
 -- * COPY encoding
 -- ---------------------------------------------------------------------------
 
--- | Encode a 'Block' with its 'BlockId' into a COPY text row.
--- The ID is prepended as the first column.
 encodeBlockCopy :: BlockId -> Block -> ByteString
 encodeBlockCopy (BlockId bid) blk =
   buildCopyRow
@@ -702,7 +686,6 @@ encodeBlockCopy (BlockId bid) blk =
     , bWord64 <$> blockOpCertCounter blk
     ]
 
--- | Encode a 'Tx' with its 'TxId' into a COPY text row.
 encodeTxCopy :: TxId -> Tx -> ByteString
 encodeTxCopy (TxId tid) tx =
   buildCopyRow
@@ -721,7 +704,6 @@ encodeTxCopy (TxId tid) tx =
     , Just $ bWord64 (unDbLovelace $ txTreasuryDonation tx)
     ]
 
--- | Encode a 'SlotLeader' with its 'SlotLeaderId' into a COPY text row.
 encodeSlotLeaderCopy :: SlotLeaderId -> SlotLeader -> ByteString
 encodeSlotLeaderCopy (SlotLeaderId slid) sl =
   buildCopyRow
@@ -731,7 +713,6 @@ encodeSlotLeaderCopy (SlotLeaderId slid) sl =
     , Just $ bText (slotLeaderDescription sl)
     ]
 
--- | Encode a 'StakeAddress' with its 'StakeAddressId' into a COPY text row.
 encodeStakeAddressCopy :: StakeAddressId -> StakeAddress -> ByteString
 encodeStakeAddressCopy (StakeAddressId sid) sa =
   buildCopyRow
@@ -741,7 +722,6 @@ encodeStakeAddressCopy (StakeAddressId sid) sa =
     , bHex <$> stakeAddressScriptHash sa
     ]
 
--- | Encode a 'PoolHash' with its 'PoolHashId' into a COPY text row.
 encodePoolHashCopy :: PoolHashId -> PoolHash -> ByteString
 encodePoolHashCopy (PoolHashId pid) ph =
   buildCopyRow
@@ -750,7 +730,6 @@ encodePoolHashCopy (PoolHashId pid) ph =
     , Just $ bText (poolHashView ph)
     ]
 
--- | Encode a 'Meta' row with its 'MetaId' into a COPY text row.
 encodeMetaCopy :: MetaId -> Meta -> ByteString
 encodeMetaCopy (MetaId mid) m =
   buildCopyRow
@@ -760,7 +739,6 @@ encodeMetaCopy (MetaId mid) m =
     , Just $ bText (metaVersion m)
     ]
 
--- | Encode a 'ReverseIndex' row with its 'ReverseIndexId' into a COPY text row.
 encodeReverseIndexCopy :: ReverseIndexId -> ReverseIndex -> ByteString
 encodeReverseIndexCopy (ReverseIndexId rid) ri =
   buildCopyRow

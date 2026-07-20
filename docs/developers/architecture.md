@@ -28,7 +28,7 @@ catch-up, the hasql path drives steady-state chain following:
 flowchart TD
     Node["cardano-node"]
     Receiver["ChainSync Receiver<br/>(one thread)"]
-    Queue[("Block queue<br/>TBQueue, cap 500")]
+    Queue[("Block queue<br/>TBQueue, cap 300")]
     Consumer["Consumer thread<br/>parseBlock → processBlock"]
 
     IngestWriter["Ingest Writer<br/>encode → per-table queues<br/>→ per-table COPY workers<br/>(UNLOGGED tables)"]
@@ -80,8 +80,7 @@ pre-assigned IDs without sequencing between themselves.
 ## The extractor model
 
 An extractor is a `DbSync.Extractor.ExtractorDef` — a record carrying a
-name, schema version, dependency list, table definitions, and a process
-function:
+name, the table definitions it owns, and a process function:
 
 ```haskell
 type ProcessBlockFn =

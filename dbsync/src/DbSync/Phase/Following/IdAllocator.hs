@@ -1,9 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Pre-allocate every assignable ID a block will need in a single
--- libpq pipeline round-trip.
---
--- Replaces the per-row @SELECT nextval(seq)@ call site by:
+-- libpq pipeline round-trip:
 --
 --   1. Walking the block once via 'IdCounts.countAssignableIds'.
 --   2. Issuing one @SELECT nextval(seq) FROM generate_series(1, N)@
@@ -141,14 +139,10 @@ wrapInRefs r =
     <*> newIORef (rConstitutionIds r)
 
 -- | Issue one bulk @nextval@ call for the given table's sequence.
---
--- Zero-count case is a no-op: no pipeline statement issued, an empty
--- list returned immediately via 'pure'.
---
--- Non-zero case: @SELECT nextval(seq) FROM generate_series(1, $1)@
--- returns N rows in one statement; the pipeline batches it with
--- the other tables' allocations. The SQL itself lives in
--- 'DbSync.Db.Statement.IdAllocator'.
+-- Zero count is a no-op (no statement issued); otherwise
+-- @SELECT nextval(seq) FROM generate_series(1, $1)@ returns N rows
+-- in one statement, batched with the other tables' allocations. The
+-- SQL lives in 'DbSync.Db.Statement.IdAllocator'.
 allocFor
   :: TableDef
   -> Int                          -- ^ How many IDs to allocate (may be 0).

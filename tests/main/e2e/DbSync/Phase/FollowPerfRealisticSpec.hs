@@ -7,8 +7,7 @@
 -- The sibling 'DbSync.Phase.FollowPerfSpec' drains an empty-block
 -- batch (one block row, no tx rows) and asserts only that the
 -- per-block transaction envelope hasn't regressed catastrophically.
--- It passes at hundreds of blocks/sec while real testnet runs were
--- observed at ~0.5 blk/s — so the empty-block test is silent on the
+-- Because it has no tx rows, that test is silent on the per-tx
 -- bottleneck operators actually hit.
 --
 -- This spec forges blocks closer to mainnet's mid-traffic shape

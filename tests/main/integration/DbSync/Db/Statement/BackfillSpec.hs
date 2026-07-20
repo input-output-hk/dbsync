@@ -7,15 +7,15 @@
 -- pipeline and asserts on the @tx.fee@ / @tx.deposit@ values that
 -- come out the other side. What it cannot catch is a query-plan
 -- regression — the SQL produces the correct numbers on a tiny
--- fixture even when the plan is pathological enough to take hours
--- on a real chain.
+-- fixture even when the plan is pathological enough to be
+-- prohibitively slow on a real chain.
 --
 -- This spec stops mid-'Phase.Preparing.Run.run' (after the
 -- pre-resolve indexes, the FK resolves and a fresh @ANALYZE@, but
 -- before the backfill UPDATEs themselves) and runs @EXPLAIN@
 -- against each backfill statement. The assertions check that the
 -- plan references the new pre-resolve indexes, not the full-table
--- aggregate-then-filter shape that previously hung at the rollback
+-- aggregate-then-filter shape that would hang at the rollback
 -- boundary.
 --
 -- Substring matching on plain-text @EXPLAIN@ output is chosen over

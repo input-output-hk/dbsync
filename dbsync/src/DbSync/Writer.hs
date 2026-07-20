@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Writer interface for the unified extraction pipeline.
+-- | Writer interface for the extraction pipeline.
 --
 -- Two implementations exist, one per persisting phase:
 --

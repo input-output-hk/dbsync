@@ -79,7 +79,8 @@ IDs from two cooperating pieces:
   all get their final IDs before the writer ever sees them.
 - A `DedupStore` (LSM-tree) mapping natural keys to previously
   assigned IDs for the tables that need it: `stake_address`,
-  `multi_asset`, `pool_hash`, `slot_leader`, `cost_model`.
+  `pool_hash`, `slot_leader`, `multi_asset`, `script`, `datum`,
+  `redeemer_data`, `drep_hash`, `committee_hash`, and `voting_anchor`.
 
 The pre-assignment is what makes extractors textually independent:
 extractor `pool` doesn't need to wait for `stake_delegation` to write
@@ -118,7 +119,7 @@ Three LSM-tree backed stores sit on the Ingest write path:
 
 | Store | Role | Eviction |
 |---|---|---|
-| **DedupStore** (5 tables) | Natural-key → assigned-ID maps for dedup tables. | Wiped at Ingest → Prep handoff. |
+| **DedupStore** (10 tables) | Natural-key → assigned-ID maps for dedup tables. | Wiped at Ingest → Prep handoff. |
 | **UtxoStore** | `tx-hash → (TxId, [(TxOutId, value)])` for inline input resolution. | Deleted entries when outputs are consumed; the whole session is wiped at Ingest → Prep. |
 | **Cardano LedgerDB** | The V2 ledger UTxO set when ledger is enabled. | Persists across all phases and restarts. |
 

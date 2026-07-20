@@ -67,7 +67,7 @@ Every extractor `INSERT` lands on
 [`DbSync.Phase.Following.WriteBuffer`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/Phase/Following/WriteBuffer.hs)
 rather than going to PG immediately. At end-of-block, `drain` flushes the
 buffer as a single hasql `Pipeline` round-trip alongside the
-`sync_state.last_committed_slot` advance.
+`dbsync_sync_state.last_committed_slot` advance.
 
 One pipeline per block trades latency for throughput: chainsync's nominal
 ~20 s/block on mainnet leaves plenty of room, and batching keeps the
@@ -79,7 +79,7 @@ block produces.
 A `MsgRollback` runs the cascade in
 [`DbSync.Phase.Following.Rollback`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/Phase/Following/Rollback.hs):
 DELETE rows past the target slot in FK-dependency order, then update
-`sync_state` to the target. The whole cascade runs in a single
+`dbsync_sync_state` to the target. The whole cascade runs in a single
 transaction so a crash leaves the database at a consistent point.
 
 The receiver only forwards rollback markers; the consumer is the only

@@ -109,7 +109,7 @@ constraints between steps and the timing characteristics.
 
 The Follow loop, with the consumer still draining the block queue. Per-block
 `BEGIN`/`COMMIT` over a single hasql connection. Writes batched into a hasql
-`Pipeline` flushed once per block. `sync_state.last_committed_slot` advances
+`Pipeline` flushed once per block. `dbsync_sync_state.last_committed_slot` advances
 inside the same transaction so a crash leaves the database at a clean
 per-block boundary.
 

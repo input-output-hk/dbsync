@@ -93,17 +93,21 @@ of recognised keys (from
 [`DbSync.App.Config.Types`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/App/Config/Types.hs)
 on the developer side):
 
-`utxo`, `multi_asset`, `metadata`, `stake_delegation`, `pool`,
-`scripts_datums`, `governance`, `cbor`, `epoch_sync_stats`,
-`epoch_boundary`, `epoch`, `current_state`.
+`utxo`, `multi_asset`, `metadata`, `stake_delegation`,
+`stake_delegation_ledger`, `pool`, `pool_stats`, `scripts_datums`,
+`governance`, `cbor`, `epoch_sync_stats`, `epoch_boundary`, `epoch`,
+`off_chain_pools`, `off_chain_votes`, `current_state`.
 
-Three of these (`scripts_datums`, `governance`, `current_state`) are
-reserved — their option key is accepted in the profile and the
-validator won't reject them, but the underlying extractor is a no-op
-stub today. The remaining options drive real projections. See
-[Custom profiles](custom) for what each one writes and
-[Existing extractors](/developers/extractors/existing) on the
-developer side for the per-table breakdown.
+All of these drive real projections except `current_state`, which is
+reserved — its option key is accepted in the profile and the validator
+won't reject it, but the underlying extractor is a no-op stub today.
+Several keys need `ledger.enabled = true`
+(`stake_delegation_ledger`, `pool_stats`, `epoch_boundary`) or another
+extractor (`multi_asset` needs `utxo`; `off_chain_pools` needs `pool`;
+`off_chain_votes` needs `governance`); the validator rejects a profile
+that breaks these rules. See [Custom profiles](custom) for what each
+one writes and [Existing extractors](/developers/extractors/existing)
+on the developer side for the per-table breakdown.
 
 ## Validation
 
@@ -111,9 +115,9 @@ At boot dbsync:
 
 1. Parses the profile JSON. Malformed JSON, unknown enum values, or
    missing required fields abort with a clear error.
-2. Validates extractor dependencies. Enabling `pool` without
-   `stake_delegation` is rejected with the message
-   `Extractor 'pool' is enabled but its dependency 'stake_delegation' is not enabled.`
+2. Validates extractor dependencies. Enabling `multi_asset` without
+   `utxo`, for example, is rejected with a message like
+   `multi_asset extractor requires utxo extractor to be enabled.`
 3. Cross-checks against the existing database schema (on a resume).
    Mismatches abort with a message explaining what changed.
 

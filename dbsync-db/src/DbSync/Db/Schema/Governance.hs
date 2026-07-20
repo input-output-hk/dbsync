@@ -17,9 +17,8 @@
 -- @processBlock@ and write rows in any order.
 --
 -- @param_proposal.cost_model_id@ references the @cost_model@ table
--- which is owned by the @epoch_boundary@ extractor (commit 6); the
--- column stays as a nullable @BIGINT@ here so the schema compiles
--- in isolation.
+-- which is owned by the @epoch_boundary@ extractor; the column stays
+-- as a nullable @BIGINT@ here so the schema compiles in isolation.
 module DbSync.Db.Schema.Governance
   ( -- * Schema types
     DrepHash (..)
@@ -262,8 +261,7 @@ data GovActionProposal = GovActionProposal
 --
 -- Three nullable voter ID columns — exactly one of @drep_voter@,
 -- @pool_voter@, @committee_voter@ is non-NULL per row, picked by
--- @voter_role@. Ported as-is from the original; a future projection
--- variant could collapse them.
+-- @voter_role@.
 data VotingProcedure = VotingProcedure
   { votingProcedureTxId                :: !TxId
   , votingProcedureIndex               :: !Word16
@@ -342,11 +340,8 @@ data CommitteeDeRegistration = CommitteeDeRegistration
   deriving stock (Eq, Show)
 
 -- | The @param_proposal@ table — 53 columns of optional parameter
--- overrides. Ported as-is per the AS-IS porting policy; a future
--- projection variant could fold the lot into a single JSONB.
---
--- Most columns are nullable — only those the proposer chose to
--- change are populated.
+-- overrides. Most columns are nullable; only those the proposer chose
+-- to change are populated.
 data ParamProposal = ParamProposal
   { paramProposalEpochNo                    :: !(Maybe Word64)
   , paramProposalKey                        :: !(Maybe ByteString)
@@ -416,7 +411,7 @@ data TreasuryWithdrawal = TreasuryWithdrawal
 
 -- | The @event_info@ table — a free-form audit record attached to
 -- voting procedures whose evaluation produced a notable event.
--- @type@ is plain text in the original (not an enum).
+-- @type@ is plain text, not an enum.
 data EventInfo = EventInfo
   { eventInfoTxId        :: !(Maybe TxId)
   , eventInfoEpoch       :: !Word64
@@ -703,12 +698,10 @@ committeeDeRegistrationTableDef = TableDef
   , tdForeignKeys = []
   }
 
--- | 53 column metadata for @param_proposal@. Doubles ride a TEXT
--- column matching the existing pattern in @pool_update.margin@ /
--- @epoch_sync_stats@; bumping these to PG @float8@ is a future
--- refactor. @committee_max_term_length@ has no @sqltype@ tag in
--- the original — keep the @numeric@ shape used by every other
--- @DbWord64@ column.
+-- | 53-column @param_proposal@. Doubles ride a TEXT column matching
+-- the pattern in @pool_update.margin@ / @epoch_sync_stats@.
+-- @committee_max_term_length@ uses the @numeric@ shape shared by every
+-- other @DbWord64@ column.
 paramProposalTableDef :: TableDef
 paramProposalTableDef = TableDef
   { tdName    = "param_proposal"

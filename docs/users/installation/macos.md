@@ -38,8 +38,8 @@ binaries on PATH (`brew info postgresql@16` shows the exact line) so
 ## Haskell toolchain
 
 ```bash
-ghcup install ghc 9.8.4
-ghcup set ghc 9.8.4
+ghcup install ghc 9.14.1
+ghcup set ghc 9.14.1
 ghcup install cabal latest
 ```
 

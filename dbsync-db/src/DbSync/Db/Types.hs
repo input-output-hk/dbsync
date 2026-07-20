@@ -237,7 +237,7 @@ instance NFData RewardSource where
   rnf RwdProposalRefund = ()
 
 -- | Whether the local tip is lagging or following the global chain
--- tip. Stored in the legacy @epoch_sync_time.state@ column.
+-- tip. Stored in the @epoch_sync_time.state@ column.
 data SyncState
   = SyncLagging
   | SyncFollowing

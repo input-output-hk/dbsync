@@ -125,7 +125,6 @@ formatColumnDdl col =
   where
     nullability = if cdNullable col then "" else " NOT NULL"
 
--- | Convert a 'PgType' to its SQL string representation.
 pgTypeToSql :: PgType -> Text
 pgTypeToSql = \case
   PgBigInt      -> "BIGINT"

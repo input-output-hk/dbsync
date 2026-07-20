@@ -1,13 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-{- |
-Module      : DbSync.Worker.OffChain.Types
-Description : Types for off-chain metadata fetching.
-
-Defines the function-record interface for fetching off-chain metadata
-(stake pool metadata, governance voting anchors) and the associated
-reference and result types.
--}
+-- | Function-record interface for fetching off-chain metadata (stake
+-- pool metadata, governance voting anchors) and its reference and
+-- result types.
 module DbSync.Worker.OffChain.Types
   ( -- * Fetcher interface
     OffChainFetcher (..)

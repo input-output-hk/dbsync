@@ -3,11 +3,9 @@
 -- | Low-level loader-stream connection management.
 --
 -- Each table gets its own dedicated connection running a loader-stream
--- session. The current implementation drives PostgreSQL's @COPY FROM
--- STDIN@ over @postgresql-libpq@; the @beginStream@\/@writeStreamRow@
--- \/@endStream@ vocabulary insulates callers from that detail so a
--- future variant (binary COPY, batched prepared INSERTs, a different
--- DB) can be swapped in without rippling through the call sites.
+-- session over PostgreSQL's @COPY FROM STDIN@ via @postgresql-libpq@.
+-- The @beginStream@\/@writeStreamRow@\/@endStream@ vocabulary insulates
+-- callers from that transport detail.
 --
 -- Errors are thrown as 'AppDatabaseError' with source location tracking.
 module DbSync.Db.Loader.Connection
@@ -92,8 +90,7 @@ closeLoaderConnection bc = PQ.finish (bcConnection bc)
 -- | Start a loader-stream session on this connection.
 --
 -- The connection must be in a transaction (after 'beginTransaction')
--- and NOT already streaming. Today this issues a @COPY FROM STDIN@
--- statement.
+-- and NOT already streaming. Issues a @COPY FROM STDIN@ statement.
 beginStream :: HasCallStack => LoaderConnection -> IO ()
 beginStream bc = do
   let sql = copyFromStdinSql (bcTableName bc) (bcColumnList bc)
@@ -166,13 +163,11 @@ endStream bc = do
 -- * Transaction control
 -- ---------------------------------------------------------------------------
 
--- | Begin a transaction on this connection.
 beginTransaction :: HasCallStack => LoaderConnection -> IO ()
 beginTransaction bc = do
   result <- PQ.exec (bcConnection bc) beginSqlBs
   checkResult bc "BEGIN" result
 
--- | Commit the current transaction on this connection.
 commitTransaction :: HasCallStack => LoaderConnection -> IO ()
 commitTransaction bc = do
   result <- PQ.exec (bcConnection bc) commitSqlBs

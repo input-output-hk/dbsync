@@ -1,4 +1,4 @@
--- | Hasql writers for tables owned by the @off_chain_pools@ extractor.
+-- | hasql writers for tables owned by the @off_chain_pools@ extractor.
 module DbSync.Phase.Following.Writer.OffChainPools
   ( writeOffChainPoolDataConn
   , writeOffChainPoolDataBuf

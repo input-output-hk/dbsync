@@ -1,22 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-{- |
-Module      : DbSync.Db.Loader.Encoder
-Description : Encoding helpers for the loader-stream wire format.
-
-Builder-based encoding pipeline producing one row per call, ready to
-hand to the loader-stream transport (currently PostgreSQL @COPY ... FROM
-STDIN@). All field values are constructed as 'Builder's, joined with
-tabs, and materialised to a strict 'ByteString' once via 'buildCopyRow'.
-
-== Why Builders
-
-The previous implementation used @BS8.concatMap@ for hex encoding
-(~50K tiny pinned ByteStrings per tx_cbor row) and 3-pass @replaceBS@
-for escaping. This caused massive GC pressure from pinned-memory
-fragmentation. The Builder pipeline produces zero intermediate
-ByteStrings — everything is assembled in a single buffer.
--}
+-- | Encoding helpers for the loader-stream wire format.
+--
+-- Builder-based encoding pipeline producing one row per call, ready to
+-- hand to the loader-stream transport (currently PostgreSQL @COPY ... FROM
+-- STDIN@). Field values are constructed as 'Builder's, joined with tabs,
+-- and materialised to a strict 'ByteString' once via 'buildCopyRow', so a
+-- row is assembled in a single buffer with no intermediate ByteStrings.
 module DbSync.Db.Loader.Encoder
   ( -- * Builder-based encoding
     CopyField
@@ -30,7 +20,7 @@ module DbSync.Db.Loader.Encoder
   , bText
   , bEscapeText
 
-    -- * Legacy API (for test compatibility)
+    -- * ByteString field encoders
   , encodeToCopyRow
   , escapeField
   , encodeNull
@@ -73,14 +63,11 @@ type CopyField = Maybe Builder
 -- | Materialise a list of 'CopyField's into a single COPY text row.
 --
 -- Tab-separated, newline-terminated. 'Nothing' → @\\N@.
--- The entire row is built as a single 'Builder' and materialised once.
 --
--- The allocation strategy matters here: the default
--- 'Data.ByteString.Builder.toLazyByteString' starts with a ~4KB
--- buffer and trim-copies it, which for a typical 100-300B row is a
--- ~15-40x allocation amplification per row. A 512-byte untrimmed
--- first chunk fits most rows exactly once; 'LBS.toStrict' then does
--- the single copy of the bytes actually used.
+-- Uses a 512-byte untrimmed first chunk rather than the default
+-- 'Data.ByteString.Builder.toLazyByteString' strategy, which starts
+-- with a larger buffer and trim-copies it. Most rows fit the chunk
+-- exactly once; 'LBS.toStrict' then copies only the bytes used.
 buildCopyRow :: [CopyField] -> ByteString
 buildCopyRow fields =
   LBS.toStrict
@@ -125,8 +112,7 @@ bBool False = char7 'f'
 --
 -- 'byteStringHex' is a fused fixed-size-primitive loop that writes
 -- nibble pairs straight into the output buffer — no per-byte
--- 'Builder' closures (which for a 50KB @tx_cbor@ row used to mean
--- megabytes of transient heap per row).
+-- 'Builder' closures.
 {-# INLINE bHex #-}
 bHex :: ByteString -> Builder
 bHex bs =
@@ -167,12 +153,11 @@ bEscapeText bs =
     escaped _    = byteString "\\r"
 
 -- ---------------------------------------------------------------------------
--- * Legacy API (for test compatibility)
+-- * ByteString field encoders
 -- ---------------------------------------------------------------------------
 
--- | Encode a list of nullable fields into a single COPY row.
---
--- Legacy wrapper — new code should use 'buildCopyRow' with Builder fields.
+-- | Encode a list of nullable fields into a single COPY row from plain
+-- 'ByteString' values, rather than the 'Builder' fields 'buildCopyRow' takes.
 encodeToCopyRow :: [Maybe ByteString] -> ByteString
 encodeToCopyRow fields =
   BS.intercalate "\t" (map encodeField fields) <> "\n"

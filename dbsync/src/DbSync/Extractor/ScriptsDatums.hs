@@ -16,11 +16,10 @@
 -- * @redeemer.fee@ is always 'Nothing'. Populating it needs the
 --   per-block 'apPrices' value multiplied by the redeemer's
 --   exec units; that wiring is not yet in place.
--- * @redeemer.script_hash@ is always 'Nothing'. The original parser
---   resolves it from the redeemer pointer against the tx body's
---   inputs / certs / withdrawals / votes / proposals; resolving
---   those references is deferred until the governance extractor
---   lands its proposal\/vote structures.
+-- * @redeemer.script_hash@ is always 'Nothing'. Resolving it means
+--   following the redeemer pointer against the tx body's inputs /
+--   certs / withdrawals / votes / proposals; that wiring is not yet
+--   in place.
 module DbSync.Extractor.ScriptsDatums
   ( scriptsDatumsExtractor
   ) where

@@ -27,6 +27,7 @@ data TableDef = TableDef
   , tdColumnDefaults    :: ![(Text, Text)]
   , tdUniqueConstraints :: ![NonEmpty Text]
   , tdGeneratedColumns  :: ![(Text, Text)]
+  , tdIdentityColumns   :: ![Text]
   , tdForeignKeys       :: ![ForeignKey]
   }
 
@@ -156,16 +157,15 @@ bBool        :: Bool -> Builder
 bHex         :: ByteString -> Builder       -- \\x prefix
 bUTCTime     :: UTCTime -> Builder
 bText        :: Text -> Builder
-bEscapeText  :: Text -> Builder             -- escapes tab/newline/backslash
+bEscapeText  :: ByteString -> Builder       -- escapes tab/newline/backslash
 ```
 
 Each per-table `encode<Table>Copy` builds a list of `CopyField`s and
 joins them via `buildCopyRow`. The whole row materialises as one
 strict `ByteString` ready to hand to the loader stream.
 
-Why Builders: the previous implementation used `BS8.concatMap` for
-hex encoding and a three-pass replace for COPY-escaping, allocating
-~50K tiny pinned ByteStrings per `tx_cbor` row. The Builder pipeline
+Why Builders: naive hex encoding and multi-pass COPY-escaping allocate
+a swarm of tiny pinned ByteStrings per row. The Builder pipeline
 allocates one buffer per row and emits everything in-place.
 
 ## Hasql statements

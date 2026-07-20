@@ -27,7 +27,7 @@ lifetime of a sync.
 flowchart TD
     Node["cardano-node"]
     Receiver["ChainSync Receiver<br/>(one thread)"]
-    Queue[("Block queue<br/>TBQueue, cap 500")]
+    Queue[("Block queue<br/>TBQueue, cap 300")]
     Consumer["Consumer thread<br/>parseBlock → processBlock"]
 
     IngestWriter["Ingest Writer<br/>encode → per-table queues<br/>→ per-table COPY workers<br/>(UNLOGGED tables)"]

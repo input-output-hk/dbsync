@@ -12,20 +12,6 @@
 -- commit + reopen cascade. Rollback markers are unreachable in this
 -- phase — the receiver only enqueues them above @chain_tip − k@ and
 -- the consumer exits before drainage; one slipping through panics.
---
--- == Per-epoch progress log
---
--- At each boundary 'handleEpochBoundary' emits one summary line:
---
--- @
--- Epoch 265 | 21,427 blk in 41s (526 blk/s) | utxo hitrate=99.92% | peak mem=2.3GB | [63.21%]
--- @
---
--- The bracketed percentage is the current block's position relative
--- to the rollback boundary (@nodeTip − k@), omitted while the chain
--- is shorter than @k@. The @blk in X@ window spans the previous
--- boundary's post-commit reset through this boundary's, so the rate
--- reflects what the operator sees.
 module DbSync.Phase.Ingest.Consumer
   ( -- * Running
     runConsumer

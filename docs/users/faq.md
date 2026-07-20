@@ -39,8 +39,8 @@ presets nearly halves the database. See
 
 Enable `ledger` if you need:
 
-- Reward amounts per epoch (`rewards`).
-- Per-epoch stake distribution (`epoch_stake`, `stake_dist`).
+- Reward amounts per epoch (`reward`).
+- Per-epoch stake distribution (`epoch_stake`).
 - Protocol parameter snapshots per epoch (`epoch_param`).
 - ADA pot balances (`ada_pots`).
 - Per-tx deposit values populated on the `tx` row.

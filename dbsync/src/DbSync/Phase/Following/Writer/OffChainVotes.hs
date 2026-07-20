@@ -1,4 +1,4 @@
--- | Hasql writers for tables owned by the @off_chain_votes@ extractor.
+-- | hasql writers for tables owned by the @off_chain_votes@ extractor.
 module DbSync.Phase.Following.Writer.OffChainVotes
   ( writeOffChainVoteDataConn
   , writeOffChainVoteDataBuf

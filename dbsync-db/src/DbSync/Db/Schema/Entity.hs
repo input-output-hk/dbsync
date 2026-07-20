@@ -24,11 +24,6 @@ import Cardano.Prelude
 
 -- | A database entity: primary key plus row data.
 --
--- @
--- Entity BlockId block   -- a block row with its database ID
--- Entity TxId   tx       -- a tx row with its database ID
--- @
---
 -- During 'IngestChainHistory', IDs are pre-assigned in-process.
 -- During 'FollowingChainTip', IDs come from PostgreSQL @RETURNING id@.
 data Entity record = Entity

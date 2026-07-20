@@ -164,9 +164,8 @@ mkWriter conn = Writer
 -- caller flushes the buffer once at end of block.
 --
 -- Same row shapes, same encoders, same SQL — only the network timing
--- differs. Each append is a 'modifyIORef' (microseconds); each
--- immediate-mode call would be a libpq round-trip
--- (microseconds-to-milliseconds, depending on PG distance).
+-- differs: each append is a 'modifyIORef', each immediate-mode call
+-- would be a libpq round-trip.
 mkBufferedWriter :: WriteBuffer -> Writer IO
 mkBufferedWriter buf = Writer
   { -- Core

@@ -444,12 +444,6 @@ poolCertAction = \case
     CertPoolRetirement (keyHashToBytes poolHash) (unEpochNo epochNo)
 
 -- | Extract pool registration data from StakePoolParams.
---
--- In cardano-node 10.7.1 / cardano-ledger 1.13+ the @PoolParams@ type was
--- renamed to @StakePoolParams@, accessors gained the @spp*@ prefix, and
--- @ppRewardAccount@ was renamed to @sppAccountAddress@ alongside the
--- @RewardAccount → AccountAddress@ type rename. @PoolP.PoolParams@ still
--- exists as a pattern synonym but is no longer a type.
 poolParamsToData :: PoolP.StakePoolParams -> PoolRegistrationData
 poolParamsToData pp = PoolRegistrationData
   { prdPoolHash    = keyHashToBytes (PoolP.sppId pp)

@@ -10,7 +10,7 @@
 -- the encoded ByteString that matches the Ingest LSM layout; the
 -- SELECT keys on the row's structured columns.
 --
--- Cross-block scratchpads — the proposal cache becomes a SELECT-on-PG
+-- Cross-block scratchpads — the proposal cache is a SELECT-on-PG
 -- + per-block 'BlockDedupCache' shadow; the enacted-state triple and
 -- gov-action lifetime remain IORef-backed because no PG mirror exists.
 module DbSync.Phase.Following.Resolver.Governance
@@ -125,10 +125,9 @@ assignConstitutionIdBuf :: PreAllocatedIds -> IO ConstitutionId
 assignConstitutionIdBuf preAlloc =
   popHead "assignConstitutionId" (paiConstitutionIds preAlloc)
 
--- | @event_info@ has no pre-allocation lane in 'PreAllocatedIds' —
--- the table is never written today. The Buf flavour falls through
--- to 'nextval' via the connection so a future writer doesn't need
--- to wait for a pipeline upgrade.
+-- | @event_info@ has no pre-allocation lane in 'PreAllocatedIds'
+-- because the table is unwritten; the Buf flavour falls through to
+-- 'nextval' via the connection.
 assignEventInfoIdConn :: Conn.Connection -> IO EventInfoId
 assignEventInfoIdConn conn = runStmt conn () nextEventInfoIdStmt
 

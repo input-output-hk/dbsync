@@ -2,29 +2,21 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-{- |
-Module      : DbSync.Worker.Ledger.Worker
-Description : Background thread that drains the ledger queue.
-
-Reads 'ChainSyncMsg' values off 'leLedgerQueue':
-
-  * 'MsgForward' — apply the block via 'applyBlockAndSnapshot', write
-    the latest 'ApplyResult' into @leLatestApplyResult@, and signal
-    epoch boundaries via 'leEpochReady'.
-  * 'MsgRollback' — call 'loadLedgerAtPoint' to walk the in-memory
-    buffer back to the target. Rollbacks deeper than the buffer
-    (~100 blocks) panic with an operator-actionable message — the
-    recovery path is to restart dbsync so the disk snapshot can be
-    reloaded at the rollback point.
-
-== Hook-based factoring
-
-'runLedgerWorkerWith' separates the queue-draining loop from the
-LSM-backed apply call. Tests use it directly with stub hooks to
-exercise the coordination primitives without an LSM session.
-Production goes through 'runLedgerWorker', which dispatches forward
-and rollback messages around 'realWorkerHooks'.
--}
+-- | Background thread that drains the ledger queue.
+--
+-- Reads 'ChainSyncMsg' values off 'leLedgerQueue':
+--
+--   * 'MsgForward' — apply the block via 'applyBlockAndSnapshot', write
+--     the latest 'ApplyResult' into @leLatestApplyResult@, and signal
+--     epoch boundaries via 'leEpochReady'.
+--   * 'MsgRollback' — call 'loadLedgerAtPoint' to walk the in-memory
+--     buffer back to the target. Rollbacks deeper than the buffer
+--     (~100 blocks) panic with an operator-actionable message; recovery
+--     is to restart dbsync so the disk snapshot reloads at the point.
+--
+-- 'runLedgerWorkerWith' separates the queue-draining loop from the
+-- LSM-backed apply call so tests can drive it with stub hooks;
+-- 'runLedgerWorker' wires in 'realWorkerHooks'.
 module DbSync.Worker.Ledger.Worker
   ( -- * Entry points
     runLedgerWorker

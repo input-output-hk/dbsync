@@ -19,18 +19,13 @@ on sync time and disk usage.
 | `minimal-profile.json` | (core only) | off | ~30 GB |
 | `utxo-only-profile.json` | `utxo` | off | ~160 GB |
 | `spo-profile.json` | `utxo`, `metadata`, `stake_delegation`, `pool` | off | ~185 GB |
-| `dapp-profile.json` | `utxo`, `multi_asset`, `metadata`, `scripts_datums`† | off | ~265 GB |
-| `everything-no-ledger-profile.json` | every implemented projection | off | ~475 GB |
-| `everything-profile.json` | every implemented projection | on | ~480 GB |
+| `dapp-profile.json` | `utxo`, `multi_asset`, `metadata`, `scripts_datums` | off | ~265 GB |
+| `everything-no-ledger-profile.json` | all non-ledger projections | off | ~475 GB |
+| `everything-profile.json` | every projection, ledger on | on | ~480 GB |
 
 The `everything-profile` figure is measured at mainnet tip; the
 smaller-profile figures are approximations derived from that
 profile's per-table breakdown.
-
-† `scripts_datums` is currently a stub; enabling it doesn't yet
-populate scripts/datums tables. See
-[Existing extractors](/developers/extractors/existing) for the
-current implementation status.
 
 Every preset also enables `epoch_sync_stats` so the per-epoch sync
 progress table gets populated. It's cheap and useful for diagnostics.
@@ -110,48 +105,52 @@ Tables it gives you:
 
 - `multi_asset`, `ma_tx_mint`, `ma_tx_out` for native tokens.
 - `tx_metadata` for arbitrary on-chain metadata.
-- `scripts_datums` tables (reserved — Plutus scripts, datums,
-  redeemers; not yet implemented).
+- `datum`, `script`, `redeemer`, `redeemer_data`, `extra_key_witness`
+  for Plutus and native-script witness data.
 
 Suitable for:
 
 - NFT / token explorers.
 - DApps that need on-chain metadata payloads.
-- Plutus contract analytics (once `scripts_datums` lands).
+- Plutus contract analytics.
 
 ## `everything-no-ledger`
 
-Every implemented projection except the ledger-derived ones. Adds
-`stake_delegation`, `pool`, `governance` (reserved), `cbor`, and
-`epoch_boundary` on top of `dapp`.
+The broad projection set that doesn't need ledger state. Adds
+`stake_delegation`, `pool`, `governance`, and `cbor` on top of `dapp`.
+It deliberately leaves out the ledger-derived projections
+(`stake_delegation_ledger`, `pool_stats`, `epoch_boundary`) and the
+off-chain metadata fetchers (`off_chain_pools`, `off_chain_votes`).
 
 Suitable for:
 
-- Block-explorer backends that need the full schema.
+- Block-explorer backends that need the full on-chain schema without
+  reward / stake-distribution data.
 - Downstream consumers that re-serialise transactions (the `cbor`
   extractor stores raw tx bytes).
 
-The `epoch_boundary` and `governance` projections are enabled but
-their per-block work is mostly a no-op without ledger state — the
-tables get created but stay empty.
+`governance` records proposals, votes, and DRep / committee
+certificates straight from transaction bodies, so it works here
+without ledger. Only its `drep_distr` (per-epoch DRep voting power)
+stays empty, since that's derived from ledger state.
 
 ## `everything`
 
-`everything-no-ledger` plus `ledger.enabled = true` and the
-`epoch_boundary` and `current_state` (reserved) projections.
+`ledger.enabled = true` plus every projection: everything in
+`everything-no-ledger`, and additionally the ledger-derived
+`stake_delegation_ledger`, `pool_stats`, and `epoch_boundary`, the
+`off_chain_pools` / `off_chain_votes` metadata fetchers, and the
+reserved `current_state` stub.
 
-With ledger on, the consumer applies blocks to an in-RAM ledger
-state and the worker produces:
+With ledger on, the consumer applies blocks to an in-RAM ledger state
+and the worker produces:
 
 - Per-block deposit maps (tx-level deposit amounts).
-- Per-epoch `ada_pots`, `epoch_param`, `epoch_state`, `stake_dist`,
-  `rewards`, `epoch_stake`.
+- Per-epoch `ada_pots`, `epoch_param`, `epoch_state`, `reward`,
+  `pot_reward`, `epoch_stake`, and `pool_stat`.
 
 This is the largest, slowest profile, and the one that gives you the
-full upstream-dbsync-equivalent schema.
-
-Mainnet sync time on a 4-core / 16 GB target is on the order of a
-day for `everything`; less for the smaller profiles.
+full upstream-cardano-db-sync-equivalent schema.
 
 ## Switching profiles
 

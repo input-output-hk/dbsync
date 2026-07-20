@@ -235,7 +235,6 @@ mkSlotLeader mPoolHashId gb = SlotLeader
   , slotLeaderDescription = mkSlotLeaderDesc gb mPoolHashId
   }
 
--- | Build a 'Tx' record from a 'GenericTx'.
 mkTx :: BlockId -> G.GenericTx -> Tx
 mkTx blkId gtx = Tx
   { txHash             = G.txHash gtx

@@ -34,8 +34,7 @@ every transaction consumes UTxOs (as inputs) and produces UTxOs
 `multi_asset` and referenced from `ma_tx_out` rows.
 
 **Datum** / **Redeemer** / **Script** — Plutus smart-contract
-ingredients. Covered by the `scripts_datums` extractor (currently a
-stub).
+ingredients. Recorded by the `scripts_datums` extractor.
 
 **Slot leader** — The pool that produced a given block. Resolved via
 the VRF key in the block header; dbsync writes one `slot_leader` row
@@ -144,8 +143,9 @@ maps and per-epoch reward / stake / protocol-param data.
 **TxOut worker** — A per-epoch worker active during Ingest that
 back-fills `tx_out.address_id` and `tx_out.consumed_by_tx_id`.
 
-**OffChain fetcher** — Reserved background worker for fetching
-pool / vote metadata via HTTP. Not yet implemented.
+**OffChain fetcher** — Background workers that fetch pool and
+governance-vote metadata over HTTP, off the hot path. Enabled by the
+`off_chain_pools` / `off_chain_votes` options.
 
 ## State files
 

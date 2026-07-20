@@ -12,31 +12,16 @@
 -- row; subsequent encounters return the existing id with @isNew =
 -- False@.
 --
--- 'DedupStores' aggregates the five distinct kinds of dedup table
--- used during 'IngestChainHistory' — pool hash, stake address, slot
--- leader, multi-asset, script hash. All five live in the shared
--- 'LsmSession' under distinct snapshot labels so they coexist
--- without name collisions.
+-- 'DedupStores' aggregates the dedup tables used during
+-- 'IngestChainHistory', each under a distinct snapshot label in the
+-- shared 'LsmSession' so they coexist without name collisions.
 --
--- == Wire format
---
--- Values are a fixed 8-byte big-endian 'Int64'. No length prefix.
--- See 'encodeInt64' / 'decodeInt64'.
---
--- == Threading
---
--- All operations are called from a single thread (the consumer
--- thread for the hot path; the boot thread for 'newStores' and
--- 'rebuildDedupMaps' restore). @lsm-tree@ rejects concurrent writers
--- on a single table.
---
--- == Counter persistence
---
--- The LSM snapshot persists the @(key, id)@ table contents but
--- /not/ the next-id counter. On a resumed boot
--- 'DbSync.SyncState.Row.rebuildDedupMaps' calls
--- 'insertExisting' once per existing row, which raises the counter
--- to @max(existingId) + 1@.
+-- Values are a fixed 8-byte big-endian 'Int64' (see 'encodeInt64' /
+-- 'decodeInt64'). All access is single-threaded — @lsm-tree@
+-- rejects concurrent writers on a table. The snapshot persists the
+-- @(key, id)@ pairs but not the next-id counter; on a resumed boot
+-- 'DbSync.SyncState.Row.rebuildDedupMaps' calls 'insertExisting' per
+-- existing row, which raises the counter to @max(existingId) + 1@.
 module DbSync.Phase.Ingest.DedupStore
   ( -- * Types
     DedupStore
@@ -97,8 +82,8 @@ data DedupStore = DedupStore
     -- and by 'insertExisting' when the incoming id is at or past
     -- the current value.
   , dstSnapshotName :: !LSMTree.SnapshotName
-    -- ^ Per-store snapshot name. See 'newStores' for the five
-    -- distinct names.
+    -- ^ Per-store snapshot name. See 'newStores' for the distinct
+    -- names.
   , dstLabel        :: !LSMTree.SnapshotLabel
     -- ^ Per-store snapshot label. @lsm-tree@ rejects an open whose
     -- label differs from the save label.

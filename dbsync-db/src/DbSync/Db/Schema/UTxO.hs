@@ -97,15 +97,14 @@ type instance Key ReferenceTxIn = ReferenceTxInId
 
 -- | The @tx_out@ table.
 --
--- Address columns are normalised into the @address@ dedup table.
--- @txOutAddressId@ is the FK that replaces the original inline
--- @address@\/@address_has_script@\/@payment_cred@ trio.
+-- Address columns are normalised into the @address@ dedup table;
+-- @txOutAddressId@ is the FK into it.
 --
 -- The FK is permanently nullable: 'Nothing' for rows whose owning
 -- epoch hasn't been processed by the 'AddressResolver' worker yet,
--- 'Just' once the worker fills it in. The schema does not change
--- between phases — the column stays @NULL@-able forever — which
--- keeps the on-disk shape stable for downstream consumers.
+-- 'Just' once the worker fills it in. The column stays @NULL@-able
+-- across all phases, keeping the on-disk shape stable for downstream
+-- consumers.
 data TxOut = TxOut
   { txOutTxId              :: !TxId             -- ^ FK to tx
   , txOutIndex             :: !Word64           -- ^ Output index within the transaction
@@ -152,8 +151,7 @@ data ReferenceTxIn = ReferenceTxIn
 -- | The @collateral_tx_out@ table — the optional collateral-return
 -- output of a Babbage+ phase-2 failed transaction. Schema mirrors
 -- the @tx_out@ shape with one addition: @multi_assets_descr@ is a
--- textual dump of the multi-asset map (the original schema does not
--- normalise multi-assets on this table).
+-- textual dump of the multi-asset map, not normalised on this table.
 --
 -- @collateralTxOutAddressId@ follows the same lifecycle as
 -- 'TxOut.txOutAddressId': permanently nullable, filled in by the

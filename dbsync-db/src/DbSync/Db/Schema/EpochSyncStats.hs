@@ -6,9 +6,9 @@
 -- The extractor owns two tables, both written by the consumer thread
 -- at each epoch-boundary commit:
 --
---   * @epoch_sync_stats@ — our metrics (blocks/sec, throughput, phase).
---   * @epoch_sync_time@ — the original-project parity table
---     (epoch number, elapsed seconds, sync state).
+--   * @epoch_sync_stats@ — sync metrics (blocks/sec, throughput, phase).
+--   * @epoch_sync_time@ — upstream parity table (epoch number, elapsed
+--     seconds, sync state).
 module DbSync.Db.Schema.EpochSyncStats
   ( -- * Schema types
     EpochSyncStats (..)
@@ -81,7 +81,7 @@ data EpochSyncStats = EpochSyncStats
   deriving stock (Eq, Show)
 
 -- | The @epoch_sync_time@ table.
--- Original-project parity. Unique on @no@.
+-- Upstream parity. Unique on @no@.
 data EpochSyncTime = EpochSyncTime
   { epochSyncTimeNo      :: !Word64
   , epochSyncTimeSeconds :: !Word64

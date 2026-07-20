@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
 
--- | Block processing pipeline for the unified extraction architecture.
+-- | Block processing pipeline.
 --
 -- Pre-assigns shared IDs (BlockId, TxId, TxOutId) centrally, builds
 -- a 'BlockContext', then runs all enabled extractors. Works identically
@@ -87,10 +87,8 @@ processBlock block = do
   --
   -- The bang on @v@ forces the Word64 before the tuple is built. Without
   -- it the tuple's second field is a thunk that retains its captured
-  -- @o :: GenericTxOut@ (and through it the raw address ByteString), so
-  -- the cache transitively pins ~1.8 GB of GenericTxOut + ByteString +
-  -- ARR_WORDS for every retained tx. Heap profiling traced the leak to
-  -- this exact site.
+  -- @o :: GenericTxOut@ (and through it the raw address ByteString),
+  -- pinning that memory for every tx held in the cache.
   txCtxs <- forM (blkTxs block) $ \gtx -> do
     txId <- liftIO $ assignTxId resolver
     outIds <- forM (txOutputs gtx) $ \_ -> liftIO $ assignTxOutId resolver

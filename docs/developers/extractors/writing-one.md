@@ -141,11 +141,9 @@ module DbSync.Extractor.Claim
 
 claimExtractor :: ExtractorDef
 claimExtractor = ExtractorDef
-  { pdName         = "claim"
-  , pdVersion      = 1
-  , pdDependencies = [("core", 1), ("stake_delegation", 1)]
-  , pdTables       = [claimTableDef]
-  , pdProcess      = processClaim
+  { pdName    = "claim"
+  , pdTables  = [claimTableDef]
+  , pdProcess = processClaim
   }
 
 processClaim :: ProcessBlockFn
@@ -169,22 +167,28 @@ helper and be tested separately.
 
 ## 6. Register the extractor
 
-Two edits in
+First add `claimExtractor` to `allKnownExtractors` in
+[`DbSync.Extractor.Registry`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/Extractor/Registry.hs).
+That registry is the single source of truth for which names resolve to
+a real extractor — anything not in it falls back to a no-op stub — and
+it also feeds the schema fingerprint.
+
+Then add the profile key to `optionalExtractors` in
 [`DbSync.App.Setup.buildExtractors`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/App/Setup.hs):
 
 ```haskell
-resolveExtractor "claim" = claimExtractor
--- ...
 optionalExtractors =
   [ ...
   , ("claim", prEnabled (pcClaim pc))
   ]
 ```
 
-Then add `pcClaim :: !SyncOption` to `SyncOptions` in
+Finally add `pcClaim :: !OptionFlag` to `DbSyncOptions` in
 [`DbSync.App.Config.Types`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/App/Config/Types.hs)
-with `False` as the default. Profiles opt in by setting
-`"claim": true` in `db_options`.
+with a disabled default, and — if the extractor depends on another —
+a rule in
+[`DbSync.App.Config.Validation`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/App/Config/Validation.hs).
+Profiles opt in by setting `"claim": true` in `db_options`.
 
 If your extractor warrants structured config (like `utxo` does with
 its `consumed_by_tx_id` / `strategy` knobs), use the `UtxoOption`

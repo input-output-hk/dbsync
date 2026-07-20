@@ -137,8 +137,8 @@ mkFollowResolver conn = do
 --     (zero round-trips).
 --   * Dedup @resolve*@ checks the per-block cache first; on miss
 --     does @SELECT@ then @nextval@. The corresponding INSERT is
---     queued via the 'Writer' as today; the per-block cache shadows
---     the not-yet-flushed row.
+--     queued via the 'Writer'; the per-block cache shadows the
+--     not-yet-flushed row.
 --   * @resolveAddressId@ resolves synchronously, queuing the
 --     @address@ INSERT (when new) on the shared 'WriteBuffer'. The
 --     extractor writes the tx_out row with @address_id@ filled in.

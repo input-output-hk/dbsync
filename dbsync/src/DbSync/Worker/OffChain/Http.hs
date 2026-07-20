@@ -283,7 +283,7 @@ extractTicker _ = Nothing
 -- * Vote fetcher
 -- ---------------------------------------------------------------------------
 
--- Vote size limits mirror the original (3 MB attempt + 3 MB cap).
+-- Vote size limits: 3 MB read attempt, 3 MB hard cap.
 voteBytesToRead, voteMaxBytes :: Int
 voteBytesToRead = 3_000_000
 voteMaxBytes    = 3_000_000

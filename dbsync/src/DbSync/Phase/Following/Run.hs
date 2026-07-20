@@ -236,9 +236,7 @@ waitForMsgOrHeartbeat q phaseRef micros = do
       unless expired STM.retry
       pure Nothing
 
--- | Render the current phase as the log-component string. Always
--- reflects whether we are catching up or steady-state, so a reader
--- can tell at a glance.
+-- | Render the current phase as the log-component string.
 readPhaseComponent :: CurrentPhase -> IO Text
 readPhaseComponent = fmap renderPhase . readCurrentPhase
 
@@ -496,7 +494,7 @@ writeFollowEpochSyncStats phase snap prev now = do
 --
 --   * one Info line per applied block when in 'FollowingChainTip' —
 --     at mainnet's ~20 s/block cadence this is roughly one log per
---     20 s, the natural "I'm alive" rhythm at tip; or
+--     20 s; or
 --   * the windowed summary when 'logEveryNBlocks' blocks have been
 --     applied or a new epoch has crossed (other phases). Per-block
 --     spam isn't useful while still catching up.

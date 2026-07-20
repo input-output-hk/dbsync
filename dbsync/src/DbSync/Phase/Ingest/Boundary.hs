@@ -3,16 +3,11 @@
 
 -- | Epoch-boundary handling for the Ingest consumer.
 --
--- The consumer's per-block loop in "DbSync.Phase.Ingest.Consumer"
--- detects an epoch transition by comparing 'sdEpochNo' against the
--- previous block's. When it crosses, control passes here.
---
--- 'handleEpochBoundary' runs a pipelined cascade — flush COPY,
--- snapshot per-epoch buffers, await the tx-out worker, advance
--- @sync_state@ for the /previous/ pending epoch, enqueue the
--- just-finished one, reopen the loader stream, persist the LSM
--- tables, and emit the per-epoch summary line. The pipelining means
--- @sync_state@ always lags by one epoch behind the consumer.
+-- When the per-block loop in "DbSync.Phase.Ingest.Consumer" detects
+-- an 'sdEpochNo' change it hands off to 'handleEpochBoundary', which
+-- runs a pipelined cascade to commit the finished epoch and set up
+-- the next one. The pipelining means @sync_state@ always lags one
+-- epoch behind the consumer.
 module DbSync.Phase.Ingest.Boundary
   ( -- * Loop state
     ConsumerLoopState (..)
@@ -184,26 +179,12 @@ newConsumerLoopState bootSlot = do
 -- * Boundary handler
 -- ---------------------------------------------------------------------------
 
--- | Run the 9-step boundary cascade for the @prev → blockEpoch@
--- transition. Called from the consumer when @prev /= blockEpoch@.
---
--- The steps, in order:
---
---   1. Commit the loader stream — tx_outs durable, address_id NULL.
---   2. Snapshot the address buffer (+ optional consumed-by buffer).
---   3. Await the tx-out worker draining the /previous/ boundary's job.
---   4. Flush the ledger worker's pending epoch_param deposits.
---   5. Advance @sync_state@ for the lagging epoch (now fully resolved).
---   6. Enqueue the just-finished epoch's resolve job to the worker.
---   7. Stash the snapshot for the /next/ boundary's @sync_state@ write.
---   8. Reopen the loader stream for the next epoch.
---   9. Persist the LSM tables (snapshot refresh; full
---      reopen-compaction every 'ingestCompactEveryEpochs') — spawned
---      before step 1, runs concurrently with the cascade, awaited
---      here.
---
--- Followed by the per-epoch summary log, optional dedup-debug log,
--- and a growth-gated major GC on epochs above 10s wall-clock.
+-- | Run the boundary cascade for the @prev → blockEpoch@ transition,
+-- called from the consumer when @prev /= blockEpoch@. The numbered
+-- steps run in order in the body; step 9 (persist the LSM tables) is
+-- spawned first so it overlaps the PG-bound steps 1–8. Followed by
+-- the per-epoch summary log, an optional dedup-debug log, and a
+-- growth-gated major GC on long epochs.
 handleEpochBoundary
   :: ConsumerLoopState
   -> EpochNo        -- ^ epoch just completed

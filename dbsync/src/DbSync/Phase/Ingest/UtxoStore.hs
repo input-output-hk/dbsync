@@ -277,8 +277,7 @@ emptyStats = StoreStats 0 0 0 0
 --
 -- Built directly rather than via a 'Data.ByteString.Builder' —
 -- 'toLazyByteString' allocates a ~4KB pinned first chunk per call,
--- which at one call per output/input/delete dominated the payload
--- by two orders of magnitude.
+-- and this runs once per output, input, and delete on the hot path.
 mkKey :: ByteString -> Word16 -> ShortByteString
 mkKey hash idx = SBS.toShort (hash <> idxBytes)
   where

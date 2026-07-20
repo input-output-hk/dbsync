@@ -1,13 +1,10 @@
-{- |
-Module      : DbSync.StateQuery.Types
-Description : Shared types for the LocalStateQuery integration.
-
-Lives in its own module so 'DbSync.App.Env' (and any other consumer that
-just needs the shape of the handle) can depend on these definitions
-without pulling in 'DbSync.StateQuery'\'s monadic helpers — the latter
-import 'DbSync.App.Env' to read environment-bound fields, so the type
-definitions must sit below the @Env -> StateQuery@ dependency arrow.
--}
+-- | Shared types for the LocalStateQuery integration.
+--
+-- Split into its own module so 'DbSync.App.Env' (and other consumers
+-- that only need the handle's shape) can depend on these definitions
+-- without pulling in 'DbSync.StateQuery'\'s monadic helpers, which
+-- import 'DbSync.App.Env' — the types must sit below the
+-- @Env -> StateQuery@ dependency arrow.
 module DbSync.StateQuery.Types
   ( -- * Types
     SlotDetails (..)

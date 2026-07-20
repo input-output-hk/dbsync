@@ -1,16 +1,11 @@
-{- |
-Module      : DbSync.Worker.Ledger.Rewards
-Description : Era-agnostic reward value types.
-
-These are the era-collapsed shapes produced by the per-era
-converters: a @'Reward'@ here is a plain @(source, pool, amount)@
-triple, not the era-specific @'Cardano.Ledger.Reward'@ that comes out
-of the ledger. Extractors and the event pipeline consume these
-unified values without caring which era produced them.
-
-@'RewardSource'@ is re-exported from 'DbSync.Db.Types' so the worker
-and the schema agree on the single canonical enum.
--}
+-- | Era-agnostic reward value types.
+--
+-- The era-collapsed shapes produced by the per-era converters: a
+-- 'Reward' here is a plain @(source, pool, amount)@ triple, not the
+-- era-specific @Cardano.Ledger.Reward@. Extractors and the event
+-- pipeline consume these without caring which era produced them.
+-- 'RewardSource' is re-exported from 'DbSync.Db.Types' so the worker
+-- and the schema share one canonical enum.
 module DbSync.Worker.Ledger.Rewards
   ( -- * Reward source tag
     RewardSource (..)

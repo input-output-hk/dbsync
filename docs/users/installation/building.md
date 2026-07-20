@@ -33,7 +33,7 @@ After `cabal build all`:
 
 ```bash
 $ cabal list-bin dbsync
-/path/to/dbsync/dist-newstyle/build/aarch64-osx/ghc-9.8.4/dbsync-0.1.0.0/x/dbsync/build/dbsync/dbsync
+/path/to/dbsync/dist-newstyle/build/aarch64-osx/ghc-9.14.1/dbsync-0.1.0.0/x/dbsync/build/dbsync/dbsync
 ```
 
 You can run it directly from `cabal run dbsync -- <args>` while

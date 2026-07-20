@@ -7,10 +7,9 @@ title: Memory & Strictness
 
 How laziness interacts with the long-lived structures in this codebase,
 what a laziness leak looks like from the outside, and the discipline that
-keeps the class of bug out. The rules here are normative in
-[`AGENTS.md`](https://github.com/input-output-hk/dbsync/blob/main/AGENTS.md);
-this page explains *why* they exist and how to recognise a violation in a
-running sync.
+keeps the class of bug out. The conventions here are normative: this page
+is the reference for them, and explains *why* they exist and how to
+recognise a violation in a running sync.
 
 ## Why this class of bug is expensive
 

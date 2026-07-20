@@ -1,43 +1,18 @@
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | LSM session that backs Ingest-phase working state.
---
--- Hosts every LSM table used during 'IngestChainHistory':
--- 'DbSync.Phase.Ingest.UtxoStore' and the
+-- | LSM session that backs Ingest-phase working state — the
+-- 'DbSync.Phase.Ingest.UtxoStore' and
 -- 'DbSync.Phase.Ingest.DedupStore' tables.
 --
--- == Lifecycle
+-- 'openLsmSession' runs once when 'DbSync.App.Env.IngestEnv' is
+-- built, restoring an existing on-disk session or creating a fresh
+-- one. 'closeLsmSession' closes but preserves the directory for the
+-- next boot; 'closeAndDeleteLsmSession' also removes @ingest-lsm/@.
+-- The Follow phase never opens this session.
 --
--- * 'openLsmSession' is called once when 'DbSync.App.Env.IngestEnv' is
---   built. If the directory exists it is restored, otherwise a
---   fresh session is created.
--- * 'lsmClose' is the idempotent shutdown action stored in the
---   record (same shape as 'DbSync.Worker.Ledger.Types.leClose'). Called
---   either via 'closeLsmSession' (close only — preserves the
---   on-disk session for the next boot) or
---   'closeAndDeleteLsmSession' (close + remove
---   @ingest-lsm/@).
--- * The Follow phase does not open this session — it uses the
---   PG-sequence + per-block resolver in
---   'DbSync.Phase.Following.Resolver'. The post-Prep delete in
---   'DbSync.Phase.Preparing.Run' is what makes that safe.
---
--- == Threading
---
--- @lsm-tree@ sessions are safe for concurrent reads but races on
--- write + anything else. Every ingest-phase table on top of this
--- session is written by the single consumer thread; match that or
--- add explicit serialisation.
---
--- == On disk
---
--- @
--- \<state-dir\>/dbsync-ledger/ingest-lsm/    -- 'lsmRootDir'
---   active/                                 -- managed by lsm-tree
---   snapshots/\<name\>/                     -- one per saved snapshot
---   lock                                    -- session-dir lock file
--- @
+-- @lsm-tree@ sessions allow concurrent reads but race on writes, so
+-- every table here is written only by the single consumer thread.
 module DbSync.Phase.Ingest.LsmSession
   ( -- * Types
     LsmSession (..)
@@ -185,7 +160,7 @@ nullLsmSessionTracer = nullTracer
 -- High-frequency per-operation table events ('LSMTree.TraceLookups',
 -- 'LSMTree.TraceRangeLookup', 'LSMTree.TraceUpdates',
 -- 'LSMTree.TraceUpdated') are dropped: during ingest they fire
--- hundreds of times per second and flood the log. Session lifecycle,
+-- on every batched operation and flood the log. Session lifecycle,
 -- table lifecycle, snapshot ops, union ops and cursor ops are all
 -- preserved.
 lsmSessionTracerFromApp :: AppTracer -> LsmSessionTracer
@@ -194,10 +169,9 @@ lsmSessionTracerFromApp inner = Tracer $ \e ->
     traceWith inner (LogMsg Debug "LsmIngest" (show e) Nothing)
 
 -- | True for 'LSMTree.LSMTreeTrace' events that fire on every
--- batched table operation. These flood the log during ingest
--- (hundreds per second) and add no diagnostic value. The silenced
--- set is intentionally explicit so adding or removing an event is a
--- one-line change.
+-- batched table operation. These flood the log during ingest and
+-- add no diagnostic value. The silenced set is intentionally
+-- explicit so adding or removing an event is a one-line change.
 isHotPathLsmTrace :: LSMTree.LSMTreeTrace -> Bool
 isHotPathLsmTrace (LSMTree.TraceTable _ tt) = case tt of
   LSMTree.TraceLookups{}     -> True

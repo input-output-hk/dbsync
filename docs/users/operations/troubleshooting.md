@@ -51,13 +51,17 @@ and have dbsync create the database itself; for a constrained
 production user, the operator should pre-create the database and
 grant `CONNECT`, `CREATE`, and `USAGE` on the `public` schema.
 
-## "Extractor 'X' is enabled but its dependency 'Y' is not enabled"
+## "… extractor requires … to be enabled"
 
-Profile validation rejected the combination. Add the missing
-dependency to `db_options`. Typical cases:
+Profile validation rejected the combination and named the missing
+dependency. Add it to `db_options`, or enable `ledger`. The enforced
+rules:
 
-- `pool` → needs `stake_delegation`.
 - `multi_asset` → needs `utxo`.
+- `off_chain_pools` → needs `pool`.
+- `off_chain_votes` → needs `governance`.
+- `epoch_boundary`, `pool_stats`, `stake_delegation_ledger`,
+  `current_state` → need `ledger.enabled = true`.
 
 See [Custom profiles](../profiles/custom) for the dependency table.
 

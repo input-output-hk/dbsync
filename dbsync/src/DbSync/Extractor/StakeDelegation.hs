@@ -196,7 +196,7 @@ processStakeDelegation ctx = do
         -- All other cert types: handled by Pool or Governance extractors
         _ -> pure ()
 
-    -- 2. Process withdrawals
+    -- Process withdrawals
     forM_ (txWithdrawals gtx) $ \w -> do
       saId <- resolveStakeCred (rewardAddrCredHash (txwRewardAddress w))
       liftIO $ writeWithdrawal writer Withdrawal

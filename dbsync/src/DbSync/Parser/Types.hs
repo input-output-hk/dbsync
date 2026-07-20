@@ -337,7 +337,7 @@ data CertAction
       !DRepIdent               -- ^ DRep target
       !(Maybe Word64)          -- ^ Registration deposit when the cert also registers the stake key (RegDeleg variant); Nothing for a pure delegation
 
-  -- Conway governance certificates (for future Governance extractor)
+  -- Conway governance certificates
   | CertDRepRegistration
       !CredHash                -- ^ DRep credential
       !Word64                  -- ^ Deposit

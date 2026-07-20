@@ -102,7 +102,7 @@ buildCoreEnv tracer syncCfg nodeCfg network = do
 -- @current_state@) gets a no-op stub so its enablement is still
 -- recorded and the schema reflects it once the work lands.
 --
--- Returns 'Either' for call-site symmetry; construction no longer fails.
+-- Returns 'Either' for call-site symmetry, though construction cannot fail.
 buildExtractors :: DbSyncOptions -> Either Text [ExtractorDef]
 buildExtractors pc =
   Right (coreExtractor : mapMaybe mkProj optionalExtractors)

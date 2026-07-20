@@ -85,8 +85,8 @@ insertEpochParamPendingStmt =
 -- ---------------------------------------------------------------------------
 
 -- | Fill @pool_update.deposit@ for first-registration rows (smallest
--- @id@ per @hash_id@). Subsequent re-registrations keep
--- @deposit IS NULL@ to match the original schema. Joins
+-- @id@ per @hash_id@); only the first registration carries a deposit,
+-- so subsequent re-registrations keep @deposit IS NULL@. Joins
 -- @pool_update -> tx -> block -> epoch_param_pending@ so the
 -- protocol-param value is read at the registration's epoch.
 -- @AND pu.deposit IS NULL@ keeps it idempotent.

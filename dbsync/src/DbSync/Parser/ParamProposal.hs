@@ -11,8 +11,8 @@
 -- the genesis-key update mechanism entirely and routes parameter
 -- changes through 'gov_action_proposal' instead.
 --
--- The Conway converter is still exported because the governance
--- extractor uses it when materialising a @param_proposal@ row from a
+-- The Conway converter is exported because the governance extractor
+-- uses it when materialising a @param_proposal@ row from a
 -- @ParameterChange@ governance action.
 module DbSync.Parser.ParamProposal
   ( GenericParamProposal (..)

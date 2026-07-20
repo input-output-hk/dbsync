@@ -82,7 +82,7 @@ do the heavy lifting:
 | `Database` | Test-DB lifecycle, `truncateAllTables`, the `dbsync_test` connection settings. |
 | `MockChain` | Forge Conway-era blocks through a real `Interpreter`, push them through `parseBlock` + the consumer pipeline. Used by integration specs that need ledger-derived data. |
 | `MockNode` | Vendored `Cardano.Mock.ChainSync.Server`. Drives the full ChainSync socket path for e2e tests. |
-| `PgAssertions` | Helpers like `assertRowCount`, `assertColumnSum`. |
+| `PgAssertions` | Helpers like `countRows`, `countNulls`, `sequenceAdvanced`. |
 | `PipelineEnv` | In-process `IdResolver` + collecting `Writer` for unit tests on extractor bodies. |
 | `Generators` | QuickCheck generators for parser types. |
 | `Property.Invariants` | Shared property-test invariants. |

@@ -41,7 +41,7 @@ re-runs the rebuild.
 
 Crashes during Follow restart at the last per-block commit. Follow
 transactions are atomic over both the row writes and the
-`sync_state.last_committed_slot` advance, so there's no partial-block
+`dbsync_sync_state.last_committed_slot` advance, so there's no partial-block
 state to clean up.
 
 ## Rollbacks during Follow
@@ -53,7 +53,7 @@ It runs in a single transaction:
 1. Walk the FK graph in dependency order.
 2. `DELETE FROM <table> WHERE <fk> > <target_slot>` per table per
    family.
-3. Update `sync_state.last_committed_slot` to the target.
+3. Update `dbsync_sync_state.last_committed_slot` to the target.
 
 :::caution `k`-bounded
 Rollbacks are bounded by the protocol security parameter `k` (2160

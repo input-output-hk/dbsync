@@ -54,10 +54,9 @@ import DbSync.Db.Schema.Ids (CollateralTxOutId, StakeAddressId, TxOutId)
 
 -- | Snapshot of one epoch's worth of address-resolution work.
 --
--- The tx-out lists are 'Seq' because a Conway-era epoch accumulates
--- 100k+ outputs and we want O(1) snoc with FIFO order preserved
--- across the worker handoff. The internal finger-tree chunks of 16
--- amortise the per-element overhead at this scale.
+-- The tx-out lists are 'Seq' for O(1) snoc with FIFO order preserved
+-- across the worker handoff, since an epoch can accumulate a large
+-- number of outputs.
 data EpochAddressBuffer = EpochAddressBuffer
   { eabAddresses :: !(Map ShortByteString (Maybe StakeAddressId))
     -- ^ Unique addresses seen this epoch, keyed by raw bytes. The

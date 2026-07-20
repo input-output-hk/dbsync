@@ -1,33 +1,30 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-{- |
-Module      : DbSync.Db.Loader
-Description : Multi-threaded loader-stream writer with per-table TBQueue fan-out.
-
-The 'LoaderStream' streams encoded rows to PostgreSQL via per-table
-writer threads. Rows are accumulated into ~64KB chunks on the
-producer side ('lsWriteRow' runs on the single consumer thread), so
-the bounded per-table 'TBQueue's and the writer threads see one
-element per chunk rather than per row — two STM transactions and
-one transport call per ~64KB instead of per row. Each writer thread
-drains its queue and pushes chunks down its dedicated loader
-connection. Today that connection runs PostgreSQL's @COPY FROM
-STDIN@ protocol via @libpq@ (which accepts arbitrarily-chunked,
-non-row-aligned data); the public API of this module deliberately
-hides that detail.
-
-Epoch-aligned commits use a sentinel\/barrier pattern:
-
-  1. Parser flushes each table's partial chunk, then writes
-     'Nothing' to all queues
-  2. Each writer drains remaining chunks, ends its stream, signals ready
-  3. Parser waits for all writers, then @COMMIT@ on all connections
-     concurrently
-  4. Parser calls 'lsReopen' to start new streams for the next epoch
-
-Errors from worker threads propagate to the parent via @async@ + @link@.
-All errors are 'AppDatabaseError' with source location tracking.
--}
+-- | Multi-threaded loader-stream writer with per-table 'TBQueue'
+-- fan-out.
+--
+-- The 'LoaderStream' streams encoded rows to PostgreSQL via per-table
+-- writer threads. Rows are accumulated into ~64KB chunks on the
+-- producer side ('lsWriteRow' runs on the single consumer thread), so
+-- the bounded per-table 'TBQueue's and the writer threads see one
+-- element per chunk rather than per row — two STM transactions and
+-- one transport call per ~64KB instead of per row. Each writer thread
+-- drains its queue and pushes chunks down its dedicated loader
+-- connection, which runs PostgreSQL's @COPY FROM STDIN@ protocol via
+-- @libpq@ (accepting arbitrarily-chunked, non-row-aligned data); the
+-- public API deliberately hides that detail.
+--
+-- Epoch-aligned commits use a sentinel\/barrier pattern:
+--
+--   1. Parser flushes each table's partial chunk, then writes
+--      'Nothing' to all queues
+--   2. Each writer drains remaining chunks, ends its stream, signals ready
+--   3. Parser waits for all writers, then @COMMIT@ on all connections
+--      concurrently
+--   4. Parser calls 'lsReopen' to start new streams for the next epoch
+--
+-- Errors from worker threads propagate to the parent via @async@ + @link@.
+-- All errors are 'AppDatabaseError' with source location tracking.
 module DbSync.Db.Loader
   ( -- * Types
     LoaderStream (..)

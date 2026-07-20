@@ -8,25 +8,15 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-{- |
-Module      : DbSync.Worker.Ledger.Event
-Description : Era-agnostic ledger events extracted from consensus.
-
-The 'LedgerEvent' sum is the canonical shape in which we consume
-ledger events — rewards, MIR distributions, pool reaps, ada-pots
-totals, governance-action refunds — emitted by the consensus
-ledger-application machinery as 'AuxLedgerEvent' values.
-'convertAuxLedgerEvent' is the conversion point: given an
-era-specific 'OneEraLedgerEvent', produce a 'Maybe LedgerEvent'
-suitable for accumulation in 'ApplyResult'.
-
-Two small helpers live here rather than in a top-level utility
-module:
-
-  * 'splitDeposits' peels out deposit events for the deposit-bookkeeping
-    pass ('DbSync.Worker.Ledger.Types.DepositsMap').
-  * 'txHashFromSafe' is inlined locally.
--}
+-- | Era-agnostic ledger events extracted from consensus.
+--
+-- The 'LedgerEvent' sum is the canonical shape for the ledger events we
+-- consume — rewards, MIR distributions, pool reaps, ada-pots totals,
+-- governance-action refunds — emitted by consensus as 'AuxLedgerEvent'
+-- values. 'convertAuxLedgerEvent' turns an era-specific
+-- 'OneEraLedgerEvent' into a 'Maybe LedgerEvent' for accumulation in
+-- 'ApplyResult'. 'splitDeposits' peels out deposit events for the
+-- deposit-bookkeeping pass ('DbSync.Worker.Ledger.Types.DepositsMap').
 module DbSync.Worker.Ledger.Event
   ( LedgerEvent (..)
   , GovActionRefunded (..)

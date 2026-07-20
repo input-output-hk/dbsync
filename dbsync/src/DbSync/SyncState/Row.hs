@@ -2,10 +2,9 @@
 --
 -- Owns connection lifecycle and IO-level error mapping. The schema
 -- type 'SyncStateRow', encoders\/decoders, and 'Statement' bindings
--- live in @dbsync-db@ (re-exported here so existing call sites don't
--- need a new import).
+-- live in @dbsync-db@ and are re-exported here for convenience.
 --
--- libpq remains for the loader-stream transport in
+-- libpq handles the loader-stream transport in
 -- 'DbSync.Db.Loader.Connection'; the control-plane path here goes
 -- through hasql.
 module DbSync.SyncState.Row

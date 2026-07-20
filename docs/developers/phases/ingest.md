@@ -55,9 +55,10 @@ that gap with two cooperating pieces:
 - **Counter** ([`DbSync.Phase.Ingest.Counter`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/Phase/Ingest/Counter.hs)) —
   per-table monotonic counters that hand out fresh IDs in-process.
 - **DedupStore** ([`DbSync.Phase.Ingest.DedupStore`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/Phase/Ingest/DedupStore.hs)) —
-  five LSM-tree tables mapping each dedup-eligible natural key (stake
-  credential hash, multi-asset id, pool key hash, slot leader hash,
-  cost-model hash) to the ID assigned the first time we saw it.
+  ten LSM-tree tables, one per dedup-eligible natural key (stake
+  credential, pool key hash, slot leader, multi-asset id, script hash,
+  datum hash, redeemer-data hash, DRep hash, committee hash, voting
+  anchor), mapping each to the ID assigned the first time we saw it.
 
 For each block, `processBlock` (in `DbSync.Extractor.Pipeline`) pre-assigns
 the shared IDs — `BlockId`, `SlotLeaderId`, per-tx `TxId`, per-output
@@ -125,7 +126,7 @@ runs a **pipelined cascade**:
 8. Emit the per-epoch summary log line, then a major GC gated on live-heap
    growth since the last boundary collection.
 
-The **one-epoch lag** is deliberate. `sync_state` always reflects the last
+The **one-epoch lag** is deliberate. `dbsync_sync_state` always reflects the last
 epoch the tx-out worker has fully resolved, so a crash mid-epoch can be
 cleanly cleaned up with `deleteRowsPastSlot` on resume. The pipelining
 means the consumer doesn't wait for the worker on the hot path — it only

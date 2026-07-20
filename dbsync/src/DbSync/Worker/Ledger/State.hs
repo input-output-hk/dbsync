@@ -11,27 +11,22 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 
-{- |
-Module      : DbSync.Worker.Ledger.State
-Description : Core ledger-state operations — LedgerDB buffer, block application, rollback.
-
-Sits between the consensus LedgerDB V2 machinery and the rest of the
-sync engine. Owns:
-
-  * The in-memory 'LedgerDB' checkpoint buffer (push, prune, current
-    tip, atomic read\/write against 'leStateVar').
-  * 'applyBlock' \/ 'applyBlockAndSnapshot' — single-block entry
-    points that tick the chain to the block\'s slot, reapply against
-    the LSM tables, and return an 'ApplyResult' for the downstream
-    extractors.
-  * 'loadLedgerAtPoint' — rollback entry point. Walks the in-memory
-    buffer first, then falls back to a disk-snapshot load when the
-    target is older than the buffer can reach.
-
-Small ledger projections (@getPrices@, @findAdaPots@,
-@findProposedCommittee@, @getStakeSlice@) live here because each
-pulls one value out of a 'CardanoLedgerState' or event stream.
--}
+-- | Core ledger-state operations: the 'LedgerDB' buffer, block
+-- application, and rollback. Sits between the consensus LedgerDB V2
+-- machinery and the sync engine. Owns:
+--
+--   * The in-memory 'LedgerDB' checkpoint buffer (push, prune, current
+--     tip, atomic read\/write against 'leStateVar').
+--   * 'applyBlock' \/ 'applyBlockAndSnapshot' — tick the chain to the
+--     block's slot, reapply against the LSM tables, and return an
+--     'ApplyResult' for the extractors.
+--   * 'loadLedgerAtPoint' — rollback: walk the in-memory buffer first,
+--     then fall back to a disk-snapshot load when the target predates
+--     the buffer.
+--
+-- Small ledger projections (@getPrices@, @findAdaPots@,
+-- @findProposedCommittee@, @getStakeSlice@) live here, each pulling one
+-- value out of a 'CardanoLedgerState' or event stream.
 module DbSync.Worker.Ledger.State
   ( -- * LedgerDB management
     pushLedgerDB
@@ -347,10 +342,10 @@ mkHasLedgerEnv
     snapshotQueue   <- newTBQueueIO snapshotQueueBound
 
     -- One snapshot, two directories — both halves required, neither a duplicate:
-    --   <dir>/snapshot-headers/<slot>/  ExtLedgerState minus UTxO (tens to
-    --     hundreds of MB on Conway mainnet/testnet) + utxoSize + checksum.
-    --     The entry door on resume; without it we'd replay from genesis.
-    --   <dir>/lsm/snapshots/<slot>/     UTxO tables (multi-GB).
+    --   <dir>/snapshot-headers/<slot>/  ExtLedgerState minus UTxO, plus
+    --     utxoSize + checksum. The entry door on resume; without it we'd
+    --     replay from genesis.
+    --   <dir>/lsm/snapshots/<slot>/     UTxO tables.
     -- Retention is bounded by 'snapshotRetention' (currently 3).
     -- 'LSM.saveSnapshot' rejects pre-existing dirs and the load path
     -- is upstream's V2 LSM 'implTakeSnapshot', so the two halves can't
@@ -470,11 +465,10 @@ mkHasLedgerEnv
     boundaryQueueBound = 4
 
     -- One slot per worker-side look-ahead block; entries are small,
-    -- fully-forced projections, so a full queue is a few MB. Deep
-    -- enough that the consumer (one pop per block) keeps draining
-    -- banked results while the worker pauses for its epoch-boundary
-    -- tick; a bound below the consumer's drain batch (100) turns
-    -- every worker pause into per-block consumer stalls.
+    -- fully-forced projections. Deep enough that the consumer (one pop
+    -- per block) keeps draining banked results while the worker pauses
+    -- for its epoch-boundary tick; a bound below the consumer's drain
+    -- batch (100) turns every worker pause into per-block consumer stalls.
     blockApplyQueueBound :: Natural
     blockApplyQueueBound = 256
 
@@ -955,8 +949,7 @@ Returns:
     the buffer has been trimmed to end at that ref.
   * @'Left' []@ — not in memory; caller should try the on-disk
     snapshot manager. The caller is also responsible for deleting any
-    newer snapshots that fail the \"resume constraint\" check
-    described in the ledger-state plan.
+    newer snapshots that fail the \"resume constraint\" check.
 
 When the target point lives in the in-memory buffer we write the
 trimmed 'LedgerDB' back into 'leStateVar' before returning; the ref

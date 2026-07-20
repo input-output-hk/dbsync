@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | ID resolution interface for the unified extraction pipeline.
+-- | ID resolution interface for the extraction pipeline.
 --
 -- An 'IdResolver' provides the mechanism for obtaining database IDs
 -- during block processing. Two implementations exist:

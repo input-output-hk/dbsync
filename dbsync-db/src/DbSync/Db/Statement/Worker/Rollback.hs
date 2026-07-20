@@ -1,13 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Hasql 'Statement' bindings for the 'FollowingChainTip' rollback
--- cascade.
---
--- Mirrors cardano-db-sync's @deleteBlocksBlockId@ shape without the
--- @reverse_index@ fast path: resolve the rollback point to a
--- @block.id@, find the smallest dependent id past that block in each
--- FK family (tx, tx_out, pool_update), then issue range deletes
--- against the dependent tables.
+-- cascade: resolve the rollback point to a @block.id@, find the
+-- smallest dependent id past that block in each FK family (tx,
+-- tx_out, pool_update), then issue range deletes against the
+-- dependent tables.
 module DbSync.Db.Statement.Worker.Rollback
   ( -- * Resolving the rollback point
     queryBlockAtPointStmt

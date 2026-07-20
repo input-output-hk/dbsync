@@ -6,25 +6,12 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 
-{- |
-Module      : DbSync.Worker.Ledger.Types
-Description : Core types for the ledger subsystem.
-
-The top-level shape is a sum over \"ledger enabled\" vs \"ledger
-disabled\":
-
-@
-data HasLedgerEnv
-  = LedgerEnabled  !LedgerEnv
-  | LedgerDisabled !NoLedgerEnv
-@
-
-The @LedgerDisabled@ arm carries only what we genuinely need when the
-ledger feature is off (tracer, protocol info, system start, network);
-it allocates no LSM session, no snapshot queue, no @LedgerDB@
-checkpoint buffer. Code paths that want to start a 'LedgerWorker' or
-take snapshots simply don't exist on the disabled arm.
--}
+-- | Core types for the ledger subsystem.
+--
+-- 'HasLedgerEnv' splits ledger-enabled from ledger-disabled. The
+-- disabled arm carries only tracer, protocol info, system start and
+-- network — no LSM session, snapshot queue, or 'LedgerDB' buffer — so
+-- the snapshot and worker entry points don't exist on it.
 module DbSync.Worker.Ledger.Types
   ( -- * Top-level sum
     HasLedgerEnv (..)

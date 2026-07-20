@@ -1,9 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Structured logging types for the application.
---
--- Defines the core logging types: 'Severity', 'LogMsg', 'SrcInfo',
--- and the 'AppTracer' type alias used throughout the application.
 module DbSync.Trace.Types
   ( -- * Types
     Severity (..)
@@ -114,8 +111,7 @@ logThreadExit component e tracer = case fromException e of
 --
 -- The function name comes from the first element of @getCallStack@'s
 -- tuple (the name of the function that pushed the frame), not from
--- the 'SrcLoc' — which is what the previous in-line copies of this
--- helper mistakenly used.
+-- the 'SrcLoc'.
 captureCallSite :: CallStack -> SrcInfo
 captureCallSite cs = case getCallStack cs of
   (fn, loc) : _ ->

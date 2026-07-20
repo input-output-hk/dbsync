@@ -31,11 +31,10 @@ module DbSync.Db.Statement.Worker.Backfill
     -- * Raw SQL strings
     --
     -- Exported so tests can feed them to @EXPLAIN@ and assert on the
-    -- plan shape. Bad plans (e.g. Nested Loop with a one-row outer
-    -- estimate around a 3M-row aggregate) don't surface as functional
-    -- failures on small fixtures — they surface as a multi-hour hang
-    -- on a real chain. Plan-shape assertions catch that regardless
-    -- of fixture size.
+    -- plan shape. A bad plan (e.g. a Nested Loop around a large
+    -- aggregate) doesn't surface as a functional failure on small
+    -- fixtures — it surfaces as a stall on a real chain. Plan-shape
+    -- assertions catch that regardless of fixture size.
   , backfillPhaseTwoFeeSql
   , backfillPhaseTwoDepositSql
   , backfillValidContractDepositSql

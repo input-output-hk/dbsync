@@ -574,8 +574,8 @@ blockFetchClient appTracer blockQueue mLedgerQueue latestPointRef rollbackBounda
 --
 -- Atomicity is load-bearing, not style: the receiver is killed with
 -- an async exception at the Ingest → Follow handoff (and on node
--- reconnects), and the ledger-queue write can block for seconds when
--- the worker is behind. With separate transactions a kill landing
+-- reconnects), and the ledger-queue write can block while the worker
+-- is behind. With separate transactions a kill landing
 -- after the main-queue write but before the point write leaves the
 -- block queued yet unrecorded; the next session then re-requests it
 -- and the Follow consumer applies it twice — the @tx@ unique

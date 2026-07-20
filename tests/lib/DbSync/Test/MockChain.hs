@@ -1,7 +1,7 @@
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Multi-block / multi-epoch test harness for the new dbsync.
+-- | Multi-block / multi-epoch test harness.
 --
 -- Bootstraps a forging 'Interpreter' (vendored in 'dbsync-mock' from
 -- the upstream @cardano-chain-gen@ project) over a Conway-era test
@@ -233,10 +233,9 @@ registerStakeCreds mc = Mock.forgeWithStakeCreds (mcInterpreter mc)
 -- depends on — small "target" outputs would otherwise drain to
 -- negative change once a later block re-picked them.
 --
--- The shape exists as a record so future enrichments (delegations,
--- multi-asset mints, governance txs) can be added as fields without
--- breaking call sites once the corresponding forging primitives no
--- longer require carrying state across blocks.
+-- The shape is a record so enrichments (delegations, multi-asset
+-- mints, governance txs) can be added as fields without breaking
+-- call sites.
 data RealisticBlockShape = RealisticBlockShape
   { rbsPaymentTxCount :: !Int
     -- ^ Payment txs per block. Bounded by the size of the live UTxO

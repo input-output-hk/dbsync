@@ -5,36 +5,29 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
-{- |
-Module      : DbSync.Worker.Ledger.Snapshot
-Description : Snapshot management — listing, writing, loading, deleting.
-
-Sits on top of consensus's
-'Ouroboros.Consensus.Storage.LedgerDB.Snapshots.SnapshotManager' (a
-three-operation record: @listSnapshots@, @deleteSnapshotIfTemporary@,
-@takeSnapshot@). Every helper here is a thin wrapper that adds
-project-specific concerns: tracing, defensive deletion, the in-memory
-buffer's edge-points contribution to 'listKnownSnapshots', and the
-async writer thread that drains 'leSnapshotQueue'.
-
-Snapshot loading is __not__ on the manager — the V2 backend provides
-@newHandleFromSnapshot@ directly, surfaced via the
-'leLoadSnapshot' callback that the boot flow wires up. We bridge that
-into a 'DbSyncStateRef' here.
-
-Two invariants from the ledger-state plan are enforced in this module:
-
-  * I3 (in-flight handle safety) — 'saveCurrentLedgerState' flips
-    @srCanClose@ to @False@ before enqueueing; 'snapshotWriteLoop'
-    flips it back after the write completes. The pruner in
-    'DbSync.Worker.Ledger.State' must not @close@ a handle while @srCanClose@
-    is @False@.
-  * Defensive delete — 'safeDeleteSnapshot' tolerates LSM-orphan
-    failures (a snapshot directory that exists on disk but the LSM
-    session has lost track of). The consensus default already catches
-    @SomeException@; we add a tracer call so the operator sees what
-    happened.
--}
+-- | Snapshot management: listing, writing, loading, deleting.
+--
+-- Sits on top of consensus's 'SnapshotManager' (@listSnapshots@,
+-- @deleteSnapshotIfTemporary@, @takeSnapshot@). Every helper here adds
+-- project-specific concerns: tracing, defensive deletion, the in-memory
+-- buffer's edge-points contribution to 'listKnownSnapshots', and the
+-- async writer thread that drains 'leSnapshotQueue'.
+--
+-- Snapshot loading is __not__ on the manager: the V2 backend provides
+-- @newHandleFromSnapshot@ directly, surfaced via the 'leLoadSnapshot'
+-- callback the boot flow wires up and bridged into a 'DbSyncStateRef'
+-- here.
+--
+-- Two invariants are enforced here:
+--
+--   * In-flight handle safety — 'saveCurrentLedgerState' flips
+--     @srCanClose@ to @False@ before enqueueing; 'snapshotWriteLoop'
+--     flips it back after the write completes. The pruner in
+--     'DbSync.Worker.Ledger.State' must not @close@ a handle while
+--     @srCanClose@ is @False@.
+--   * Defensive delete — 'safeDeleteSnapshot' tolerates LSM-orphan
+--     failures (a snapshot directory on disk that the LSM session has
+--     lost track of), adding a tracer call so the operator sees it.
 module DbSync.Worker.Ledger.Snapshot
   ( -- * Listing
     listDiskSnapshots

@@ -1,17 +1,10 @@
-{- |
-Module      : DbSync.Worker.Ledger.EpochUpdate
-Description : Era-agnostic per-epoch update and new-epoch summary.
-
-'NewEpoch' is the summary we emit once per epoch boundary during
-'IngestChainHistory' — it carries the ada-pots snapshot, the
-protocol-parameter update, and (from Conway on) the DRep / gov-state
-snapshot. 'EpochUpdate' is the parameters-only subset that every era
-produces.
-
-The two main entry points are 'epochUpdate', which reads from the
-current 'ExtLedgerState', and 'extractEpochNonce', which digs into
-the header state for the per-epoch VRF nonce.
--}
+-- | Era-agnostic per-epoch update and new-epoch summary.
+--
+-- 'NewEpoch' is emitted once per epoch boundary during
+-- 'IngestChainHistory': it carries the ada-pots snapshot, the
+-- protocol-parameter update, and (from Conway on) the DRep / gov-state
+-- snapshot. 'EpochUpdate' is the parameters-only subset every era
+-- produces.
 module DbSync.Worker.Ledger.EpochUpdate
   ( NewEpoch (..)
   , EpochUpdate (..)

@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Test writer for the unified extraction pipeline.
+-- | Test writer for the extraction pipeline.
 --
 -- Captures written records in 'IORef's for test assertions.
 -- No database, no COPY encoding — just accumulates typed records.

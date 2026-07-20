@@ -2,20 +2,15 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RankNTypes #-}
 
-{- |
-Module      : DbSync.Worker.Ledger.ProtoParams
-Description : Era-agnostic protocol parameters + per-era builders.
-
-The era-collapsed 'ProtoParams' record holds every protocol parameter
-we care about across Shelley through Dijkstra. Fields that only
-appear from a given era onwards ('ppCoinsPerUtxo' from Alonzo,
-'ppGovActionDeposit' from Conway, …) carry a 'Maybe' so earlier eras
-can leave them empty.
-
-'epochProtoParams' / 'getDeposits' project the current-epoch params
-out of an 'ExtLedgerState'; the per-era @fromXxxParams@ helpers do
-the era-specific extraction.
--}
+-- | Era-agnostic protocol parameters and per-era builders.
+--
+-- 'ProtoParams' holds every protocol parameter used across Shelley
+-- through Dijkstra. Fields that only appear from a given era onwards
+-- ('ppCoinsPerUtxo' from Alonzo, 'ppGovActionDeposit' from Conway, …)
+-- carry a 'Maybe' so earlier eras leave them empty.
+-- 'epochProtoParams' / 'getDeposits' project the current-epoch params
+-- out of an 'ExtLedgerState'; the per-era @fromXxxParams@ helpers do
+-- the era-specific extraction.
 module DbSync.Worker.Ledger.ProtoParams
   ( ProtoParams (..)
   , Deposits (..)

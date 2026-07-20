@@ -5,7 +5,7 @@
 -- Shelley→Babbage only. Follow runs at chain tip where the active
 -- era is Conway+, so these writers are unreachable in production.
 -- They are wired symmetrically with the Ingest path anyway, so a
--- future deeper-rollforward scenario remains correct.
+-- deep rollback that re-applies those eras stays correct.
 module DbSync.Phase.Following.Writer.StakeDelegation
   ( writeStakeAddressConn
   , writeStakeAddressBuf

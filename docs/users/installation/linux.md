@@ -64,8 +64,8 @@ curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
 Then install the required versions:
 
 ```bash
-ghcup install ghc 9.8.4
-ghcup set ghc 9.8.4
+ghcup install ghc 9.14.1
+ghcup set ghc 9.14.1
 ghcup install cabal latest
 ```
 
@@ -102,8 +102,8 @@ the system libraries:
 }
 ```
 
-GHC 9.8.4 specifically is required; nixpkgs may default to a newer
-version. Pin via `haskell.compiler.ghc984` once it's available, or
+GHC 9.14.1 specifically is required; nixpkgs may default to a different
+version. Pin via `haskell.compiler.ghc9141` once it's available, or
 fall back to `ghcup` inside the shell.
 
 ## Next

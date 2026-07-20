@@ -779,10 +779,9 @@ data FollowRestartStart = FollowRestartStart
 -- that @--resync-from-genesis@ may be faster than replaying every
 -- block one transaction at a time.
 --
--- Tuned for mainnet: 500k blocks is roughly four months of chain
--- advance. Below this the per-block Follow loop is the right tool;
--- above it the COPY pipeline that @--resync-from-genesis@ triggers
--- typically catches up faster despite redoing the historical work.
+-- Below this the per-block Follow loop is the right tool; above it the
+-- COPY pipeline that @--resync-from-genesis@ triggers typically catches
+-- up faster despite redoing the historical work.
 resumeGapWarnBlocks :: Word64
 resumeGapWarnBlocks = 500_000
 
@@ -978,7 +977,7 @@ runFollowSession
   socketPath intersectReq mShutdown mkFollowEnv = do
     followCtrl <- openControlConnection hasqlSettings
     let followConn = unControlConnection followCtrl
-    -- @synchronous_commit = off@: per-block COMMITs no longer wait on
+    -- @synchronous_commit = off@: per-block COMMITs don't wait on
     -- WAL fsync. Crash recovery is covered by chainsync replay from
     -- @last_committed_slot@.
     runAppM followConn (setFollowSessionGUCs defaultFollowTuning)

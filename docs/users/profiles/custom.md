@@ -22,17 +22,21 @@ Every key is opt-in. Omitting a key means disabled.
       "tx_in": true,
       "strategy": "archive"
     },
-    "multi_asset":      true,
-    "metadata":         true,
-    "stake_delegation": true,
-    "pool":             true,
-    "scripts_datums":   true,
-    "governance":       true,
-    "cbor":             true,
-    "epoch_sync_stats": true,
-    "epoch_boundary":   true,
-    "epoch":            true,
-    "current_state":    true
+    "multi_asset":             true,
+    "metadata":                true,
+    "stake_delegation":        true,
+    "stake_delegation_ledger": true,
+    "pool":                    true,
+    "pool_stats":              true,
+    "scripts_datums":          true,
+    "governance":              true,
+    "off_chain_pools":         true,
+    "off_chain_votes":         true,
+    "cbor":                    true,
+    "epoch_sync_stats":        true,
+    "epoch_boundary":          true,
+    "epoch":                   true,
+    "current_state":           true
   }
 }
 ```
@@ -71,30 +75,58 @@ encoding. No dependencies.
 
 ### `stake_delegation`
 
-Stake-address lifecycle. Adds `stake_address`, `stake_registration`,
+Stake-address lifecycle. Adds `stake_registration`,
 `stake_deregistration`, `delegation`, `withdrawal`, `pot_transfer`,
-`reserve`, `treasury`. No dependencies.
+`reserve`, `treasury`. No dependencies (the `stake_address` table it
+populates is owned by `core`).
+
+### `stake_delegation_ledger`
+
+Ledger-derived stake and reward data. Adds `reward`, `pot_reward`,
+`epoch_stake`, and `epoch_stake_progress`. Requires `ledger.enabled =
+true` — the validator rejects the profile otherwise.
 
 ### `pool`
 
-Stake-pool registrations and retirements. Adds `pool_hash`,
-`pool_update`, `pool_metadata_ref`, `pool_owner`, `pool_relay`,
-`pool_retire`. Requires `stake_delegation`.
+Stake-pool registrations and retirements. Adds `pool_update`,
+`pool_metadata_ref`, `pool_owner`, `pool_relay`, `pool_retire`. No
+dependencies beyond `core` (the `pool_hash` table it populates is
+core-owned).
+
+### `pool_stats`
+
+Per-epoch pool distribution in `pool_stat` (one row per pool per
+epoch). Requires `ledger.enabled = true`.
 
 ### `scripts_datums`
 
-:::caution Reserved
-Will cover Plutus scripts, datums, redeemers, and redeemer-data.
-Currently a stub — enabling it is accepted but nothing gets
-populated.
-:::
+Plutus and native-script witness data. Adds `script`, `datum`,
+`redeemer`, `redeemer_data`, and `extra_key_witness`; the `script`,
+`datum`, and `redeemer_data` rows are deduped on their hash. The
+`redeemer.fee` and `redeemer.script_hash` columns are declared but not
+yet populated. No dependencies beyond `core`.
 
 ### `governance`
 
-:::caution Reserved
-Will cover Conway-era governance: proposals, votes, voters, vote
-anchors. Currently a stub.
-:::
+Conway-era governance: DRep and committee certificates, governance
+proposals, voting procedures, and the constitution. Adds sixteen
+tables including `drep_hash`, `drep_registration`, `drep_distr`,
+`delegation_vote`, `gov_action_proposal`, `voting_procedure`,
+`voting_anchor`, `constitution`, and the `committee*` family. No
+dependencies beyond `core`; `drep_distr` is only populated when
+`ledger.enabled = true`.
+
+### `off_chain_pools`
+
+Pool off-chain metadata, fetched over HTTP by a background worker.
+Adds `off_chain_pool_data`, `off_chain_pool_fetch_error`,
+`delisted_pool`, and `reserved_pool_ticker`. Requires `pool`.
+
+### `off_chain_votes`
+
+Governance off-chain metadata (Conway vote anchors), fetched over HTTP
+by a background worker. Adds the seven `off_chain_vote_*` tables.
+Requires `governance`.
 
 ### `cbor`
 
@@ -175,7 +207,7 @@ produce reward, deposit, and protocol-parameter data. Adds roughly
 tip (the LSM-backed on-disk UTxO set).
 
 Without ledger, the schema is created but `ada_pots`, `epoch_param`,
-`epoch_state`, `rewards`, `epoch_stake` etc. stay empty.
+`epoch_state`, `reward`, `pot_reward`, `epoch_stake` etc. stay empty.
 
 `backend` accepts only `"lsm"` (the on-disk backend); an `"inmemory"`
 backend was considered but isn't supported. `snapshot_near_tip_epoch`

@@ -1,22 +1,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 
-{- |
-Module      : DbSync.Db.Schema.ScriptsDatums
-Description : Schema types for the @scripts_datums@ extractor.
-
-The @scripts_datums@ extractor owns five tables, all populated from
-the witness set of a transaction:
-
-  * @datum@ — Plutus datums (deduped on @hash@).
-  * @script@ — script payloads (Plutus / native; deduped on @hash@).
-  * @redeemer@ — script invocations.
-  * @redeemer_data@ — Plutus redeemer payloads (deduped on @hash@).
-  * @extra_key_witness@ — required-signer hashes.
-
-The FK from @redeemer.redeemer_data_id@ to @redeemer_data.id@ forces
-all five tables into the same extractor.
--}
+-- | Schema types for the @scripts_datums@ extractor, which owns five
+-- tables, all populated from the witness set of a transaction:
+--
+--   * @datum@ — Plutus datums (deduped on @hash@).
+--   * @script@ — script payloads (Plutus / native; deduped on @hash@).
+--   * @redeemer@ — script invocations.
+--   * @redeemer_data@ — Plutus redeemer payloads (deduped on @hash@).
+--   * @extra_key_witness@ — required-signer hashes.
+--
+-- The FK from @redeemer.redeemer_data_id@ to @redeemer_data.id@ forces
+-- all five tables into the same extractor.
 module DbSync.Db.Schema.ScriptsDatums
   ( -- * Schema types
     Datum (..)

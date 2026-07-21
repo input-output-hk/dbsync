@@ -86,6 +86,7 @@ import DbSync.Db.Schema.Types (TableDef)
 import DbSync.Extractor (ExtractState (..), ExtractorDef (..), freshExtractState)
 import DbSync.Parser.Types (CardanoPoint)
 import DbSync.Phase.Current (setCurrentPhase)
+import DbSync.Phase.Following.Resolver (ConsumedTracking (..))
 import qualified DbSync.Phase.Following.Resolver as FollowResolver
 import qualified DbSync.Phase.Following.Run as Follow
 import qualified DbSync.Phase.Following.Rollback as Rollback
@@ -132,7 +133,11 @@ import DbSync.Worker.Ledger.Worker (withLedgerThreads)
 import DbSync.Worker.OffChain.Pool (closeOffChainPoolWorker)
 import DbSync.Worker.OffChain.Vote (closeOffChainVoteWorker)
 import DbSync.App.Setup (setupOffChainPoolWorker, setupOffChainVoteWorker)
-import DbSync.App.Config.Types (SyncConfig (..))
+import DbSync.App.Config.Types
+  ( DbSyncOptions (..)
+  , SyncConfig (..)
+  , UtxoOption (..)
+  )
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -943,10 +948,14 @@ runBootFollowRestart
 
           let mLastBlock = ssrLastCommittedBlockNo (frcSyncState frc)
               kBlocks    = ceSecurityParam coreEnv
+              consumedTracking =
+                if uoConsumedByTxId (pcUtxo (scOptions (ceConfig coreEnv)))
+                  then TrackConsumedBy
+                  else SkipConsumedBy
           withAsync (checkResumeGap tracer kBlocks mLastBlock rollbackBoundary) $ \gapThread -> do
             link gapThread
             runFollowSession tracer "Boot" iomgr hasqlSettings topLevelCfg
-              networkMagic socketPath intersectReq mShutdown mkEnv
+              networkMagic socketPath intersectReq consumedTracking mShutdown mkEnv
 
 -- | Open a dedicated Follow hasql connection, build its resolver and
 -- writer, hand them to the caller-supplied 'FollowEnv' builder, and
@@ -967,6 +976,7 @@ runFollowSession
   -> NetworkMagic
   -> FilePath                                          -- ^ socketPath
   -> IntersectionRequirement
+  -> ConsumedTracking
   -> Maybe (IO ())                                     -- ^ mShutdown
   -> (Conn.Connection -> IdResolver IO -> Writer IO -> FollowEnv)
        -- ^ FollowEnv builder. Receives the just-opened Follow
@@ -974,14 +984,14 @@ runFollowSession
   -> IO ()
 runFollowSession
   tracer component iomgr hasqlSettings topLevelCfg networkMagic
-  socketPath intersectReq mShutdown mkFollowEnv = do
+  socketPath intersectReq consumedTracking mShutdown mkFollowEnv = do
     followCtrl <- openControlConnection hasqlSettings
     let followConn = unControlConnection followCtrl
     -- @synchronous_commit = off@: per-block COMMITs don't wait on
     -- WAL fsync. Crash recovery is covered by chainsync replay from
     -- @last_committed_slot@.
     runAppM followConn (setFollowSessionGUCs defaultFollowTuning)
-    resolver <- FollowResolver.mkFollowResolver followConn
+    resolver <- FollowResolver.mkFollowResolver followConn consumedTracking
     let writer    = FollowingWriter.mkWriter followConn
         followEnv = mkFollowEnv followConn resolver writer
 

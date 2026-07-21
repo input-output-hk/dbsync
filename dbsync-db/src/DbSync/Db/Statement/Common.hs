@@ -11,6 +11,8 @@ module DbSync.Db.Statement.Common
     -- * SQL builders
   , insertRowSql
   , insertReturningIdSql
+  , upsertRowSql
+  , insertIgnoreRowSql
   , insertableColumns
 
     -- * Lookups
@@ -110,6 +112,45 @@ insertReturningIdSql td =
     castFor c = case cdType c of
       PgJsonb -> "::jsonb"
       _       -> ""
+
+-- | 'insertRowSql' plus @ON CONFLICT … DO UPDATE@ on the table's
+-- declared unique constraint, refreshing every other insertable
+-- column (except @id@) from @EXCLUDED@. Needs the matching unique
+-- index, so Follow-phase only.
+upsertRowSql :: HasCallStack => TableDef -> Text
+upsertRowSql td =
+  T.concat
+    [ insertRowSql td
+    , " ON CONFLICT (", T.intercalate ", " conflictCols, ")"
+    , " DO UPDATE SET "
+    , T.intercalate ", " [ c <> " = EXCLUDED." <> c | c <- updateCols ]
+    ]
+  where
+    conflictCols = soleUniqueConstraint td
+    updateCols =
+      [ cdName c
+      | c <- insertableColumns td
+      , cdName c `notElem` ("id" : conflictCols)
+      ]
+
+-- | 'insertRowSql' plus @ON CONFLICT … DO NOTHING@ on the table's
+-- declared unique constraint, for rows a rollback replay re-emits
+-- byte-identical. Follow-phase only.
+insertIgnoreRowSql :: HasCallStack => TableDef -> Text
+insertIgnoreRowSql td =
+  T.concat
+    [ insertRowSql td
+    , " ON CONFLICT (", T.intercalate ", " (soleUniqueConstraint td), ") DO NOTHING"
+    ]
+
+-- | The conflict target: exactly one 'tdUniqueConstraints' entry.
+-- Panics otherwise — a builder bug, not a runtime condition.
+soleUniqueConstraint :: HasCallStack => TableDef -> [Text]
+soleUniqueConstraint td = case tdUniqueConstraints td of
+  [cols] -> toList cols
+  other  -> panic $
+    "soleUniqueConstraint: " <> tdName td <> " declares "
+      <> show (length other) <> " unique constraints, expected exactly 1"
 
 -- ---------------------------------------------------------------------------
 -- * Lookups

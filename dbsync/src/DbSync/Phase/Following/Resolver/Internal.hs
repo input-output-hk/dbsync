@@ -43,6 +43,7 @@ import DbSync.Db.Schema.Ids
   , StakeAddressId
   , VotingAnchorId
   )
+import DbSync.Phase.Ingest.UtxoStore (UtxoTxEntry)
 
 -- ---------------------------------------------------------------------------
 -- * Statement execution
@@ -77,11 +78,16 @@ data BlockDedupCache = BlockDedupCache
   , bdcCommitteeHash     :: !(IORef (Map ByteString CommitteeHashId))
   , bdcVotingAnchor      :: !(IORef (Map ByteString VotingAnchorId))
   , bdcGovActionProposal :: !(IORef (Map (ByteString, Word64) GovActionProposalId))
+  , bdcUtxo              :: !(IORef (Map ByteString UtxoTxEntry))
+    -- ^ Outputs of the block's own txs, keyed by tx hash. Lets a
+    -- same-block spend resolve its producer while the tx_out INSERT
+    -- is still sitting unflushed in the 'WriteBuffer'.
   }
 
 newBlockDedupCache :: IO BlockDedupCache
 newBlockDedupCache = BlockDedupCache
   <$> newIORef Map.empty
+  <*> newIORef Map.empty
   <*> newIORef Map.empty
   <*> newIORef Map.empty
   <*> newIORef Map.empty

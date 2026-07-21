@@ -36,6 +36,11 @@ module DbSync.Test.Fixtures
   , byronBlock
   , withdrawalBlock
   , producerHash
+  , consumerHash
+  , phase2Hash
+  , chainedBlock
+  , chainedProducerHash
+  , chainedSpenderHash
   ) where
 
 import Cardano.Prelude
@@ -179,8 +184,11 @@ producerBlock = GenericBlock
 -- targets the row (plain transfers ship with @0@ at parse time and
 -- bypass the SQL). The fallback computes
 -- @5_000_000 - 4_500_000 - 200_000 - 0 = 300_000@.
+consumerHash :: ByteString
+consumerHash = padHash32 "VALID"
+
 consumerTx :: GenericTx
-consumerTx = (emptyTx (padHash32 "VALID"))
+consumerTx = (emptyTx consumerHash)
   { txBlockIndex   = 0
   , txSize         = 200
   , txFee          = 200000
@@ -202,8 +210,11 @@ consumerTx = (emptyTx (padHash32 "VALID"))
 -- populated. With no @total_collateral@ field the fee stays at the @0@
 -- sentinel for the post-load backfill to compute as
 -- @SUM(input.value) - out_sum = 5_000_000 - 2_000_000 = 3_000_000@.
+phase2Hash :: ByteString
+phase2Hash = padHash32 "FAIL"
+
 phase2Tx :: GenericTx
-phase2Tx = (emptyTx (padHash32 "FAIL"))
+phase2Tx = (emptyTx phase2Hash)
   { txBlockIndex       = 1
   , txSize             = 300
   , txValidContract    = False
@@ -223,6 +234,56 @@ spendingBlock = producerBlock
   , blkBlockNo      = BlockNo 2
   , blkEpochSlotNo  = 120
   , blkTxs          = [consumerTx, phase2Tx]
+  }
+
+-- ---------------------------------------------------------------------------
+-- * Same-block chained spend
+-- ---------------------------------------------------------------------------
+
+chainedProducerHash :: ByteString
+chainedProducerHash = padHash32 "CHAINPROD"
+
+chainedSpenderHash :: ByteString
+chainedSpenderHash = padHash32 "CHAINSPEND"
+
+-- | Produces two outputs; output 0 is consumed by 'chainedSpenderTx'
+-- within the same block.
+chainedProducerTx :: GenericTx
+chainedProducerTx = (emptyTx chainedProducerHash)
+  { txBlockIndex = 0
+  , txSize       = 100
+  , txFee        = 170000
+  , txOutSum     = 6000000
+  , txOutputs    =
+      [ mkOut 0 5000000
+      , mkOut 1 1000000
+      ]
+  }
+
+-- | Spends @(chainedProducerHash, 0)@ — an output whose tx_out row
+-- does not exist in PG yet when this tx is processed.
+chainedSpenderTx :: GenericTx
+chainedSpenderTx = (emptyTx chainedSpenderHash)
+  { txBlockIndex = 1
+  , txSize       = 200
+  , txFee        = 200000
+  , txOutSum     = 4800000
+  , txInputs     = [GenericTxIn chainedProducerHash 0]
+  , txOutputs    = [mkOut 0 4800000]
+  }
+
+-- | Standalone block whose second tx spends the first tx's output.
+-- Exercises the Follow resolvers' same-block producer lookup: on the
+-- buffered path the producing INSERT is still unflushed in the
+-- 'WriteBuffer' when the spend resolves.
+chainedBlock :: GenericBlock
+chainedBlock = producerBlock
+  { blkHash         = padHash32 "BLK5"
+  , blkPreviousHash = ""
+  , blkSlotNo       = SlotNo 400
+  , blkBlockNo      = BlockNo 1
+  , blkEpochSlotNo  = 400
+  , blkTxs          = [chainedProducerTx, chainedSpenderTx]
   }
 
 -- ---------------------------------------------------------------------------

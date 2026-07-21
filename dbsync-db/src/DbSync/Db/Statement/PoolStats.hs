@@ -8,12 +8,14 @@ import qualified Hasql.Decoders as D
 import qualified Hasql.Statement as Stmt
 
 import DbSync.Db.Schema.Pool (PoolStat, poolStatEncoder, poolStatTableDef)
-import DbSync.Db.Statement.Common (insertRowSql)
+import DbSync.Db.Statement.Common (upsertRowSql)
 
 -- ---------------------------------------------------------------------------
 -- * pool_stat
 -- ---------------------------------------------------------------------------
 
+-- | Upserts on @(pool_hash_id, epoch_no)@ so a rollback that
+-- re-crosses the boundary refreshes the pool's row for that epoch.
 insertPoolStatRowStmt :: Stmt.Statement PoolStat ()
 insertPoolStatRowStmt =
-  Stmt.preparable (insertRowSql poolStatTableDef) poolStatEncoder D.noResult
+  Stmt.preparable (upsertRowSql poolStatTableDef) poolStatEncoder D.noResult

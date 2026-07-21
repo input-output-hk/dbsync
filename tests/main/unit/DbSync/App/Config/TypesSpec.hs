@@ -8,6 +8,7 @@ module DbSync.App.Config.TypesSpec
 
 import Cardano.Prelude
 
+import qualified Data.Aeson as Aeson
 import qualified Data.Text as Text
 
 import DbSync.App.Config.Types (parseConfig)
@@ -210,3 +211,12 @@ spec = describe "DbSync.App.Config.Types" $ do
           panic "Expected parse failure for utxo.strategy = \"from_ledger\""
         Left err ->
           Text.pack (show err) `shouldSatisfy` ("from_ledger" `Text.isInfixOf`)
+
+  describe "utxo boolean shorthand" $ do
+    it "\"utxo\": true means defaults with enabled set" $
+      Aeson.eitherDecode "true"
+        `shouldBe` Right (UtxoOption True True True StrategyArchive)
+
+    it "\"utxo\": false means defaults" $
+      Aeson.eitherDecode "false"
+        `shouldBe` Right (UtxoOption False True True StrategyArchive)

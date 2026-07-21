@@ -160,7 +160,7 @@ import DbSync.Db.Schema.Ids
   , idEncoder
   )
 import DbSync.Db.Sql.Refs (col, qcol, table)
-import DbSync.Db.Statement.Common (insertRowSql, nextIdStmt)
+import DbSync.Db.Statement.Common (insertRowSql, nextIdStmt, upsertRowSql)
 import DbSync.Db.Types (AnchorType, anchorTypeEncoder)
 
 -- ---------------------------------------------------------------------------
@@ -209,10 +209,11 @@ insertDrepRegistrationRowStmt =
 -- ---------------------------------------------------------------------------
 
 -- | Written by 'runGovernanceBoundary' from the pulsing snapshot at
--- each epoch boundary.
+-- each epoch boundary. Upserts on @(hash_id, epoch_no)@ so a
+-- rollback that re-crosses the boundary refreshes the rows.
 insertDrepDistrRowStmt :: Stmt.Statement DrepDistr ()
 insertDrepDistrRowStmt =
-  Stmt.preparable (insertRowSql drepDistrTableDef) drepDistrEncoder D.noResult
+  Stmt.preparable (upsertRowSql drepDistrTableDef) drepDistrEncoder D.noResult
 
 -- ---------------------------------------------------------------------------
 -- * delegation_vote

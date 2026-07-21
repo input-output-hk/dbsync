@@ -55,9 +55,9 @@ epochParamSpec = describe "epochParamTableDef" $ do
   it "has 55 columns (id + 54 schema fields)" $
     length (tdColumns epochParamTableDef) `shouldBe` 55
 
-  it "has UNIQUE (epoch_no, block_id)" $
+  it "has UNIQUE (epoch_no)" $
     tdUniqueConstraints epochParamTableDef
-      `shouldBe` [NE.fromList ["epoch_no", "block_id"]]
+      `shouldBe` [pure "epoch_no"]
 
   it "declares FK on block_id to block.id" $
     tdForeignKeys epochParamTableDef

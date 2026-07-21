@@ -368,8 +368,12 @@ defaultUtxoOption = UtxoOption
   , uoStrategy       = StrategyArchive
   }
 
+-- | Accepts the object form or a bare boolean shorthand
+-- (@"utxo": true@ ≡ defaults with @enabled@ set), matching the
+-- 'OptionFlag' ergonomics of the sibling options.
 instance FromJSON UtxoOption where
-  parseJSON = Aeson.withObject "UtxoOption" $ \o -> do
+  parseJSON (Aeson.Bool b) = pure defaultUtxoOption { uoEnabled = b }
+  parseJSON v = flip (Aeson.withObject "UtxoOption") v $ \o -> do
     enabled        <- o .:? "enabled"           .!= uoEnabled defaultUtxoOption
     consumedByTxId <- o .:? "consumed_by_tx_id" .!= uoConsumedByTxId defaultUtxoOption
     txIn           <- o .:? "tx_in"             .!= uoTxIn defaultUtxoOption

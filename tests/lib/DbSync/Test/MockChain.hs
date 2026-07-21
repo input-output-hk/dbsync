@@ -91,7 +91,7 @@ import DbSync.Extractor (ExtractorDef)
 import DbSync.Extractor (emptyBlockLedgerData)
 import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.Phase.Type (SyncPhase (..))
-import DbSync.Phase.Following.Resolver (mkFollowResolver)
+import DbSync.Phase.Following.Resolver (ConsumedTracking (..), mkFollowResolver)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnvWith)
 import qualified DbSync.Phase.Following.Writer as FollowingWriter
 import DbSync.StateQuery
@@ -301,7 +301,7 @@ parseAndProcess
   -> IO ()
 parseAndProcess conn mc extractors blocks = do
   genericBlocks <- traverse toGeneric blocks
-  resolver <- mkFollowResolver conn
+  resolver <- mkFollowResolver conn TrackConsumedBy
   let writer = FollowingWriter.mkWriter conn
       env    =
         mkTestPipelineEnvWith

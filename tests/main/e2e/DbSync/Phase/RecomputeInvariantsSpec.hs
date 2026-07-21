@@ -22,6 +22,9 @@ import DbSync.Test.MockNode.Workload (mainnetLikeWorkload)
 import DbSync.Test.PgAssertions (countRows)
 import DbSync.Test.RecomputeInvariants
   ( blockTxCountDriftCount
+  , consumedByDriftCount
+  , duplicateEpochRowGroupCount
+  , epochContiguityGapCount
   , epochFinalizedDriftCount
   , txOutSumDriftCount
   )
@@ -43,6 +46,13 @@ spec = describe "Recompute invariants" $
           finalizedEpochs <- countRows "epoch_finalized"
           finalizedEpochs `shouldSatisfy` (> 0)
 
+          -- Spends must exist, otherwise the consumed-by check is vacuous.
+          spends <- countRows "tx_in"
+          spends `shouldSatisfy` (> 0)
+
           epochFinalizedDriftCount `shouldReturn` 0
           blockTxCountDriftCount `shouldReturn` 0
           txOutSumDriftCount `shouldReturn` 0
+          duplicateEpochRowGroupCount `shouldReturn` 0
+          epochContiguityGapCount `shouldReturn` 0
+          consumedByDriftCount `shouldReturn` 0

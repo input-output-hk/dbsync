@@ -51,6 +51,7 @@ import DbSync.App.Config.Types
   ( SyncConfig (..)
   , OptionFlag (..)
   , DbSyncOptions (..)
+  , UtxoOption (..)
   )
 import DbSync.App.Env (CoreEnv (..), FollowEnv (..), HasConfig (..), HasNetwork)
 import DbSync.Extractor (ExtractorDef (..), cborCaptureEnabled, takeBlockLedgerData)
@@ -62,7 +63,7 @@ import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.ChainSync.Msg (ChainSyncMsg (..))
 import DbSync.Phase.Following.IdAllocator (allocateAllIds)
 import DbSync.Phase.Following.IdCounts (countAssignableIds)
-import DbSync.Phase.Following.Resolver (mkBufferedFollowResolver)
+import DbSync.Phase.Following.Resolver (ConsumedTracking (..), mkBufferedFollowResolver)
 import qualified DbSync.Phase.Following.Rollback as Rollback
 import DbSync.Phase.Following.WriteBuffer (drain, newWriteBuffer)
 import DbSync.Phase.Following.Writer (mkBufferedWriter)
@@ -86,7 +87,9 @@ import DbSync.Trace.Replay
   , advanceReplay
   , renderReplayPercent
   )
-import DbSync.Db.Schema.Types (TableDef)
+import DbSync.Db.Schema.EpochView (epochFinalizedTableDef)
+import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Statement.EpochView (appendEpochFinalizedStmt)
 import DbSync.Error (AppError (..))
 import DbSync.Trace.Timing (fmtCount, fmtDuration, fmtF2)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
@@ -296,6 +299,12 @@ processForward progressRef replayRef lastAppliedRef cardanoBlock = do
       sd <- getSlotDetails slot
       now <- liftIO getCurrentTime
       let !cborEnabled = cborCaptureEnabled (ceExtractors feCore)
+          epochViewOn = any ((== tdName epochFinalizedTableDef) . tdName)
+                            (concatMap pdTables (ceExtractors feCore))
+          consumedTracking =
+            if uoConsumedByTxId (pcUtxo (scOptions (getConfig env)))
+              then TrackConsumedBy
+              else SkipConsumedBy
           !genBlock = parseBlock cborEnabled sd cardanoBlock
           !curEpoch = unEpochNo (blkEpochNo genBlock)
           !counts   = countAssignableIds genBlock
@@ -311,7 +320,7 @@ processForward progressRef replayRef lastAppliedRef cardanoBlock = do
       liftIO $ do
         preAllocated <- allocateAllIds feHasqlConnection counts
         buf          <- newWriteBuffer
-        resolver     <- mkBufferedFollowResolver feHasqlConnection preAllocated buf
+        resolver     <- mkBufferedFollowResolver feHasqlConnection preAllocated buf consumedTracking
         let writer      = mkBufferedWriter buf
             bufferedEnv = env { feResolver = resolver, feWriter = writer }
         runAppM bufferedEnv (processBlock genBlock)
@@ -323,8 +332,16 @@ processForward progressRef replayRef lastAppliedRef cardanoBlock = do
             runAppM bufferedEnv (runFollowBoundary feHasLedgerEnv)
           _ -> pure ()
         writes <- drain buf
-        let flushAndAdvance =
-              writes *> void (Pipeline.statement triple writeSyncStateSlotStmt)
+        -- Finalise the completed epoch in the same transaction as the
+        -- crossing block; the upsert makes a re-issued boundary
+        -- harmless and a crash before COMMIT re-fires it on replay.
+        let appendFinalized = case (boundaryCrossed, prevEpoch) of
+              (True, Just prev) | epochViewOn ->
+                Pipeline.statement prev appendEpochFinalizedStmt
+              _ -> pure ()
+            flushAndAdvance =
+              writes *> appendFinalized
+                     *> void (Pipeline.statement triple writeSyncStateSlotStmt)
         runFollowBlockTx feHasqlConnection flushAndAdvance
         -- Only advance the re-delivery guard once the block's PG
         -- transaction has committed; a crash before this point must

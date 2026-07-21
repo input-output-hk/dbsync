@@ -2,19 +2,26 @@
 
 -- | Tests for the 'FollowingChainTip' rollback cascade.
 --
--- Two kinds of tests:
+-- Test groups:
 --
 --   * /Schema-walk/ — pure assertions that 'tdForeignKeys' declares
 --     the right children for the three rollback parents (tx, tx_out,
 --     pool_update). Catches FK-metadata drift compile-time-fast.
 --   * /Cascade integration/ — populate a real DB, call
 --     'Rollback.rollbackToPoint', assert per-table row counts.
+--   * /Epoch-keyed cleanup/ — seed the boundary tables around the
+--     target epoch, assert each 'Rollback.EpochAnchor' deletes the
+--     right slice.
+--   * /Consumed-by cleanup/ — marks pointing at deleted spenders are
+--     nulled; marks from surviving spenders are kept.
 module DbSync.Phase.Following.RollbackSpec
   ( spec
   , schemaWalkSpec
   , cascadeSpec
   , kSafetyGuardSpec
   , rollbackToSlotSpec
+  , epochKeyedSpec
+  , consumedByNullOutSpec
   ) where
 
 import Cardano.Prelude
@@ -38,6 +45,7 @@ import DbSync.Parser.Types
   , CardanoPoint
   , GenericBlock (..)
   , GenericTx (..)
+  , GenericTxIn (..)
   , GenericTxOut (..)
   )
 import qualified DbSync.Db.Schema.CBOR as CBOR
@@ -69,7 +77,12 @@ import DbSync.Db.Schema.StakeDelegation
   , withdrawalTableDef
   )
 import DbSync.Db.Schema.SyncState (syncStateTableDef)
-import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Schema.Types
+  ( ColumnDef (..)
+  , PgType (..)
+  , TableColumn (..)
+  , TableDef (..)
+  )
 import DbSync.Db.Schema.UTxO
   ( collateralTxInTableDef
   , collateralTxOutTableDef
@@ -94,7 +107,7 @@ import DbSync.AppM (runAppM)
 import qualified DbSync.Phase.Following.Rollback as Rollback
 import DbSync.App (cardanoSecurityParam)
 import DbSync.App.Boot (mkCardanoPoint)
-import DbSync.Phase.Following.Resolver (mkFollowResolver)
+import DbSync.Phase.Following.Resolver (ConsumedTracking (..), mkFollowResolver)
 import DbSync.Test.Database
   ( queryTestDb
   , setupFollowTipSchema
@@ -175,6 +188,8 @@ spec = do
   cascadeSpec
   kSafetyGuardSpec
   rollbackToSlotSpec
+  epochKeyedSpec
+  consumedByNullOutSpec
 
 -- ---------------------------------------------------------------------------
 -- Schema-walk: assert tdForeignKeys declarations
@@ -372,6 +387,148 @@ rollbackToSlotSpec = describe "Rollback.rollbackToSlot" $
       result `shouldBe` Nothing
 
 -- ---------------------------------------------------------------------------
+-- Epoch-keyed cleanup: seed the boundary tables, roll back, assert
+-- per-anchor survivors
+-- ---------------------------------------------------------------------------
+
+-- | Every table 'Rollback.epochKeyedDeletes' touches, derived from
+-- the entries themselves so a new anchor automatically joins the
+-- schema setup, the seeding, and the assertions.
+epochTables :: [TableDef]
+epochTables =
+  Map.elems $ Map.fromList
+    [ (tdName td, td) | (c, _) <- Rollback.epochKeyedDeletes, let td = tcTable c ]
+
+tablesWithEpoch :: [TableDef]
+tablesWithEpoch = tables <> epochTables
+
+-- | Epochs seeded into every epoch-keyed table. The fixture blocks
+-- all sit in epoch 5, so rolling back to 'target' anchors on 5.
+seedEpochs :: [Word64]
+seedEpochs = [4, 5, 6, 7]
+
+-- | Which of 'seedEpochs' each anchor leaves behind for target
+-- epoch 5.
+expectedSurvivors :: Rollback.EpochAnchor -> [Word64]
+expectedSurvivors anchor = case anchor of
+  Rollback.EnteredEpoch      -> [4, 5]     -- delete > 5
+  Rollback.NextEpochSnapshot -> [4, 5, 6]  -- delete > 6
+  Rollback.CompletedEpoch    -> [4]        -- delete >= 5
+
+epochKeyedSpec :: Spec
+epochKeyedSpec = describe "Rollback.rollbackToPoint epoch-keyed cleanup" $
+  beforeAll_ (setupFollowTipSchema tablesWithEpoch) $
+  afterAll_  (teardownSchema tablesWithEpoch) $
+  before_    (truncateAllTables (map tdName tablesWithEpoch)) $
+
+    it "applies each table's anchor against the target epoch" $ do
+      runFollow [block1WithTx, block2WithTxMeta, block3WithTx]
+      for_ Rollback.epochKeyedDeletes $ \(c, _) ->
+        for_ seedEpochs (seedEpochRow c)
+
+      withTestConnection $ \conn ->
+        runAppM (RollbackTestEnv conn cardanoSecurityParam)
+          (Rollback.rollbackToPoint tablesWithEpoch target)
+
+      for_ Rollback.epochKeyedDeletes $ \(c, anchor) -> do
+        survivors <- survivingEpochs c
+        (tdName (tcTable c), survivors)
+          `shouldBe` (tdName (tcTable c), expectedSurvivors anchor)
+
+-- | Insert one minimal row with the delete-anchor column landing on
+-- @epoch@: NOT NULL columns get type-appropriate dummies, nullable
+-- and generated columns are omitted, and @id@ doubles as the epoch
+-- so rows stay unique per table.
+seedEpochRow :: TableColumn -> Word64 -> IO ()
+seedEpochRow c epoch = do
+  let td = tcTable c
+      generatedCols = map fst (tdGeneratedColumns td)
+      -- pot_reward anchors on the generated @earned_epoch@
+      -- (@spendable_epoch@ − 1, floored at 0); steer its source
+      -- column instead.
+      (epochCol, epochVal)
+        | tcName c `elem` generatedCols = ("spendable_epoch", epoch + 1)
+        | otherwise                     = (tcName c, epoch)
+      insertable =
+        [ cd | cd <- tdColumns td
+             , not (cdNullable cd)
+             , cdName cd `notElem` generatedCols
+        ]
+      value cd
+        | cdName cd == epochCol = show epochVal
+        | cdName cd == "id"     = show epoch
+        | otherwise             = dummySqlValue (cdType cd)
+  void $ queryTestDb $
+    "INSERT INTO " <> tdName td
+      <> " (" <> T.intercalate ", " (map cdName insertable) <> ")"
+      <> " VALUES (" <> T.intercalate ", " (map value insertable) <> ");"
+
+dummySqlValue :: PgType -> Text
+dummySqlValue pgType = case pgType of
+  PgBigInt      -> "0"
+  PgInteger     -> "0"
+  PgSmallInt    -> "0"
+  PgText        -> "'x'"
+  PgBytea       -> "'\\x00'"
+  PgJsonb       -> "'{}'"
+  PgBoolean     -> "false"
+  PgNumeric     -> "0"
+  PgTimestamp   -> "'2024-01-15 12:00:00'"
+  PgTimestampTz -> "'2024-01-15 12:00:00+00'"
+  PgTextArray   -> "'{}'"
+
+-- | Anchor-column values left in @c@'s table, ascending.
+survivingEpochs :: TableColumn -> IO [Word64]
+survivingEpochs c = do
+  raw <- queryTestDb $
+    "SELECT " <> tcName c <> " FROM " <> tdName (tcTable c)
+      <> " ORDER BY " <> tcName c <> ";"
+  pure (mapMaybe (readMaybe . T.unpack) (T.lines raw))
+
+-- ---------------------------------------------------------------------------
+-- Consumed-by cleanup: deleted spenders release their marks
+-- ---------------------------------------------------------------------------
+
+consumedByNullOutSpec :: Spec
+consumedByNullOutSpec = describe "Rollback.rollbackToPoint consumed_by cleanup" $
+  beforeAll_ (setupFollowTipSchema tables) $
+  afterAll_  (teardownSchema tables) $
+  before_    (truncateAllTables tableNames) $
+
+    it "clears marks from deleted spenders and keeps surviving ones" $ do
+      runFollow [block1WithTx, block2SpendsBlock1, block3SpendsBlock2]
+
+      -- Sanity: each block's tx consumed the previous block's output.
+      bbId <- txIdOf "bb"
+      ccId <- txIdOf "cc"
+      consumedByOf "aa" >>= (`shouldBe` bbId)
+      consumedByOf "bb" >>= (`shouldBe` ccId)
+
+      -- Roll back to block2: block3 and its tx 0xcc are deleted.
+      withTestConnection $ \conn ->
+        runAppM (RollbackTestEnv conn cardanoSecurityParam)
+          (Rollback.rollbackToPoint tables block2Target)
+
+      consumedByOf "bb" >>= (`shouldBe` "null")
+      consumedByOf "aa" >>= (`shouldBe` bbId)
+
+-- | @consumed_by_tx_id@ of the sole output of the tx whose hash is
+-- 32 repetitions of @hexByte@; @\"null\"@ when unset.
+consumedByOf :: Text -> IO Text
+consumedByOf hexByte = T.strip <$> queryTestDb
+  ( "SELECT COALESCE(o.consumed_by_tx_id::text, 'null')"
+      <> " FROM tx_out o JOIN tx t ON o.tx_id = t.id"
+      <> " WHERE t.hash = " <> hashLit hexByte <> ";"
+  )
+
+txIdOf :: Text -> IO Text
+txIdOf hexByte = T.strip <$> queryTestDb
+  ("SELECT id FROM tx WHERE hash = " <> hashLit hexByte <> ";")
+
+hashLit :: Text -> Text
+hashLit hexByte = "decode(repeat('" <> hexByte <> "', 32), 'hex')"
+
+-- ---------------------------------------------------------------------------
 -- Helpers
 -- ---------------------------------------------------------------------------
 
@@ -388,7 +545,7 @@ countOf td = T.strip <$>
 runFollow :: [GenericBlock] -> IO ()
 runFollow blocks =
   withTestConnection $ \conn -> do
-    resolver <- mkFollowResolver conn
+    resolver <- mkFollowResolver conn TrackConsumedBy
     let writer = FollowingWriter.mkWriter conn
         env    =
           mkTestPipelineEnvWith
@@ -505,3 +662,30 @@ block2WithTxMeta =
 block3WithTx :: GenericBlock
 block3WithTx =
   mkBlock (BS.replicate 32 2) (BS.replicate 32 1) 3 140 [sampleTx 0xcc 3_000_000]
+
+-- | Spend chain for the consumed-by tests: block2's tx spends
+-- block1's sole output, block3's tx spends block2's.
+block2SpendsBlock1 :: GenericBlock
+block2SpendsBlock1 =
+  mkBlock
+    (BS.replicate 32 1)
+    (BS.replicate 32 0)
+    2 120
+    [ (sampleTx 0xbb 900_000)
+        { txInputs = [GenericTxIn (BS.replicate 32 0xaa) 0] }
+    ]
+
+block3SpendsBlock2 :: GenericBlock
+block3SpendsBlock2 =
+  mkBlock
+    (BS.replicate 32 2)
+    (BS.replicate 32 1)
+    3 140
+    [ (sampleTx 0xcc 800_000)
+        { txInputs = [GenericTxIn (BS.replicate 32 0xbb) 0] }
+    ]
+
+-- | Rollback target at block2 — used by the consumed-by test to keep
+-- one spend on chain while deleting the other.
+block2Target :: CardanoPoint
+block2Target = mkCardanoPoint 120 (BS.replicate 32 1)

@@ -19,7 +19,10 @@ module DbSync.Db.Statement.Worker.Rollback
 
     -- * Per-table deletes
   , deleteWhereGteStmt
+  , deleteWhereEpochGtStmt
+  , deleteWhereEpochGteStmt
   , deleteBlockAfterIdStmt
+  , nullConsumedByFromTxStmt
   ) where
 
 import Cardano.Prelude
@@ -183,6 +186,26 @@ deleteWhereGteStmt tableName columnName =
       ]
     encoder = E.param (E.nonNullable E.int8)
 
+-- | @DELETE FROM <owning table> WHERE <column> > $1@ against an
+-- epoch-number column; the target epoch's own rows survive.
+deleteWhereEpochGtStmt :: TableColumn -> Stmt.Statement Word64 Int64
+deleteWhereEpochGtStmt = deleteWhereEpochStmt ">"
+
+-- | @>=@ variant for rows that describe a completed epoch: rolling
+-- back into an epoch un-completes it.
+deleteWhereEpochGteStmt :: TableColumn -> Stmt.Statement Word64 Int64
+deleteWhereEpochGteStmt = deleteWhereEpochStmt ">="
+
+deleteWhereEpochStmt :: Text -> TableColumn -> Stmt.Statement Word64 Int64
+deleteWhereEpochStmt op c =
+  Stmt.unpreparable sql encoder D.rowsAffected
+  where
+    sql = T.concat
+      [ "DELETE FROM ", table (tcTable c)
+      , " WHERE ", col c, " ", op, " $1"
+      ]
+    encoder = (fromIntegral :: Word64 -> Int64) >$< E.param (E.nonNullable E.int8)
+
 -- | Strictly @>@ because the rollback target itself is the new tip;
 -- only blocks above it are deleted.
 deleteBlockAfterIdStmt :: Stmt.Statement BlockId Int64
@@ -191,3 +214,18 @@ deleteBlockAfterIdStmt =
     ("DELETE FROM " <> quoteIdent (tdName Core.blockTableDef) <> " WHERE id > $1")
     (idEncoder getBlockId)
     D.rowsAffected
+
+-- | Clear @tx_out.consumed_by_tx_id@ marks that point at consumer
+-- txs being deleted. The producer rows themselves predate the
+-- rollback target and survive the cascade; without the reset the
+-- new fork could not re-consume them (and an output the fork leaves
+-- unspent would stay marked consumed forever).
+nullConsumedByFromTxStmt :: Stmt.Statement TxId Int64
+nullConsumedByFromTxStmt =
+  Stmt.unpreparable sql (idEncoder getTxId) D.rowsAffected
+  where
+    sql = T.concat
+      [ "UPDATE ", table UTxO.txOutTableDef
+      , " SET ", col UTxO.txOutCols.tocConsumedByTxId, " = NULL"
+      , " WHERE ", col UTxO.txOutCols.tocConsumedByTxId, " >= $1"
+      ]

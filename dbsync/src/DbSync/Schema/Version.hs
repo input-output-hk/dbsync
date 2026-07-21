@@ -46,7 +46,7 @@ currentSchemaVersion = 1
 -- still in development may be refreshed.
 releasedSchemaFingerprints :: [(Int, Fingerprint)]
 releasedSchemaFingerprints =
-  [ (1, Fingerprint "3bfb7978e35d633ad2aa25824f82f459745f6fbcf40d74494cceb5ecec0da5ca")
+  [ (1, Fingerprint "489239a4230373a0cba4c0f35fa98d3f5f9d659f44b2e2931e3bbc5bbc49f343")
   ]
 
 -- ---------------------------------------------------------------------------

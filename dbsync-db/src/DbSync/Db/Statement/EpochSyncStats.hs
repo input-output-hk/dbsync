@@ -17,15 +17,17 @@ import DbSync.Db.Schema.EpochSyncStats
   , epochSyncStatsTableDef
   )
 import DbSync.Db.Schema.Ids (EpochSyncStatsId (..), idEncoder)
-import DbSync.Db.Statement.Common (insertRowSql, nextIdStmt)
+import DbSync.Db.Statement.Common (nextIdStmt, upsertRowSql)
 
 -- ---------------------------------------------------------------------------
 -- * epoch_sync_stats
 -- ---------------------------------------------------------------------------
 
+-- | Upserts on @epoch_no@ so a rollback that re-crosses the boundary
+-- refreshes the epoch's row.
 insertEpochSyncStatsRowStmt :: Stmt.Statement (EpochSyncStatsId, EpochSyncStats) ()
 insertEpochSyncStatsRowStmt =
-  Stmt.preparable (insertRowSql epochSyncStatsTableDef) encoder D.noResult
+  Stmt.preparable (upsertRowSql epochSyncStatsTableDef) encoder D.noResult
   where
     encoder = (fst >$< idEncoder getEpochSyncStatsId)
            <> (snd >$< epochSyncStatsEncoder)

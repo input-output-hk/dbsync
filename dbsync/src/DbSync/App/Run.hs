@@ -88,6 +88,7 @@ import DbSync.Db.Schema.Init
 import DbSync.Schema.Version (Fingerprint, currentSchemaVersion, unFingerprint)
 import DbSync.Extractor.Registry (declaredSchemaFingerprint)
 import DbSync.Extractor (ExtractorDef (..))
+import DbSync.Phase.Following.Resolver (ConsumedTracking (..))
 import DbSync.Phase.Ingest.DedupStore (DedupStores, closeStores)
 import DbSync.Phase.Ingest.Consumer (runConsumer)
 import DbSync.Phase.Ingest.Gauge (withPipelineGauge)
@@ -810,8 +811,12 @@ handoffToFollow
     -- The Ingest receiver was cancelled before Prep ran;
     -- 'runFollowSession' opens a fresh one starting at the
     -- post-Ingest commit point.
+    let consumedTracking =
+          if uoConsumedByTxId (pcUtxo (scOptions (ceConfig (ieCore ie))))
+            then TrackConsumedBy
+            else SkipConsumedBy
     runFollowSession tracer "App" iomgr hasqlSettings topLevelCfg
-      networkMagic socketPath intersectReq mShutdown
+      networkMagic socketPath intersectReq consumedTracking mShutdown
       (mkFollowEnvFromIngest ie)
 
 

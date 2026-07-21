@@ -37,7 +37,7 @@ import DbSync.Db.Schema.StakeDelegation
   , rewardEncoder
   , rewardTableDef
   )
-import DbSync.Db.Statement.Common (insertRowSql)
+import DbSync.Db.Statement.Common (insertIgnoreRowSql, insertRowSql)
 
 -- ---------------------------------------------------------------------------
 -- * reward
@@ -59,17 +59,20 @@ insertPotRewardRowStmt =
 -- * epoch_stake
 -- ---------------------------------------------------------------------------
 
+-- | @ON CONFLICT DO NOTHING@: a rollback replay re-emits slices of
+-- the same frozen snapshot, so retried rows are byte-identical.
 insertEpochStakeRowStmt :: Stmt.Statement EpochStake ()
 insertEpochStakeRowStmt =
-  Stmt.preparable (insertRowSql epochStakeTableDef) epochStakeEncoder D.noResult
+  Stmt.preparable (insertIgnoreRowSql epochStakeTableDef) epochStakeEncoder D.noResult
 
 -- ---------------------------------------------------------------------------
 -- * epoch_stake_progress
 -- ---------------------------------------------------------------------------
 
+-- | Same replay tolerance as 'insertEpochStakeRowStmt'.
 insertEpochStakeProgressRowStmt :: Stmt.Statement EpochStakeProgress ()
 insertEpochStakeProgressRowStmt =
   Stmt.preparable
-    (insertRowSql epochStakeProgressTableDef)
+    (insertIgnoreRowSql epochStakeProgressTableDef)
     epochStakeProgressEncoder
     D.noResult

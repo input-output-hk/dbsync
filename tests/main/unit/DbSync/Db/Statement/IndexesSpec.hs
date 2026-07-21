@@ -97,12 +97,8 @@ spec = describe "DbSync.Db.Statement.Indexes" $ do
               <> " ON \"plain\" (\"id\")"
         ]
 
-    it "emits a single PK index for a PK-only table" $
-      tableIndexStatements Concurrent pkTable `shouldBe`
-        [ IndexStatement "pk_only_pkey_idx" $
-            "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"pk_only_pkey_idx\""
-              <> " ON \"pk_only\" (\"id\")"
-        ]
+    it "emits nothing for a declared PK (CREATE TABLE already built its index)" $
+      tableIndexStatements Concurrent pkTable `shouldBe` []
 
     it "emits the default PK plus one UNIQUE INDEX per single-column constraint" $
       tableIndexStatements Concurrent uniqueOneCol `shouldBe`
@@ -124,12 +120,9 @@ spec = describe "DbSync.Db.Statement.Indexes" $ do
               <> " ON \"uniq_multi\" (\"addr_id\", \"pool_id\", \"epoch_no\")"
         ]
 
-    it "emits PK first, then numbered UNIQUE indexes" $
+    it "skips the declared PK but keeps the numbered UNIQUE indexes" $
       tableIndexStatements Concurrent pkAndUniques `shouldBe`
-        [ IndexStatement "many_pkey_idx" $
-            "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"many_pkey_idx\""
-              <> " ON \"many\" (\"id\")"
-        , IndexStatement "many_unique_1_idx" $
+        [ IndexStatement "many_unique_1_idx" $
             "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS \"many_unique_1_idx\""
               <> " ON \"many\" (\"name\")"
         , IndexStatement "many_unique_2_idx" $
@@ -140,10 +133,7 @@ spec = describe "DbSync.Db.Statement.Indexes" $ do
   describe "tableIndexStatements NonConcurrent" $
     it "drops the CONCURRENTLY keyword across every emission path" $
       tableIndexStatements NonConcurrent pkAndUniques `shouldBe`
-        [ IndexStatement "many_pkey_idx" $
-            "CREATE UNIQUE INDEX IF NOT EXISTS \"many_pkey_idx\""
-              <> " ON \"many\" (\"id\")"
-        , IndexStatement "many_unique_1_idx" $
+        [ IndexStatement "many_unique_1_idx" $
             "CREATE UNIQUE INDEX IF NOT EXISTS \"many_unique_1_idx\""
               <> " ON \"many\" (\"name\")"
         , IndexStatement "many_unique_2_idx" $

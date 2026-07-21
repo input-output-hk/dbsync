@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -13,13 +14,17 @@
 --
 -- The cascade tables come from each 'TableDef'\'s 'tdForeignKeys' so
 -- the rollback automatically picks up new dependent tables when they
--- declare the right FK; no hand-maintained list to drift.
+-- declare the right FK; no hand-maintained list to drift. The
+-- epoch-keyed boundary tables carry no FKs and are scoped by
+-- 'epochKeyedDeletes' instead.
 module DbSync.Phase.Following.Rollback
   ( rollbackToPoint
   , rollbackToSlot
 
     -- * Schema-walk helpers (exported for tests)
   , childrenOf
+  , EpochAnchor (..)
+  , epochKeyedDeletes
   ) where
 
 import Cardano.Prelude
@@ -36,16 +41,38 @@ import Ouroboros.Network.Block (data BlockPoint, data GenesisPoint)
 import Cardano.Slotting.Slot (SlotNo (..))
 
 import DbSync.Parser.Types (CardanoPoint)
+import DbSync.Db.Schema.AdaPots (AdaPotsCols (..), adaPotsCols)
 import qualified DbSync.Db.Schema.Core as Core
+import DbSync.Db.Schema.EpochBoundary
+  ( EpochParamCols (..)
+  , EpochStateCols (..)
+  , epochParamCols
+  , epochStateCols
+  )
+import DbSync.Db.Schema.EpochSyncStats (EpochSyncStatsCols (..), epochSyncStatsCols)
+import DbSync.Db.Schema.EpochView (EpochFinalizedCols (..), epochFinalizedCols)
+import DbSync.Db.Schema.Governance (DrepDistrCols (..), drepDistrCols)
 import DbSync.Db.Schema.Ids (getPoolUpdateId, getTxId, getTxOutId)
 import qualified DbSync.Db.Schema.Pool as Pool
-import DbSync.Db.Schema.Types (ForeignKey (..), TableDef (..))
+import DbSync.Db.Schema.Pool (PoolStatCols (..))
+import DbSync.Db.Schema.StakeDelegation
+  ( EpochStakeCols (..)
+  , EpochStakeProgressCols (..)
+  , PotRewardCols (..)
+  , RewardCols (..)
+  , epochStakeCols
+  , epochStakeProgressCols
+  , potRewardCols
+  , rewardCols
+  )
+import DbSync.Db.Schema.Types (ForeignKey (..), TableColumn (..), TableDef (..))
 import qualified DbSync.Db.Schema.UTxO as UTxO
-import DbSync.Db.Schema.EpochView (epochFinalizedTableName)
-import DbSync.Db.Statement.EpochView (deleteEpochFinalizedFromEpochStmt)
 import DbSync.Db.Statement.Worker.Rollback
   ( deleteBlockAfterIdStmt
+  , deleteWhereEpochGtStmt
+  , deleteWhereEpochGteStmt
   , deleteWhereGteStmt
+  , nullConsumedByFromTxStmt
   , queryBlockAtOrAfterSlotStmt
   , queryBlockAtPointStmt
   , queryMinPoolUpdateIdAfterTxStmt
@@ -65,7 +92,8 @@ import DbSync.App.Env (HasSecurityParam (..))
 -- tables are considered, and a table's outgoing FKs (the parent
 -- table referenced by 'fkParentTable') decide which family it
 -- belongs to. Tables that don't reference @tx@ / @tx_out@ /
--- @pool_update@ are silently skipped.
+-- @pool_update@ are skipped by the FK cascade; the epoch-keyed
+-- boundary tables among them are cleaned via 'epochKeyedDeletes'.
 --
 -- The k-safety horizon comes from 'getSecurityParam' on the env. A
 -- target more than @k@ blocks behind the current PG tip is rejected
@@ -160,6 +188,15 @@ rollbackToPoint tableDefs point = case point of
         void $ runSess ("delete " <> poolTbl)
           (i, deleteWhereGteStmt poolTbl "id")
 
+      -- Surviving producer rows must drop their consumed-by marks
+      -- pointing at the txs deleted above, or the re-applied fork
+      -- can never re-consume them.
+      for_ mMinTxId $ \minTxId ->
+        when (any ((== tdName UTxO.txOutTableDef) . tdName) tableDefs) $ do
+          let c = UTxO.tocConsumedByTxId UTxO.txOutCols
+          void $ runSess ("null " <> tdName (tcTable c) <> "." <> tcName c)
+            (minTxId, nullConsumedByFromTxStmt)
+
       -- Finally tx and block themselves.
       let txTbl = tdName Core.txTableDef
       for_ mMinTxId $ \minTxId ->
@@ -168,14 +205,18 @@ rollbackToPoint tableDefs point = case point of
       void $ runSess ("delete " <> tdName Core.blockTableDef)
         (targetBlockId, deleteBlockAfterIdStmt)
 
-      -- Drop finalised-epoch rows at or past the rollback target;
-      -- the target's own epoch becomes the new unfinalised epoch
-      -- served by @epoch_current@. No-op when the @epoch@ extractor
-      -- is disabled or when the target predates any epoch (Byron).
-      when (any ((== epochFinalizedTableName) . tdName) tableDefs) $
-        for_ mTargetEpoch $ \targetEpoch ->
-          void $ runSess "deleteEpochFinalizedFromEpochStmt"
-            (targetEpoch, deleteEpochFinalizedFromEpochStmt)
+      -- Epoch-keyed boundary tables (no FKs, so the cascade above
+      -- never touches them). Tables whose extractor is disabled are
+      -- absent from tableDefs and skipped; a target without an
+      -- epoch_no (Byron EBB) skips the lot.
+      for_ mTargetEpoch $ \targetEpoch ->
+        for_ epochKeyedDeletes $ \(c, anchor) ->
+          when (any ((== tdName (tcTable c)) . tdName) tableDefs) $ do
+            let (param, delStmt) = case anchor of
+                  EnteredEpoch      -> (targetEpoch, deleteWhereEpochGtStmt c)
+                  NextEpochSnapshot -> (targetEpoch + 1, deleteWhereEpochGtStmt c)
+                  CompletedEpoch    -> (targetEpoch, deleteWhereEpochGteStmt c)
+            void $ runSess ("delete " <> tdName (tcTable c)) (param, delStmt)
 
       -- Sync-state advance. The target block is the new chain tip.
       void $ runSess "writeSyncStateSlotStmt"
@@ -207,6 +248,37 @@ rollbackToSlot tableDefs targetSlot = do
           point = BlockPoint (SlotNo resolvedSlot) hash
       rollbackToPoint tableDefs point
       pure (Just resolvedBlockNo)
+
+-- | How rows of an epoch-keyed boundary table anchor to the rollback
+-- target's epoch.
+--
+--   * 'EnteredEpoch' — written entering the epoch they carry; the
+--     target epoch's own rows stay valid, so delete @> target@.
+--   * 'NextEpochSnapshot' — stake slices of the /next/ epoch's mark
+--     snapshot, emitted across the preceding epoch. The snapshot for
+--     @target+1@ froze before the target block, so delete
+--     @> target+1@ and let the replay re-emit identical slices.
+--   * 'CompletedEpoch' — describe a finished epoch; rolling back
+--     into an epoch un-finishes it, so delete @>= target@.
+data EpochAnchor = EnteredEpoch | NextEpochSnapshot | CompletedEpoch
+  deriving stock (Eq, Show)
+
+epochKeyedDeletes :: [(TableColumn, EpochAnchor)]
+epochKeyedDeletes =
+  [ (epochStateCols.esccEpochNo,         EnteredEpoch)
+  , (epochParamCols.epcEpochNo,          EnteredEpoch)
+  , (adaPotsCols.apcEpochNo,             EnteredEpoch)
+  , (Pool.poolStatCols.pstcEpochNo,      EnteredEpoch)
+  , (drepDistrCols.ddcEpochNo,           EnteredEpoch)
+    -- reward rows land entering their spendable epoch; pot_reward
+    -- rows land entering their earned epoch (spendable is one later).
+  , (rewardCols.rcSpendableEpoch,        EnteredEpoch)
+  , (potRewardCols.prcEarnedEpoch,       EnteredEpoch)
+  , (epochStakeCols.escEpochNo,          NextEpochSnapshot)
+  , (epochStakeProgressCols.espcEpochNo, NextEpochSnapshot)
+  , (epochSyncStatsCols.esscEpochNo,     CompletedEpoch)
+  , (epochFinalizedCols.efcNo,           CompletedEpoch)
+  ]
 
 -- | All tables that declare an outgoing FK to @parentTable@, paired
 -- with the FK column name. Walks every supplied 'TableDef' and pulls

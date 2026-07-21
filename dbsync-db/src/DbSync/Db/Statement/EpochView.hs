@@ -7,11 +7,12 @@
 --
 --   * 'backfillEpochFinalizedStmt' — one-shot fill at end of Ingest.
 --   * 'appendEpochFinalizedStmt' — Follow boundary upsert.
---   * 'deleteEpochFinalizedFromEpochStmt' — Follow rollback cleanup.
+--
+-- Rollback cleanup goes through the shared epoch-keyed delete in
+-- 'DbSync.Phase.Following.Rollback'.
 module DbSync.Db.Statement.EpochView
   ( appendEpochFinalizedStmt
   , backfillEpochFinalizedStmt
-  , deleteEpochFinalizedFromEpochStmt
   ) where
 
 import Cardano.Prelude
@@ -84,19 +85,6 @@ backfillEpochFinalizedStmt =
       ,   " WHERE ", col blockCols.bcEpochNo, " IS NOT NULL)"
       , " GROUP BY ", qcol "b" blockCols.bcEpochNo
       , " ON CONFLICT (", col epochFinalizedCols.efcNo, ") DO NOTHING"
-      ]
-
--- | @>=@ rather than @>@: the rollback target's epoch is re-derived
--- live from the post-rollback @block@ + @tx@ data via the
--- @epoch_current@ view, not kept as a stale finalised row.
-deleteEpochFinalizedFromEpochStmt :: Stmt.Statement Word64 Int64
-deleteEpochFinalizedFromEpochStmt =
-  Stmt.preparable sql encoder D.rowsAffected
-  where
-    encoder = (fromIntegral :: Word64 -> Int64) >$< E.param (E.nonNullable E.int8)
-    sql = mconcat
-      [ "DELETE FROM ", table epochFinalizedTableDef
-      , " WHERE ", col epochFinalizedCols.efcNo, " >= $1"
       ]
 
 -- ---------------------------------------------------------------------------

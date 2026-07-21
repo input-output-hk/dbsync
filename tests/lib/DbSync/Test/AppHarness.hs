@@ -183,9 +183,11 @@ profileTableNames cfg = case buildExtractors (scOptions cfg) of
 -- created by the time it marks @sync_complete = true@.
 --
 -- Derived from 'TableDef' metadata on the active extractor tables:
--- primary keys yield @<table>_pkey_idx@ (defaulting to @id@, exactly
--- as 'DbSync.Db.Statement.Indexes.tableIndexStatements' does); each
--- entry in 'tdUniqueConstraints' yields @<table>_unique_N_idx@.
+-- tables without a declared primary key yield @<table>_pkey_idx@ on
+-- @id@ (a declared PK carries its constraint index from CREATE
+-- TABLE, exactly as 'DbSync.Db.Statement.Indexes.tableIndexStatements'
+-- treats it); each entry in 'tdUniqueConstraints' yields
+-- @<table>_unique_N_idx@.
 --
 -- The resolve-support scaffolding is intentionally absent: Prep
 -- drops it before the UNLOGGED → LOGGED flip
@@ -203,7 +205,9 @@ tableIndexNames :: TableDef -> [Text]
 tableIndexNames td =
   pkIdx <> uniqueIdxs
   where
-    pkIdx = [tdName td <> "_pkey_idx"]
+    pkIdx = case tdPrimaryKey td of
+      Just _  -> []
+      Nothing -> [tdName td <> "_pkey_idx"]
     uniqueIdxs =
       zipWith
         (\n _ -> uniqueConstraintIndexName td n)

@@ -76,7 +76,7 @@ import DbSync.Db.Schema.UTxO
   )
 import DbSync.Phase.Following.IdAllocator (allocateAllIds)
 import DbSync.Phase.Following.IdCounts (countAssignableIds)
-import DbSync.Phase.Following.Resolver (mkBufferedFollowResolver, mkFollowResolver)
+import DbSync.Phase.Following.Resolver (ConsumedTracking (..), mkBufferedFollowResolver, mkFollowResolver)
 import DbSync.Phase.Following.WriteBuffer (drain, newWriteBuffer)
 import DbSync.Phase.Following.Writer (mkBufferedWriter, mkWriter)
 import DbSync.Test.Database
@@ -130,7 +130,7 @@ diffSnapshot run takeSnap = do
 runImmediate :: [GenericBlock] -> IO ()
 runImmediate blocks =
   withTestConnection $ \conn -> do
-    resolver <- mkFollowResolver conn
+    resolver <- mkFollowResolver conn TrackConsumedBy
     let writer = mkWriter conn
         env    =
           mkTestPipelineEnvWith
@@ -154,7 +154,7 @@ runBuffered blocks =
       let counts = countAssignableIds blk
       preAllocated <- allocateAllIds conn counts
       buf          <- newWriteBuffer
-      resolver     <- mkBufferedFollowResolver conn preAllocated buf
+      resolver     <- mkBufferedFollowResolver conn preAllocated buf TrackConsumedBy
       let writer = mkBufferedWriter buf
           env    =
             mkTestPipelineEnvWith
@@ -200,6 +200,8 @@ contentSamples = do
       , ("tx fees",            stringAgg "fee::text"           txTableDef)
       , ("tx_out values",      stringAgg "value::text"         txOutTableDef)
       , ("tx_out address_ids", stringAgg "coalesce(address_id::text, 'NULL')" txOutTableDef)
+      , ("tx_out consumed_by", stringAgg "coalesce(consumed_by_tx_id::text, 'NULL')" txOutTableDef)
+      , ("tx_in tx_out_ids",   stringAgg "coalesce(tx_out_id::text, 'NULL')" txInTableDef)
       , ("address raws",       stringAgg "encode(raw, 'hex')"  addressTableDef)
       , ("slot leader hashes", stringAgg "encode(hash, 'hex')" slotLeaderTableDef)
       ]

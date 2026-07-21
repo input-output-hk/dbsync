@@ -111,7 +111,8 @@ adaPotsTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
-  , tdUniqueConstraints = []
+    -- One row per epoch boundary.
+  , tdUniqueConstraints = [pure "epoch_no"]
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
   , tdForeignKeys = []

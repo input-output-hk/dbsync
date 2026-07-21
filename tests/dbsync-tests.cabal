@@ -111,6 +111,7 @@ test-suite dbsync-test
     DbSync.ChainSync.DeliverSpec
     DbSync.App.Config.TypesSpec
     DbSync.App.Config.NodeSpec
+    DbSync.App.Config.ProfilesSpec
     DbSync.App.Config.ValidationSpec
     DbSync.App.Config.GenesisSpec
     DbSync.Db.Statement.BackfillSpec
@@ -155,6 +156,7 @@ test-suite dbsync-test
     DbSync.Extractor.ScriptsDatumsSpec
     DbSync.Extractor.StakeDelegationSpec
     DbSync.Extractor.UTxOSpec
+    DbSync.Parser.BlockSpec
     DbSync.Parser.MetadataSpec
     DbSync.Phase.Ingest.ConsumerSpec
     DbSync.Phase.Ingest.DedupStoreSpec
@@ -176,8 +178,11 @@ test-suite dbsync-test
     DbSync.Phase.Following.BufferedDiffSpec
     DbSync.Phase.Following.FlipPredicateSpec
     DbSync.Phase.Following.IdCountsSpec
+    DbSync.Phase.Following.Resolver.UTxOSpec
     DbSync.Phase.Following.RollbackSpec
     DbSync.Phase.Following.RunSpec
+    DbSync.Phase.Following.SameBlockSpendSpec
+    DbSync.Phase.BoundaryRecrossSpec
     DbSync.Phase.FollowAtTipSpec
     DbSync.Phase.AlonzoInvalidTxSpec
     DbSync.Phase.FollowEpochBoundarySpec

@@ -27,6 +27,7 @@ import qualified DbSync.AppSpec as AppSpec
 import qualified DbSync.App.CliSpec as CliSpec
 import qualified DbSync.App.Config.GenesisSpec as ConfigGenesisSpec
 import qualified DbSync.App.Config.NodeSpec as ConfigNodeSpec
+import qualified DbSync.App.Config.ProfilesSpec as ConfigProfilesSpec
 import qualified DbSync.App.Config.TypesSpec as ConfigTypesSpec
 import qualified DbSync.App.Config.ValidationSpec as ConfigValidationSpec
 import qualified DbSync.Db.Statement.IndexesSpec as DbStatementIndexesSpec
@@ -55,6 +56,7 @@ import qualified DbSync.Worker.Ledger.WorkerSpec as LedgerWorkerSpec
 import qualified DbSync.App.BootSpec as AppBootSpec
 import qualified DbSync.Phase.CurrentSpec as PhaseCurrentSpec
 import qualified DbSync.Phase.Following.IdCountsSpec as PhaseFollowIdCountsSpec
+import qualified DbSync.Phase.Following.Resolver.UTxOSpec as PhaseFollowResolverUTxOSpec
 import qualified DbSync.Schema.AdaPotsSpec as SchemaAdaPotsSpec
 import qualified DbSync.Schema.AddressSpec as SchemaAddressSpec
 import qualified DbSync.Schema.ColumnsConsistencySpec as SchemaColumnsConsistencySpec
@@ -75,6 +77,7 @@ import qualified DbSync.Schema.SyncStateSpec as SchemaSyncStateSpec
 import qualified DbSync.StateQuery.ObservedSummarySpec as ObservedSummarySpec
 import qualified DbSync.StateQuery.SlotDetailsSpec as SlotDetailsSpec
 import qualified DbSync.Trace.ReplaySpec as TraceReplaySpec
+import qualified DbSync.Parser.BlockSpec as ParserBlockSpec
 import qualified DbSync.Parser.MetadataSpec as BlockMetadataSpec
 import qualified DbSync.Util.Bech32Spec as UtilBech32Spec
 import qualified DbSync.Util.DedupHashSpec as UtilDedupHashSpec
@@ -99,6 +102,7 @@ import qualified DbSync.Phase.Following.BufferedDiffSpec as PhaseFollowBufferedD
 import qualified DbSync.Phase.Following.FlipPredicateSpec as PhaseFollowFlipPredicateSpec
 import qualified DbSync.Phase.Following.RollbackSpec as PhaseRollbackSpec
 import qualified DbSync.Phase.Following.RunSpec as PhaseFollowRunSpec
+import qualified DbSync.Phase.Following.SameBlockSpendSpec as PhaseFollowSameBlockSpendSpec
 import qualified DbSync.Phase.Preparing.RunSpec as PhasePrepSpec
 import qualified DbSync.Schema.InitSpec as SchemaInitSpec
 import qualified DbSync.Schema.Migration.LadderSpec as SchemaMigrationLadderSpec
@@ -106,6 +110,7 @@ import qualified DbSync.Schema.Migration.LadderSpec as SchemaMigrationLadderSpec
 -- End-to-end
 import qualified DbSync.ChainSync.DeliverSpec as ChainSyncDeliverSpec
 import qualified DbSync.Phase.AlonzoInvalidTxSpec as PhaseAlonzoInvalidTxSpec
+import qualified DbSync.Phase.BoundaryRecrossSpec as PhaseBoundaryRecrossSpec
 import qualified DbSync.Phase.FollowAtTipSpec as PhaseFollowAtTipSpec
 import qualified DbSync.Phase.FollowEpochBoundarySpec as PhaseFollowEpochBoundarySpec
 import qualified DbSync.Phase.FollowEpochSyncStatsSpec as PhaseFollowEpochSyncStatsSpec
@@ -152,6 +157,7 @@ main = hspec $ do
     CliSpec.spec
     ConfigGenesisSpec.spec
     ConfigNodeSpec.spec
+    ConfigProfilesSpec.spec
     ConfigTypesSpec.spec
     ConfigValidationSpec.spec
     DbStatementIndexesSpec.spec
@@ -181,6 +187,7 @@ main = hspec $ do
     PhaseCurrentSpec.spec
     PhaseFollowFlipPredicateSpec.spec
     PhaseFollowIdCountsSpec.spec
+    PhaseFollowResolverUTxOSpec.spec
     SchemaAdaPotsSpec.spec
     SchemaAddressSpec.spec
     SchemaColumnsConsistencySpec.spec
@@ -203,6 +210,7 @@ main = hspec $ do
     TraceReplaySpec.spec
     UtilBech32Spec.spec
     UtilDedupHashSpec.spec
+    ParserBlockSpec.spec
     BlockMetadataSpec.spec
     WorkerTxOutSpec.spec
     PhaseRollbackSpec.schemaWalkSpec
@@ -224,10 +232,13 @@ main = hspec $ do
     DbStatementSyncStateSpec.spec
     PhaseFollowBufferedDiffSpec.spec
     PhaseFollowRunSpec.spec
+    PhaseFollowSameBlockSpendSpec.spec
     PhasePrepSpec.spec
     PhaseRollbackSpec.cascadeSpec
     PhaseRollbackSpec.kSafetyGuardSpec
     PhaseRollbackSpec.rollbackToSlotSpec
+    PhaseRollbackSpec.epochKeyedSpec
+    PhaseRollbackSpec.consumedByNullOutSpec
     SchemaInitSpec.spec
     SchemaMigrationLadderSpec.spec
 
@@ -243,6 +254,7 @@ main = hspec $ do
     PhaseFollowReplayWindowSpec.spec
     PhaseFollowAtTipSpec.spec
     PhaseFollowEpochBoundarySpec.spec
+    PhaseBoundaryRecrossSpec.spec
     PhaseFollowEpochSyncStatsSpec.spec
     PhaseFollowScriptsDatumsSpec.spec
     PhaseFollowGovernanceSpec.spec

@@ -2,8 +2,8 @@
 -- tables: @ada_pots@, @epoch_param@, @epoch_state@, @cost_model@.
 --
 -- @cost_model@ is the only dedup-keyed table here (keyed on its
--- Blake2b CBOR @hash@); the other three are written verbatim per
--- epoch boundary.
+-- Blake2b CBOR @hash@); the other three upsert on @epoch_no@ so a
+-- rollback that re-crosses the boundary refreshes the epoch's row.
 module DbSync.Db.Statement.EpochBoundary
   ( -- * ada_pots
     insertAdaPotsRowStmt
@@ -44,6 +44,7 @@ import DbSync.Db.Statement.Common
   , insertRowSql
   , nextIdStmt
   , queryIdByColumnStmt
+  , upsertRowSql
   )
 
 -- ---------------------------------------------------------------------------
@@ -52,7 +53,7 @@ import DbSync.Db.Statement.Common
 
 insertAdaPotsRowStmt :: Stmt.Statement AdaPots ()
 insertAdaPotsRowStmt =
-  Stmt.preparable (insertRowSql adaPotsTableDef) adaPotsEncoder D.noResult
+  Stmt.preparable (upsertRowSql adaPotsTableDef) adaPotsEncoder D.noResult
 
 -- ---------------------------------------------------------------------------
 -- * epoch_param
@@ -60,7 +61,7 @@ insertAdaPotsRowStmt =
 
 insertEpochParamRowStmt :: Stmt.Statement EpochParam ()
 insertEpochParamRowStmt =
-  Stmt.preparable (insertRowSql epochParamTableDef) epochParamEncoder D.noResult
+  Stmt.preparable (upsertRowSql epochParamTableDef) epochParamEncoder D.noResult
 
 -- ---------------------------------------------------------------------------
 -- * epoch_state
@@ -68,7 +69,7 @@ insertEpochParamRowStmt =
 
 insertEpochStateRowStmt :: Stmt.Statement EpochState ()
 insertEpochStateRowStmt =
-  Stmt.preparable (insertRowSql epochStateTableDef) epochStateEncoder D.noResult
+  Stmt.preparable (upsertRowSql epochStateTableDef) epochStateEncoder D.noResult
 
 -- ---------------------------------------------------------------------------
 -- * cost_model

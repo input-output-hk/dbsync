@@ -339,7 +339,8 @@ poolStatTableDef = TableDef
   , tdPrimaryKey     = Nothing
   , tdChecks         = []
   , tdColumnDefaults = []
-  , tdUniqueConstraints = []
+    -- Natural key: one row per pool per epoch.
+  , tdUniqueConstraints = ["pool_hash_id" :| ["epoch_no"]]
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
   , tdForeignKeys = []

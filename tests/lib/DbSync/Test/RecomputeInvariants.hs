@@ -9,13 +9,26 @@ module DbSync.Test.RecomputeInvariants
   ( epochFinalizedDriftCount
   , blockTxCountDriftCount
   , txOutSumDriftCount
+  , duplicateEpochRowGroupCount
+  , epochContiguityGapCount
+  , consumedByDriftCount
   ) where
 
 import Cardano.Prelude
 
 import qualified Data.Text as T
 
+import DbSync.Db.Schema.AdaPots (adaPotsTableDef)
+import DbSync.Db.Schema.Core (TxCols (..), blockTableDef, txCols)
+import DbSync.Db.Schema.EpochBoundary (epochParamTableDef, epochStateTableDef)
+import DbSync.Db.Schema.EpochSyncStats (epochSyncStatsTableDef)
+import DbSync.Db.Schema.Governance (drepDistrTableDef)
+import DbSync.Db.Schema.Pool (poolStatTableDef)
+import DbSync.Db.Schema.StakeDelegation (epochStakeProgressTableDef)
+import DbSync.Db.Schema.Types (TableColumn (..), TableDef (..))
+import DbSync.Db.Schema.UTxO (TxInCols (..), TxOutCols (..), txInCols, txOutCols)
 import DbSync.Test.Database (queryTestDb)
+import DbSync.Test.PgAssertions (tableColumn)
 
 -- ---------------------------------------------------------------------------
 -- * Invariant checks
@@ -74,6 +87,113 @@ txOutSumDriftCount =
       , "WHERE t.valid_contract = true"
       , "  AND t.out_sum <> COALESCE(o.s, 0)"
       ]
+
+-- | Tables Follow writes at most once per natural key; a boundary
+-- crossed twice without rollback cleanup shows up as a duplicate
+-- group. Keys derive from each table's sole unique constraint so the
+-- check tracks schema edits.
+epochKeyedTables :: [TableDef]
+epochKeyedTables =
+  [ epochStateTableDef
+  , adaPotsTableDef
+  , epochParamTableDef
+  , poolStatTableDef
+  , drepDistrTableDef
+  , epochSyncStatsTableDef
+  , epochStakeProgressTableDef
+  ]
+
+-- | Natural-key groups holding more than one row, summed across every
+-- 'epochKeyedTables' member present in the schema (profiles disable
+-- some extractors, so a missing table counts as clean).
+duplicateEpochRowGroupCount :: IO Int
+duplicateEpochRowGroupCount = do
+  counts <- for epochKeyedTables $ \td -> do
+    present <- tablePresent (tdName td)
+    if present then countViolations (dupGroupsQuery td) else pure 0
+  pure (sum counts)
+  where
+    dupGroupsQuery td =
+      let keyCols = case tdUniqueConstraints td of
+            [k] -> T.intercalate ", " (toList k)
+            _   -> panic $
+              "duplicateEpochRowGroupCount: " <> tdName td
+                <> " must declare exactly one unique constraint"
+      in T.unwords
+        [ "SELECT", keyCols, "FROM", tdName td
+        , "GROUP BY", keyCols
+        , "HAVING COUNT(*) > 1"
+        ]
+
+-- | Disagreements between @tx_in@ and @tx_out.consumed_by_tx_id@,
+-- in both directions: a spent output whose mark is missing or names
+-- the wrong spender, and a marked output that no @tx_in@ row claims.
+-- The producer is located through @tx.hash@ so rows whose
+-- @tx_in.tx_out_id@ is still unresolved are covered too. Only valid
+-- for profiles with @utxo.consumed_by_tx_id@ enabled.
+consumedByDriftCount :: IO Int
+consumedByDriftCount = do
+  present <- tablePresent txIn
+  if not present
+    then pure 0
+    else do
+      wrongOrMissing <- countViolations $ T.unwords
+        [ "SELECT ti." <> name txInCols.ticId
+        , "FROM " <> txIn <> " ti"
+        , "JOIN " <> tx <> " t"
+        , "  ON t." <> name txCols.tcHash <> " = ti." <> name txInCols.ticTxOutHash
+        , "JOIN " <> txOut <> " o"
+        , "  ON o." <> name txOutCols.tocTxId <> " = t." <> name txCols.tcId
+        , " AND o." <> name txOutCols.tocIndex <> " = ti." <> name txInCols.ticTxOutIndex
+        , "WHERE o." <> consumedBy <> " IS DISTINCT FROM ti." <> name txInCols.ticTxInId
+        ]
+      phantom <- countViolations $ T.unwords
+        [ "SELECT o." <> name txOutCols.tocId
+        , "FROM " <> txOut <> " o"
+        , "WHERE o." <> consumedBy <> " IS NOT NULL"
+        , "  AND NOT EXISTS ("
+        , "    SELECT 1 FROM " <> txIn <> " ti"
+        , "    JOIN " <> tx <> " t"
+        , "      ON t." <> name txCols.tcHash <> " = ti." <> name txInCols.ticTxOutHash
+        , "    WHERE t." <> name txCols.tcId <> " = o." <> name txOutCols.tocTxId
+        , "      AND ti." <> name txInCols.ticTxOutIndex <> " = o." <> name txOutCols.tocIndex
+        , "  )"
+        ]
+      pure (wrongOrMissing + phantom)
+  where
+    name       = tcName
+    txIn       = tdName (tcTable txInCols.ticId)
+    txOut      = tdName (tcTable txOutCols.tocId)
+    tx         = tdName (tcTable txCols.tcId)
+    consumedBy = name txOutCols.tocConsumedByTxId
+
+-- | Epoch numbers inside @[MIN .. MAX]@ of @block.epoch_no@ that no
+-- block row carries — a hole means a rollback/re-advance lost an
+-- epoch's blocks.
+epochContiguityGapCount :: IO Int
+epochContiguityGapCount =
+  countViolations $
+    T.unwords
+      [ "SELECT s.no FROM ("
+      , "  SELECT generate_series(MIN(" <> epochNo <> "), MAX(" <> epochNo <> ")) AS no"
+      , "  FROM " <> blockTbl <> " WHERE " <> epochNo <> " IS NOT NULL"
+      , ") s"
+      , "LEFT JOIN (SELECT DISTINCT " <> epochNo <> " FROM " <> blockTbl <> ") b"
+      , "  ON b." <> epochNo <> " = s.no"
+      , "WHERE b." <> epochNo <> " IS NULL"
+      ]
+  where
+    blockTbl = tdName blockTableDef
+    epochNo  = tableColumn blockTableDef "epoch_no"
+
+-- ---------------------------------------------------------------------------
+-- * Internal
+-- ---------------------------------------------------------------------------
+
+tablePresent :: Text -> IO Bool
+tablePresent table = do
+  t <- T.strip <$> queryTestDb ("SELECT to_regclass('" <> table <> "') IS NOT NULL;")
+  pure (t == "t")
 
 -- Count the rows a mismatch query returns; -1 if the count fails to parse.
 countViolations :: Text -> IO Int

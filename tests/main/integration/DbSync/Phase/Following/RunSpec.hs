@@ -75,7 +75,7 @@ import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Extractor.UTxO (utxoExtractor)
 import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.Phase.Type (SyncPhase (..))
-import DbSync.Phase.Following.Resolver (mkFollowResolver)
+import DbSync.Phase.Following.Resolver (ConsumedTracking (..), mkFollowResolver)
 import DbSync.Test.Database
   ( queryTestDb
   , setupFollowTipSchema
@@ -556,7 +556,7 @@ countOf td = T.strip <$>
 runFollowWith :: [ExtractorDef] -> [GenericBlock] -> IO ()
 runFollowWith ex blocks =
   withTestConnection $ \conn -> do
-    resolver <- mkFollowResolver conn
+    resolver <- mkFollowResolver conn TrackConsumedBy
     let writer = FollowingWriter.mkWriter conn
         env    =
           mkTestPipelineEnvWith

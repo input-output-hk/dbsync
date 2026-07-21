@@ -170,18 +170,22 @@ data IndexStatement = IndexStatement
   }
   deriving stock (Eq, Show)
 
--- | One entry for the primary key (defaulting to @id@ when
--- 'tdPrimaryKey' is 'Nothing') plus one per unique constraint.
+-- | One entry for the implicit @id@ key when no primary key is
+-- declared, plus one per unique constraint. A declared
+-- 'tdPrimaryKey' already carries its unique index from CREATE TABLE
+-- time, so emitting @\<table>_pkey_idx@ for it would just duplicate
+-- the @\<table>_pkey@ constraint index.
 -- 'Concurrent' = @CREATE INDEX CONCURRENTLY@ (live database, no
 -- @ShareLock@); 'NonConcurrent' = full parallel maintenance worker
 -- support.
 tableIndexStatements :: Concurrency -> TableDef -> [IndexStatement]
 tableIndexStatements conc td =
-  pkStatement : uniqueStatements <> foreignKeyIndexStatements conc td
+  pkStatements <> uniqueStatements <> foreignKeyIndexStatements conc td
   where
-    pkCols = fromMaybe ["id"] (tdPrimaryKey td)
-    pkStatement =
-      renderIndex conc Unique (tdName td <> "_pkey_idx") (tdName td) pkCols
+    pkStatements = case tdPrimaryKey td of
+      Just _  -> []
+      Nothing ->
+        [renderIndex conc Unique (tdName td <> "_pkey_idx") (tdName td) ["id"]]
 
     uniqueStatements =
       zipWith

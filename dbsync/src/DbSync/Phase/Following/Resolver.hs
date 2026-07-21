@@ -22,7 +22,8 @@
 -- Per-extractor method bodies live in @Resolver\/\<extractor\>.hs@;
 -- this module composes them.
 module DbSync.Phase.Following.Resolver
-  ( mkFollowResolver
+  ( ConsumedTracking (..)
+  , mkFollowResolver
   , mkBufferedFollowResolver
   ) where
 
@@ -44,6 +45,7 @@ import qualified DbSync.Phase.Following.Resolver.Pool as Pool
 import qualified DbSync.Phase.Following.Resolver.ScriptsDatums as ScriptsDatums
 import qualified DbSync.Phase.Following.Resolver.StakeDelegation as Stake
 import qualified DbSync.Phase.Following.Resolver.UTxO as UTxO
+import DbSync.Phase.Following.Resolver.UTxO (ConsumedTracking (..))
 import DbSync.Phase.Following.IdAllocator (PreAllocatedIds)
 import DbSync.Phase.Following.WriteBuffer (WriteBuffer)
 import DbSync.Resolver (IdResolver (..))
@@ -55,8 +57,8 @@ import DbSync.Resolver (IdResolver (..))
 -- | Build a direct (un-buffered) Follow resolver. Every assigner
 -- does a @nextval@ round-trip; every dedup resolver does
 -- @SELECT@ then @nextval@ on miss.
-mkFollowResolver :: Conn.Connection -> IO (IdResolver IO)
-mkFollowResolver conn = do
+mkFollowResolver :: Conn.Connection -> ConsumedTracking -> IO (IdResolver IO)
+mkFollowResolver conn consumedTracking = do
   lastBlock <- newIORef Nothing
   gov       <- Governance.newGovScratchpad
   pure IdResolver
@@ -73,10 +75,10 @@ mkFollowResolver conn = do
     , resolveAddressId             = UTxO.resolveAddressIdConn         conn
     , assignTxOutId                = UTxO.assignTxOutIdConn             conn
     , assignCollateralTxOutId      = UTxO.assignCollateralTxOutIdConn   conn
-    , resolveInputValues           = UTxO.resolveInputValuesFollow      conn
-    , resolveInputUtxo             = UTxO.resolveInputUtxoFollow        conn
-    , recordTxOutputs              = UTxO.recordTxOutputsFollow
-    , recordConsumed               = UTxO.recordConsumedFollow
+    , resolveInputValues           = UTxO.resolveInputValuesConn        conn
+    , resolveInputUtxo             = UTxO.resolveInputUtxoConn          conn
+    , recordTxOutputs              = UTxO.recordTxOutputsConn
+    , recordConsumed               = UTxO.recordConsumedConn            conn consumedTracking
     , deleteCachedUtxo             = UTxO.deleteCachedUtxoFollow
 
       -- MultiAsset
@@ -142,12 +144,17 @@ mkFollowResolver conn = do
 --   * @resolveAddressId@ resolves synchronously, queuing the
 --     @address@ INSERT (when new) on the shared 'WriteBuffer'. The
 --     extractor writes the tx_out row with @address_id@ filled in.
+--   * @recordTxOutputs@ fills a block-local outputs map so a
+--     same-block spend resolves its producer while the tx_out
+--     INSERT is still unflushed; @recordConsumed@ queues the
+--     consumed-by UPDATE behind it on the same pipeline.
 mkBufferedFollowResolver
   :: Conn.Connection
   -> PreAllocatedIds
   -> WriteBuffer
+  -> ConsumedTracking
   -> IO (IdResolver IO)
-mkBufferedFollowResolver conn preAlloc buf = do
+mkBufferedFollowResolver conn preAlloc buf consumedTracking = do
   lastBlock <- newIORef Nothing
   cache     <- newBlockDedupCache
   gov       <- Governance.newGovScratchpad
@@ -166,10 +173,10 @@ mkBufferedFollowResolver conn preAlloc buf = do
     , resolveAddressId             = UTxO.resolveAddressIdBuf            conn buf cache
     , assignTxOutId                = UTxO.assignTxOutIdBuf                preAlloc
     , assignCollateralTxOutId      = UTxO.assignCollateralTxOutIdBuf      preAlloc
-    , resolveInputValues           = UTxO.resolveInputValuesFollow         conn
-    , resolveInputUtxo             = UTxO.resolveInputUtxoFollow           conn
-    , recordTxOutputs              = UTxO.recordTxOutputsFollow
-    , recordConsumed               = UTxO.recordConsumedFollow
+    , resolveInputValues           = UTxO.resolveInputValuesBuf           conn cache
+    , resolveInputUtxo             = UTxO.resolveInputUtxoBuf             conn cache
+    , recordTxOutputs              = UTxO.recordTxOutputsBuf              cache
+    , recordConsumed               = UTxO.recordConsumedBuf               buf consumedTracking
     , deleteCachedUtxo             = UTxO.deleteCachedUtxoFollow
 
       -- MultiAsset

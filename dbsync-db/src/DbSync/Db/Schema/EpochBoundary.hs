@@ -247,8 +247,8 @@ data Reserve = Reserve
 -- their @show \@Double@ encoding. Conway-era fields (committee
 -- thresholds, gov-action params) are all nullable.
 --
--- UNIQUE on @(epoch_no, block_id)@: the same epoch_no may
--- legitimately appear with different block_ids across resyncs.
+-- UNIQUE on @epoch_no@: one row per epoch. A rollback re-crossing
+-- the boundary refreshes the row (including @block_id@) via upsert.
 epochParamTableDef :: TableDef
 epochParamTableDef = TableDef
   { tdName    = "epoch_param"
@@ -313,7 +313,7 @@ epochParamTableDef = TableDef
   , tdPrimaryKey        = Nothing
   , tdChecks            = []
   , tdColumnDefaults    = []
-  , tdUniqueConstraints = ["epoch_no" :| ["block_id"]]
+  , tdUniqueConstraints = [pure "epoch_no"]
   , tdGeneratedColumns  = []
   , tdIdentityColumns = ["id"]
   , tdForeignKeys =
@@ -323,7 +323,7 @@ epochParamTableDef = TableDef
 
 -- | 4-column @epoch_state@. All three FK columns are nullable; the
 -- writer sets them based on what governance state is enacted at
--- the boundary.
+-- the boundary. UNIQUE on @epoch_no@: one row per epoch.
 epochStateTableDef :: TableDef
 epochStateTableDef = TableDef
   { tdName    = "epoch_state"
@@ -338,7 +338,7 @@ epochStateTableDef = TableDef
   , tdPrimaryKey        = Nothing
   , tdChecks            = []
   , tdColumnDefaults    = []
-  , tdUniqueConstraints = []
+  , tdUniqueConstraints = [pure "epoch_no"]
   , tdGeneratedColumns  = []
   , tdIdentityColumns = ["id"]
   , tdForeignKeys       = []

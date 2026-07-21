@@ -267,19 +267,20 @@ data IdResolver m = IdResolver
     -- Used by the UTxO extractor to write @tx_in.tx_out_id@ at COPY
     -- time, to enqueue the consumed-by triple keyed by the output's
     -- 'TxOutId', and to accumulate input values for the deposit
-    -- calculation. Follow resolves via SQL; Ingest reads from the
-    -- in-process 'UtxoStore'.
+    -- calculation. Ingest reads from the in-process 'UtxoStore';
+    -- buffered Follow checks the block-local outputs map (the
+    -- producer's INSERT may still be unflushed) before SQL.
   , resolveInputUtxo :: !(ByteString -> Word16 -> m (Maybe (TxId, TxOutId, DbLovelace)))
 
-    -- | Record a tx's outputs in the Ingest 'UtxoStore' so later
-    -- inputs spending them resolve at COPY time. No-op in Follow.
+    -- | Record a tx's outputs so later inputs spending them resolve
+    -- in-process: into the Ingest 'UtxoStore', or the buffered
+    -- Follow resolver's block-local map.
   , recordTxOutputs :: !(ByteString -> UtxoTxEntry -> m ())
 
-    -- | Buffer a @(producer_tx_out_id, consumer_tx_id)@ pair for the
-    -- 'TxOutWorker'. Called by the UTxO extractor on a cache hit; the
-    -- worker fans these into a bulk UPDATE against
-    -- @tx_out.consumed_by_tx_id@ at the next epoch boundary. No-op
-    -- when @utxo.consumed_by_tx_id@ is off and in Follow.
+    -- | Mark the producer output consumed by the tx. Ingest buffers
+    -- the pair for the 'TxOutWorker''s per-epoch bulk UPDATE;
+    -- Follow runs the UPDATE inside the block's own transaction.
+    -- No-op when @utxo.consumed_by_tx_id@ is off.
   , recordConsumed :: !(TxOutId -> TxId -> m ())
 
     -- | Remove a consumed output from the Ingest 'UtxoStore' so the

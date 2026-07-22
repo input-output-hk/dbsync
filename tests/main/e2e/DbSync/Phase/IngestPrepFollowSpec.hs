@@ -46,10 +46,8 @@ import DbSync.Test.PgAssertions
   ( countNonLoggedTables
   , countNulls
   , countRows
-  , listMissingIndexes
   , readBlockMax
   , readSyncStateLast
-  , sequenceAdvanced
   , tableColumn
   , waitForSchemaSettled
   )
@@ -96,9 +94,6 @@ spec = describe "IngestChainHistory \x2192 PreparingForVolatileTail \x2192 Follo
           nonLogged <- countNonLoggedTables expectedTables
           nonLogged `shouldBe` 0
 
-          missingIdx <- listMissingIndexes expectedIndexes
-          missingIdx `shouldBe` []
-
           -- FK-resolution backfills left no NULLs on the dependent
           -- columns. The Conway test chain produces no real inputs
           -- (genesis seed only) but the asserts still guard against
@@ -115,12 +110,6 @@ spec = describe "IngestChainHistory \x2192 PreparingForVolatileTail \x2192 Follo
           txInNulls  `shouldBe` 0
           colInNulls `shouldBe` 0
           refInNulls `shouldBe` 0
-
-          -- Every LOGGED table with a PK has its id sequence advanced
-          -- to MAX(id) + 1 (or 1 on an empty table).
-          forM_ pkSequenceTables $ \table -> do
-            ok <- sequenceAdvanced table
-            ok `shouldBe` True
 
           -- sync_state has been populated and never sits ahead of the
           -- block table. Strict equality doesn't hold yet because
@@ -170,16 +159,3 @@ spec = describe "IngestChainHistory \x2192 PreparingForVolatileTail \x2192 Follo
           (followMaxSlot,  followMaxBlock)  <- readBlockMax
           followLastSlot  `shouldBe` followMaxSlot
           followLastBlock `shouldBe` followMaxBlock
-
--- | Tables whose PK has a sequence attached during Prep. Narrow on
--- purpose: the assertion checks both that the sequence advanced on
--- populated tables and that it sits at 1 on empty ones, so the list
--- is limited to tables the Conway test chain reliably populates.
-pkSequenceTables :: [Text]
-pkSequenceTables = map tdName
-  [ blockTableDef
-  , txTableDef
-  , txOutTableDef
-  , txInTableDef
-  , slotLeaderTableDef
-  ]

@@ -1,121 +1,37 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Pure (no DB) tests for the @dbsync_sync_state@ schema definition.
---
--- These tests lock the DDL shape against a golden string and verify
--- the derived column helpers stay in sync with the 'TableDef'.
--- Anything that changes the on-disk schema layout will break one
--- of these tests loudly — which is what we want for a schema that
--- every ingestion commit depends on.
+-- | Pure (no DB) tests for the @dbsync_sync_state@ schema: the golden
+-- CREATE TABLE DDL and the counter-column cross-check that the resume
+-- cleanup depends on.
 module DbSync.Schema.SyncStateSpec (spec) where
 
 import Cardano.Prelude
 
 import Data.Algorithm.Diff (Diff, PolyDiff (..), getDiff)
-import Data.List (last, lookup)
 import qualified Data.Text as T
 
-import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, describe, it, shouldBe)
 
 import DbSync.Db.Schema.Generate (generateCreateTable)
 import DbSync.Db.Schema.SyncState
   ( idCounterByTable
-  , syncStateColumns
-  , syncStateCounterColumns
   , syncStateTableDef
-  , syncStateTableName
   )
 import DbSync.Db.Schema.Types
   ( ColumnDef (..)
   , TableDef (..)
-  , TableMode (..)
   )
 
 spec :: Spec
 spec = describe "DbSync.Db.Schema.SyncState" $ do
 
-  describe "syncStateTableName" $
-    it "is dbsync_sync_state" $
-      syncStateTableName `shouldBe` "dbsync_sync_state"
-
-  describe "syncStateTableDef shape" $ do
-    it "uses the singleton table name" $
-      tdName syncStateTableDef `shouldBe` syncStateTableName
-
-    it "is LOGGED from day one (no UNLOGGED promotion dance)" $
-      tdMode syncStateTableDef `shouldBe` TableLogged
-
-    it "has a single-column primary key on id" $
-      tdPrimaryKey syncStateTableDef `shouldBe` Just ["id"]
-
-    it "enforces the single-row CHECK constraint" $
-      tdChecks syncStateTableDef `shouldBe` [ "\"id\" = 1" ]
-
-    it "counter columns all default to 1" $ do
-      let defaults = tdColumnDefaults syncStateTableDef
-      forM_ syncStateCounterColumns $ \col ->
-        lookup col defaults `shouldBe` Just "1"
-
-    it "id column defaults to 1" $
-      lookup "id" (tdColumnDefaults syncStateTableDef) `shouldBe` Just "1"
-
-    it "updated_at defaults to now()" $
-      lookup "updated_at" (tdColumnDefaults syncStateTableDef) `shouldBe` Just "now()"
-
-    it "state-marker columns (last_committed_*, last_snapshot_slot, pending_rollback_slot) are nullable" $ do
-      let nullableByName =
-            [ (cdName col, cdNullable col)
-            | col <- tdColumns syncStateTableDef
-            , cdName col `elem`
-                [ "last_committed_slot"
-                , "last_committed_block_no"
-                , "last_committed_block_hash"
-                , "last_snapshot_slot"
-                , "pending_rollback_slot"
-                ]
-            ]
-      nullableByName `shouldBe`
-        [ ("last_committed_slot", True)
-        , ("last_committed_block_no", True)
-        , ("last_committed_block_hash", True)
-        , ("last_snapshot_slot", True)
-        , ("pending_rollback_slot", True)
-        ]
-
-  describe "syncStateColumns" $ do
-    it "matches the table's column order" $
-      syncStateColumns `shouldBe` map cdName (tdColumns syncStateTableDef)
-
-    it "lists id + 3 last_committed_* + last_snapshot_slot + counters + 6 metadata + pending_rollback_slot" $
-      length syncStateColumns `shouldBe` 1 + 3 + 1 + length syncStateCounterColumns + 6 + 1
-
-    it "starts with id" $
-      head syncStateColumns `shouldBe` Just "id"
-
-    it "ends with updated_at" $
-      last syncStateColumns `shouldBe` "updated_at"
-
-  describe "syncStateCounterColumns" $ do
-    it "lists one counter per IdCounters field" $
-      length syncStateCounterColumns `shouldBe` 20
-
-    it "is a subset of syncStateColumns" $
-      all (`elem` syncStateColumns) syncStateCounterColumns `shouldBe` True
-
-  describe "idCounterByTable" $ do
+  describe "idCounterByTable" $
     -- The table-name half of 'idCounterByTable' drives the resume
     -- cleanup's counter pass. Adding a counter column without a
     -- matching entry leaves rows past the recorded id on the next
     -- boot — the exact bug the cleanup exists to fix. Both
     -- directions are pinned so renaming a table without updating
     -- the counter list also fails.
-    it "has the same number of entries as syncStateCounterColumns" $
-      length idCounterByTable `shouldBe` length syncStateCounterColumns
-
-    it "pairs each entry with its <table>_id_counter column, in order" $ do
-      let derivedColumns = map ((<> "_id_counter") . fst) idCounterByTable
-      derivedColumns `shouldBe` syncStateCounterColumns
-
     it "covers every _id_counter column on the table" $ do
       let tableCounters =
             filter (T.isSuffixOf "_id_counter")
@@ -123,38 +39,10 @@ spec = describe "DbSync.Db.Schema.SyncState" $ do
           derived = map ((<> "_id_counter") . fst) idCounterByTable
       derived `shouldBe` tableCounters
 
-  describe "generateCreateTable syncStateTableDef" $ do
-    let ddl = generateCreateTable syncStateTableDef
-
-    it "produces a LOGGED CREATE TABLE (no UNLOGGED keyword)" $ do
-      ddl `shouldSatisfy` T.isInfixOf "CREATE TABLE"
-      ddl `shouldSatisfy` (not . T.isInfixOf "UNLOGGED")
-
-    it "includes the table name" $
-      ddl `shouldSatisfy` T.isInfixOf "\"dbsync_sync_state\""
-
-    it "emits the PRIMARY KEY (id) clause" $
-      ddl `shouldSatisfy` T.isInfixOf "PRIMARY KEY (\"id\")"
-
-    it "emits the CHECK (id = 1) constraint" $
-      ddl `shouldSatisfy` T.isInfixOf "CHECK (\"id\" = 1)"
-
-    it "sets DEFAULT 1 on counter columns" $
-      ddl `shouldSatisfy` T.isInfixOf "\"block_id_counter\" BIGINT NOT NULL DEFAULT 1"
-
-    it "sets DEFAULT now() on updated_at" $
-      ddl `shouldSatisfy` T.isInfixOf
-        "\"updated_at\" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()"
-
-    it "makes last_committed_slot nullable (no NOT NULL)" $ do
-      let slotLine =
-            T.unlines $
-              filter (T.isInfixOf "last_committed_slot") (T.lines ddl)
-      slotLine `shouldSatisfy` (not . T.isInfixOf "NOT NULL")
-
+  describe "generateCreateTable syncStateTableDef" $
     -- Line-by-line so a mismatch prints only the differing lines.
     it "matches the golden DDL line-by-line" $
-      diffLines ddl goldenDdl `shouldBe` []
+      diffLines (generateCreateTable syncStateTableDef) goldenDdl `shouldBe` []
 
 -- | The expected CREATE TABLE output. Updating this string is the
 -- canonical way to change the on-disk schema: edit 'syncStateTableDef',

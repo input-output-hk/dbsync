@@ -19,7 +19,7 @@ import qualified Data.Text as T
 import Data.IORef (IORef, atomicWriteIORef, newIORef, readIORef)
 import qualified Ouroboros.Network.Block as Network
 
-import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, describe, it, shouldBe)
 
 import Ouroboros.Network.Block (data BlockPoint)
 
@@ -142,7 +142,9 @@ spec = describe "FollowingChainTip at-tip behaviour" $ do
       appliedAfter <- countLogsMatching logs isAppliedBlockTip
       phaseAfter   <- countLogsMatching logs isPhaseTransition
 
-      (appliedAfter - appliedBefore) `shouldSatisfy` (>= 5)
+      -- Five pushes at tip, each waited for, so exactly five new
+      -- applied-block logs — no stray blocks in a manual-forge chain.
+      (appliedAfter - appliedBefore) `shouldBe` 5
       -- The phase didn't oscillate: same count before and after.
       phaseAfter `shouldBe` phaseBefore
 

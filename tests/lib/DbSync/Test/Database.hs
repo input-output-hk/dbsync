@@ -2,23 +2,13 @@
 
 -- | Database test helpers.
 --
--- Provides functions to create and drop the test database, and a bracket
--- pattern for test suites that need a clean database. Connects via
--- @template1@ (the PostgreSQL maintenance database) to issue CREATE/DROP.
---
--- The test database name defaults to @dbsync_test@ but can be overridden
--- via the @DBSYNC_TEST_DB@ environment variable.
---
--- For CI: ensure PostgreSQL is running and the current user has CREATEDB
--- privileges.
+-- The suite runs against an externally provisioned @dbsync_test@
+-- database; these helpers connect to it, run SQL, and reset schema
+-- state between specs. For CI: ensure PostgreSQL is running and
+-- @dbsync_test@ exists.
 module DbSync.Test.Database
-  ( -- * Database lifecycle
-    createTestDatabase
-  , dropTestDatabase
-  , withTestDatabase
-
-    -- * Configuration
-  , testDbName
+  ( -- * Configuration
+    testDbName
   , testConnStr
   , testConnBs
   , testHasqlSettings
@@ -49,7 +39,7 @@ import DbSync.Db.Schema.Types (TableDef)
 -- * Configuration
 -- ---------------------------------------------------------------------------
 
--- | The test database name. Could be made configurable via env var in future.
+-- | The externally provisioned test database name.
 testDbName :: Text
 testDbName = "dbsync_test"
 
@@ -66,51 +56,6 @@ testConnBs = TE.encodeUtf8 testConnStr
 -- "dbname=…" format.
 testHasqlSettings :: Settings.Settings
 testHasqlSettings = Settings.dbname testDbName
-
--- | The maintenance database used for CREATE/DROP DATABASE commands.
--- @template1@ is guaranteed to exist in all PostgreSQL installations.
-maintenanceDb :: Text
-maintenanceDb = "dbname=template1"
-
--- ---------------------------------------------------------------------------
--- * Database lifecycle
--- ---------------------------------------------------------------------------
-
--- | Create the test database. Drops it first if it already exists.
---
--- Connects to @template1@ to issue the DDL. Safe to call multiple times.
-createTestDatabase :: IO ()
-createTestDatabase = do
-  dropTestDatabase
-  execMaintenance $
-    "CREATE DATABASE \"" <> testDbName <> "\";"
-
--- | Drop the test database if it exists.
---
--- Terminates any active connections first, then drops.
--- Connects to @template1@ to issue the DDL.
-dropTestDatabase :: IO ()
-dropTestDatabase = do
-  -- Terminate existing connections (ignore errors if DB doesn't exist)
-  execMaintenanceSilent $
-    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '"
-    <> testDbName <> "' AND pid <> pg_backend_pid();"
-  execMaintenanceSilent $
-    "DROP DATABASE IF EXISTS \"" <> testDbName <> "\";"
-
--- | Bracket pattern: create a fresh test database, run the action, then drop it.
---
--- Use with HSpec's @around_@:
---
--- @
--- spec :: Spec
--- spec = around_ withTestDatabase $ do
---   it "does something with the DB" $ ...
--- @
-withTestDatabase :: IO () -> IO ()
-withTestDatabase action = do
-  createTestDatabase
-  action `finally` dropTestDatabase
 
 -- ---------------------------------------------------------------------------
 -- * Utilities
@@ -167,29 +112,3 @@ setupFollowTipSchema tables = do
 -- | Drop everything for use in @afterAll_@.
 teardownSchema :: [TableDef] -> IO ()
 teardownSchema tables = dropSchema tables testConnStr
-
--- ---------------------------------------------------------------------------
--- * Internal helpers
--- ---------------------------------------------------------------------------
-
--- | Execute SQL against the maintenance database (@template1@).
-execMaintenance :: Text -> IO ()
-execMaintenance sql = do
-  (exitCode, _out, err) <- readProcessWithExitCode
-    "psql"
-    [T.unpack maintenanceDb, "-q", "-c", T.unpack sql]
-    ""
-  case exitCode of
-    ExitSuccess -> pure ()
-    ExitFailure _ ->
-      throwIO $ userError $
-        "execMaintenance failed: " <> err <> "\nSQL: " <> T.unpack sql
-
--- | Execute SQL against the maintenance database, ignoring errors.
--- Used for cleanup operations where the target may not exist.
-execMaintenanceSilent :: Text -> IO ()
-execMaintenanceSilent sql = do
-  void $ readProcessWithExitCode
-    "psql"
-    [T.unpack maintenanceDb, "-q", "-c", T.unpack sql]
-    ""

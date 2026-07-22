@@ -2,13 +2,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
--- | Throughput test for 'FollowingChainTip' on /realistic/ blocks.
---
--- The sibling 'DbSync.Phase.FollowPerfSpec' drains an empty-block
--- batch (one block row, no tx rows) and asserts only that the
--- per-block transaction envelope hasn't regressed catastrophically.
--- Because it has no tx rows, that test is silent on the per-tx
--- bottleneck operators actually hit.
+-- | Follow-drain coverage on /realistic/ blocks, with a throughput
+-- report.
 --
 -- This spec forges blocks closer to mainnet's mid-traffic shape
 -- (~10 payment txs per block, each consuming one bulk-genesis UTxO
@@ -26,16 +21,15 @@
 --     flush.
 --   * BEGIN, the flush, COMMIT.
 --
--- That's the per-block path the production 0.5 blk/s symptom
--- exercises. The shape is intentionally light by mainnet standards
+-- That's the per-block path a Follow throughput regression would
+-- exercise. The shape is intentionally light by mainnet standards
 -- (single-decimal txs per block; no multi-asset; no delegations) so
--- CI runtime stays bounded; the shape grows in follow-ups as more
--- extractors and richer forging primitives become available.
+-- CI runtime stays bounded.
 --
--- The regression floor is intentionally soft (> 4 blk/s on local
--- PG). The point of the test is to fire when the per-block hot
--- path slows by an order of magnitude — not to track every
--- millisecond.
+-- The CI gate is functional only: every pushed block drains and
+-- every built tx lands. Wall-clock throughput is machine-dependent,
+-- so it is reported to stderr for before\/after comparison rather
+-- than asserted; the real perf validation is a manual testnet run.
 module DbSync.Phase.FollowPerfRealisticSpec (spec) where
 
 import Cardano.Prelude hiding (hPutStrLn)
@@ -76,7 +70,7 @@ import DbSync.Test.PgAssertions (countRows)
 spec :: Spec
 spec = describe "FollowingChainTip throughput on realistic blocks" $ do
 
-  it "drains a realistic batch above the regression floor" $ do
+  it "drains a realistic batch completely, reporting throughput to stderr" $ do
     withMockNode conwayConfigDir $ \mn ->
       withTempDir "dbsync-perf-realistic" $ \ledgerDir -> do
 
@@ -151,12 +145,6 @@ spec = describe "FollowingChainTip throughput on realistic blocks" $ do
           -- And produced at least the txs we built; allows for slack
           -- if a future shape adds optional certs / mints.
           txsDone `shouldSatisfy` (>= expectedTxsMin)
-          -- 4 blk/s is the floor: comfortably above the ~0.5 blk/s
-          -- production symptom the spec is meant to catch, while
-          -- absorbing local-machine variance against the expected
-          -- ~50 blk/s baseline. Tighten when a stable CI baseline
-          -- exists.
-          rate `shouldSatisfy` (> 4.0)
 
 -- | Poll @count(*) FROM block@ until it reaches @minTotal@ or the
 -- timeout elapses. Returns the most recent observed count rather

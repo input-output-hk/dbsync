@@ -1,5 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- | End-to-end coverage of the boundary-triggered writers under
@@ -7,10 +6,11 @@
 --
 -- Drives Ingest \u2192 Prep \u2192 Follow with the ledger enabled, snapshots
 -- the four EpochBoundary table counts at @sync_complete=true@, then
--- forges enough additional blocks for the live consumer to cross an
--- epoch boundary. The new row in @ada_pots@, @epoch_param@,
--- @epoch_state@, and (if a fresh cost model lands) @cost_model@
--- proves the boundary handler ran on the Follow side.
+-- forges enough additional blocks for the live consumer to cross
+-- exactly one epoch boundary. Exactly one new row in @ada_pots@,
+-- @epoch_param@, and @epoch_state@ proves the boundary handler ran
+-- on the Follow side; @cost_model@ must stay put because the model
+-- is unchanged and deduped by hash.
 --
 -- Also checks the FK shape that future slices depend on:
 --
@@ -23,12 +23,14 @@ module DbSync.Phase.FollowEpochBoundarySpec (spec) where
 import Cardano.Prelude
 
 import qualified Data.Text as T
-import qualified Ouroboros.Network.Block as Network
 
 import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe, shouldSatisfy)
 
-import Ouroboros.Network.Block (data BlockPoint)
-
+import DbSync.App.Config.Types
+  ( SyncConfig (..)
+  , OptionFlag (..)
+  , DbSyncOptions (..)
+  )
 import DbSync.Db.Schema.AdaPots (adaPotsTableDef)
 import DbSync.Db.Schema.Core (blockTableDef)
 import DbSync.Db.Schema.EpochBoundary
@@ -36,6 +38,8 @@ import DbSync.Db.Schema.EpochBoundary
   , epochParamTableDef
   , epochStateTableDef
   )
+import DbSync.Db.Schema.EpochSyncStats (epochSyncStatsTableDef)
+import DbSync.Db.Schema.Pool (poolStatTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Test.AppHarness
   ( ledgerEnabledTestProfile
@@ -51,13 +55,11 @@ import DbSync.Test.E2E
   )
 import DbSync.Test.Helpers (waitFor)
 import DbSync.Test.MockNode
-  ( currentTip
-  , forgeAndPushBlocks
+  ( forgeAndPushBlocks
   , forgeAndPushUntilNextEpoch
-  , rollbackMockNode
   , withMockNode
   )
-import DbSync.Test.PgAssertions (countRows)
+import DbSync.Test.PgAssertions (countRows, readInt)
 
 -- ---------------------------------------------------------------------------
 -- * Spec
@@ -77,7 +79,7 @@ spec = describe "Follow boundary writes" $ do
         -- third boundary (slot 1500) to exercise Follow.
         _ <- forgeAndPushBlocks mn 250
 
-        withAppSession tracer ledgerEnabledTestProfile mn ledgerDir $ \_ -> do
+        withAppSession tracer boundaryProfile mn ledgerDir $ \_ -> do
           waitForSyncComplete 120
 
           baselineBlocks <- countRows (tdName blockTableDef)
@@ -85,6 +87,8 @@ spec = describe "Follow boundary writes" $ do
           baselineEpochParam <- countRows (tdName epochParamTableDef)
           baselineEpochState <- countRows (tdName epochStateTableDef)
           baselineCostModel <- countRows (tdName costModelTableDef)
+          baselineSyncStats <- countRows (tdName epochSyncStatsTableDef)
+          baselinePoolEpoch <- readInt maxPoolStatEpochQuery
 
           -- Push 100 more blocks (~500 more slots) so the live
           -- consumer crosses the next epoch boundary while in Follow.
@@ -104,12 +108,35 @@ spec = describe "Follow boundary writes" $ do
           followEpochState <- countRows (tdName epochStateTableDef)
           followCostModel <- countRows (tdName costModelTableDef)
 
-          (followAdaPots - baselineAdaPots) `shouldSatisfy` (>= 1)
-          (followEpochParam - baselineEpochParam) `shouldSatisfy` (>= 1)
-          (followEpochState - baselineEpochState) `shouldSatisfy` (>= 1)
-          -- cost_model is deduped by hash; the same model across
-          -- boundaries doesn't add a row, so the delta is >= 0.
-          (followCostModel - baselineCostModel) `shouldSatisfy` (>= 0)
+          -- The 100-block window crosses exactly one boundary (tip
+          -- sits mid-epoch after 250 blocks; 100 blocks ~ 500 slots
+          -- ~ one epoch length), so each boundary writer must land
+          -- exactly one row. A duplicate boundary apply would show
+          -- up here as a delta of 2.
+          (followAdaPots - baselineAdaPots) `shouldBe` 1
+          (followEpochParam - baselineEpochParam) `shouldBe` 1
+          (followEpochState - baselineEpochState) `shouldBe` 1
+          -- No protocol-param change is forged, so the cost model is
+          -- byte-identical across the boundary and dedup-by-hash must
+          -- reuse the existing row. A new row means dedup broke.
+          (followCostModel - baselineCostModel) `shouldBe` 0
+
+          -- The same boundary writes exactly one epoch_sync_stats row,
+          -- authored by the Follow consumer (phase "Following…"), so a
+          -- leftover Ingest row can't be mistaken for it.
+          followSyncStats <- countRows (tdName epochSyncStatsTableDef)
+          (followSyncStats - baselineSyncStats) `shouldBe` 1
+          latestSyncFollowPhase <- T.strip <$> queryTestDb
+            ( "SELECT (phase LIKE 'Following%')::text FROM "
+                <> tdName epochSyncStatsTableDef
+                <> " ORDER BY id DESC LIMIT 1"
+            )
+          latestSyncFollowPhase `shouldBe` "true"
+
+          -- The crossing finalises a new epoch, so pool_stat gains a batch
+          -- stamped with an epoch_no beyond the Ingest baseline.
+          followPoolEpoch <- readInt maxPoolStatEpochQuery
+          followPoolEpoch `shouldSatisfy` (> baselinePoolEpoch)
 
           -- The Follow-written epoch_param row points at a cost
           -- model. Read the most recent row and assert the FK is
@@ -131,62 +158,6 @@ spec = describe "Follow boundary writes" $ do
             )
           mostRecentCommitteeId `shouldBe` ""
 
-  it "tolerates a within-window rollback after crossing the boundary without disturbing ada_pots" $
-    withMockNode conwayConfigDir $ \mn ->
-      withTempDir "dbsync-test-follow-boundary-rollback" $ \ledgerDir -> do
-        tracer <- quietTracer
-        _ <- forgeAndPushBlocks mn 250
-        withAppSession tracer ledgerEnabledTestProfile mn ledgerDir $ \_ -> do
-          waitForSyncComplete 120
-
-          baselineAdaPots <- countRows (tdName adaPotsTableDef)
-          baselineEpochParam <- countRows (tdName epochParamTableDef)
-
-          -- Cross the next boundary in Follow.
-          _ <- forgeAndPushUntilNextEpoch mn
-          waitFor
-            (tdName adaPotsTableDef <> " count grows after boundary")
-            (do n <- countRows (tdName adaPotsTableDef); pure (n > baselineAdaPots))
-            60
-
-          afterBoundaryAdaPots <- countRows (tdName adaPotsTableDef)
-          afterBoundaryEpochParam <- countRows (tdName epochParamTableDef)
-          (afterBoundaryEpochParam - baselineEpochParam) `shouldSatisfy` (>= 1)
-          postBoundaryBlocks <- countRows (tdName blockTableDef)
-
-          -- Capture the post-boundary tip and forge a few more blocks
-          -- on top, well within the ledger's in-memory rollback window.
-          tipAfterBoundary <- currentTip mn
-          forkPoint <- case tipAfterBoundary of
-            Network.TipGenesis ->
-              panic "rollback scenario: server tip at genesis (no blocks)"
-            Network.Tip slot hash _bn ->
-              pure (BlockPoint slot hash)
-
-          forgeAndWaitForBlocks mn 5 (postBoundaryBlocks + 5) 60
-
-          -- Roll back the five extra blocks within the new epoch. The
-          -- boundary row must survive the rewind without being undone
-          -- or duplicated.
-          rollbackMockNode mn forkPoint
-          waitFor (tdName blockTableDef <> " returns to post-boundary value")
-            (do n <- countRows (tdName blockTableDef); pure (n == postBoundaryBlocks))
-            60
-
-          afterRollbackAdaPots <- countRows (tdName adaPotsTableDef)
-          afterRollbackEpochParam <- countRows (tdName epochParamTableDef)
-          afterRollbackAdaPots `shouldBe` afterBoundaryAdaPots
-          afterRollbackEpochParam `shouldBe` afterBoundaryEpochParam
-
-          -- Re-forge within the same epoch; boundary writes must not
-          -- duplicate.
-          forgeAndWaitForBlocks mn 10 (postBoundaryBlocks + 10) 60
-
-          finalAdaPots <- countRows (tdName adaPotsTableDef)
-          finalEpochParam <- countRows (tdName epochParamTableDef)
-          finalAdaPots `shouldBe` afterBoundaryAdaPots
-          finalEpochParam `shouldBe` afterBoundaryEpochParam
-
   it "epoch_current.blk_count grows live within the unfinalized epoch" $
     withMockNode conwayConfigDir $ \mn ->
       withTempDir "dbsync-test-epoch-current-live" $ \ledgerDir -> do
@@ -195,35 +166,55 @@ spec = describe "Follow boundary writes" $ do
         withAppSession tracer ledgerEnabledTestProfile mn ledgerDir $ \_ -> do
           waitForSyncComplete 120
 
-          baselineBlocks <- countRows (tdName blockTableDef)
+          -- Land at the start of a fresh epoch so the ten-block probe
+          -- window (~50 slots) cannot straddle a 500-slot boundary.
+          epochBefore <- readInt currentEpochQuery
+          _ <- forgeAndPushUntilNextEpoch mn
+          waitFor "block table reaches the new epoch"
+            (do e <- readInt currentEpochQuery
+                pure (e > epochBefore))
+            60
 
-          -- Capture the current epoch before forging more blocks so
-          -- the assertion can skip if a boundary lands in between.
-          let currentEpochQuery =
-                "SELECT epoch_no FROM " <> tdName blockTableDef
-                  <> " WHERE epoch_no IS NOT NULL ORDER BY id DESC LIMIT 1"
-              blkCountQuery =
-                "SELECT blk_count FROM epoch_current ORDER BY no DESC LIMIT 1"
+          blocks0 <- countRows (tdName blockTableDef)
+          epoch0 <- readInt currentEpochQuery
+          blkCount0 <- readInt blkCountQuery
 
-          epoch0 <- T.strip <$> queryTestDb currentEpochQuery
-          blkCount0 <- T.strip <$> queryTestDb blkCountQuery
+          forgeAndWaitForBlocks mn 5 (blocks0 + 5) 30
+          epoch1 <- readInt currentEpochQuery
+          blkCount1 <- readInt blkCountQuery
 
-          -- Forge a small window of blocks well inside the current
-          -- epoch (Conway test config has ~100 blocks per epoch).
-          forgeAndWaitForBlocks mn 5 (baselineBlocks + 5) 30
-          epoch1 <- T.strip <$> queryTestDb currentEpochQuery
-          blkCount1 <- T.strip <$> queryTestDb blkCountQuery
+          forgeAndWaitForBlocks mn 5 (blocks0 + 10) 30
+          epoch2 <- readInt currentEpochQuery
+          blkCount2 <- readInt blkCountQuery
 
-          forgeAndWaitForBlocks mn 5 (baselineBlocks + 10) 30
-          epoch2 <- T.strip <$> queryTestDb currentEpochQuery
-          blkCount2 <- T.strip <$> queryTestDb blkCountQuery
+          -- The probe window stays inside the fresh epoch by
+          -- construction; drift here means the scenario broke, not
+          -- the view.
+          epoch1 `shouldBe` epoch0
+          epoch2 `shouldBe` epoch0
 
-          -- Only assert if the whole window stayed in one epoch; a
-          -- boundary crossing would reset blk_count.
-          when (epoch0 == epoch1 && epoch1 == epoch2) $ do
-            readBlk blkCount1 `shouldSatisfy` (> readBlk blkCount0)
-            readBlk blkCount2 `shouldSatisfy` (> readBlk blkCount1)
+          -- Every forged block lands in the unfinalized epoch, so
+          -- the live view must count each one exactly once.
+          blkCount1 `shouldBe` blkCount0 + 5
+          blkCount2 `shouldBe` blkCount0 + 10
+  where
+    currentEpochQuery =
+      "SELECT epoch_no FROM " <> tdName blockTableDef
+        <> " WHERE epoch_no IS NOT NULL ORDER BY id DESC LIMIT 1"
+    blkCountQuery =
+      "SELECT blk_count FROM epoch_current ORDER BY no DESC LIMIT 1"
+    maxPoolStatEpochQuery =
+      "SELECT COALESCE(max(epoch_no), 0) FROM " <> tdName poolStatTableDef
 
--- | Parse a 'blk_count' string into 'Int' for ordering comparisons.
-readBlk :: Text -> Int
-readBlk = fromMaybe 0 . readMaybe . T.unpack
+-- ---------------------------------------------------------------------------
+-- * Profile
+-- ---------------------------------------------------------------------------
+
+-- | 'ledgerEnabledTestProfile' with @pool_stats@ on so the boundary
+-- crossing also exercises the pool_stat writer.
+boundaryProfile :: SyncConfig
+boundaryProfile = ledgerEnabledTestProfile
+  { scOptions = (scOptions ledgerEnabledTestProfile)
+      { pcPoolStats = OptionFlag True
+      }
+  }

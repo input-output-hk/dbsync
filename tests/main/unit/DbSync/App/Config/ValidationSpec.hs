@@ -58,10 +58,14 @@ spec = describe "DbSync.App.Config.Validation" $ do
         Right _ -> panic "Expected validation error"
 
     it "collects multiple errors at once" $ do
-      -- Verifies the error-accumulation mechanism. We currently only
-      -- have one fixture that triggers multiple errors at once; if
-      -- more rules land, extend or add a fixture and assert >= 2.
-      result <- parseAndValidate "fixtures/invalid-epoch-no-ledger.json"
+      -- The fixture violates two independent rules (epoch_boundary
+      -- without ledger, multi_asset without utxo); accumulation must
+      -- surface both rather than stopping at the first.
+      result <- parseAndValidate "fixtures/invalid-two-errors.json"
       case result of
-        Left errs -> length errs `shouldSatisfy` (>= 1)
+        Left errs -> do
+          length errs `shouldSatisfy` (>= 2)
+          let msgs = [t | ConfigValidationError t <- errs]
+          msgs `shouldSatisfy` any (Text.isInfixOf "epoch_boundary")
+          msgs `shouldSatisfy` any (Text.isInfixOf "multi_asset")
         Right _ -> panic "Expected validation error"

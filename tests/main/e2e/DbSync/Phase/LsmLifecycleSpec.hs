@@ -70,9 +70,11 @@ import DbSync.Trace.Types (AppTracer)
 -- growth rather than a precise bound: persist-only boundaries flush
 -- one write-buffer run per table with new data, and the periodic
 -- full compaction collapses each table back to its snapshot's run
--- shape (a handful of runs for the toy Conway test workload).
+-- shape. The two-boundary toy Conway workload settles around 44 runs;
+-- the ceiling leaves headroom for flush-timing jitter while still
+-- catching the per-boundary accumulation a broken compaction produces.
 maxActiveRunsAfterCompact :: Int
-maxActiveRunsAfterCompact = 256
+maxActiveRunsAfterCompact = 96
 
 spec :: Spec
 spec = describe "Ingest LSM session lifecycle" $ do

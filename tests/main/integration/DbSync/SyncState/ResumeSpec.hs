@@ -17,7 +17,6 @@ import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 import qualified Data.Text as T
 
-import qualified System.Process
 
 import Test.Hspec (Spec, afterAll_, beforeAll_, before_, describe, it, shouldBe)
 
@@ -59,7 +58,7 @@ import DbSync.Db.Loader.Encoder
   , bWord16
   , bWord64
   )
-import DbSync.Test.Database (queryTestDb, testConnBs, testConnStr, testHasqlSettings, truncateAllTables)
+import DbSync.Test.Database (execTestDb, queryTestDb, testConnBs, testConnStr, testHasqlSettings, truncateAllTables)
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -643,10 +642,4 @@ fetchBlockHashAtSlotSpec = describe "DbSync.SyncState.Row.fetchBlockHashAtSlot" 
 resetFixtures :: IO ()
 resetFixtures = do
   truncateAllTables coreTableNames
-  _ <- System.Process.readProcessWithExitCode
-    "psql"
-    [ T.unpack testConnStr, "-q", "-c"
-    , "TRUNCATE TABLE " <> T.unpack (tdName syncStateTableDef) <> ";"
-    ]
-    ""
-  pure ()
+  execTestDb $ "TRUNCATE TABLE " <> tdName syncStateTableDef <> ";"

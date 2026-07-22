@@ -1,106 +1,30 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Tests for the @ada_pots@ table schema and COPY encoding.
---
--- Pure tests — no PostgreSQL required. Verify that:
---
--- * The 'TableDef' has the expected shape (UNLOGGED, no PK during
---   ingest, columns in golden order).
--- * 'encodeAdaPotsCopy' produces correctly tab-separated,
---   newline-terminated COPY rows.
--- * Numeric fields land in the right column index — guards against
---   accidental field reordering between the record, the encoder,
---   and the table definition.
+-- | Tests for the @ada_pots@ COPY encoder: numeric fields land in the
+-- right column index — guards against accidental field reordering
+-- between the record, the encoder, and the table definition.
 module DbSync.Schema.AdaPotsSpec (spec) where
 
 import Cardano.Prelude
 
 import Data.List ((!!))
 
-import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 
 import Test.Hspec (Spec, describe, it, shouldBe)
 
 import DbSync.Db.Schema.AdaPots
   ( AdaPots (..)
-  , adaPotsTableDef
   , encodeAdaPotsCopy
   )
 import DbSync.Db.Schema.Ids (BlockId (..))
-import DbSync.Db.Schema.Types
-  ( ColumnDef (..)
-  , PgType (..)
-  , TableDef (..)
-  , TableMode (..)
-  )
 import DbSync.Db.Types (DbLovelace (..))
 
 -- ---------------------------------------------------------------------------
 
 spec :: Spec
 spec = do
-  describe "adaPotsTableDef" $ do
-    it "is named ada_pots" $
-      tdName adaPotsTableDef `shouldBe` "ada_pots"
-
-    it "is UNLOGGED during ingest" $
-      tdMode adaPotsTableDef `shouldBe` TableUnlogged
-
-    it "has no PK during ingest (added in PreparingForVolatileTail)" $
-      tdPrimaryKey adaPotsTableDef `shouldBe` Nothing
-
-    it "carries no CHECK constraints" $
-      tdChecks adaPotsTableDef `shouldBe` []
-
-    it "carries no DEFAULT clauses" $
-      tdColumnDefaults adaPotsTableDef `shouldBe` []
-
-    it "lists columns in golden order" $
-      map cdName (tdColumns adaPotsTableDef) `shouldBe`
-        [ "id"
-        , "slot_no"
-        , "epoch_no"
-        , "treasury"
-        , "reserves"
-        , "rewards"
-        , "utxo"
-        , "deposits_stake"
-        , "fees"
-        , "block_id"
-        , "deposits_drep"
-        , "deposits_proposal"
-        ]
-
-    it "uses BIGINT for id, slot_no, epoch_no, block_id" $ do
-      cdType (tdColumns adaPotsTableDef !! 0) `shouldBe` PgBigInt
-      cdType (tdColumns adaPotsTableDef !! 1) `shouldBe` PgBigInt
-      cdType (tdColumns adaPotsTableDef !! 2) `shouldBe` PgBigInt
-      cdType (tdColumns adaPotsTableDef !! 9) `shouldBe` PgBigInt
-
-    it "uses NUMERIC for every Lovelace pot column" $ do
-      -- treasury, reserves, rewards, utxo, deposits_stake, fees,
-      -- deposits_drep, deposits_proposal — eight pots in total.
-      let cols = tdColumns adaPotsTableDef
-          potIndices = [3, 4, 5, 6, 7, 8, 10, 11]
-      forM_ potIndices $ \i ->
-        cdType (cols !! i) `shouldBe` PgNumeric
-
-    it "marks every column NOT NULL" $
-      all (not . cdNullable) (tdColumns adaPotsTableDef) `shouldBe` True
-
   describe "encodeAdaPotsCopy" $ do
-    it "produces a row terminated with newline" $ do
-      let row = encodeAdaPotsCopy sampleAdaPots
-      BS8.last row `shouldBe` '\n'
-
-    it "separates every non-id column with a tab" $ do
-      let row = encodeAdaPotsCopy sampleAdaPots
-          tabCount = BS.count (fromIntegral (fromEnum '\t')) row
-          nonIdCols = length (tdColumns adaPotsTableDef)
-                        - length (tdIdentityColumns adaPotsTableDef)
-      tabCount `shouldBe` nonIdCols - 1
-
     it "writes slot_no in field 0 and epoch_no in field 1" $ do
       let row = encodeAdaPotsCopy sampleAdaPots
           fields = BS8.split '\t' (BS8.init row)

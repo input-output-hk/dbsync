@@ -26,7 +26,6 @@ import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 import qualified Data.Text as T
 
-import qualified System.Process
 
 import Test.Hspec (Spec, afterAll_, beforeAll_, before_, describe, it, shouldBe)
 
@@ -55,7 +54,7 @@ import DbSync.SyncState.Row
   , readSyncState
   , seedSyncState
   )
-import DbSync.Test.Database (queryTestDb, testConnBs, testConnStr, testHasqlSettings, truncateAllTables)
+import DbSync.Test.Database (execTestDb, queryTestDb, testConnBs, testConnStr, testHasqlSettings, truncateAllTables)
 import DbSync.AppM (runAppM)
 import DbSync.Schema.Version (Fingerprint (..))
 
@@ -272,13 +271,7 @@ spec = describe "DbSync.SyncState.Manager.commitEpoch" $
     resetFixtures :: IO ()
     resetFixtures = do
       truncateAllTables coreTableNames
-      _ <- System.Process.readProcessWithExitCode
-        "psql"
-        [ T.unpack testConnStr, "-q", "-c"
-        , "TRUNCATE TABLE " <> T.unpack (tdName syncStateTableDef) <> ";"
-        ]
-        ""
-      pure ()
+      execTestDb $ "TRUNCATE TABLE " <> tdName syncStateTableDef <> ";"
 
 -- | Count rows in a table via @psql@. Returns the bare count string
 -- (e.g. @"2"@) so callers compare against the small numeric literals

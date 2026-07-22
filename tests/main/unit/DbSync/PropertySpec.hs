@@ -83,20 +83,10 @@ prop_extractIsDeterministic :: CardanoBlock StandardCrypto -> Property
 prop_extractIsDeterministic block = ioProperty $ do
   s1 <- runPureExtract enabledExtractors block
   s2 <- runPureExtract enabledExtractors block
-  -- 'TestWriterState' has a 'Show' instance and we compare shapes via
-  -- the row counts; a full structural Eq would be nicer but the
-  -- record's row types currently lack 'Eq'. Counts cover the non-
-  -- determinism failure modes we care about (number of rows produced
-  -- from the same input must be stable).
-  pure $ shape s1 == shape s2
-  where
-    shape :: TestWriterState -> (Int, Int, Int, Int)
-    shape s =
-      ( length (twBlocks s)
-      , length (twTxs s)
-      , length (twSlotLeaders s)
-      , twCommits s
-      )
+  -- Full structural comparison: any content- or order-level
+  -- nondeterminism in any captured table fails, not just a changed
+  -- row count.
+  pure $ s1 === s2
 
 -- | One block in → exactly one block row out, regardless of era or
 -- contents. A failure here means an extractor is silently dropping

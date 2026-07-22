@@ -5,6 +5,7 @@ module DbSync.Phase.Ingest.UtxoStoreSpec (spec) where
 import Cardano.Prelude
 
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Short as SBS
 import qualified Data.Sequence as Seq
 
 import Test.Hspec (Spec, describe, it, shouldBe)
@@ -163,3 +164,45 @@ spec = do
           UtxoStore.compactUtxoStore store lsm
           result <- lookupInput store (mkHash 0xe1) 0
           result `shouldBe` Just (TxId 9, TxOutId 900, DbLovelace 90)
+
+  -- The 24-byte value layout is otherwise only exercised transitively
+  -- through the LSM SerialiseValue path, where a shared offset/sign bug
+  -- in both directions could round-trip cleanly. These pin the layout
+  -- directly. (There is no strictness bomb here: the decode input is a
+  -- fully-strict ShortByteString with no lazy byte to bottom out, and
+  -- the decoded ids' force-on-entry contract is bombed downstream in
+  -- Phase/Following/Resolver/UTxOSpec and Worker/TxOut/WorkerSpec.)
+  describe "encodeOutput / decodeOutput wire format" $ do
+    it "round-trips a representative triple" $
+      decodeOutput (encodeOutput (TxId 42) (TxOutId 4200) (DbLovelace 1_000_000))
+        `shouldBe` Just (TxId 42, TxOutId 4200, DbLovelace 1_000_000)
+
+    -- Byte layout, checked against the documented format independently
+    -- of decodeOutput: tx id at 0..7, out id at 8..15, value at 16..23,
+    -- each big-endian (low byte last).
+    it "lays the three fields out big-endian at offsets 0, 8, 16" $ do
+      let UtxoOutputBytes sbs = encodeOutput (TxId 1) (TxOutId 2) (DbLovelace 3)
+      SBS.unpack sbs `shouldBe`
+        [ 0,0,0,0,0,0,0,1
+        , 0,0,0,0,0,0,0,2
+        , 0,0,0,0,0,0,0,3
+        ]
+
+    -- getTxId/getTxOutId are Int64; encode goes via Word64 and decode
+    -- reads back through fromIntegral, so the two's-complement round trip
+    -- for negative and boundary ids must survive.
+    it "round-trips Int64 id sign/boundary values" $ do
+      let checkIds tid oid =
+            decodeOutput (encodeOutput (TxId tid) (TxOutId oid) (DbLovelace 0))
+              `shouldBe` Just (TxId tid, TxOutId oid, DbLovelace 0)
+      checkIds maxBound minBound
+      checkIds minBound maxBound
+      checkIds (-1) (-1)
+
+    it "round-trips the full Word64 value range" $
+      decodeOutput (encodeOutput (TxId 1) (TxOutId 2) (DbLovelace maxBound))
+        `shouldBe` Just (TxId 1, TxOutId 2, DbLovelace maxBound)
+
+    it "returns Nothing for a value that is not 24 bytes" $ do
+      decodeOutput (UtxoOutputBytes (SBS.toShort (BS.replicate 23 0))) `shouldBe` Nothing
+      decodeOutput (UtxoOutputBytes (SBS.toShort (BS.replicate 25 0))) `shouldBe` Nothing

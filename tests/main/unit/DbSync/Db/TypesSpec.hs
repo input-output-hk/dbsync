@@ -28,25 +28,17 @@ import Test.Hspec (Spec, describe, it, shouldBe)
 import Test.Hspec.QuickCheck (prop)
 
 import DbSync.Db.Types
-  ( AnchorType (..)
-  , DbLovelace (..)
+  ( DbLovelace (..)
   , DbWord64 (..)
-  , GovActionType (..)
   , RewardSource (..)
   , ScriptPurpose (..)
   , ScriptType (..)
   , SyncState (..)
-  , Vote (..)
-  , VoterRole (..)
-  , bAnchorType
-  , bGovActionType
   , bInt65
   , bRewardSource
   , bScriptPurpose
   , bScriptType
   , bSyncState
-  , bVote
-  , bVoterRole
   , bWord128
   , fromDbInt65
   , scientificToWord128
@@ -148,39 +140,6 @@ spec = do
     it "emits the legacy lagging/following strings" $ do
       bs (bSyncState SyncLagging)   `shouldBe` "lagging"
       bs (bSyncState SyncFollowing) `shouldBe` "following"
-
-  describe "Vote builder" $
-    it "emits the upper-case Yes/No/Abstain strings" $ do
-      bs (bVote VoteYes)     `shouldBe` "Yes"
-      bs (bVote VoteNo)      `shouldBe` "No"
-      bs (bVote VoteAbstain) `shouldBe` "Abstain"
-
-  describe "VoterRole builder" $
-    it "emits the upstream-style camel-case role strings" $ do
-      bs (bVoterRole ConstitutionalCommittee) `shouldBe` "ConstitutionalCommittee"
-      bs (bVoterRole DRep)                    `shouldBe` "DRep"
-      bs (bVoterRole SPO)                     `shouldBe` "SPO"
-
-  describe "GovActionType builder" $ do
-    it "emits the long camel-case action names" $ do
-      bs (bGovActionType ParameterChange)     `shouldBe` "ParameterChange"
-      bs (bGovActionType HardForkInitiation)  `shouldBe` "HardForkInitiation"
-      bs (bGovActionType TreasuryWithdrawals) `shouldBe` "TreasuryWithdrawals"
-      bs (bGovActionType NoConfidence)        `shouldBe` "NoConfidence"
-      bs (bGovActionType NewConstitution)     `shouldBe` "NewConstitution"
-      bs (bGovActionType InfoAction)          `shouldBe` "InfoAction"
-
-    it "maps NewCommitteeType → \"NewCommittee\" (constructor differs from PG)" $
-      bs (bGovActionType NewCommitteeType) `shouldBe` "NewCommittee"
-
-  describe "AnchorType builder" $
-    it "emits the snake-case anchor-kind strings" $ do
-      bs (bAnchorType GovActionAnchor)      `shouldBe` "gov_action"
-      bs (bAnchorType DrepAnchor)           `shouldBe` "drep"
-      bs (bAnchorType OtherAnchor)          `shouldBe` "other"
-      bs (bAnchorType VoteAnchor)           `shouldBe` "vote"
-      bs (bAnchorType CommitteeDeRegAnchor) `shouldBe` "committee_dereg"
-      bs (bAnchorType ConstitutionAnchor)   `shouldBe` "constitution"
 
   -- ---------------------------------------------------------------------
   -- Scientific / Word conversions

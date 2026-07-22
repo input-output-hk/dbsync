@@ -1,10 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Tests for COPY encoding of Block, Tx, and SlotLeader rows.
---
--- These are pure tests — no PostgreSQL needed. They verify that the
--- encoding functions produce correct tab-separated, newline-terminated
--- COPY text format matching the PostgreSQL COPY FROM STDIN protocol.
+-- | Tests for COPY encoding of Block, Tx, and SlotLeader rows: field
+-- values match the PostgreSQL COPY FROM STDIN text protocol.
 module DbSync.Schema.CoreSpec (spec) where
 
 import Cardano.Prelude
@@ -65,14 +62,6 @@ spec = do
       encodeUTCTime t `shouldBe` "2024-01-15 12:00:00"
 
   describe "encodeBlockCopy" $ do
-    it "produces correct tab-separated COPY row" $ do
-      let row = encodeBlockCopy (BlockId 1) sampleBlock
-      -- Must end with newline
-      BS8.last row `shouldBe` '\n'
-      -- Must have exactly 16 fields (16 columns) separated by 15 tabs
-      let tabCount = BS.count (fromIntegral (fromEnum '\t')) row
-      tabCount `shouldBe` 15
-
     it "encodes NULL fields as \\N" $ do
       let blk = sampleBlock { blockVrfKey = Nothing, blockOpCert = Nothing, blockOpCertCounter = Nothing }
           row = encodeBlockCopy (BlockId 1) blk
@@ -106,12 +95,6 @@ spec = do
       fields !! 6 `shouldBe` "99"
 
   describe "encodeTxCopy" $ do
-    it "produces correct tab-separated COPY row" $ do
-      let row = encodeTxCopy (TxId 1) sampleTx
-      BS8.last row `shouldBe` '\n'
-      let tabCount = BS.count (fromIntegral (fromEnum '\t')) row
-      tabCount `shouldBe` 12  -- 13 columns = 12 tabs
-
     it "encodes all fields correctly for a known tx" $ do
       let row = encodeTxCopy (TxId 42) sampleTx
           fields = BS8.split '\t' (BS8.init row)
@@ -143,12 +126,6 @@ spec = do
       fields !! 9 `shouldBe` "500"
 
   describe "encodeSlotLeaderCopy" $ do
-    it "produces correct tab-separated COPY row" $ do
-      let row = encodeSlotLeaderCopy (SlotLeaderId 1) sampleSlotLeader
-      BS8.last row `shouldBe` '\n'
-      let tabCount = BS.count (fromIntegral (fromEnum '\t')) row
-      tabCount `shouldBe` 3  -- 4 columns = 3 tabs
-
     it "encodes pool_hash_id as NULL when not a pool" $ do
       let row = encodeSlotLeaderCopy (SlotLeaderId 1) sampleSlotLeader
           fields = BS8.split '\t' (BS8.init row)

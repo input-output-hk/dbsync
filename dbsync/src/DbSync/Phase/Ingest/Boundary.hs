@@ -25,6 +25,7 @@ module DbSync.Phase.Ingest.Boundary
     -- * Helpers
   , compactIngestStores
   , renderEpochSummary
+  , renderBoundaryPercent
   , renderUtxoHitRate
   , renderDedupCounts
   , renderMemCurve
@@ -461,10 +462,10 @@ renderPeakMem b
   | b == 0    = ""
   | otherwise = " | peak mem=" <> fmtBytes b
 
--- | Inline copy of 'DbSync.Phase.Ingest.Consumer.renderBoundaryPercent'
--- used by 'renderEpochSummary' so the public version stays in
--- "DbSync.Phase.Ingest.Consumer" (where the test suite pins its
--- location).
+-- | Ingest progress segment @\" | [87.32%]\"@: the current block's
+-- position relative to the node tip (@boundary + k@). Empty until a
+-- boundary is published, a block has been processed, and the derived
+-- tip is non-zero.
 renderBoundaryPercent :: Maybe BlockNo -> Word64 -> Maybe Word64 -> Text
 renderBoundaryPercent (Just (BlockNo boundary)) k (Just curBlock)
   | tip > 0 =

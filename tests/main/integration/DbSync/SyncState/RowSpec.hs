@@ -41,7 +41,7 @@ import DbSync.Db.Schema.SyncState (syncStateTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Error (AppError (..))
 import DbSync.Schema.Version (Fingerprint (..))
-import DbSync.Test.Database (queryTestDb, testConnStr, testHasqlSettings)
+import DbSync.Test.Database (execTestDb, queryTestDb, testConnStr, testHasqlSettings)
 
 -- | Placeholder schema fingerprint for seeding the sync-state row in tests.
 testFp :: Fingerprint
@@ -217,14 +217,8 @@ withControlConnection =
 -- schema on every test (which is slow) but still gives each @it@
 -- a fresh starting point.
 resetSyncStateTable :: IO ()
-resetSyncStateTable = do
-  _ <- System.Process.readProcessWithExitCode
-    "psql"
-    [ T.unpack testConnStr, "-q", "-c"
-    , "TRUNCATE TABLE " <> T.unpack (tdName syncStateTableDef) <> ";"
-    ]
-    ""
-  pure ()
+resetSyncStateTable =
+  execTestDb $ "TRUNCATE TABLE " <> tdName syncStateTableDef <> ";"
 
 -- | Attempt a raw @INSERT@ that violates the @CHECK (id = 1)@
 -- constraint. Uses @psql@ directly so the error path is exercised

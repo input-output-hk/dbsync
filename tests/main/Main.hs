@@ -1,15 +1,22 @@
 -- | Test runner.
 --
--- Specs are grouped under three top-level categories matching the
--- @hs-source-dirs@ split in @dbsync-tests.cabal@:
+-- Specs are grouped under four top-level categories:
 --
 --   * "Unit tests" (@main/unit@)        — pure, no IO beyond
---     deterministic helpers; fast. Includes 'PropertySpec'.
---   * "Database integration" (@main/integration@) — require a
---     running @dbsync_test@ PostgreSQL database; each spec sets up
---     and tears down its own schema. No mock chain.
+--     deterministic helpers; fast.
+--   * "Property tests" (@main/unit@)    — QuickCheck properties over
+--     arbitrary blocks; separate heading so @--match=Unit@ stays
+--     example-only.
+--   * "Database integration" (@main/integration@) — targeted tests
+--     that stop short of the full mock-node lifecycle. Most need a
+--     running @dbsync_test@ PostgreSQL database (each sets up and
+--     tears down its own schema); a few drive production STM/queue
+--     paths with in-memory state. No mock chainsync server.
 --   * "End-to-end" (@main/e2e@)         — drive the full sync
 --     lifecycle through the mock chainsync server; slowest tier.
+--   * "Test harness" (@main/e2e@)       — self-tests for the mock
+--     chain and mock node in @tests/lib@; exercise no production
+--     code, so they do not count toward end-to-end coverage.
 --
 -- All tiers run by default. To run a single tier locally use
 -- @cabal test --test-options=\"--match=Unit\"@ etc.
@@ -31,11 +38,9 @@ import qualified DbSync.App.Config.ProfilesSpec as ConfigProfilesSpec
 import qualified DbSync.App.Config.TypesSpec as ConfigTypesSpec
 import qualified DbSync.App.Config.ValidationSpec as ConfigValidationSpec
 import qualified DbSync.Db.Statement.IndexesSpec as DbStatementIndexesSpec
-import qualified DbSync.Db.Statement.SequencesSpec as DbStatementSequencesSpec
 import qualified DbSync.Db.TypesSpec as DbTypesSpec
 import qualified DbSync.Extractor.CoreSpec as ExtractorCoreSpec
 import qualified DbSync.Extractor.EpochBoundarySpec as ExtractorEpochBoundarySpec
-import qualified DbSync.Extractor.EpochSpec as ExtractorEpochSpec
 import qualified DbSync.Extractor.GovernanceSpec as ExtractorGovernanceSpec
 import qualified DbSync.Extractor.MultiAssetSpec as ExtractorMultiAssetSpec
 import qualified DbSync.Extractor.OffChainPoolsSpec as ExtractorOffChainPoolsSpec
@@ -55,17 +60,21 @@ import qualified DbSync.Worker.Ledger.TypesSpec as LedgerTypesSpec
 import qualified DbSync.Worker.Ledger.WorkerSpec as LedgerWorkerSpec
 import qualified DbSync.App.BootSpec as AppBootSpec
 import qualified DbSync.Phase.CurrentSpec as PhaseCurrentSpec
+import qualified DbSync.Phase.Following.FlipPredicateSpec as PhaseFollowFlipPredicateSpec
 import qualified DbSync.Phase.Following.IdCountsSpec as PhaseFollowIdCountsSpec
 import qualified DbSync.Phase.Following.Resolver.UTxOSpec as PhaseFollowResolverUTxOSpec
+import qualified DbSync.Worker.TxOut.WorkerSpec as WorkerTxOutSpec
 import qualified DbSync.Schema.AdaPotsSpec as SchemaAdaPotsSpec
 import qualified DbSync.Schema.AddressSpec as SchemaAddressSpec
 import qualified DbSync.Schema.ColumnsConsistencySpec as SchemaColumnsConsistencySpec
+import qualified DbSync.Schema.CopyShapeSpec as SchemaCopyShapeSpec
 import qualified DbSync.Schema.CoreSpec as SchemaCoreSpec
 import qualified DbSync.Schema.EpochBoundarySpec as SchemaEpochBoundarySpec
 import qualified DbSync.Schema.EpochViewSpec as SchemaEpochViewSpec
 import qualified DbSync.Schema.VersionSpec as SchemaVersionSpec
 import qualified DbSync.Schema.GenerateSpec as SchemaGenerateSpec
 import qualified DbSync.Schema.GovernanceSpec as SchemaGovernanceSpec
+import qualified DbSync.Schema.InitPureSpec as SchemaInitPureSpec
 import qualified DbSync.Schema.Migration.DiffSpec as SchemaMigrationDiffSpec
 import qualified DbSync.Schema.Migration.RenderSpec as SchemaMigrationRenderSpec
 import qualified DbSync.Schema.Migration.RunnerSpec as SchemaMigrationRunnerSpec
@@ -79,18 +88,22 @@ import qualified DbSync.StateQuery.SlotDetailsSpec as SlotDetailsSpec
 import qualified DbSync.Trace.ReplaySpec as TraceReplaySpec
 import qualified DbSync.Parser.BlockSpec as ParserBlockSpec
 import qualified DbSync.Parser.MetadataSpec as BlockMetadataSpec
+import qualified DbSync.Parser.ParamProposalSpec as ParserParamProposalSpec
+import qualified DbSync.Parser.TxSpec as ParserTxSpec
 import qualified DbSync.Util.Bech32Spec as UtilBech32Spec
 import qualified DbSync.Util.DedupHashSpec as UtilDedupHashSpec
 
 -- Property tests
 import qualified DbSync.PropertySpec as PropertySpec
-import qualified DbSync.Worker.TxOut.WorkerSpec as WorkerTxOutSpec
 
 -- Database integration
+import qualified DbSync.ChainSync.DeliverSpec as ChainSyncDeliverSpec
 import qualified DbSync.SyncState.ManagerSpec as SyncStateManagerSpec
 import qualified DbSync.SyncState.ResumeSpec as SyncStateResumeSpec
 import qualified DbSync.SyncState.RowSpec as SyncStateRowSpec
+import qualified DbSync.Worker.OffChain.HttpSpec as WorkerOffChainHttpSpec
 import qualified DbSync.Worker.OffChain.PoolSpec as WorkerOffChainPoolSpec
+import qualified DbSync.Worker.OffChain.RetrySpec as WorkerOffChainRetrySpec
 import qualified DbSync.Worker.OffChain.VoteSpec as WorkerOffChainVoteSpec
 import qualified DbSync.Db.LoaderSpec as LoaderSpec
 import qualified DbSync.Db.Statement.BackfillSpec as DbStatementBackfillSpec
@@ -99,7 +112,6 @@ import qualified DbSync.Db.Statement.RoundTripSpec as DbStatementRoundTripSpec
 import qualified DbSync.Db.Statement.SlotLeaderSpec as DbStatementSlotLeaderSpec
 import qualified DbSync.Db.Statement.SyncStateSpec as DbStatementSyncStateSpec
 import qualified DbSync.Phase.Following.BufferedDiffSpec as PhaseFollowBufferedDiffSpec
-import qualified DbSync.Phase.Following.FlipPredicateSpec as PhaseFollowFlipPredicateSpec
 import qualified DbSync.Phase.Following.RollbackSpec as PhaseRollbackSpec
 import qualified DbSync.Phase.Following.RunSpec as PhaseFollowRunSpec
 import qualified DbSync.Phase.Following.SameBlockSpendSpec as PhaseFollowSameBlockSpendSpec
@@ -108,27 +120,25 @@ import qualified DbSync.Schema.InitSpec as SchemaInitSpec
 import qualified DbSync.Schema.Migration.LadderSpec as SchemaMigrationLadderSpec
 
 -- End-to-end
-import qualified DbSync.ChainSync.DeliverSpec as ChainSyncDeliverSpec
 import qualified DbSync.Phase.AlonzoInvalidTxSpec as PhaseAlonzoInvalidTxSpec
 import qualified DbSync.Phase.BoundaryRecrossSpec as PhaseBoundaryRecrossSpec
 import qualified DbSync.Phase.FollowAtTipSpec as PhaseFollowAtTipSpec
 import qualified DbSync.Phase.FollowEpochBoundarySpec as PhaseFollowEpochBoundarySpec
-import qualified DbSync.Phase.FollowEpochSyncStatsSpec as PhaseFollowEpochSyncStatsSpec
 import qualified DbSync.Phase.FollowGovernanceSpec as PhaseFollowGovernanceSpec
 import qualified DbSync.Phase.GovernanceGenesisSpec as PhaseGovernanceGenesisSpec
-import qualified DbSync.Phase.FollowPoolStatsSpec as PhaseFollowPoolStatsSpec
 import qualified DbSync.Phase.FollowScriptsDatumsSpec as PhaseFollowScriptsDatumsSpec
 import qualified DbSync.Phase.FollowStakeDelegationLedgerSpec as PhaseFollowStakeDelegationLedgerSpec
 import qualified DbSync.Phase.FollowPerfRealisticSpec as PhaseFollowPerfRealisticSpec
-import qualified DbSync.Phase.FollowPerfSpec as PhaseFollowPerfSpec
 import qualified DbSync.Phase.FollowReplayOnBootSpec as PhaseFollowReplayOnBootSpec
-import qualified DbSync.Phase.FollowReplayWindowSpec as PhaseFollowReplayWindowSpec
 import qualified DbSync.Phase.FollowRestartSpec as PhaseFollowRestartSpec
+import qualified DbSync.Phase.FollowNodeRestartSpec as PhaseFollowNodeRestartSpec
 import qualified DbSync.Phase.HandoffRedeliverySpec as PhaseHandoffRedeliverySpec
 import qualified DbSync.Phase.IngestPrepFollowSpec as PhaseIngestPrepFollowSpec
 import qualified DbSync.Phase.RecomputeInvariantsSpec as PhaseRecomputeInvariantsSpec
 import qualified DbSync.Phase.IngestRestartSpec as PhaseIngestRestartSpec
 import qualified DbSync.Phase.LsmLifecycleSpec as PhaseLsmLifecycleSpec
+
+-- Test harness (self-tests for the mock chain/node in tests/lib)
 import qualified DbSync.Phase.MockChainSpec as PhaseMockChainSpec
 import qualified DbSync.Phase.MockNodeSpec as PhaseMockNodeSpec
 
@@ -150,6 +160,13 @@ unitTimeoutSeconds        = 30
 integrationTimeoutSeconds = 120
 e2eTimeoutSeconds         = 300
 
+-- | Runs every tier in one hspec process.
+--
+-- Integration and end-to-end specs share the single @dbsync_test@
+-- database, each setting up and tearing down its own schema. That is
+-- safe only because hspec runs specs sequentially: the schema-migration
+-- ladder spec issues @DROP SCHEMA public CASCADE@, so any spec running
+-- beside it would see its tables vanish. Do not add hspec @parallel@.
 main :: IO ()
 main = hspec $ do
   describe "Unit tests" $ withTimeoutSeconds unitTimeoutSeconds $ do
@@ -161,11 +178,9 @@ main = hspec $ do
     ConfigTypesSpec.spec
     ConfigValidationSpec.spec
     DbStatementIndexesSpec.spec
-    DbStatementSequencesSpec.spec
     DbTypesSpec.spec
     ExtractorCoreSpec.spec
     ExtractorEpochBoundarySpec.spec
-    ExtractorEpochSpec.spec
     ExtractorGovernanceSpec.spec
     ExtractorMultiAssetSpec.spec
     ExtractorOffChainPoolsSpec.spec
@@ -191,12 +206,14 @@ main = hspec $ do
     SchemaAdaPotsSpec.spec
     SchemaAddressSpec.spec
     SchemaColumnsConsistencySpec.spec
+    SchemaCopyShapeSpec.spec
     SchemaCoreSpec.spec
     SchemaEpochBoundarySpec.spec
     SchemaEpochViewSpec.spec
     SchemaVersionSpec.spec
     SchemaGenerateSpec.spec
     SchemaGovernanceSpec.spec
+    SchemaInitPureSpec.spec
     SchemaMigrationDiffSpec.spec
     SchemaMigrationRenderSpec.spec
     SchemaMigrationRunnerSpec.spec
@@ -212,13 +229,18 @@ main = hspec $ do
     UtilDedupHashSpec.spec
     ParserBlockSpec.spec
     BlockMetadataSpec.spec
+    ParserParamProposalSpec.spec
+    ParserTxSpec.spec
     WorkerTxOutSpec.spec
+    WorkerOffChainHttpSpec.spec
+    WorkerOffChainRetrySpec.spec
     PhaseRollbackSpec.schemaWalkSpec
 
   describe "Property tests" $ withTimeoutSeconds unitTimeoutSeconds $
     PropertySpec.spec
 
   describe "Database integration" $ withTimeoutSeconds integrationTimeoutSeconds $ do
+    ChainSyncDeliverSpec.spec
     SyncStateManagerSpec.spec
     SyncStateResumeSpec.spec
     SyncStateRowSpec.spec
@@ -243,26 +265,24 @@ main = hspec $ do
     SchemaMigrationLadderSpec.spec
 
   describe "End-to-end" $ withTimeoutSeconds e2eTimeoutSeconds $ do
-    ChainSyncDeliverSpec.spec
     PhaseAlonzoInvalidTxSpec.spec
     PhaseIngestPrepFollowSpec.spec
     PhaseHandoffRedeliverySpec.spec
     PhaseIngestRestartSpec.spec
     PhaseLsmLifecycleSpec.spec
     PhaseFollowRestartSpec.spec
+    PhaseFollowNodeRestartSpec.spec
     PhaseFollowReplayOnBootSpec.spec
-    PhaseFollowReplayWindowSpec.spec
     PhaseFollowAtTipSpec.spec
     PhaseFollowEpochBoundarySpec.spec
     PhaseBoundaryRecrossSpec.spec
-    PhaseFollowEpochSyncStatsSpec.spec
     PhaseFollowScriptsDatumsSpec.spec
     PhaseFollowGovernanceSpec.spec
     PhaseGovernanceGenesisSpec.spec
-    PhaseFollowPoolStatsSpec.spec
     PhaseFollowStakeDelegationLedgerSpec.spec
-    PhaseFollowPerfSpec.spec
     PhaseFollowPerfRealisticSpec.spec
+    PhaseRecomputeInvariantsSpec.spec
+
+  describe "Test harness" $ withTimeoutSeconds e2eTimeoutSeconds $ do
     PhaseMockChainSpec.spec
     PhaseMockNodeSpec.spec
-    PhaseRecomputeInvariantsSpec.spec

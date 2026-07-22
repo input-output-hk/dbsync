@@ -11,8 +11,9 @@
 -- historically a fatal @tx@ unique-constraint abort; the @block@
 -- table (no unique constraint) would accept the duplicate row
 -- silently. This spec drives the full app through the handoff with
--- blocks forged while Ingest and Prep are still running, so the
--- volatile tail is genuinely buffered, then asserts the invariants
+-- tx-bearing blocks forged while Ingest and Prep are still running,
+-- so the volatile tail is genuinely buffered and carries tx rows
+-- that a double-apply would duplicate, then asserts the invariants
 -- the schema cannot enforce on its own: no duplicate block or tx
 -- rows, and the consumer's re-delivery guard stayed silent.
 module DbSync.Phase.HandoffRedeliverySpec (spec) where
@@ -39,8 +40,13 @@ import DbSync.Test.E2E
   , forgeAndWaitForBlocks
   , withAppSession
   )
-import DbSync.Test.MockNode (forgeAndPushBlocks, withMockNode)
-import DbSync.Test.PgAssertions (countRows)
+import DbSync.Test.MockNode
+  ( forgeAndPushBlocks
+  , forgeAndPushBlocksWith
+  , withMockNode
+  )
+import DbSync.Test.MockNode.Workload (mainnetLikeWorkload)
+import DbSync.Test.PgAssertions (countRows, readInt)
 
 spec :: Spec
 spec = describe "Ingest \x2192 Follow handoff re-delivery safety" $
@@ -58,11 +64,28 @@ spec = describe "Ingest \x2192 Follow handoff re-delivery safety" $
           -- Forge while Ingest and Prep are still running so the
           -- handoff starts with a genuinely buffered volatile tail —
           -- the production shape in which the re-delivery bug fired.
-          _ <- forgeAndPushBlocks mn 30
+          -- The blocks carry payment txs so a double-applied block
+          -- has tx rows to duplicate; empty blocks would make the
+          -- tx-duplication check below pass vacuously.
+          _ <- forgeAndPushBlocksWith mn 30 mainnetLikeWorkload
           waitForSyncComplete 120
 
           baseline <- countRows (tdName blockTableDef)
           baseline `shouldSatisfy` (>= 150)
+
+          -- Every workload tx must have landed exactly once: 30
+          -- blocks times 10 payment txs. Genesis-distribution txs sit
+          -- on the synthetic slotless genesis block, so the join
+          -- filters them out. This both guards the dup check against
+          -- vacuity and catches a lost/duplicated tx outright.
+          txCount <- readInt
+            ( "SELECT count(*) FROM " <> tdName txTableDef
+                <> " JOIN " <> tdName blockTableDef
+                <> " ON " <> tdName txTableDef <> ".block_id = "
+                <> tdName blockTableDef <> ".id"
+                <> " WHERE " <> tdName blockTableDef <> ".slot_no IS NOT NULL;"
+            )
+          txCount `shouldBe` 300
 
           -- Volatile blocks through the freshly handed-off Follow
           -- loop, past the tail buffered at the handoff.

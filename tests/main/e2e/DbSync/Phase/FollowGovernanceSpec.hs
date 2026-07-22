@@ -46,7 +46,7 @@ import Cardano.Ledger.Hashes (ScriptHash (..))
 import Cardano.Ledger.Keys (KeyHash (..))
 import Ouroboros.Consensus.Shelley.Eras (ConwayEra)
 
-import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe)
 
 import qualified Cardano.Mock.Forging.Tx.Conway as Conway
 import qualified Cardano.Mock.Forging.Tx.Generic as Generic
@@ -167,20 +167,20 @@ spec = describe "Follow governance writes" $ do
           followAnchor   <- countRows (tdName votingAnchorTableDef)
           followVoting   <- countRows (tdName votingProcedureTableDef)
 
-          -- Cert tables.
-          (followDrepH    - baselineDrepH)    `shouldSatisfy` (>= 1)
-          (followDrepReg  - baselineDrepReg)  `shouldSatisfy` (>= 1)
+          -- Cert tables — one DRep reg, one committee auth (hot key only).
+          (followDrepH    - baselineDrepH)    `shouldBe` 1
+          (followDrepReg  - baselineDrepReg)  `shouldBe` 1
           -- Only the hot key is new; the cold key is a genesis committee
           -- member seeded during Ingest, so its committee_hash pre-exists.
-          (followCommH    - baselineCommH)    `shouldSatisfy` (>= 1)
-          (followCommReg  - baselineCommReg)  `shouldSatisfy` (>= 1)
-          -- Proposal tables.
-          (followGap      - baselineGap)      `shouldSatisfy` (>= 2)  -- ParameterChange + TreasuryWithdrawals
-          (followParam    - baselineParam)    `shouldSatisfy` (>= 1)
-          (followWithdraw - baselineWithdraw) `shouldSatisfy` (>= 1)
-          (followAnchor   - baselineAnchor)   `shouldSatisfy` (>= 1)
+          (followCommH    - baselineCommH)    `shouldBe` 1
+          (followCommReg  - baselineCommReg)  `shouldBe` 1
+          -- Proposal tables — ParameterChange + TreasuryWithdrawals.
+          (followGap      - baselineGap)      `shouldBe` 2
+          (followParam    - baselineParam)    `shouldBe` 1
+          (followWithdraw - baselineWithdraw) `shouldBe` 1
+          (followAnchor   - baselineAnchor)   `shouldBe` 1
           -- Vote table — cross-block lookup hit means the row landed.
-          (followVoting   - baselineVoting)   `shouldSatisfy` (>= 1)
+          (followVoting   - baselineVoting)   `shouldBe` 1
 
           -- The ParameterChange row carries a non-NULL @param_proposal@ FK.
           paramFk <- T.strip <$> queryTestDb
@@ -189,16 +189,23 @@ spec = describe "Follow governance writes" $ do
                 <> " WHERE type = 'ParameterChange' "
                 <> "ORDER BY id DESC LIMIT 1"
             )
-          paramFk `shouldSatisfy` (not . T.null)
+          paramFk `shouldNotBe` ""
 
-          -- The vote row points at a gov_action_proposal id (sanity check
-          -- that the cross-block cache resolved the reference).
+          -- The vote's gov_action_proposal_id resolves to Block C's
+          -- ParameterChange row: the cross-block cache linked the Block E
+          -- vote back to the Block C action.
+          paramChangeRowId <- T.strip <$> queryTestDb
+            ( "SELECT id::text FROM "
+                <> tdName govActionProposalTableDef
+                <> " WHERE type = 'ParameterChange' "
+                <> "ORDER BY id DESC LIMIT 1"
+            )
           voteFk <- T.strip <$> queryTestDb
             ( "SELECT COALESCE(gov_action_proposal_id::text, '') FROM "
                 <> tdName votingProcedureTableDef
                 <> " ORDER BY id DESC LIMIT 1"
             )
-          voteFk `shouldSatisfy` (not . T.null)
+          voteFk `shouldBe` paramChangeRowId
 
   -- | Both abstract DReps share @(raw=NULL, has_script=FALSE)@; the
   -- Follow-phase SELECT must filter on @view@ to disambiguate them.
@@ -285,9 +292,9 @@ spec = describe "Follow governance writes" $ do
           followConst <- countRows (tdName constitutionTableDef)
           followComm  <- countRows (tdName committeeTableDef)
           followProp  <- countRows (tdName govActionProposalTableDef)
-          (followConst - baselineConst) `shouldSatisfy` (>= 1)
-          (followComm  - baselineComm)  `shouldSatisfy` (>= 1)
-          (followProp  - baselineProp)  `shouldSatisfy` (>= 2)
+          (followConst - baselineConst) `shouldBe` 1
+          (followComm  - baselineComm)  `shouldBe` 1
+          (followProp  - baselineProp)  `shouldBe` 2
 
   it "links chained committee proposals via prev_gov_action_proposal" $
     withMockNode conwayConfigDir $ \mn ->
@@ -326,19 +333,19 @@ spec = describe "Follow governance writes" $ do
 
           followComm <- countRows (tdName committeeTableDef)
           followProp <- countRows (tdName govActionProposalTableDef)
-          (followComm - baselineComm) `shouldSatisfy` (>= 2)
-          (followProp - baselineProp) `shouldSatisfy` (>= 2)
+          (followComm - baselineComm) `shouldBe` 2
+          (followProp - baselineProp) `shouldBe` 2
 
           -- The latest committee row carries the full resolved membership
-          -- (bootstrap members plus cred1 and cred2), not just the single
+          -- (genesis members plus cred1 and cred2), not just the single
           -- added member p2's tx body carries.
-          latestMembers <- T.strip <$> queryTestDb
-            ( "SELECT count(*) FROM " <> tdName committeeMemberTableDef
-                <> " WHERE committee_id = (SELECT max(id) FROM "
-                <> tdName committeeTableDef <> ")"
+          genesisMembers <- committeeMemberCount
+            ( "(SELECT id FROM " <> tdName committeeTableDef
+                <> " WHERE gov_action_proposal_id IS NULL LIMIT 1)"
             )
-          let latestMemberCount = fromMaybe 0 (readMaybe (T.unpack latestMembers)) :: Int
-          latestMemberCount `shouldSatisfy` (>= 2)
+          latestMembers <- committeeMemberCount
+            ("(SELECT max(id) FROM " <> tdName committeeTableDef <> ")")
+          latestMembers `shouldBe` genesisMembers + 2
 
   it "resolves full committee membership across an add-then-remove chain" $
     withMockNode conwayConfigDir $ \mn ->
@@ -500,10 +507,15 @@ spec = describe "Follow governance writes" $ do
             ( "SELECT count(*) FROM " <> tdName govActionProposalTableDef
                 <> " WHERE type = 'InfoAction'"
             )
-          infoCount `shouldSatisfy` (/= "0")
+          infoCount `shouldBe` "1"
 
-          (followProp - baselineProp) `shouldSatisfy` (>= 1)
-          (followVote - baselineVote) `shouldSatisfy` (>= 1)
+          (followProp - baselineProp) `shouldBe` 1
+          -- 'voteAllOnAction' casts one Yes vote per voter — every DRep,
+          -- every committee hot key, and the three live stake pools — and
+          -- each lands its own voting_procedure row.
+          let expectedInfoVotes =
+                length Generic.drepVoters + length Generic.committeeVoters + 3
+          (followVote - baselineVote) `shouldBe` expectedInfoVotes
           (followConst - baselineConst) `shouldBe` 0
           (followComm  - baselineComm)  `shouldBe` 0
 

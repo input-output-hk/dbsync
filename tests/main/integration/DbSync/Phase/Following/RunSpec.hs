@@ -493,41 +493,27 @@ spec = describe "DbSync.Phase.Following.Run" $
         result `shouldBe` "2|1|0"
 
     describe "per-era block ingestion" $ do
-      it "Byron block lands with proto_major 1" $ do
-        runFollow [byronEmptyBlock]
+      -- proto_major passes through the extractor untransformed, so
+      -- one ordered read-back covers every era's pass-through in a
+      -- single pipeline run.
+      it "every era's block lands with its proto_major" $ do
+        let eras =
+              [ (Byron, 1), (Shelley, 2), (Allegra, 3)
+              , (Mary, 4), (Alonzo, 6), (Babbage, 8)
+              ]
+            mkEraBlock i (era, protoMajor) = emptyBlock
+              { blkEra        = era
+              , blkProtoMajor = protoMajor
+              , blkHash       = BS.replicate 32 (fromIntegral i)
+              , blkBlockNo    = BlockNo (fromIntegral i)
+              , blkSlotNo     = SlotNo (100 + 20 * fromIntegral i)
+              }
+        runFollow (zipWith mkEraBlock [1 :: Int ..] eras)
         result <- T.strip <$> queryTestDb
-          ("SELECT proto_major FROM " <> tdName blockTableDef <> ";")
-        result `shouldBe` "1"
-
-      it "Shelley block lands with proto_major 2" $ do
-        runFollow [shelleyEmptyBlock]
-        result <- T.strip <$> queryTestDb
-          ("SELECT proto_major FROM " <> tdName blockTableDef <> ";")
-        result `shouldBe` "2"
-
-      it "Allegra block lands with proto_major 3" $ do
-        runFollow [allegraEmptyBlock]
-        result <- T.strip <$> queryTestDb
-          ("SELECT proto_major FROM " <> tdName blockTableDef <> ";")
-        result `shouldBe` "3"
-
-      it "Mary block lands with proto_major 4" $ do
-        runFollow [maryEmptyBlock]
-        result <- T.strip <$> queryTestDb
-          ("SELECT proto_major FROM " <> tdName blockTableDef <> ";")
-        result `shouldBe` "4"
-
-      it "Alonzo block lands with proto_major 6" $ do
-        runFollow [alonzoEmptyBlock]
-        result <- T.strip <$> queryTestDb
-          ("SELECT proto_major FROM " <> tdName blockTableDef <> ";")
-        result `shouldBe` "6"
-
-      it "Babbage block lands with proto_major 8" $ do
-        runFollow [babbageEmptyBlock]
-        result <- T.strip <$> queryTestDb
-          ("SELECT proto_major FROM " <> tdName blockTableDef <> ";")
-        result `shouldBe` "8"
+          ( "SELECT proto_major FROM " <> tdName blockTableDef
+              <> " ORDER BY id;"
+          )
+        result `shouldBe` "1\n2\n3\n4\n6\n8"
 
       it "Alonzo phase-2 failure marks tx valid_contract=false" $ do
         runFollow [alonzoPhase2FailBlock]
@@ -617,23 +603,11 @@ emptyBlock2 = emptyBlock
   , blkSlotNo  = SlotNo 120
   }
 
-byronEmptyBlock :: GenericBlock
-byronEmptyBlock = emptyBlock { blkEra = Byron, blkProtoMajor = 1 }
-
-shelleyEmptyBlock :: GenericBlock
-shelleyEmptyBlock = emptyBlock { blkEra = Shelley, blkProtoMajor = 2 }
-
 allegraEmptyBlock :: GenericBlock
 allegraEmptyBlock = emptyBlock { blkEra = Allegra, blkProtoMajor = 3 }
 
-maryEmptyBlock :: GenericBlock
-maryEmptyBlock = emptyBlock { blkEra = Mary, blkProtoMajor = 4 }
-
 alonzoEmptyBlock :: GenericBlock
 alonzoEmptyBlock = emptyBlock { blkEra = Alonzo, blkProtoMajor = 6 }
-
-babbageEmptyBlock :: GenericBlock
-babbageEmptyBlock = emptyBlock { blkEra = Babbage, blkProtoMajor = 8 }
 
 alonzoPhase2FailBlock :: GenericBlock
 alonzoPhase2FailBlock = alonzoEmptyBlock

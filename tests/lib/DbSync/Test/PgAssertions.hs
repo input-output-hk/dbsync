@@ -35,6 +35,7 @@ module DbSync.Test.PgAssertions
   , tableColumn
 
     -- * Generic decoders
+  , readInt
   , readNullableInt
   ) where
 
@@ -52,23 +53,21 @@ import DbSync.Test.Helpers (waitFor)
 -- * Row counts
 -- ---------------------------------------------------------------------------
 
--- | @SELECT count(*) FROM table@ as an 'Int'. Returns @0@ if the
--- value comes back unparseable (e.g. the table doesn't exist); the
--- caller's downstream assertion then fails loudly on the wrong-value
--- comparison rather than swallowing a parse error here.
-countRows :: Text -> IO Int
+-- | @SELECT count(*) FROM table@ as an 'Int'. Panics on unparseable
+-- output so a zero-expectation assertion can never pass vacuously.
+countRows :: HasCallStack => Text -> IO Int
 countRows table = do
   t <- T.strip <$> queryTestDb ("SELECT count(*) FROM " <> table <> ";")
-  pure $ fromMaybe 0 (readMaybe (T.unpack t))
+  pure $ readIntCell ("countRows " <> table) t
 
 -- | NULL count for a single column. Used by FK-resolution
 -- assertions where Prep's backfill UPDATEs are expected to leave
--- zero NULLs on the affected columns.
-countNulls :: Text -> Text -> IO Int
+-- zero NULLs on the affected columns. Panics on unparseable output.
+countNulls :: HasCallStack => Text -> Text -> IO Int
 countNulls table col = do
   t <- T.strip <$> queryTestDb
     ("SELECT count(*) FROM " <> table <> " WHERE " <> col <> " IS NULL;")
-  pure $ fromMaybe 0 (readMaybe (T.unpack t))
+  pure $ readIntCell ("countNulls " <> table <> "." <> col) t
 
 -- ---------------------------------------------------------------------------
 -- * Schema-flip introspection
@@ -80,14 +79,14 @@ countNulls table col = do
 -- 'TableDef' values and so are SQL-safe by construction, but they
 -- are still single-quoted in the @IN (...)@ list as a defence in
 -- depth.
-countNonLoggedTables :: [Text] -> IO Int
+countNonLoggedTables :: HasCallStack => [Text] -> IO Int
 countNonLoggedTables names = do
   let inList = T.intercalate "," (map quoteLit names)
   t <- T.strip <$> queryTestDb
     ( "SELECT count(*) FROM pg_class WHERE relkind = 'r' AND relname IN ("
         <> inList <> ") AND relpersistence <> 'p';"
     )
-  pure $ fromMaybe 0 (readMaybe (T.unpack t))
+  pure $ readIntCell "countNonLoggedTables" t
 
 -- | Of the supplied index names, those missing from
 -- @pg_indexes.public@. The empty list means every expected index
@@ -111,24 +110,23 @@ listMissingIndexes expected = do
 -- the next allocation equals @MAX(id) + 1@ on a populated table, or
 -- @1@ on an empty one. The sequence name is resolved via
 -- @pg_get_serial_sequence@ so explicit and @IDENTITY@-backed
--- sequences are handled uniformly. Returns 'False' on parse failure
--- so the calling assertion surfaces the discrepancy rather than the
--- parser.
-sequenceAdvanced :: Text -> IO Bool
+-- sequences are handled uniformly. The probing @nextval@ is reverted
+-- via @setval(..., is_called=false)@, so repeated calls observe the
+-- same sequence state. Panics on unparseable output.
+sequenceAdvanced :: HasCallStack => Text -> IO Bool
 sequenceAdvanced table = do
-  -- nextval advances the sequence; we revert by re-setting it to the
-  -- same value with is_called=true so a follow-up nextval still
-  -- returns one past the previous value.
   nextRaw <- T.strip <$> queryTestDb
     ("SELECT nextval(pg_get_serial_sequence('" <> table <> "', 'id'));")
+  let n = readIntCell ("sequenceAdvanced " <> table <> " nextval") nextRaw
+  -- undo the advance: the next consumer sees n again
+  _ <- queryTestDb
+    ( "SELECT setval(pg_get_serial_sequence('" <> table <> "', 'id'), "
+        <> show n <> ", false);"
+    )
   maxRaw <- T.strip <$> queryTestDb
     ("SELECT COALESCE(MAX(id), 0) FROM " <> table <> ";")
-  let nextVal = readMaybe (T.unpack nextRaw) :: Maybe Int
-      maxVal  = readMaybe (T.unpack maxRaw) :: Maybe Int
-  case (nextVal, maxVal) of
-    (Just n, Just 0) -> pure (n == 1)
-    (Just n, Just m) -> pure (n == m + 1)
-    _                -> pure False
+  let m = readIntCell ("sequenceAdvanced " <> table <> " max id") maxRaw
+  pure $ if m == 0 then n == 1 else n == m + 1
 
 -- ---------------------------------------------------------------------------
 -- * Settle-state polling
@@ -224,12 +222,22 @@ tableColumn td name =
 -- * Generic decoders
 -- ---------------------------------------------------------------------------
 
+-- | Run @sql@ via 'queryTestDb' and parse the first cell as 'Int',
+-- panicking on unparseable output.
+readInt :: HasCallStack => Text -> IO Int
+readInt sql = do
+  t <- T.strip <$> queryTestDb sql
+  pure $ readIntCell ("readInt " <> sql) t
+
 -- | Run @sql@ via 'queryTestDb' and parse the first cell as a
--- nullable 'Int'. Empty / unparseable cells return 'Nothing'.
-readNullableInt :: Text -> IO (Maybe Int)
+-- nullable 'Int'. An empty cell is NULL ('Nothing'); non-empty
+-- unparseable output panics rather than masquerading as NULL.
+readNullableInt :: HasCallStack => Text -> IO (Maybe Int)
 readNullableInt sql = do
   t <- T.strip <$> queryTestDb sql
-  if T.null t then pure Nothing else pure (readMaybe (T.unpack t))
+  if T.null t
+    then pure Nothing
+    else pure (Just (readIntCell "readNullableInt" t))
 
 -- ---------------------------------------------------------------------------
 -- * Internal
@@ -239,3 +247,11 @@ readNullableInt sql = do
 -- any embedded apostrophes per the SQL spec.
 quoteLit :: Text -> Text
 quoteLit t = "'" <> T.replace "'" "''" t <> "'"
+
+-- | Parse a psql cell as 'Int', panicking on failure so no
+-- assertion can pass against garbage output.
+readIntCell :: HasCallStack => Text -> Text -> Int
+readIntCell what t =
+  case readMaybe (T.unpack t) of
+    Just n  -> n
+    Nothing -> panic $ what <> ": unparseable psql output: " <> show t

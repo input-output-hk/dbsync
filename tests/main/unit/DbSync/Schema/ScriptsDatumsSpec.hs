@@ -1,16 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Tests for the @scripts_datums@ schema and COPY encoders.
---
--- Pure tests — no PostgreSQL required. Coverage focuses on:
---
--- * 'TableDef' shape (column names, ordering, nullability, enum types).
--- * COPY encoder field counts and the per-enum string values that hit
---   the wire (drift between Haskell constructor and PG enum value would
---   otherwise corrupt data silently).
---
--- End-to-end correctness against forged transactions lands later
--- (commit 6, chain-gen mirroring).
+-- | Tests for the @scripts_datums@ COPY encoders: the per-enum string
+-- values that hit the wire (drift between Haskell constructor and PG
+-- enum value would otherwise corrupt data silently) and NULL encoding.
 module DbSync.Schema.ScriptsDatumsSpec (spec) where
 
 import Cardano.Prelude
@@ -32,23 +24,11 @@ import DbSync.Db.Schema.ScriptsDatums
   ( Datum (..)
   , ExtraKeyWitness (..)
   , Redeemer (..)
-  , RedeemerData (..)
   , Script (..)
-  , datumTableDef
   , encodeDatumCopy
   , encodeExtraKeyWitnessCopy
   , encodeRedeemerCopy
-  , encodeRedeemerDataCopy
   , encodeScriptCopy
-  , extraKeyWitnessTableDef
-  , redeemerDataTableDef
-  , redeemerTableDef
-  , scriptTableDef
-  )
-import DbSync.Db.Schema.Types
-  ( ColumnDef (..)
-  , PgType (..)
-  , TableDef (..)
   )
 import DbSync.Db.Types
   ( DbLovelace (..)
@@ -60,21 +40,10 @@ import DbSync.Db.Types
 
 spec :: Spec
 spec = do
-  describe "datumTableDef" $ do
-    it "is named datum with 5 columns including a JSONB value" $ do
-      tdName datumTableDef `shouldBe` "datum"
-      map cdName (tdColumns datumTableDef) `shouldBe`
-        ["id", "hash", "tx_id", "value", "bytes"]
-      cdType (tdColumns datumTableDef !! 3) `shouldBe` PgJsonb
-
-    it "declares a unique constraint on hash" $
-      tdUniqueConstraints datumTableDef `shouldBe` [pure "hash"]
-
   describe "encodeDatumCopy" $ do
-    it "produces 5 fields, NULL value when datumValue is Nothing" $ do
+    it "encodes value as NULL when datumValue is Nothing" $ do
       let row = encodeDatumCopy (DatumId 1) sampleDatum { datumValue = Nothing }
           fields = BS8.split '\t' (BS8.init row)
-      length fields `shouldBe` 5
       fields !! 3 `shouldBe` "\\N"
 
     it "writes JSONB value as plain text when present" $ do
@@ -82,14 +51,6 @@ spec = do
                   sampleDatum { datumValue = Just "{\"k\":1}" }
           fields = BS8.split '\t' (BS8.init row)
       fields !! 3 `shouldBe` "{\"k\":1}"
-
-  describe "scriptTableDef" $ do
-    it "stores the script type as text" $
-      cdType (tdColumns scriptTableDef !! 3) `shouldBe` PgText
-
-    it "is unique on hash and has 7 columns total" $ do
-      tdUniqueConstraints scriptTableDef `shouldBe` [pure "hash"]
-      length (tdColumns scriptTableDef) `shouldBe` 7
 
   describe "encodeScriptCopy" $ do
     it "encodes every ScriptType enum value as the matching PG string" $
@@ -116,14 +77,6 @@ spec = do
       fields !! 4 `shouldBe` "\\N"
       fields !! 5 `shouldBe` "\\N"
       fields !! 6 `shouldBe` "\\N"
-
-  describe "redeemerTableDef" $ do
-    it "stores the script purpose as text and has 9 columns" $ do
-      cdType (tdColumns redeemerTableDef !! 5) `shouldBe` PgText
-      length (tdColumns redeemerTableDef) `shouldBe` 9
-
-    it "has no unique constraints (a tx can carry many redeemers)" $
-      tdUniqueConstraints redeemerTableDef `shouldBe` []
 
   describe "encodeRedeemerCopy" $ do
     it "encodes every ScriptPurpose enum value as the matching PG string" $
@@ -155,28 +108,6 @@ spec = do
           fields = BS8.split '\t' (BS8.init row)
       fields !! 2 `shouldBe` "12345"
       fields !! 3 `shouldBe` "999999999"
-
-  describe "redeemerDataTableDef" $ do
-    it "is named redeemer_data with the same shape as datum" $ do
-      tdName redeemerDataTableDef `shouldBe` "redeemer_data"
-      map cdName (tdColumns redeemerDataTableDef) `shouldBe`
-        ["id", "hash", "tx_id", "value", "bytes"]
-      tdUniqueConstraints redeemerDataTableDef `shouldBe` [pure "hash"]
-
-  describe "encodeRedeemerDataCopy" $ do
-    it "produces a 5-field row with the expected tab count" $ do
-      let row = encodeRedeemerDataCopy (RedeemerDataId 1) sampleRedeemerData
-          tabs = BS.count (fromIntegral (fromEnum '\t')) row
-      BS8.last row `shouldBe` '\n'
-      tabs `shouldBe` 4
-
-  describe "extraKeyWitnessTableDef" $ do
-    it "is the trivial hash + tx_id table with an identity id" $ do
-      tdName extraKeyWitnessTableDef `shouldBe` "extra_key_witness"
-      map cdName (tdColumns extraKeyWitnessTableDef) `shouldBe`
-        ["id", "hash", "tx_id"]
-      tdUniqueConstraints extraKeyWitnessTableDef `shouldBe` []
-      tdIdentityColumns extraKeyWitnessTableDef `shouldBe` ["id"]
 
   describe "encodeExtraKeyWitnessCopy" $ do
     it "produces 2 fields with the hex hash and tx_id (id is server-assigned)" $ do
@@ -222,12 +153,4 @@ sampleRedeemer = Redeemer
   , redeemerIndex          = 0
   , redeemerScriptHash     = Just (BS.replicate 28 0xee)
   , redeemerRedeemerDataId = RedeemerDataId 9
-  }
-
-sampleRedeemerData :: RedeemerData
-sampleRedeemerData = RedeemerData
-  { redeemerDataHash  = BS.replicate 32 0xff
-  , redeemerDataTxId  = TxId 100
-  , redeemerDataValue = Just "{\"d\":1}"
-  , redeemerDataBytes = BS.replicate 8 0x11
   }

@@ -101,11 +101,6 @@ spec = do
       length (twSlotLeaders w2) `shouldBe` 1
 
   describe "extraction: ID monotonicity" $ do
-    it "block IDs increase across sequential blocks" $ do
-      (w1, w2) <- runCoreTwoBlocks emptyBlock emptyBlock2
-      fst (headDef (panic "no block") (twBlocks w1)) `shouldBe` BlockId 1
-      fst (headDef (panic "no block") (twBlocks w2)) `shouldBe` BlockId 2
-
     it "tx IDs increase across blocks" $ do
       let block2 = blockWith3Txs { blkHash = BS.replicate 32 2, blkBlockNo = BlockNo 2 }
       (w1, w2) <- runCoreTwoBlocks blockWith3Txs block2
@@ -339,6 +334,11 @@ spec = do
     it "False for CertDelegation"          $ affectsDeposit delegationAction                           `shouldBe` False
     it "False for CertConwayDelegVote"     $ affectsDeposit conwayDelegVoteAction                      `shouldBe` False
     it "False for CertConwayDelegStakeVote" $ affectsDeposit (CertConwayDelegStakeVote (CredHash "" False) "" G.DRepAlwaysAbstain Nothing) `shouldBe` False
+
+    -- The Conway deleg-vote variants register a stake key when they carry a
+    -- deposit, so the deposit's presence — not the constructor — decides.
+    it "True for CertConwayDelegVote carrying a deposit"      $ affectsDeposit (CertConwayDelegVote (CredHash "" False) G.DRepAlwaysAbstain (Just 2_000_000))              `shouldBe` True
+    it "True for CertConwayDelegStakeVote carrying a deposit" $ affectsDeposit (CertConwayDelegStakeVote (CredHash "" False) "" G.DRepAlwaysAbstain (Just 2_000_000)) `shouldBe` True
     it "False for CertDRepUpdate"          $ affectsDeposit drepUpdateAction                           `shouldBe` False
     it "False for CertCommitteeAuth"       $ affectsDeposit committeeAuthAction                        `shouldBe` False
     it "False for CertCommitteeResign"     $ affectsDeposit (CertCommitteeResign (CredHash "" False) Nothing)           `shouldBe` False

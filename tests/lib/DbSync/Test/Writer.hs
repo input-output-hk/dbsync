@@ -15,10 +15,13 @@ import Cardano.Prelude
 
 import Data.IORef (IORef, atomicModifyIORef')
 
+import DbSync.Db.Schema.AdaPots (AdaPots)
 import DbSync.Db.Schema.Address (Address)
+import DbSync.Db.Schema.CBOR (TxCbor)
 import DbSync.Db.Schema.Core (Block, PoolHash, SlotLeader, StakeAddress, Tx)
 import DbSync.Db.Schema.EpochBoundary
   ( CostModel, EpochParam, EpochState, PotTransfer, Reserve, Treasury )
+import DbSync.Db.Schema.EpochSyncStats (EpochSyncStats)
 import DbSync.Db.Schema.Governance
   ( Committee
   , CommitteeDeRegistration
@@ -30,6 +33,7 @@ import DbSync.Db.Schema.Governance
   , DrepDistr
   , DrepHash
   , DrepRegistration
+  , EventInfo
   , GovActionProposal
   , ParamProposal
   , TreasuryWithdrawal
@@ -46,9 +50,13 @@ import DbSync.Db.Schema.Ids
   , CostModelId
   , DatumId
   , DrepHashId
+  , EpochSyncStatsId
+  , EventInfoId
   , GovActionProposalId
+  , MultiAssetId
   , ParamProposalId
   , PoolHashId
+  , PoolMetadataRefId
   , PoolUpdateId
   , RedeemerDataId
   , RedeemerId
@@ -60,16 +68,20 @@ import DbSync.Db.Schema.Ids
   , VotingAnchorId
   )
 import DbSync.Db.Schema.Metadata (TxMetadata)
-import DbSync.Db.Schema.MultiAsset (MaTxMint, MaTxOut)
-import DbSync.Db.Schema.Pool (PoolStat, PoolUpdate)
+import DbSync.Db.Schema.MultiAsset (MaTxMint, MaTxOut, MultiAsset)
+import DbSync.Db.Schema.Pool
+  ( PoolMetadataRef, PoolOwner, PoolRelay, PoolRetire, PoolStat, PoolUpdate )
 import DbSync.Db.Schema.ScriptsDatums
   ( Datum, ExtraKeyWitness, Redeemer, RedeemerData, Script )
 import DbSync.Db.Schema.StakeDelegation
-  ( EpochStake
+  ( Delegation
+  , EpochStake
   , EpochStakeProgress
   , PotReward
   , Reward
+  , StakeDeregistration
   , StakeRegistration
+  , Withdrawal
   )
 import DbSync.Db.Schema.UTxO (CollateralTxIn, CollateralTxOut, ReferenceTxIn, TxIn, TxOut)
 import DbSync.Writer (Writer (..))
@@ -93,21 +105,32 @@ data TestWriterState = TestWriterState
   , twReferenceTxIns    :: ![ReferenceTxIn]
   , twStakeAddresses    :: ![(StakeAddressId, StakeAddress)]
   , twStakeRegistrations :: ![StakeRegistration]
+  , twStakeDeregistrations :: ![StakeDeregistration]
+  , twDelegations       :: ![Delegation]
+  , twWithdrawals       :: ![Withdrawal]
   , twRewards           :: ![Reward]
   , twPotRewards        :: ![PotReward]
   , twEpochStakes       :: ![EpochStake]
   , twEpochStakeProgresses :: ![EpochStakeProgress]
   , twPoolHashes        :: ![(PoolHashId, PoolHash)]
   , twPoolUpdates       :: ![(PoolUpdateId, PoolUpdate)]
+  , twPoolMetadataRefs  :: ![(PoolMetadataRefId, PoolMetadataRef)]
+  , twPoolOwners        :: ![PoolOwner]
+  , twPoolRetires       :: ![PoolRetire]
+  , twPoolRelays        :: ![PoolRelay]
   , twPoolStats         :: ![PoolStat]
   , twTxMetadata        :: ![TxMetadata]
+  , twTxCbors           :: ![TxCbor]
+  , twMultiAssets       :: ![(MultiAssetId, MultiAsset)]
   , twMaTxMints         :: ![MaTxMint]
   , twMaTxOuts          :: ![MaTxOut]
   , twPotTransfers      :: ![PotTransfer]
   , twTreasuries        :: ![Treasury]
   , twReserves          :: ![Reserve]
+  , twAdaPots           :: ![AdaPots]
   , twEpochParams       :: ![EpochParam]
   , twEpochStates       :: ![EpochState]
+  , twEpochSyncStats    :: ![(EpochSyncStatsId, EpochSyncStats)]
   , twCostModels        :: ![(CostModelId, CostModel)]
   , twDatums            :: ![(DatumId, Datum)]
   , twScripts           :: ![(ScriptId, Script)]
@@ -131,10 +154,11 @@ data TestWriterState = TestWriterState
   , twCommitteeRegistrations   :: ![CommitteeRegistration]
   , twCommitteeDeRegistrations :: ![CommitteeDeRegistration]
   , twDrepDistrs               :: ![DrepDistr]
+  , twEventInfos               :: ![(EventInfoId, EventInfo)]
 
   , twCommits           :: !Int
   }
-  deriving stock (Show)
+  deriving stock (Eq, Show)
 
 -- | Empty test writer state.
 emptyTestWriterState :: TestWriterState
@@ -150,21 +174,32 @@ emptyTestWriterState = TestWriterState
   , twReferenceTxIns    = []
   , twStakeAddresses    = []
   , twStakeRegistrations = []
+  , twStakeDeregistrations = []
+  , twDelegations       = []
+  , twWithdrawals       = []
   , twRewards           = []
   , twPotRewards        = []
   , twEpochStakes       = []
   , twEpochStakeProgresses = []
   , twPoolHashes        = []
   , twPoolUpdates       = []
+  , twPoolMetadataRefs  = []
+  , twPoolOwners        = []
+  , twPoolRetires       = []
+  , twPoolRelays        = []
   , twPoolStats         = []
   , twTxMetadata        = []
+  , twTxCbors           = []
+  , twMultiAssets       = []
   , twMaTxMints         = []
   , twMaTxOuts          = []
   , twPotTransfers     = []
   , twTreasuries       = []
   , twReserves         = []
+  , twAdaPots          = []
   , twEpochParams      = []
   , twEpochStates      = []
+  , twEpochSyncStats   = []
   , twCostModels       = []
   , twDatums           = []
   , twScripts          = []
@@ -186,6 +221,7 @@ emptyTestWriterState = TestWriterState
   , twCommitteeRegistrations   = []
   , twCommitteeDeRegistrations = []
   , twDrepDistrs               = []
+  , twEventInfos               = []
   , twCommits           = 0
   }
 
@@ -193,9 +229,10 @@ emptyTestWriterState = TestWriterState
 -- * Construction
 -- ---------------------------------------------------------------------------
 
--- | Build a 'Writer' that captures the row-producing calls used by
--- the unit tests. Calls without a corresponding field on
--- 'TestWriterState' are no-ops.
+-- | Build a 'Writer' that captures every extractor-produced row.
+-- Only the off-chain pool\/vote tables are no-ops: those rows are
+-- written by the off-chain workers, never by the extractors under
+-- test here.
 mkTestWriter :: IORef TestWriterState -> Writer IO
 mkTestWriter ref = Writer
   { -- Core
@@ -235,7 +272,9 @@ mkTestWriter ref = Writer
         (s { twTxMetadata = twTxMetadata s ++ [md] }, ())
 
     -- MultiAsset
-  , writeMultiAsset = \_ _ -> pure ()
+  , writeMultiAsset = \mid ma ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twMultiAssets = twMultiAssets s ++ [(mid, ma)] }, ())
   , writeMaTxMint = \m ->
       atomicModifyIORef' ref $ \s ->
         (s { twMaTxMints = twMaTxMints s ++ [m] }, ())
@@ -250,9 +289,15 @@ mkTestWriter ref = Writer
   , writeStakeRegistration   = \sr ->
       atomicModifyIORef' ref $ \s ->
         (s { twStakeRegistrations = twStakeRegistrations s ++ [sr] }, ())
-  , writeStakeDeregistration = \_ -> pure ()
-  , writeDelegation          = \_ -> pure ()
-  , writeWithdrawal          = \_ -> pure ()
+  , writeStakeDeregistration = \sd ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twStakeDeregistrations = twStakeDeregistrations s ++ [sd] }, ())
+  , writeDelegation          = \d ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twDelegations = twDelegations s ++ [d] }, ())
+  , writeWithdrawal          = \w ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twWithdrawals = twWithdrawals s ++ [w] }, ())
   , writeReward = \r ->
       atomicModifyIORef' ref $ \s ->
         (s { twRewards = twRewards s ++ [r] }, ())
@@ -273,10 +318,18 @@ mkTestWriter ref = Writer
   , writePoolUpdate = \puid pu ->
       atomicModifyIORef' ref $ \s ->
         (s { twPoolUpdates = twPoolUpdates s ++ [(puid, pu)] }, ())
-  , writePoolMetadataRef = \_ _ -> pure ()
-  , writePoolOwner       = \_ -> pure ()
-  , writePoolRetire      = \_ -> pure ()
-  , writePoolRelay       = \_ -> pure ()
+  , writePoolMetadataRef = \pmid pm ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twPoolMetadataRefs = twPoolMetadataRefs s ++ [(pmid, pm)] }, ())
+  , writePoolOwner       = \po ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twPoolOwners = twPoolOwners s ++ [po] }, ())
+  , writePoolRetire      = \pr ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twPoolRetires = twPoolRetires s ++ [pr] }, ())
+  , writePoolRelay       = \prl ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twPoolRelays = twPoolRelays s ++ [prl] }, ())
   , writePoolStat        = \ps ->
       atomicModifyIORef' ref $ \s ->
         (s { twPoolStats = twPoolStats s ++ [ps] }, ())
@@ -298,14 +351,20 @@ mkTestWriter ref = Writer
   , writeOffChainVoteExternalUpdate = \_ -> pure ()
   , writeOffChainVoteFetchError     = \_ -> pure ()
 
-    -- CBOR (no-op)
-  , writeTxCbor = \_ -> pure ()
+    -- CBOR
+  , writeTxCbor = \tc ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twTxCbors = twTxCbors s ++ [tc] }, ())
 
-    -- EpochSyncStats (no-op)
-  , writeEpochSyncStats = \_ _ -> pure ()
+    -- EpochSyncStats
+  , writeEpochSyncStats = \esid ess ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twEpochSyncStats = twEpochSyncStats s ++ [(esid, ess)] }, ())
 
     -- EpochBoundary
-  , writeAdaPots     = \_ -> pure ()
+  , writeAdaPots     = \pots ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twAdaPots = twAdaPots s ++ [pots] }, ())
   , writeEpochParam  = \ep ->
       atomicModifyIORef' ref $ \s ->
         (s { twEpochParams = twEpochParams s ++ [ep] }, ())
@@ -342,8 +401,7 @@ mkTestWriter ref = Writer
       atomicModifyIORef' ref $ \s ->
         (s { twExtraKeyWitnesses = twExtraKeyWitnesses s ++ [ek] }, ())
 
-    -- Governance — see 'TestWriterState' for the captured fields;
-    -- only the slice-2-relevant tables are stored, the rest are no-ops.
+    -- Governance
   , writeGovActionProposal       = \gid g ->
       atomicModifyIORef' ref $ \s ->
         (s { twGovActionProposals = twGovActionProposals s ++ [(gid, g)] }, ())
@@ -356,7 +414,9 @@ mkTestWriter ref = Writer
   , writeConstitution            = \cid c ->
       atomicModifyIORef' ref $ \s ->
         (s { twConstitutions = twConstitutions s ++ [(cid, c)] }, ())
-  , writeEventInfo               = \_ _ -> pure ()
+  , writeEventInfo               = \eid ei ->
+      atomicModifyIORef' ref $ \s ->
+        (s { twEventInfos = twEventInfos s ++ [(eid, ei)] }, ())
   , writeDrepHash                = \did d ->
       atomicModifyIORef' ref $ \s ->
         (s { twDrepHashes = twDrepHashes s ++ [(did, d)] }, ())

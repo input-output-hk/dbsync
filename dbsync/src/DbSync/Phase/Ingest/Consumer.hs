@@ -60,6 +60,7 @@ import DbSync.Phase.Ingest.Boundary
   , newConsumerLoopState
   , readBoundaryApplyResult
   , recordMemSample
+  , renderBoundaryPercent
   , fmtBytes
   )
 import DbSync.StateQuery
@@ -474,19 +475,3 @@ ingestRollbackPanicMessage point =
   "IngestChainHistory: received MsgRollback at "
     <> show point
     <> "; this should be impossible (k-safety violation)."
-
--- | Render the Ingest progress segment of the form @\" | [87.32%]\"@.
--- The percentage is the current block's position relative to the
--- current node tip (derived from the published rollback boundary
--- plus @k@). Returns @\"\"@ when the boundary is still 'Nothing'
--- (chain shorter than @k@ blocks), when no block has been processed
--- yet, or when the derived tip is zero.
-renderBoundaryPercent :: Maybe BlockNo -> Word64 -> Maybe Word64 -> Text
-renderBoundaryPercent (Just (BlockNo boundary)) k (Just curBlock)
-  | tip > 0 =
-      let raw     = (fromIntegral curBlock / fromIntegral tip :: Double) * 100
-          clamped = max 0 (min 100 raw)
-      in " | [" <> fmtF2 clamped <> "%]"
-  where
-    tip = boundary + k
-renderBoundaryPercent _ _ _ = ""

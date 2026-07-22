@@ -46,8 +46,8 @@ import Control.Concurrent.Class.MonadSTM.Strict (
   retry,
   writeTVar,
  )
-import Control.Exception (IOException, bracket, try)
-import Control.Monad (forever, unless)
+import Control.Exception (IOException, SomeException, bracket, try)
+import Control.Monad (forever, unless, void)
 import Control.Tracer
 import Data.ByteString.Lazy.Char8 (ByteString)
 import qualified Data.Map.Strict as Map
@@ -114,6 +114,10 @@ data ServerHandle m blk = ServerHandle
   , threadHandle :: StrictTVar m (Async ())
   , forkAgain :: m (Async ())
   , socketPath :: FilePath
+  , acceptedSockets :: StrictTVar m [Socket.Socket]
+    -- ^ Every connection socket the server has accepted. 'Server.Simple'
+    -- never closes these, so 'stopServer' closes them to force the
+    -- client to observe the disconnect (a real node restart sends FIN).
   }
 
 replaceGenesis :: MonadSTM m => ServerHandle m blk -> State blk -> STM m ()
@@ -160,6 +164,12 @@ stopServer :: ServerHandle IO blk -> IO ()
 stopServer sh = do
   srvThread <- atomically $ readTVar $ threadHandle sh
   cancel srvThread
+  -- Close every accepted connection so the client sees EOF. Cancelling the
+  -- accept loop alone leaves established connections open, so a still-running
+  -- client would never notice the restart.
+  socks <- atomically $ readTVar (acceptedSockets sh)
+  mapM_ (\s -> void $ (try @SomeException) (Socket.close s)) socks
+  atomically $ writeTVar (acceptedSockets sh) []
 
 -- | Block until db-sync has made a new connection to the (restarted) server.
 -- This is detected by watching 'nextFollowerId' in 'ChainProducerState': each
@@ -201,10 +211,11 @@ forkServerThread ::
   IO (ServerHandle IO blk)
 forkServerThread iom config initSt netMagic path = do
   chainSt <- newTVarIO $ initChainProducerState config initSt
-  let runThread = async $ runLocalServer iom (configCodec config) netMagic path chainSt
+  acceptedSocks <- newTVarIO []
+  let runThread = async $ runLocalServer iom (configCodec config) netMagic path chainSt acceptedSocks
   thread <- runThread
   threadVar <- newTVarIO thread
-  pure $ ServerHandle chainSt threadVar runThread path
+  pure $ ServerHandle chainSt threadVar runThread path acceptedSocks
 
 withServerHandle ::
   MockServerConstraint blk =>
@@ -227,15 +238,16 @@ runLocalServer ::
   NetworkMagic ->
   FilePath ->
   StrictTVar IO (ChainProducerState blk) ->
+  StrictTVar IO [Socket.Socket] ->
   IO ()
-runLocalServer iom codecConfig netMagic localDomainSock chainProdState = do
+runLocalServer iom codecConfig netMagic localDomainSock chainProdState acceptedSocks = do
   _ <-
     Server.with
       (Snocket.socketSnocket iom)
       nullTracer
       Mx.nullTracers
       makeSocketBearer
-      (\_ _ -> pure ())
+      recordAcceptedSocket
       (Socket.SockAddrUnix localDomainSock)
       ( HandshakeArguments
           { haHandshakeTracer = nullTracer -- showTracing stdoutTracer
@@ -251,6 +263,14 @@ runLocalServer iom codecConfig netMagic localDomainSock chainProdState = do
       (\_ serverAsync -> wait serverAsync)
   pure ()
   where
+    -- Called by 'Server.Simple' for the listening socket and every accepted
+    -- connection socket. Recording them lets 'stopServer' close them; the
+    -- listening socket is closed by 'Server.with' too, so closing it again is
+    -- a harmless no-op.
+    recordAcceptedSocket :: Socket.Socket -> Socket.SockAddr -> IO ()
+    recordAcceptedSocket sock _addr =
+      atomically $ modifyTVar acceptedSocks (sock :)
+
     versions ::
       StrictTVar IO (ChainProducerState blk) ->
       Versions

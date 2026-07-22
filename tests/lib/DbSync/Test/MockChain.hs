@@ -1,32 +1,16 @@
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Multi-block / multi-epoch test harness.
+-- | Multi-block / multi-epoch forging harness.
 --
 -- Bootstraps a forging 'Interpreter' (vendored in 'dbsync-mock' from
 -- the upstream @cardano-chain-gen@ project) over a Conway-era test
--- config, then drives forged 'CardanoBlock's through our existing
--- 'parseBlock' + 'Follow.processBlocks' pipeline. The resulting rows
--- end up in the test PostgreSQL database, where assertion helpers
--- can query them.
---
--- Two-stage flow per scenario:
---
---   1. /Forge/ — hand-pick blocks (txs + skipped slots + epoch
---      boundaries) via the interpreter API. The interpreter advances
---      a real ledger state, so reward/stake/governance side effects
---      that lag two epochs behind their triggering tx still surface
---      correctly.
---   2. /Process/ — parse each forged 'CardanoBlock' via 'parseBlock'
---      and feed the resulting 'GenericBlock' into our extractor
---      pipeline. PG rows accumulate the same way they would during a
---      real chain sync, just without the network plumbing.
---
--- Skips the chain-sync layer entirely. A future iteration can plug
--- the vendored 'Cardano.Mock.ChainSync.Server' between the
--- interpreter and our 'DbSync.ChainSync.Connection' for socket-level
--- coverage; the present harness is the minimum that gets us
--- ledger-derived data (rewards, epoch_stake, ada_pots) into PG.
+-- config. Scenarios hand-pick blocks (txs + skipped slots + epoch
+-- boundaries) via the interpreter API; the interpreter advances a
+-- real ledger state, so reward\/stake\/governance side effects that
+-- lag two epochs behind their triggering tx still surface correctly.
+-- 'DbSync.Test.MockNode' layers the chain-sync server on top for
+-- socket-level delivery to the app under test.
 module DbSync.Test.MockChain
   ( -- * Environment
     MockChain (..)
@@ -36,7 +20,6 @@ module DbSync.Test.MockChain
   , forgeNextBlock
   , forgeNextBlocks
   , forgeUntilNextEpoch
-  , fillEpochs
   , registerStakeCreds
 
     -- * Realistic block content
@@ -44,8 +27,7 @@ module DbSync.Test.MockChain
   , mainnetAverageShape
   , buildRealisticTxs
 
-    -- * Pipeline integration
-  , parseAndProcess
+    -- * State-query seeding
   , reseedStateQueryFromLedger
 
     -- * Helpers
@@ -54,7 +36,6 @@ module DbSync.Test.MockChain
 
 import Cardano.Prelude
 
-import qualified Hasql.Connection as Conn
 import System.FilePath ((</>))
 
 import qualified Cardano.Ledger.BaseTypes as Ledger
@@ -68,7 +49,6 @@ import Ouroboros.Consensus.Cardano.Node ()
 import Ouroboros.Consensus.Config (TopLevelConfig)
 import Ouroboros.Consensus.HardFork.Combinator.Mempool ()
 import Ouroboros.Consensus.Shelley.Node (ShelleyLeaderCredentials, sgNetworkId, sgSystemStart)
-import qualified Ouroboros.Network.Block as Network
 
 import qualified Cardano.Node.Protocol.Shelley as NodeShelley
 import Cardano.Node.Types (ProtocolFilepaths (..))
@@ -77,7 +57,6 @@ import qualified Cardano.Mock.Forging.Interpreter as Mock
 import qualified Cardano.Mock.Forging.Tx.Conway as Conway
 import qualified Cardano.Mock.Forging.Types as Mock
 
-import DbSync.Parser.Dispatch (parseBlock)
 import DbSync.App.Config.Genesis
   ( GenesisConfig (..)
   , ShelleyConfig (..)
@@ -87,32 +66,23 @@ import DbSync.App.Config.Genesis
   )
 import DbSync.App.Config.Node (parseNodeConfig)
 import DbSync.App.Config.Types (NodeConfig (..))
-import DbSync.Extractor (ExtractorDef)
-import DbSync.Extractor (emptyBlockLedgerData)
-import DbSync.Extractor.Pipeline (processBlock)
-import DbSync.Phase.Type (SyncPhase (..))
-import DbSync.Phase.Following.Resolver (ConsumedTracking (..), mkFollowResolver)
-import DbSync.Test.PipelineEnv (mkTestPipelineEnvWith)
-import qualified DbSync.Phase.Following.Writer as FollowingWriter
 import DbSync.StateQuery
   ( StateQueryVar
-  , getSlotDetailsIO
   , newStateQueryVar
   , seedInterpreterFromLedgerState
   )
-import DbSync.Trace.Backend (mkNullTracer)
 
 -- ---------------------------------------------------------------------------
 -- * Environment
 -- ---------------------------------------------------------------------------
 
--- | Everything a forging-and-processing scenario needs.
+-- | Everything a forging scenario needs.
 --
 -- 'mcInterpreter' is the upstream chain-gen mock interpreter, which
--- holds the live ledger state and forging credentials. 'mcStateQueryVar'
--- is seeded from that ledger state on every 'parseAndProcess' call so
--- our 'parseBlock' can compute correct 'SlotDetails' (epoch, slot,
--- time) without round-tripping to a node.
+-- holds the live ledger state and forging credentials.
+-- 'mcStateQueryVar' is re-seeded from that ledger state (see
+-- 'reseedStateQueryFromLedger') so slot-detail computation works
+-- without round-tripping to a node.
 data MockChain = MockChain
   { mcInterpreter    :: !Mock.Interpreter
   , mcNodeConfig     :: !NodeConfig
@@ -207,10 +177,6 @@ forgeUntilNextEpoch mc = do
         then go startEpoch (blk : acc)
         else pure (reverse (blk : acc))
 
--- | Forge enough blocks to cross @n@ epoch boundaries.
-fillEpochs :: MockChain -> Int -> IO [CardanoBlock StandardCrypto]
-fillEpochs mc n = concat <$> replicateM n (forgeUntilNextEpoch mc)
-
 -- | Forge a single block containing a stake-credential registration
 -- for every test stake key. Mirrors upstream's
 -- 'Api.registerAllStakeCreds'. The credentials registered here are
@@ -248,11 +214,9 @@ data RealisticBlockShape = RealisticBlockShape
 -- | Default shape: 10 payment txs per block.
 --
 -- Per block: 10 tx rows, 10 tx_in rows, 10 tx_out rows (change only).
--- Comparable to a mid-traffic mainnet block in tx count and a clear
--- step up from the empty-block 'FollowPerfSpec'. Address diversity
--- is intentionally low (output goes back to source address) so the
--- UTxO set stays bounded; mainnet-shape address diversity needs a
--- richer forging primitive that's tracked in @FOLLOW-PERF.md@.
+-- Comparable to a mid-traffic mainnet block in tx count. Address
+-- diversity is intentionally low (output goes back to the source
+-- address) so the UTxO set stays bounded.
 mainnetAverageShape :: RealisticBlockShape
 mainnetAverageShape =
   RealisticBlockShape
@@ -283,45 +247,8 @@ buildRealisticTxs mc shape =
     pure (map Mock.TxConway payments)
 
 -- ---------------------------------------------------------------------------
--- * Pipeline integration
+-- * State-query seeding
 -- ---------------------------------------------------------------------------
-
--- | Parse each block and run it through the FollowingChainTip
--- pipeline against @conn@.
---
--- Re-seeds 'mcStateQueryVar' before each block to pick up any
--- new-era / new-epoch info introduced by the previous step. With the
--- seed always derived from the interpreter's live ledger state, no
--- network traffic is required.
-parseAndProcess
-  :: Conn.Connection
-  -> MockChain
-  -> [ExtractorDef]
-  -> [CardanoBlock StandardCrypto]
-  -> IO ()
-parseAndProcess conn mc extractors blocks = do
-  genericBlocks <- traverse toGeneric blocks
-  resolver <- mkFollowResolver conn TrackConsumedBy
-  let writer = FollowingWriter.mkWriter conn
-      env    =
-        mkTestPipelineEnvWith
-          (mcNetwork mc)
-          resolver
-          writer
-          extractors
-          (\_ -> pure emptyBlockLedgerData)
-          FollowingChainTip
-  for_ genericBlocks $ \gb -> runReaderT (processBlock gb) env
-  where
-    toGeneric blk = do
-      latest <- Mock.getCurrentLedgerState (mcInterpreter mc)
-      seedInterpreterFromLedgerState (mcTopLevelConfig mc) latest (mcStateQueryVar mc)
-      slotDetails <- getSlotDetailsIO
-        mkNullTracer
-        (mcStateQueryVar mc)
-        (mcSystemStart mc)
-        (Network.blockSlot blk)
-      pure (parseBlock True slotDetails blk)
 
 -- | Re-seed 'mcStateQueryVar' from the interpreter's current ledger
 -- state. The seeded interpreter forecast only covers a bounded

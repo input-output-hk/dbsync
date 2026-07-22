@@ -16,7 +16,8 @@
 --     withdrawal, then advance three epoch boundaries: votes
 --     finalise on the first, ratification on the second, and
 --     'LedgerGovInfo' fires with a non-empty @garMTreasury@ on the
---     third, growing the @pot_reward@ table.
+--     third, growing the @pot_reward@ table. The DRep vote-delegation
+--     also lands @drep_distr@ rows once the pulsing snapshot settles.
 module DbSync.Phase.FollowStakeDelegationLedgerSpec (spec) where
 
 import Cardano.Prelude
@@ -31,7 +32,7 @@ import Cardano.Ledger.Conway.Tx (AlonzoTx (..), Tx (..))
 import qualified Cardano.Ledger.Core as Core
 import Ouroboros.Consensus.Shelley.Eras (ConwayEra)
 
-import Test.Hspec (Spec, describe, it, shouldSatisfy)
+import Test.Hspec (Spec, describe, it, shouldBe)
 
 import qualified Cardano.Mock.Forging.Interpreter as MockInt
 import qualified Cardano.Mock.Forging.Tx.Conway as Conway
@@ -44,6 +45,7 @@ import DbSync.App.Config.Types
   , DbSyncOptions (..)
   )
 import DbSync.Db.Schema.Core (blockTableDef)
+import DbSync.Db.Schema.Governance (drepDistrTableDef)
 import DbSync.Db.Schema.StakeDelegation
   ( epochStakeProgressTableDef
   , epochStakeTableDef
@@ -111,19 +113,45 @@ spec = describe "Follow stake_delegation_ledger writes" $ do
             (do n <- countRows (tdName blockTableDef); pure (n >= expectedBlocks))
             120
 
+          -- reward, epoch_stake and epoch_stake_progress each grow as
+          -- Follow drains the epoch-2/epoch-3 snapshots and pays the
+          -- epoch-0 production rewards. Exact counts are genesis-config
+          -- dependent (one row per earning cred x leader/member split),
+          -- so pin the row content instead.
           waitFor
             (tdName rewardTableDef <> " count grows after Follow boundary")
-            (do n <- countRows (tdName rewardTableDef)
-                pure (n > baselineReward))
+            (do n <- countRows (tdName rewardTableDef); pure (n > baselineReward))
+            60
+          waitFor
+            (tdName epochStakeTableDef <> " count grows after Follow boundary")
+            (do n <- countRows (tdName epochStakeTableDef); pure (n > baselineStake))
+            60
+          waitFor
+            (tdName epochStakeProgressTableDef <> " count grows after Follow boundary")
+            (do n <- countRows (tdName epochStakeProgressTableDef); pure (n > baselineProgress))
             60
 
-          followStake    <- countRows (tdName epochStakeTableDef)
-          followProgress <- countRows (tdName epochStakeProgressTableDef)
-          followReward   <- countRows (tdName rewardTableDef)
+          -- The newest reward row is block-production content: a
+          -- positive amount tagged leader or member.
+          rewardAmountPos <- T.strip <$> queryTestDb
+            ( "SELECT (amount > 0)::text FROM " <> tdName rewardTableDef
+                <> " ORDER BY id DESC LIMIT 1" )
+          rewardAmountPos `shouldBe` "true"
+          rewardTyp <- T.strip <$> queryTestDb
+            ( "SELECT type FROM " <> tdName rewardTableDef
+                <> " ORDER BY id DESC LIMIT 1" )
+          (rewardTyp `elem` ["leader", "member"]) `shouldBe` True
 
-          (followStake    - baselineStake)    `shouldSatisfy` (>= 1)
-          (followProgress - baselineProgress) `shouldSatisfy` (>= 1)
-          (followReward   - baselineReward)   `shouldSatisfy` (>= 1)
+          -- The newest epoch_stake row is a positive delegation; the
+          -- newest epoch_stake_progress row marks a completed snapshot.
+          stakeAmountPos <- T.strip <$> queryTestDb
+            ( "SELECT (amount > 0)::text FROM " <> tdName epochStakeTableDef
+                <> " ORDER BY id DESC LIMIT 1" )
+          stakeAmountPos `shouldBe` "true"
+          progressCompleted <- T.strip <$> queryTestDb
+            ( "SELECT completed::text FROM " <> tdName epochStakeProgressTableDef
+                <> " ORDER BY id DESC LIMIT 1" )
+          progressCompleted `shouldBe` "true"
 
   it "lands pot_reward after a Conway treasury withdrawal enacts at tip" $
     withMockNode conwayRewardsConfigDir $ \mn ->
@@ -135,6 +163,7 @@ spec = describe "Follow stake_delegation_ledger writes" $ do
           waitForSyncComplete 120
 
           baselinePotReward <- countRows (tdName potRewardTableDef)
+          baselineDrepDistr <- countRows (tdName drepDistrTableDef)
 
           -- Bootstrap governance: stake creds, DRep + delegation,
           -- one epoch for DRep distribution to settle, committee
@@ -166,17 +195,33 @@ spec = describe "Follow stake_delegation_ledger writes" $ do
                 pure (n > baselinePotReward))
             60
 
+          -- Conway has no MIR path, so the enacted withdrawal is the
+          -- only pot_reward source: exactly one row, tagged treasury,
+          -- for the 10_000 lovelace paid out.
           followPotReward <- countRows (tdName potRewardTableDef)
-          (followPotReward - baselinePotReward) `shouldSatisfy` (>= 1)
+          (followPotReward - baselinePotReward) `shouldBe` 1
 
-          -- The most recent row records the withdrawal as a
-          -- treasury payout.
           mostRecentType <- T.strip <$> queryTestDb
-            ( "SELECT type FROM "
-                <> tdName potRewardTableDef
-                <> " ORDER BY id DESC LIMIT 1"
-            )
-          mostRecentType `shouldSatisfy` (== "treasury")
+            ( "SELECT type FROM " <> tdName potRewardTableDef
+                <> " ORDER BY id DESC LIMIT 1" )
+          mostRecentType `shouldBe` "treasury"
+          mostRecentAmount <- T.strip <$> queryTestDb
+            ( "SELECT (amount = 10000)::text FROM " <> tdName potRewardTableDef
+                <> " ORDER BY id DESC LIMIT 1" )
+          mostRecentAmount `shouldBe` "true"
+
+          -- The DRep vote-delegation from bootstrap surfaces in the
+          -- pulsing snapshot the ledger finalises at each boundary:
+          -- drep_distr grows and at least one entry carries real
+          -- delegated stake.
+          waitFor
+            (tdName drepDistrTableDef <> " count grows after DRep delegation settles")
+            (do n <- countRows (tdName drepDistrTableDef)
+                pure (n > baselineDrepDistr))
+            60
+          drepDistrHasStake <- T.strip <$> queryTestDb
+            ( "SELECT (max(amount) > 0)::text FROM " <> tdName drepDistrTableDef )
+          drepDistrHasStake `shouldBe` "true"
 
 -- ---------------------------------------------------------------------------
 -- * Profiles

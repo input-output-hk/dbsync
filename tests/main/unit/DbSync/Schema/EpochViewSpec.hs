@@ -1,17 +1,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Pure tests for the @epoch_finalized@ table and the @epoch@ \/
--- @epoch_current@ view DDL.
+-- | Pure tests for the @epoch@ \/ @epoch_current@ view DDL and the
+-- @epoch_finalized@ COPY encoder.
 module DbSync.Schema.EpochViewSpec (spec) where
 
 import Cardano.Prelude
 
-import qualified Data.List.NonEmpty as NE
 import qualified Data.Text as T
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 
-import Test.Hspec (Spec, describe, expectationFailure, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 import DbSync.Db.Schema.EpochView
   ( EpochFinalized (..)
@@ -19,76 +18,18 @@ import DbSync.Db.Schema.EpochView
   , dropEpochViewsSql
   , encodeEpochFinalizedCopy
   , epochCurrentViewName
-  , epochFinalizedTableDef
   , epochFinalizedTableName
   , epochViewName
   )
 import DbSync.Db.Schema.Ids (EpochId (..))
-import DbSync.Db.Schema.Types
-  ( ColumnDef (..)
-  , PgType (..)
-  , TableDef (..)
-  , TableMode (..)
-  )
 import DbSync.Db.Types (DbLovelace (..))
 
-import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 
 spec :: Spec
 spec = do
-  tableDefSpec
   viewSqlSpec
   copyEncoderSpec
-
--- ---------------------------------------------------------------------------
--- * Table shape
--- ---------------------------------------------------------------------------
-
-tableDefSpec :: Spec
-tableDefSpec = describe "epochFinalizedTableDef" $ do
-  it "is named epoch_finalized" $
-    tdName epochFinalizedTableDef `shouldBe` epochFinalizedTableName
-
-  it "is LOGGED so rows survive a crash before the next commit" $
-    tdMode epochFinalizedTableDef `shouldBe` TableLogged
-
-  it "has 8 columns: id, out_sum, fees, tx_count, blk_count, no, start_time, end_time" $
-    map cdName (tdColumns epochFinalizedTableDef)
-      `shouldBe`
-        [ "id"
-        , "out_sum"
-        , "fees"
-        , "tx_count"
-        , "blk_count"
-        , "no"
-        , "start_time"
-        , "end_time"
-        ]
-
-  it "carries a primary key on id" $
-    tdPrimaryKey epochFinalizedTableDef `shouldBe` Just ["id"]
-
-  it "carries UNIQUE (no) for the boundary upsert" $
-    tdUniqueConstraints epochFinalizedTableDef
-      `shouldBe` [NE.fromList ["no"]]
-
-  it "declares all columns NOT NULL" $
-    all (not . cdNullable) (tdColumns epochFinalizedTableDef)
-      `shouldBe` True
-
-  it "uses numeric for out_sum (Word128) and fees (DbLovelace)" $ do
-    let cols = tdColumns epochFinalizedTableDef
-    case [c | c <- cols, cdName c `elem` ["out_sum", "fees"]] of
-      [a, b] -> do
-        cdType a `shouldBe` PgNumeric
-        cdType b `shouldBe` PgNumeric
-      _ -> expectationFailure "expected out_sum and fees columns"
-
-  it "uses timestamp without time zone for start_time and end_time" $ do
-    let cols = tdColumns epochFinalizedTableDef
-        timeCols = [c | c <- cols, cdName c `elem` ["start_time", "end_time"]]
-    map cdType timeCols `shouldBe` [PgTimestamp, PgTimestamp]
 
 -- ---------------------------------------------------------------------------
 -- * View DDL
@@ -139,12 +80,7 @@ viewSqlSpec = describe "view DDL" $ do
 -- ---------------------------------------------------------------------------
 
 copyEncoderSpec :: Spec
-copyEncoderSpec = describe "encodeEpochFinalizedCopy" $ do
-  it "produces a tab-separated, newline-terminated COPY line" $ do
-    let row = encodeEpochFinalizedCopy (EpochId 11) sampleEpochFinalized
-    BS8.last row `shouldBe` '\n'
-    BS.count (fromIntegral (fromEnum '\t')) row `shouldBe` 7
-
+copyEncoderSpec = describe "encodeEpochFinalizedCopy" $
   it "emits id, out_sum, fees in the documented order" $ do
     let row = encodeEpochFinalizedCopy (EpochId 11) sampleEpochFinalized
         fields = BS8.split '\t' (BS8.init row)

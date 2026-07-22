@@ -19,12 +19,13 @@ module DbSync.Phase.FollowScriptsDatumsSpec (spec) where
 
 import Cardano.Prelude
 
+import qualified Data.ByteString.Short as SBS
 import Data.List ((!!))
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Text as T
 
-import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, describe, it, shouldBe)
 
 import Cardano.Ledger.BaseTypes (TxIx (..))
 import Cardano.Ledger.Binary (sizedValue)
@@ -59,7 +60,11 @@ import DbSync.Db.Schema.ScriptsDatums
   , scriptTableDef
   )
 import DbSync.Db.Schema.Types (TableDef (..))
-import DbSync.Db.Schema.UTxO (collateralTxOutTableDef, txOutTableDef)
+import DbSync.Db.Schema.UTxO
+  ( collateralTxOutTableDef
+  , referenceTxInTableDef
+  , txOutTableDef
+  )
 import DbSync.Test.AppHarness
   ( ledgerEnabledTestProfile
   , quietTracer
@@ -126,11 +131,13 @@ spec = describe "Follow scripts/datums writes" $ do
           followRedeemerData <- countRows (tdName redeemerDataTableDef)
           followExtraKW      <- countRows (tdName extraKeyWitnessTableDef)
 
-          (followScripts      - baselineScripts)      `shouldSatisfy` (>= 1)
-          (followDatums       - baselineDatums)       `shouldSatisfy` (>= 1)
-          (followRedeemers    - baselineRedeemers)    `shouldSatisfy` (>= 1)
-          (followRedeemerData - baselineRedeemerData) `shouldSatisfy` (>= 1)
-          (followExtraKW      - baselineExtraKW)      `shouldSatisfy` (>= 1)
+          -- The unlock tx carries exactly one script, datum, redeemer,
+          -- redeemer_data, and required signer.
+          (followScripts      - baselineScripts)      `shouldBe` 1
+          (followDatums       - baselineDatums)       `shouldBe` 1
+          (followRedeemers    - baselineRedeemers)    `shouldBe` 1
+          (followRedeemerData - baselineRedeemerData) `shouldBe` 1
+          (followExtraKW      - baselineExtraKW)      `shouldBe` 1
 
           -- Every redeemer row points at a redeemer_data row.
           nullFkRows <- T.strip <$> queryTestDb
@@ -161,7 +168,7 @@ spec = describe "Follow scripts/datums writes" $ do
       followRedeemers <- countRows (tdName redeemerTableDef)
       followDatums    <- countRows (tdName datumTableDef)
       (followRedeemers - baselineRedeemers) `shouldBe` 1
-      (followDatums    - baselineDatums)    `shouldSatisfy` (>= 1)
+      (followDatums    - baselineDatums)    `shouldBe` 1
 
   it "records a phase-2 failure with valid_contract=false, folding the collateral return into tx_out" $
     withScriptsDatumsSession "dbsync-test-scripts-failed" $ \mn -> do
@@ -261,7 +268,91 @@ spec = describe "Follow scripts/datums writes" $ do
         30
 
       followMint <- countRows (tdName maTxMintTableDef)
-      (followMint - baselineMint) `shouldSatisfy` (>= 1)
+      (followMint - baselineMint) `shouldBe` 1
+
+  it "writes an inline-datum row and links it from tx_out at tip" $
+    withScriptsDatumsSession "dbsync-test-scripts-inline-datum" $ \mn -> do
+      baselineBlocks <- countRows (tdName blockTableDef)
+      baselineDatums <- countRows (tdName datumTableDef)
+      baselineInline <- txOutNonNullCount "inline_datum_id"
+
+      txs <- buildInlineDatumLockTxs mn
+      _ <- forgeAndPush mn txs
+
+      let expectedBlocks = baselineBlocks + 1
+      waitFor
+        (tdName blockTableDef <> " count reaches " <> show expectedBlocks)
+        (do n <- countRows (tdName blockTableDef); pure (n >= expectedBlocks))
+        60
+      waitFor
+        (tdName datumTableDef <> " count grows")
+        (do n <- countRows (tdName datumTableDef); pure (n > baselineDatums))
+        30
+
+      followDatums <- countRows (tdName datumTableDef)
+      followInline <- txOutNonNullCount "inline_datum_id"
+      -- An inline datum is written straight from the output — no reveal
+      -- needed — and the locked tx_out carries the inline_datum_id FK.
+      (followDatums - baselineDatums) `shouldBe` 1
+      (followInline - baselineInline) `shouldBe` 1
+
+  it "preserves the raw bytes of a non-canonical CBOR inline datum at tip" $
+    withScriptsDatumsSession "dbsync-test-scripts-noncanonical-datum" $ \mn -> do
+      baselineBlocks <- countRows (tdName blockTableDef)
+      baselineDatums <- countRows (tdName datumTableDef)
+
+      txs <- buildInlineDatumCBORLockTxs mn
+      _ <- forgeAndPush mn txs
+
+      let expectedBlocks = baselineBlocks + 1
+      waitFor
+        (tdName blockTableDef <> " count reaches " <> show expectedBlocks)
+        (do n <- countRows (tdName blockTableDef); pure (n >= expectedBlocks))
+        60
+      waitFor
+        (tdName datumTableDef <> " count grows")
+        (do n <- countRows (tdName datumTableDef); pure (n > baselineDatums))
+        30
+
+      followDatums <- countRows (tdName datumTableDef)
+      (followDatums - baselineDatums) `shouldBe` 1
+
+      -- The extractor stores the exact on-chain datum bytes, not a
+      -- canonical re-encoding: the indefinite-length CBOR survives intact.
+      latestBytes <- T.strip <$> queryTestDb
+        ( "SELECT encode(bytes, 'hex') FROM " <> tdName datumTableDef
+            <> " ORDER BY id DESC LIMIT 1"
+        )
+      latestBytes `shouldBe` "9f0102ff"
+
+  it "records a reference script and spends through it at tip" $
+    withScriptsDatumsSession "dbsync-test-scripts-ref-script" $ \mn -> do
+      baselineBlocks    <- countRows (tdName blockTableDef)
+      baselineRefOut    <- txOutNonNullCount "reference_script_id"
+      baselineRefTxIn   <- countRows (tdName referenceTxInTableDef)
+      baselineRedeemers <- countRows (tdName redeemerTableDef)
+
+      txs <- buildSpendRefScriptTxs mn
+      _ <- forgeAndPush mn txs
+
+      let expectedBlocks = baselineBlocks + 1
+      waitFor
+        (tdName blockTableDef <> " count reaches " <> show expectedBlocks)
+        (do n <- countRows (tdName blockTableDef); pure (n >= expectedBlocks))
+        60
+      waitFor
+        (tdName referenceTxInTableDef <> " count grows")
+        (do n <- countRows (tdName referenceTxInTableDef); pure (n > baselineRefTxIn))
+        30
+
+      followRefOut    <- txOutNonNullCount "reference_script_id"
+      followRefTxIn   <- countRows (tdName referenceTxInTableDef)
+      followRedeemers <- countRows (tdName redeemerTableDef)
+      -- The lock output carries the reference script; the spend commits a
+      -- reference input and still produces its own redeemer.
+      (followRefOut    - baselineRefOut)    `shouldBe` 1
+      (followRefTxIn   - baselineRefTxIn)   `shouldBe` 1
+      (followRedeemers - baselineRedeemers) `shouldBe` 1
 
 -- ---------------------------------------------------------------------------
 -- * Profile
@@ -340,6 +431,15 @@ withScriptsDatumsSession tag body =
         waitForSyncComplete 120
         body mn
 
+-- | Count @tx_out@ rows whose given nullable FK column is populated.
+txOutNonNullCount :: Text -> IO Int
+txOutNonNullCount col = do
+  t <- T.strip <$> queryTestDb
+    ( "SELECT COUNT(*) FROM " <> tdName txOutTableDef
+        <> " WHERE " <> col <> " IS NOT NULL"
+    )
+  pure (fromMaybe 0 (readMaybe (T.unpack t)))
+
 -- | Reference an output of a forged Conway tx as a 'UTxOPair' so the
 -- next tx can spend it without round-tripping through the ledger.
 outputAsPair :: Core.Tx Core.TopTx ConwayEra -> Int -> Mock.UTxOIndex ConwayEra
@@ -386,7 +486,6 @@ buildMultipleScriptsTxs mn =
       True 199_000 1_000 state'
     Right [Mock.TxConway lockTx, Mock.TxConway (withRequiredSigner reqSigner unlockTx)]
 
-{-
 -- | Lock a UTxO whose datum is inlined into the output.
 buildInlineDatumLockTxs :: MockNode -> IO [Mock.TxEra]
 buildInlineDatumLockTxs mn =
@@ -414,7 +513,6 @@ buildInlineDatumCBORLockTxs mn =
       ]
       500_000 1_000 state'
     Right [Mock.TxConway tx]
--}
 
 -- | Unlock a script-locked UTxO with the IsValid flag forced to False
 -- and a collateral-return output emitted.
@@ -447,7 +545,6 @@ buildValidUnlockWithCollateralReturnTxs mn =
       499_000 1_000 state'
     Right [Mock.TxConway (withRequiredSigner reqSigner tx)]
 
-{-
 -- | Lock a UTxO whose output carries the always-succeeds script as a
 -- reference script, then spend a separately-locked UTxO that points at
 -- the reference output as its witness source.
@@ -469,7 +566,6 @@ buildSpendRefScriptTxs mn =
       True
       299_000 1_000 state'
     Right [Mock.TxConway lockTx, Mock.TxConway (withRequiredSigner reqSigner unlockTx)]
--}
 
 -- | Mint one token through the always-mint Plutus policy. The policy
 -- script is supplied via the witness set.

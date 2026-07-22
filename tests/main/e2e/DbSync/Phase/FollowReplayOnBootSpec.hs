@@ -2,22 +2,25 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- | Boot the Follow restart path against a database that has
--- committed past the latest on-disk ledger snapshot.
+-- committed past the latest on-disk ledger snapshot, and assert both
+-- invariants of the replay window in a single restart:
 --
--- The snapshot writer is asynchronous; on any shutdown the on-disk
--- snapshot can lag the consumer\'s last PG commit. On the next boot
--- the Follow restart path:
---
---   * Picks the newest snapshot whose slot has a matching
---     @block.hash@ in PG.
---   * Loads it into the in-memory @LedgerDB@.
---   * Configures a replay window with @last_committed_slot@ as the
---     upper edge — the ledger worker re-applies the gap from the
---     receiver\'s fan-out while Follow\'s consumer skips its
---     PG-write path (the rows are already in PG from the previous
---     run).
---   * Intersects chainsync at the snapshot\'s point; the protocol
---     streams each block from @snap_slot + 1@ forward.
+--   * Count-preservation: committed rows are never rolled back. The
+--     snapshot writer is asynchronous, so on shutdown the on-disk
+--     snapshot can lag the consumer\'s last PG commit. On the next
+--     boot the Follow restart path picks the newest snapshot whose
+--     slot has a matching @block.hash@ in PG, loads it into the
+--     in-memory @LedgerDB@, and configures a replay window with
+--     @last_committed_slot@ as the upper edge. The ledger worker
+--     re-applies the gap while Follow\'s consumer skips its PG-write
+--     path (the rows are already in PG), so block/dedup counts and
+--     @last_committed_slot@ stay put across the restart.
+--   * Flip-ordering: the phase must not flip to 'FollowingChainTip'
+--     inside the replay window. During replay-skip the consumer
+--     drains the queue far ahead of the back-pressured ledger worker,
+--     so the naive \"caught up\" predicate holds spuriously.
+--     'maybeFlipToTip' must ignore that state while @slot <= bootSlot@;
+--     the flip may only fire once replay has completed.
 --
 -- The deterministic gap is engineered by deleting the newest
 -- snapshot\'s header + LSM directory between the two sessions; the
@@ -33,7 +36,7 @@ import Data.IORef (IORef, newIORef, readIORef)
 import System.Directory (doesDirectoryExist, doesPathExist, listDirectory, removePathForcibly)
 import System.FilePath ((</>))
 
-import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, describe, expectationFailure, it, shouldBe, shouldSatisfy)
 
 import DbSync.Db.Schema.Address (addressTableDef)
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef)
@@ -53,6 +56,7 @@ import DbSync.Test.E2E
   , forgeAndWaitForBlocks
   , listLedgerSnapshots
   , syncCompleteTrue
+  , waitForLogMatch
   , withAppSession
   , withAppSessionResume
   )
@@ -60,9 +64,13 @@ import DbSync.Test.Helpers (waitFor)
 import DbSync.Test.MockNode (forgeAndPushBlocks, withMockNode)
 import DbSync.Test.PgAssertions (countRows, tableColumn)
 
+-- ---------------------------------------------------------------------------
+-- * Spec
+-- ---------------------------------------------------------------------------
+
 spec :: Spec
 spec = describe "FollowingChainTip restart replay on boot" $
-  it "replays the snapshot-to-PG gap through the ledger worker without rolling PG back" $
+  it "replays the snapshot-to-PG gap without rolling PG back and defers the tip flip until replay completes" $
     withMockNode conwayConfigDir $ \mn ->
       withTempDir "dbsync-test-replay-on-boot" $ \ledgerDir -> do
         firstLogs <- newIORef []
@@ -113,9 +121,11 @@ spec = describe "FollowingChainTip restart replay on boot" $
         withAppSessionResume secondTracer ledgerEnabledTestProfile mn ledgerDir $ \_ -> do
           waitFor "sync_complete remains true on restart" syncCompleteTrue 60
 
-          -- Block count is unchanged across the restart: Follow's
-          -- consumer skips its PG-write path for blocks inside the
-          -- replay window, so committed rows stay put.
+          -- Count-preservation. Read before any new block streams: the
+          -- chain tip is still at the recorded commit, so the consumer
+          -- is replaying inside the window with its PG-write path
+          -- skipped. Committed block/dedup rows and last_committed_slot
+          -- must be exactly as the previous session left them.
           afterRestartBlocks <- countRows (tdName blockTableDef)
           afterRestartBlocks `shouldBe` preBlocks
 
@@ -125,33 +135,79 @@ spec = describe "FollowingChainTip restart replay on boot" $
           postDedupCounts <- traverse countRows dedupTables
           postDedupCounts `shouldBe` preDedupCounts
 
-          -- Forging past the original tip continues to advance PG.
-          let target = preBlocks + 20
-          forgeAndWaitForBlocks mn 20 target 90
+          -- Drive the ledger past 'last_committed_slot' so replay
+          -- finishes. These blocks are above the replay window, so
+          -- Follow writes them and PG advances.
+          let interSessionBlocks = 20 :: Int
+              postRestartBlocks  = 10 :: Int
+              replayTarget       = preBlocks + interSessionBlocks
+          forgeAndWaitForBlocks mn interSessionBlocks replayTarget 90
+          waitForLogMatch secondLogs "ledger replay completes" isReplayComplete 60
+
+          -- Push the consumer to the live tip so the legitimate flip
+          -- to FollowingChainTip fires.
+          let target = replayTarget + postRestartBlocks
+          forgeAndWaitForBlocks mn postRestartBlocks target 60
+          waitForLogMatch secondLogs "post-replay flip to FollowingChainTip" isFlipToChainTip 30
 
           finalBlocks <- countRows (tdName blockTableDef)
           finalBlocks `shouldSatisfy` (>= target)
 
-        secondMessages <- collectMessages secondLogs
+        secondMsgs <- collectChronological secondLogs
+        let secondTexts = map lmMessage secondMsgs
 
-        -- Pin the chosen snapshot and the snapshot-lag log line so
-        -- the test fails if the gap-handling branch isn't actually
-        -- exercised.
-        secondMessages `shouldSatisfy`
+        -- The gap-handling branch was actually exercised: the chosen
+        -- (next-newest) snapshot loaded and the snapshot-lag line
+        -- named the exact gap.
+        secondTexts `shouldSatisfy`
           any (T.isInfixOf ("Loading ledger snapshot at slot " <> show chosenSlot))
-        secondMessages `shouldSatisfy`
+        secondTexts `shouldSatisfy`
           any (T.isInfixOf ("Snapshot lags PG by "
                               <> show (lastCommitted - chosenSlot)
                               <> " slots"))
 
-        -- And confirm no PG rollback is performed: a "Rolling back
-        -- PG from slot" line would mean we'd deleted committed rows.
-        secondMessages `shouldSatisfy`
+        -- No PG rollback: a "Rolling back PG from slot" line would mean
+        -- committed rows were deleted.
+        secondTexts `shouldSatisfy`
           not . any (T.isInfixOf "Rolling back PG from slot")
 
+        -- Flip-ordering: the FollowingVolatileTail -> FollowingChainTip
+        -- transition must come strictly after replay completed. The
+        -- pre-fix bug flipped on the very first replay-skip block,
+        -- which inverts the order.
+        let replayIx = List.findIndex isReplayComplete secondMsgs
+            flipIx   = List.findIndex isFlipToChainTip secondMsgs
+        case (replayIx, flipIx) of
+          (Just rc, Just fl) ->
+            fl `shouldSatisfy` (> rc)
+          (Just _, Nothing) ->
+            expectationFailure
+              "captured no FollowingChainTip flip after replay completed"
+          (Nothing, _) ->
+            expectationFailure
+              "captured no LedgerReplay completion line"
+
+-- ---------------------------------------------------------------------------
+-- * Log predicates
+-- ---------------------------------------------------------------------------
+
+isReplayComplete :: LogMsg -> Bool
+isReplayComplete m =
+  lmComponent m == "LedgerReplay"
+    && T.isPrefixOf "replay complete" (lmMessage m)
+
+isFlipToChainTip :: LogMsg -> Bool
+isFlipToChainTip m =
+  lmComponent m == "Phase"
+    && T.isInfixOf "FollowingVolatileTail -> FollowingChainTip" (lmMessage m)
+
+-- ---------------------------------------------------------------------------
+-- * Helpers
+-- ---------------------------------------------------------------------------
+
 -- | Tables whose row counts must survive the restart. Dedup tables
--- (content-keyed) and the slot-keyed @block@ table; none of them
--- ever loses a row under the replay path.
+-- (content-keyed) and the slot-keyed @block@ table; none of them ever
+-- loses a row under the replay path.
 dedupTables :: [Text]
 dedupTables = map tdName
   [ addressTableDef
@@ -160,10 +216,9 @@ dedupTables = map tdName
   , stakeAddressTableDef
   ]
 
--- | Read @dbsync_sync_state.last_committed_slot@ as a 'Word64'.
--- Panics on the unexpected case where the column is NULL (the row
--- is seeded right after 'sync_complete = true' is written, and the
--- test only reads it after that).
+-- | Read @dbsync_sync_state.last_committed_slot@ as a 'Word64'. Panics
+-- on NULL — the row is seeded right after @sync_complete = true@ is
+-- written, and the test only reads it after that.
 readLastCommittedSlot :: IO Word64
 readLastCommittedSlot = do
   raw <- T.strip <$> queryTestDb
@@ -174,17 +229,15 @@ readLastCommittedSlot = do
     Just n  -> pure n
     Nothing -> panic $ "last_committed_slot was empty / unparseable: " <> raw
 
--- | Parse a snapshot directory name into its slot number. Consensus
--- writes header dirs named by @dsNumber@ (a 'Word64'); 'Nothing'
--- for any entry that doesn't decode as a number.
+-- | Snapshot directories are named by their slot number ('Word64').
 parseSnapshotSlot :: FilePath -> Maybe Word64
 parseSnapshotSlot = readMaybe
 
 -- | Delete the snapshot at the highest slot found under
 -- @ledgerDir\/dbsync-ledger@. Removes both halves of the on-disk
--- representation: the @snapshot-headers\/\<slot\>@ entry (consulted
--- by 'listSnapshots') and the @lsm\/snapshots\/\<slot\>@ entry
--- (consulted by the LSM backend on load).
+-- representation: the @snapshot-headers\/\<slot\>@ entry (consulted by
+-- 'listSnapshots') and the @lsm\/snapshots\/\<slot\>@ entry (consulted
+-- by the LSM backend on load).
 --
 -- Returns the slot number that was deleted so the caller can assert
 -- the next-newest survives and is strictly below the test\'s
@@ -201,7 +254,7 @@ removeNewestSnapshot ledgerDir = do
   case slots of
     []    -> panic "removeNewestSnapshot: snapshot-headers/ is empty"
     s : _ -> do
-      let slotStr = show s
+      let slotStr     = show s
           headerPath  = headersDir  </> slotStr
           lsmDataPath = lsmSnapsDir </> slotStr
       removePathForcibly headerPath
@@ -212,9 +265,9 @@ removeNewestSnapshot ledgerDir = do
       when lsmExists $ removePathForcibly lsmDataPath
       pure s
 
--- | Pull the captured log messages out of the test tracer's IORef.
--- The tracer prepends each new message to the head of the list, so
--- we reverse here to get chronological order — useful when scanning
--- for two related markers that should appear in a known order.
-collectMessages :: IORef [LogMsg] -> IO [Text]
-collectMessages ref = reverse . map lmMessage <$> readIORef ref
+-- | Return captured 'LogMsg's in chronological order. The tracer
+-- prepends each new message to the head of the list, so we reverse on
+-- read — useful when scanning for two related markers that should
+-- appear in a known order.
+collectChronological :: IORef [LogMsg] -> IO [LogMsg]
+collectChronological ref = reverse <$> readIORef ref

@@ -5,13 +5,12 @@
 -- 'DbSync.App.Run.runApp' directly against the same code path
 -- production uses.
 --
--- 'minimalProfile' points at the @dbsync_test@ database, leaves the
--- ledger off, and enables no optional extractors. Tests that need
--- different settings build their own 'SyncConfig'.
+-- All profiles point at the @dbsync_test@ database. Tests that need
+-- different settings build their own 'SyncConfig' via
+-- 'profileWithOptions'.
 module DbSync.Test.AppHarness
   ( -- * Profile builders
-    minimalProfile
-  , defaultTestProfile
+    defaultTestProfile
   , ledgerEnabledTestProfile
   , profileWithOptions
   , allImplementedExtractors
@@ -19,7 +18,6 @@ module DbSync.Test.AppHarness
     -- * Profile introspection
   , profileTableNames
   , profileExpectedIndexes
-  , droppedScaffoldingIndexes
 
     -- * AppArgs builders
   , mkAppArgsFromMockNode
@@ -69,7 +67,6 @@ import DbSync.App.Config.Types
   , UtxoOption (..)
   , defaultLedgerBackend
   , defaultSnapshotNearTipEpoch
-  , defaultDbSyncOptions
   , defaultUtxoOption
   )
 import DbSync.Test.Database (queryTestDb, testDbName)
@@ -81,14 +78,6 @@ import DbSync.Test.PgAssertions (tableColumn)
 -- ---------------------------------------------------------------------------
 -- * Profile builders
 -- ---------------------------------------------------------------------------
-
--- | Profile with no optional extractors. The 'core' extractor is
--- still loaded unconditionally but its Shelley+ slot-leader path
--- writes 'pool_hash' rows — so any chain that crosses into Shelley
--- needs at least 'pool' enabled. Prefer 'defaultTestProfile' unless
--- a test specifically exercises a pre-Shelley-only chain.
-minimalProfile :: SyncConfig
-minimalProfile = profileWithOptions defaultDbSyncOptions
 
 -- | The standard test profile: every currently-implemented
 -- extractor enabled. Matches what an "everything" production
@@ -136,7 +125,8 @@ allImplementedExtractors = DbSyncOptions
   , pcOffChainVotes         = OptionFlag False
   }
 
--- | Same as 'minimalProfile' but with caller-supplied 'DbSyncOptions'.
+-- | A ledger-off profile against @dbsync_test@ with caller-supplied
+-- 'DbSyncOptions'.
 profileWithOptions :: DbSyncOptions -> SyncConfig
 profileWithOptions opts = SyncConfig
   { scDatabase = DatabaseConfig
@@ -190,8 +180,8 @@ profileTableNames cfg = case buildExtractors (scOptions cfg) of
 -- @<table>_unique_N_idx@.
 --
 -- The resolve-support scaffolding is intentionally absent: Prep
--- drops it before the UNLOGGED → LOGGED flip
--- ('droppedScaffoldingIndexes').
+-- drops it before the UNLOGGED → LOGGED flip (see
+-- 'DbSync.Db.Statement.Indexes.resolveScaffoldingIndexNames').
 profileExpectedIndexes :: SyncConfig -> [Text]
 profileExpectedIndexes cfg = case buildExtractors (scOptions cfg) of
   Left _err  -> []
@@ -213,21 +203,6 @@ tableIndexNames td =
         (\n _ -> uniqueConstraintIndexName td n)
         [1 ..]
         (tdUniqueConstraints td)
-
--- | Resolve-support indexes that must /not/ survive Prep: the drop
--- step removes them before the flip and the production pass never
--- re-creates these shapes. Kept in sync by hand with the
--- scaffolding-only entries of
--- 'DbSync.Db.Statement.Indexes.resolveScaffoldingIndexNames' (the
--- rest of that list — pkey / unique shapes — is rebuilt by the
--- production pass under the same names).
-droppedScaffoldingIndexes :: [Text]
-droppedScaffoldingIndexes =
-  [ "collateral_tx_out_tx_id_idx"
-  , "withdrawal_tx_id_idx"
-  , "tx_in_tx_in_id_idx"
-  , "collateral_tx_in_tx_in_id_idx"
-  ]
 
 -- ---------------------------------------------------------------------------
 -- * AppArgs builders

@@ -38,6 +38,11 @@ module DbSync.Phase.Ingest.UtxoStore
 
     -- * Stats
   , readStoreStats
+
+    -- * Wire format (exposed for testing)
+  , UtxoOutputBytes (..)
+  , encodeOutput
+  , decodeOutput
   ) where
 
 import Cardano.Prelude

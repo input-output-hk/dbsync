@@ -24,6 +24,10 @@ module DbSync.Worker.OffChain.Http
     -- * Fetchers
   , fetchPoolMetadata
   , fetchVoteMetadata
+
+    -- * Internal (exposed for tests)
+  , isPrivateAddr
+  , buildVoteMetadata
   ) where
 
 import Cardano.Prelude

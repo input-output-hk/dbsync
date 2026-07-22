@@ -45,10 +45,10 @@ library dbsync-testlib
   hs-source-dirs: lib
   exposed-modules:
     DbSync.Test.AppHarness
+    DbSync.Test.Copy
     DbSync.Test.Database
     DbSync.Test.E2E
     DbSync.Test.Fixtures
-    DbSync.Test.Generators
     DbSync.Test.Hasql
     DbSync.Test.Helpers
     DbSync.Test.Lsm
@@ -118,7 +118,6 @@ test-suite dbsync-test
     DbSync.Db.Statement.BlockSpec
     DbSync.Db.Statement.IndexesSpec
     DbSync.Db.Statement.RoundTripSpec
-    DbSync.Db.Statement.SequencesSpec
     DbSync.Db.Statement.SlotLeaderSpec
     DbSync.Db.Statement.SyncStateSpec
     DbSync.Db.TypesSpec
@@ -127,12 +126,14 @@ test-suite dbsync-test
     DbSync.Schema.AdaPotsSpec
     DbSync.Schema.AddressSpec
     DbSync.Schema.ColumnsConsistencySpec
+    DbSync.Schema.CopyShapeSpec
     DbSync.Schema.CoreSpec
     DbSync.Schema.EpochBoundarySpec
     DbSync.Schema.EpochViewSpec
     DbSync.Schema.VersionSpec
     DbSync.Schema.GenerateSpec
     DbSync.Schema.GovernanceSpec
+    DbSync.Schema.InitPureSpec
     DbSync.Schema.Migration.DiffSpec
     DbSync.Schema.Migration.LadderSpec
     DbSync.Schema.Migration.RenderSpec
@@ -146,7 +147,6 @@ test-suite dbsync-test
     DbSync.Util.DedupHashSpec
     DbSync.Extractor.CoreSpec
     DbSync.Extractor.EpochBoundarySpec
-    DbSync.Extractor.EpochSpec
     DbSync.Extractor.GovernanceSpec
     DbSync.Extractor.MultiAssetSpec
     DbSync.Extractor.OffChainPoolsSpec
@@ -158,6 +158,8 @@ test-suite dbsync-test
     DbSync.Extractor.UTxOSpec
     DbSync.Parser.BlockSpec
     DbSync.Parser.MetadataSpec
+    DbSync.Parser.ParamProposalSpec
+    DbSync.Parser.TxSpec
     DbSync.Phase.Ingest.ConsumerSpec
     DbSync.Phase.Ingest.DedupStoreSpec
     DbSync.Phase.Ingest.UtxoStoreSpec
@@ -171,7 +173,9 @@ test-suite dbsync-test
     DbSync.SyncState.ManagerSpec
     DbSync.SyncState.ResumeSpec
     DbSync.SyncState.RowSpec
+    DbSync.Worker.OffChain.HttpSpec
     DbSync.Worker.OffChain.PoolSpec
+    DbSync.Worker.OffChain.RetrySpec
     DbSync.Worker.OffChain.VoteSpec
     DbSync.App.BootSpec
     DbSync.Phase.CurrentSpec
@@ -186,18 +190,15 @@ test-suite dbsync-test
     DbSync.Phase.FollowAtTipSpec
     DbSync.Phase.AlonzoInvalidTxSpec
     DbSync.Phase.FollowEpochBoundarySpec
-    DbSync.Phase.FollowEpochSyncStatsSpec
     DbSync.Phase.FollowGovernanceSpec
     DbSync.Phase.GovernanceGenesisSpec
-    DbSync.Phase.FollowPoolStatsSpec
     DbSync.Phase.FollowScriptsDatumsSpec
     DbSync.Phase.FollowStakeDelegationLedgerSpec
     DbSync.Phase.FollowPerfRealisticSpec
-    DbSync.Phase.FollowPerfSpec
     DbSync.Phase.FollowRestartSpec
+    DbSync.Phase.FollowNodeRestartSpec
     DbSync.Phase.HandoffRedeliverySpec
     DbSync.Phase.FollowReplayOnBootSpec
-    DbSync.Phase.FollowReplayWindowSpec
     DbSync.Phase.IngestPrepFollowSpec
     DbSync.Phase.IngestRestartSpec
     DbSync.Phase.LsmLifecycleSpec
@@ -221,8 +222,10 @@ test-suite dbsync-test
     , Diff
     , hasql
     , hspec
+    , http-client
     , cardano-crypto-class
     , cardano-ledger-alonzo
+    , cardano-ledger-babbage
     , cardano-ledger-binary
     , cardano-ledger-byron:{cardano-ledger-byron, testlib}
     , cardano-ledger-conway
@@ -238,6 +241,7 @@ test-suite dbsync-test
     , io-classes:strict-stm
     , lsm-tree
     , microlens
+    , network
     , optparse-applicative
     , ouroboros-consensus
     , ouroboros-consensus:cardano

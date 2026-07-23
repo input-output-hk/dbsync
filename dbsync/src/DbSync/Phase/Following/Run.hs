@@ -24,6 +24,7 @@ import Cardano.Prelude
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 import qualified Control.Concurrent.STM as STM
+import qualified Control.Exception as Exception
 import Control.Monad.IO.Unlift (withRunInIO)
 import Control.Tracer (traceWith)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
@@ -90,7 +91,7 @@ import DbSync.Trace.Replay
 import DbSync.Db.Schema.EpochView (epochFinalizedTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Statement.EpochView (appendEpochFinalizedStmt)
-import DbSync.Error (AppError (..))
+import DbSync.Error (AppError (..), BlockAnnotation (..))
 import DbSync.Trace.Timing (fmtCount, fmtDuration, fmtF2)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 
@@ -147,7 +148,7 @@ run = do
   liftIO $ do
     component <- readPhaseComponent phaseRef
     traceWith tracer $ LogMsg Info component
-      "consumer started; draining chainsync queue" Nothing
+      "consumer started; draining chainsync queue"
   startedAt <- liftIO getCurrentTime
   -- Seed the previous-epoch marker from PG so the first processed
   -- block can detect an epoch crossing; a crossing skipped here
@@ -212,7 +213,7 @@ dropRedeliveredForward tracer phaseRef lastAppliedRef blk = do
         ( "dropping re-delivered block " <> show (unBlockNo (blockNo blk))
             <> " (slot " <> show (unSlotNo (blockSlot blk))
             <> "); already applied up to block " <> show (unBlockNo lastBn)
-        ) Nothing
+        )
       pure True
     _ -> pure False
 
@@ -312,12 +313,16 @@ processForward progressRef replayRef lastAppliedRef cardanoBlock = do
                       , unBlockNo (blkBlockNo genBlock)
                       , blkHash   genBlock
                       )
+          blockAnn  = BlockAnnotation
+                        (unSlotNo  (blkSlotNo  genBlock))
+                        (unBlockNo (blkBlockNo genBlock))
+                        (blkHash   genBlock)
       snap <- liftIO $ readIORef progressRef
       let prevEpoch = fpLastEpoch snap
           boundaryCrossed = case prevEpoch of
             Just prev -> prev /= curEpoch
             Nothing   -> False
-      liftIO $ do
+      liftIO $ Exception.annotateIO blockAnn $ do
         preAllocated <- allocateAllIds feHasqlConnection counts
         buf          <- newWriteBuffer
         resolver     <- mkBufferedFollowResolver feHasqlConnection preAllocated buf consumedTracking
@@ -401,7 +406,7 @@ advanceAndLogReplay tracer replayRef mReplayStart mReplayBoot slot = do
     let adv = advanceReplay slot mReplayBoot now prev
     in (raNewState adv, raLog adv)
   let traceReplay msg =
-        traceWith tracer $ LogMsg Info "LedgerReplay" msg Nothing
+        traceWith tracer $ LogMsg Info "LedgerReplay" msg
   case logEvent of
     ReplayLogNothing -> pure ()
     ReplayLogProgress n ->
@@ -559,7 +564,7 @@ maybeLogProgress progressRef now gb = do
           , ", slot ", show curSlot
           , ", epoch ", show curEpoch
           , renderSinceLast now mPrevBlockAt
-          ]) Nothing
+          ])
       _ ->
         for_ mWindowed $ \(windowStart, blocks) -> do
           qLen <- atomically $ STM.lengthTBQueue feBlockQueue
@@ -572,7 +577,7 @@ maybeLogProgress progressRef now gb = do
                 , " (", fmtRate rate, " blk/s)"
                 , " | queue=", show qLen
                 ]
-          traceWith tracer $ LogMsg Info component msg Nothing
+          traceWith tracer $ LogMsg Info component msg
 
 -- | Render the "+T since prev" suffix used on the per-block
 -- 'FollowingChainTip' log. Empty on the first block (no previous)
@@ -602,7 +607,7 @@ emitIdleHeartbeat progressRef = do
             , ", queue=", show qLen
             ]
           _ -> "still at tip, no blocks applied yet, queue=" <> show qLen
-    traceWith tracer $ LogMsg Info component body Nothing
+    traceWith tracer $ LogMsg Info component body
 
 -- | Compact rate formatter: more precision at low rates so a slow
 -- sync doesn't read as "0 blk/s", less precision once the rate is
@@ -633,7 +638,7 @@ processRollback progressRef lastAppliedRef point = do
   liftIO $ do
     component <- readPhaseComponent phaseRef
     traceWith tracer $ LogMsg Info component
-      ("rollback to " <> show point) Nothing
+      ("rollback to " <> show point)
   rollbackWithRetry tableDefs point
   -- The fork's replacement blocks arrive with block numbers at or
   -- below the last applied one; disarm the re-delivery guard until
@@ -666,12 +671,15 @@ rollbackWithRetry tableDefs point = go 1
   where
     go attempt = do
       tracer <- asks getTracer
-      result <- withRunInIO $ \runInIO ->
-        try (runInIO (Rollback.rollbackToPoint tableDefs point))
-      case (result :: Either AppError ()) of
+      outcome <- withRunInIO $ \runInIO ->
+        (Right <$> runInIO (Rollback.rollbackToPoint tableDefs point))
+          `Exception.catchNoPropagate`
+            \(ewc :: Exception.ExceptionWithContext AppError) -> pure (Left ewc)
+      case outcome of
         Right () -> pure ()
-        Left (AppDatabaseError _ msg)
-          | attempt < rollbackMaxAttempts -> do
+        Left ewc@(Exception.ExceptionWithContext _ appErr)
+          | AppDatabaseError _ msg <- appErr
+          , attempt < rollbackMaxAttempts -> do
               let delayMicros =
                     rollbackBaseDelayMicros * 2 ^ (attempt - 1)
               liftIO $ do
@@ -682,7 +690,9 @@ rollbackWithRetry tableDefs point = go 1
                   , "); retrying in "
                   , show (delayMicros `div` 1000), "ms — "
                   , msg
-                  ]) Nothing
+                  ])
                 threadDelay delayMicros
               go (attempt + 1)
-        Left e -> liftIO (throwIO e)
+          -- Retries exhausted, or a non-database error: rethrow with the
+          -- original context (backtrace) intact.
+          | otherwise -> liftIO (Exception.rethrowIO ewc)

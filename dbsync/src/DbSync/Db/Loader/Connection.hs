@@ -57,7 +57,7 @@ data LoaderConnection = LoaderConnection
 --
 -- Connects to PostgreSQL, begins a transaction, and starts a
 -- @COPY tablename (columns) FROM STDIN@ stream.
-openLoaderConnection :: HasCallStack => ByteString -> TableDef -> IO LoaderConnection
+openLoaderConnection :: ByteString -> TableDef -> IO LoaderConnection
 openLoaderConnection connStr tableDef = do
   conn <- PQ.connectdb connStr
   connStatus <- PQ.status conn
@@ -91,7 +91,7 @@ closeLoaderConnection bc = PQ.finish (bcConnection bc)
 --
 -- The connection must be in a transaction (after 'beginTransaction')
 -- and NOT already streaming. Issues a @COPY FROM STDIN@ statement.
-beginStream :: HasCallStack => LoaderConnection -> IO ()
+beginStream :: LoaderConnection -> IO ()
 beginStream bc = do
   let sql = copyFromStdinSql (bcTableName bc) (bcColumnList bc)
   result <- PQ.exec (bcConnection bc) sql
@@ -103,7 +103,7 @@ beginStream bc = do
 -- encoder helpers in @DbSync.Db.Loader.Encoder@); the protocol does
 -- not require chunks to be row-aligned, so any concatenation of
 -- complete rows is valid.
-writeStreamRow :: HasCallStack => LoaderConnection -> ByteString -> IO ()
+writeStreamRow :: LoaderConnection -> ByteString -> IO ()
 writeStreamRow bc rowBytes = do
   copyResult <- PQ.putCopyData (bcConnection bc) rowBytes
   case copyResult of
@@ -129,7 +129,7 @@ writeStreamRow bc rowBytes = do
 -- an aborted transaction — which PostgreSQL executes as ROLLBACK
 -- while still reporting success — silently dropping every row of
 -- the stream.
-endStream :: HasCallStack => LoaderConnection -> IO ()
+endStream :: LoaderConnection -> IO ()
 endStream bc = do
   copyResult <- PQ.putCopyEnd (bcConnection bc) mempty
   case copyResult of
@@ -163,12 +163,12 @@ endStream bc = do
 -- * Transaction control
 -- ---------------------------------------------------------------------------
 
-beginTransaction :: HasCallStack => LoaderConnection -> IO ()
+beginTransaction :: LoaderConnection -> IO ()
 beginTransaction bc = do
   result <- PQ.exec (bcConnection bc) beginSqlBs
   checkResult bc "BEGIN" result
 
-commitTransaction :: HasCallStack => LoaderConnection -> IO ()
+commitTransaction :: LoaderConnection -> IO ()
 commitTransaction bc = do
   result <- PQ.exec (bcConnection bc) commitSqlBs
   checkResult bc "COMMIT" result
@@ -178,7 +178,7 @@ commitTransaction bc = do
 -- ---------------------------------------------------------------------------
 
 -- | Check that a @libpq@ result is not an error.
-checkResult :: HasCallStack => LoaderConnection -> Text -> Maybe PQ.Result -> IO ()
+checkResult :: LoaderConnection -> Text -> Maybe PQ.Result -> IO ()
 checkResult bc operation mResult = case mResult of
   Nothing -> do
     errMsg <- PQ.errorMessage (bcConnection bc)

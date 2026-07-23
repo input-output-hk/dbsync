@@ -31,6 +31,7 @@ const sidebars: SidebarsConfig = {
     'schema-versioning',
     'database-design',
     'memory-and-strictness',
+    'error-handling',
     'testing',
     'repository-layout',
     'contributing',

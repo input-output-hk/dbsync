@@ -35,6 +35,8 @@ import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 
 import Control.Concurrent.STM (TBQueue, TVar, readTBQueue, readTVarIO, tryReadTBQueue)
+import qualified Control.Exception as Exception
+import Control.Monad.IO.Unlift (withRunInIO)
 import Control.Tracer (traceWith)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', readIORef, writeIORef)
 import Data.Time.Clock (getCurrentTime)
@@ -45,6 +47,7 @@ import DbSync.AppM (IngestM)
 import DbSync.App.Env (CoreEnv (..), IngestEnv (..))
 import DbSync.ChainSync.Msg (ChainSyncMsg (..))
 import DbSync.Db.Schema.Ids (BlockId (..))
+import DbSync.Error (BlockAnnotation (..))
 import DbSync.Extractor (ExtractState (..), cborCaptureEnabled, takeBlockLedgerData)
 import DbSync.Extractor.EpochBoundary (runEpochBoundary)
 import DbSync.Extractor.Governance (runGovernanceBoundary)
@@ -153,7 +156,7 @@ runConsumer = do
             ( "reached rollback boundary at "
                 <> renderLastBlock mLast
                 <> "; exiting consumer loop"
-            ) Nothing
+            )
         else
           loop tracer boundaryVar cls
 
@@ -236,6 +239,14 @@ runConsumer = do
         cborEnabled <- asks (cborCaptureEnabled . ceExtractors . ieCore)
         let !genBlock   = parseBlock cborEnabled sd cardanoBlock
             !blockEpoch = sdEpochNo sd
+            blockAnn    = BlockAnnotation
+                            (unSlotNo  (blkSlotNo  genBlock))
+                            (unBlockNo (blkBlockNo genBlock))
+                            (blkHash   genBlock)
+            -- Tag every exception thrown while processing this block
+            -- with its slot/hash for the crash log.
+            inBlock :: IngestM a -> IngestM a
+            inBlock act = withRunInIO $ \run -> Exception.annotateIO blockAnn (run act)
 
         prevEpoch <- liftIO $ readIORef (clsPrevEpoch cls)
         -- On the first block (fresh boot or post-replay resume),
@@ -246,10 +257,10 @@ runConsumer = do
 
         case prevEpoch of
           Just prev | prev /= blockEpoch ->
-            handleEpochBoundary cls prev slot
+            inBlock (handleEpochBoundary cls prev slot)
           _ -> pure ()
 
-        processBlock genBlock
+        inBlock (processBlock genBlock)
 
         -- Boundary-block extractor: epoch-table writes that depend
         -- on the ledger worker's @apNewEpoch@.
@@ -264,7 +275,7 @@ runConsumer = do
           Just prev -> pure (prev /= blockEpoch)
           Nothing   -> bootBlockCrossesBoundary bootSlot blockEpoch
         when boundaryBlock $
-          runBoundaryExtractor hasLedger extractStRef
+          inBlock (runBoundaryExtractor hasLedger extractStRef)
 
         liftIO $ modifyIORef' (clsBlockCount cls) (+ 1)
         liftIO $ writeIORef (clsPrevEpoch cls) (Just blockEpoch)
@@ -301,7 +312,7 @@ runConsumer = do
                   <> " liveBefore=" <> fmtBytes (gcdetails_live_bytes (gc before))
                   <> " liveAfter=" <> fmtBytes (gcdetails_live_bytes (gc after))
                   <> " naturalMajorGCs=" <> show (major_gcs before)
-              ) Nothing
+              )
 
       processBatch cls rest
 
@@ -337,7 +348,7 @@ advanceReplayLog tracer replayRef slot bootSlot replayStart =
         let adv = advanceReplay slot bootSlot now prev
         in (raNewState adv, raLog adv)
       let traceReplay msg =
-            liftIO $ traceWith tracer $ LogMsg Info "LedgerReplay" msg Nothing
+            liftIO $ traceWith tracer $ LogMsg Info "LedgerReplay" msg
       case logEvent of
         ReplayLogNothing -> pure ()
         ReplayLogProgress n ->
@@ -362,7 +373,7 @@ logObservation tracer = \case
           <> renderEraIdx (otFromEra t) <> " → " <> renderEraIdx (otToEra t)
           <> " at slot " <> show (unSlotNo (otAtSlot t))
           <> " (epoch " <> show (unEpochNo (otAtEpoch t)) <> ")"
-      ) Nothing
+      )
   ObservationBroken fromEra toEra -> do
     cached <- isInterpreterCached
     unless cached $
@@ -370,7 +381,7 @@ logObservation tracer = \case
         ( "Observed era jump too large ("
             <> renderEraIdx fromEra <> " → " <> renderEraIdx toEra
             <> "); falling back to node interpreter"
-        ) Nothing
+        )
   Unchanged -> pure ()
 
 -- | Whether the first processed block crosses an epoch boundary

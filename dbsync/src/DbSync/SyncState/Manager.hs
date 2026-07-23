@@ -43,8 +43,7 @@ import DbSync.Phase.Ingest.Counter (IdCounter (..), IdCounters (..), mkIdCounter
 --     and the loader connections are unusable. Caller should treat as
 --     fatal and exit; a clean restart reopens the streams.
 commitEpoch
-  :: ( HasCallStack
-     , HasLoaderStream env
+  :: ( HasLoaderStream env
      , HasControlConnection env
      , MonadReader env m
      , MonadIO m

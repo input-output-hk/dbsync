@@ -99,7 +99,8 @@ import DbSync.Worker.TxOut.AddressBuffer
 import DbSync.Worker.TxOut.ConsumedByBuffer
   ( EpochConsumedByBuffer (..)
   )
-import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..), logThreadExit)
+import DbSync.Error.Render (logThreadExit)
+import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -333,7 +334,7 @@ runTxOutWorkerWith mTracer hooks queue inFlight =
       atomically $ STM.modifyTVar' inFlight (\n -> n - 1)
       for_ mTracer $ \tracer ->
         traceWith tracer $ LogMsg Info "TxOutWorker"
-          ("resolved epoch " <> show (unEpochNo (tjEpoch job))) Nothing
+          ("resolved epoch " <> show (unEpochNo (tjEpoch job)))
 
 -- | Resolve one epoch's buffers in (up to) four bulk statements:
 --
@@ -398,7 +399,7 @@ probeStep (Just tracer) epoch label act = do
       traceWith tracer $ LogMsg Debug "TxOutProbe"
         ( "epoch " <> show (unEpochNo epoch) <> " " <> label
           <> " alloc=" <> mb allocDelta <> " live=" <> mb liveNow
-        ) Nothing
+        )
       pure r
 
 mb :: Word64 -> Text

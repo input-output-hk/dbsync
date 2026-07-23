@@ -121,6 +121,7 @@ test-suite dbsync-test
     DbSync.Db.Statement.SlotLeaderSpec
     DbSync.Db.Statement.SyncStateSpec
     DbSync.Db.TypesSpec
+    DbSync.Error.RenderSpec
     DbSync.PropertySpec
     DbSync.Worker.TxOut.WorkerSpec
     DbSync.Schema.AdaPotsSpec
@@ -212,6 +213,7 @@ test-suite dbsync-test
   build-depends:
       base
     , aeson
+    , async
     , base16-bytestring
     , bech32
     , contra-tracer

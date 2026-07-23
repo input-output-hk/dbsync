@@ -73,6 +73,8 @@ transitions.
 - **[Schema layer](schema-layer)** — DDL generation, COPY encoders, hasql
   statements.
 - **[Workers](workers)** — work that runs alongside the main pipeline.
+- **[Error handling](error-handling)** — how errors are thrown, propagated,
+  and rendered, and the rules that keep a crash log diagnosable.
 - **[Comparing databases](db-compare)** — verify this dbsync stores the same
   data as the original cardano-db-sync.
 - **[Contributing](contributing)** — workflow and code conventions.

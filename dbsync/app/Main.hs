@@ -6,6 +6,7 @@ module Main
 
 import Cardano.Prelude
 
+import qualified Control.Exception as Exception
 import Control.Tracer (traceWith)
 import System.FilePath (takeDirectory, (</>))
 
@@ -22,8 +23,9 @@ import DbSync.App.Config.Types
   , SyncConfig (..)
   )
 import DbSync.App.Config.Validation (validateConfig)
+import DbSync.Error.Render (renderCrash)
 import DbSync.Trace.Backend (mkStdErrTracer)
-import DbSync.Trace.Types (LogMsg (..), Severity (..), severityFromText)
+import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..), severityFromText)
 
 #ifdef GHC_DEBUG
 import GHC.Debug.Stub (withGhcDebug)
@@ -43,7 +45,7 @@ realMain = do
   -- profile-configured tracer exists.
   args       <- parseCliArgs
   bootTracer <- mkStdErrTracer Info
-  let bootLogError msg = traceWith bootTracer $ LogMsg Error "App" msg Nothing
+  let bootLogError msg = traceWith bootTracer $ LogMsg Error "App" msg
 
   -- 1. Profile (database, sync options, ledger flag, logging).
   validProfile <- loadProfile bootLogError (caProfile args)
@@ -51,8 +53,8 @@ realMain = do
   -- 2. Rebuild the tracer at the profile-configured severity.
   let minSeverity = severityFromText (lgLevel (scLogging validProfile))
   tracer <- mkStdErrTracer minSeverity
-  let logError msg = traceWith tracer $ LogMsg Error "App" msg Nothing
-      logInfo  msg = traceWith tracer $ LogMsg Info  "App" msg Nothing
+  let logError msg = traceWith tracer $ LogMsg Error "App" msg
+      logInfo  msg = traceWith tracer $ LogMsg Info  "App" msg
 
   -- 3. db-sync-config: provides the cardano-node config path.
   dbSyncCfg <- loadDbSyncConfig logError (caDbSyncConfig args)
@@ -76,6 +78,21 @@ realMain = do
     , aaShutdownSignal    = Nothing
     , aaStateQueryVar     = Nothing
     }
+    `Exception.catch` handleFatalError tracer
+
+-- ---------------------------------------------------------------------------
+-- * Top-level error handling
+-- ---------------------------------------------------------------------------
+
+-- | Render an unhandled exception escaping 'runApp' into the app log
+-- and exit non-zero. 'ExitCode's pass through so an intentional exit
+-- keeps its status.
+handleFatalError :: AppTracer -> SomeException -> IO ()
+handleFatalError tracer e = case fromException e of
+  Just ec -> Exception.throwIO (ec :: ExitCode)
+  Nothing -> do
+    traceWith tracer $ LogMsg Error "App" (renderCrash e)
+    exitFailure
 
 -- ---------------------------------------------------------------------------
 -- * Config loading helpers

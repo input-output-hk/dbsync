@@ -65,7 +65,7 @@ sampleAndLog ie = do
         , "cbBuf=" <> compact cbCount
         , rtsTxt
         ]
-  traceWith (ceTracer (ieCore ie)) $ LogMsg Debug "Gauge" line Nothing
+  traceWith (ceTracer (ieCore ie)) $ LogMsg Debug "Gauge" line
 
 ledgerDepths :: HasLedgerEnv -> IO Text
 ledgerDepths = \case

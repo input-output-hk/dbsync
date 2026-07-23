@@ -18,16 +18,12 @@ module DbSync.Trace.Types
   , logInfoIO
   , logWarnIO
   , logErrorIO
-
-    -- * Thread-exit logging
-  , logThreadExit
   ) where
 
 import Cardano.Prelude
 
 import qualified Data.Text as Text
 
-import Control.Concurrent.Async (AsyncCancelled (..))
 import Control.Tracer (Tracer, traceWith)
 
 -- * Types
@@ -40,8 +36,8 @@ data Severity
   | Error
   deriving stock (Eq, Ord, Show, Bounded, Enum)
 
--- | Source location captured from HasCallStack.
--- Populated automatically for Warning and Error level messages.
+-- | Source location for an 'AppError', captured from the throwing
+-- helper's call site.
 data SrcInfo = SrcInfo
   { siFunction :: !Text
   , siModule   :: !Text
@@ -55,7 +51,6 @@ data LogMsg = LogMsg
   { lmSeverity  :: !Severity
   , lmComponent :: !Text        -- ^ "IngestChainHistory", "LoaderStream", etc.
   , lmMessage   :: !Text
-  , lmSrcInfo   :: !(Maybe SrcInfo)  -- ^ populated for Warning and Error
   }
   deriving stock (Show)
 
@@ -79,33 +74,17 @@ severityFromText t = case Text.toLower (Text.strip t) of
 -- don't have a phase env in scope.
 logInfoIO :: AppTracer -> Text -> Text -> IO ()
 logInfoIO tracer component msg =
-  traceWith tracer (LogMsg Info component msg Nothing)
+  traceWith tracer (LogMsg Info component msg)
 
 -- | 'Warning'-level companion to 'logInfoIO'.
 logWarnIO :: AppTracer -> Text -> Text -> IO ()
 logWarnIO tracer component msg =
-  traceWith tracer (LogMsg Warning component msg Nothing)
+  traceWith tracer (LogMsg Warning component msg)
 
 -- | 'Error'-level companion to 'logInfoIO'.
 logErrorIO :: AppTracer -> Text -> Text -> IO ()
 logErrorIO tracer component msg =
-  traceWith tracer (LogMsg Error component msg Nothing)
-
--- | Log a background-thread exit. 'AsyncCancelled' is the normal
--- shutdown signal — log at 'Info' so it doesn't pollute the
--- operator's view of real failures. Any other exception is a real
--- crash and logs at 'Error'.
---
--- Stays in 'IO' because every caller is a 'catch' handler that
--- doesn't have an env in scope.
-logThreadExit :: Text -> SomeException -> AppTracer -> IO ()
-logThreadExit component e tracer = case fromException e of
-  Just AsyncCancelled ->
-    traceWith tracer $ LogMsg Info component
-      "stopped (cancelled during shutdown)" Nothing
-  Nothing ->
-    traceWith tracer $ LogMsg Error component
-      ("crashed: " <> show e) Nothing
+  traceWith tracer (LogMsg Error component msg)
 
 -- | Extract the top frame of a 'CallStack' into 'SrcInfo'.
 --

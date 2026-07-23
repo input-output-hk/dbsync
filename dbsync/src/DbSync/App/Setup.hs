@@ -186,13 +186,12 @@ runStartup = do
       Right t -> "binary " <> toS exePath <> " (linked " <> show t <> ")"
       Left _  -> "binary " <> toS exePath
 
-  liftIO $ traceWith tracer $ LogMsg Info "App" "cardano-db-sync starting" Nothing
-  liftIO $ traceWith tracer $ LogMsg Info "App" binaryLine Nothing
+  liftIO $ traceWith tracer $ LogMsg Info "App" "cardano-db-sync starting"
+  liftIO $ traceWith tracer $ LogMsg Info "App" binaryLine
   liftIO $ traceWith tracer $ LogMsg Info "App"
     ( "Enabled extractors (" <> show projCount <> "): "
       <> showExtractorList projNames
     )
-    Nothing
 
 -- | Format a list of extractor names for logging.
 showExtractorList :: [Text] -> Text

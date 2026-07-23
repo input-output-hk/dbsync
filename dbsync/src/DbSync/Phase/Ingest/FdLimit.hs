@@ -64,9 +64,9 @@ raiseFdLimit tracer = do
             <> "under sustained load. Operators on locked-down environments "
             <> "(containers, systemd units) should raise RLIMIT_NOFILE "
             <> "(--ulimit nofile=... / LimitNOFILE=...)."
-        ) Nothing
+        )
   where
-    traceInfo msg = traceWith tracer $ LogMsg Info "FdLimit" msg Nothing
+    traceInfo msg = traceWith tracer $ LogMsg Info "FdLimit" msg
 
 -- | Honour the hard limit. 'ResourceLimitInfinity' has no integer
 -- value, so we fall back to 'fdSoftLimitTarget' in that case.

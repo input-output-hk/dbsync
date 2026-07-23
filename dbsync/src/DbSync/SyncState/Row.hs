@@ -156,7 +156,7 @@ instance HasControlConnection ControlConnection where
 
 -- | Open a fresh 'ControlConnection'. Throws 'AppDatabaseError' on
 -- handshake failure.
-openControlConnection :: HasCallStack => Settings.Settings -> IO ControlConnection
+openControlConnection :: Settings.Settings -> IO ControlConnection
 openControlConnection settings = do
   result <- Conn.acquire settings
   case result of
@@ -174,7 +174,7 @@ closeControlConnection = Conn.release . unControlConnection
 
 -- | Read the singleton row, or 'Nothing' if it has never been seeded.
 readSyncState
-  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => m (Maybe SyncStateRow)
 readSyncState = runCtrlStmt "readSyncState" () readSyncStateStmt
 
@@ -182,7 +182,7 @@ readSyncState = runCtrlStmt "readSyncState" () readSyncStateStmt
 -- Throws 'AppDatabaseError' if zero rows are affected (i.e. when
 -- 'seedSyncState' was never called).
 writeSyncState
-  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => SyncStateRow
   -> m ()
 writeSyncState row = do
@@ -193,7 +193,7 @@ writeSyncState row = do
 -- (@ON CONFLICT DO NOTHING@). Must be invoked once after
 -- 'DbSync.Db.Schema.Init.initSchema' creates the table.
 seedSyncState
-  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => Int          -- ^ @schema_version_applied@
   -> Fingerprint  -- ^ @schema_fingerprint@
   -> Bool         -- ^ @ledger_enabled@
@@ -207,7 +207,7 @@ seedSyncState schemaVersion fingerprint ledgerEnabled extractorNames =
 -- | Record that a ledger snapshot at the given slot has been
 -- successfully written.
 markSnapshotComplete
-  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => Word64
   -> m ()
 markSnapshotComplete slotNo = do
@@ -217,7 +217,7 @@ markSnapshotComplete slotNo = do
 -- | Flip @sync_complete@ to true at the Ingest → Follow boundary.
 -- Subsequent boots take the Follow-restart path.
 markSyncComplete
-  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => m ()
 markSyncComplete = do
   n <- runCtrlStmt "markSyncComplete" () markSyncCompleteStmt
@@ -225,14 +225,14 @@ markSyncComplete = do
 
 -- | Read the pending rollback marker. 'Nothing' is the normal case.
 readPendingRollbackSlot
-  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => m (Maybe Word64)
 readPendingRollbackSlot =
   runCtrlStmt "readPendingRollbackSlot" () readPendingRollbackSlotStmt
 
 -- | Persist a rollback target that must run on next boot.
 writePendingRollbackSlot
-  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => Word64 -> m ()
 writePendingRollbackSlot slot = do
   n <- runCtrlStmt "writePendingRollbackSlot" slot writePendingRollbackSlotStmt
@@ -240,7 +240,7 @@ writePendingRollbackSlot slot = do
 
 -- | Drop the marker after the recovery rollback has committed.
 clearPendingRollbackSlot
-  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => m ()
 clearPendingRollbackSlot = do
   n <- runCtrlStmt "clearPendingRollbackSlot" () clearPendingRollbackSlotStmt
@@ -253,7 +253,7 @@ clearPendingRollbackSlot = do
 -- | Look up the header hash at a given slot in the @block@ table.
 -- 'Nothing' means no committed block at that slot.
 fetchBlockHashAtSlot
-  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => Word64
   -> m (Maybe ByteString)
 fetchBlockHashAtSlot slot =
@@ -262,7 +262,7 @@ fetchBlockHashAtSlot slot =
 -- | @committee.id@ that originated from the given proposal id, or
 -- the genesis row when the input is 'Nothing'.
 queryCommitteeByProposal
-  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => Maybe Int64
   -> m (Maybe Int64)
 queryCommitteeByProposal mProposalId =
@@ -271,7 +271,7 @@ queryCommitteeByProposal mProposalId =
 -- | @constitution.id@ that originated from the given proposal id, or
 -- the genesis row when the input is 'Nothing'.
 queryConstitutionByProposal
-  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => Maybe Int64
   -> m (Maybe Int64)
 queryConstitutionByProposal mProposalId =
@@ -279,28 +279,28 @@ queryConstitutionByProposal mProposalId =
 
 -- | Set @gov_action_proposal.ratified_epoch@ on the given row.
 markGovActionRatified
-  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => Int64 -> Word64 -> m ()
 markGovActionRatified gid epoch =
   runCtrlStmt "markGovActionRatified" (gid, epoch) updateGovActionRatifiedStmt
 
 -- | Set @gov_action_proposal.enacted_epoch@ on the given row.
 markGovActionEnacted
-  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => Int64 -> Word64 -> m ()
 markGovActionEnacted gid epoch =
   runCtrlStmt "markGovActionEnacted" (gid, epoch) updateGovActionEnactedStmt
 
 -- | Set @gov_action_proposal.dropped_epoch@ on the given row.
 markGovActionDropped
-  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => Int64 -> Word64 -> m ()
 markGovActionDropped gid epoch =
   runCtrlStmt "markGovActionDropped" (gid, epoch) updateGovActionDroppedStmt
 
 -- | Set @gov_action_proposal.expired_epoch@ on the given row.
 markGovActionExpired
-  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => Int64 -> Word64 -> m ()
 markGovActionExpired gid epoch =
   runCtrlStmt "markGovActionExpired" (gid, epoch) updateGovActionExpiredStmt
@@ -324,8 +324,7 @@ markGovActionExpired gid epoch =
 -- carry the table contents from a prior run, and the PG repopulate
 -- pass below only bumps the counters.
 rebuildDedupMaps
-  :: ( HasCallStack
-     , HasTracer env
+  :: ( HasTracer env
      , HasControlConnection env
      , MonadReader env m
      , MonadIO m
@@ -372,7 +371,7 @@ dedupPageSize = 50000
 -- page resident. The scan runs in a single transaction; boot is
 -- single-threaded on the control connection, so holding it open is safe.
 cursorInsert
-  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => Text                  -- ^ caller label for errors
   -> Stmt.Statement () ()  -- ^ DECLARE … CURSOR
   -> Stmt.Statement () [r] -- ^ FETCH FORWARD …
@@ -403,8 +402,7 @@ dedupCursorName :: Text -> Text
 dedupCursorName tableName = "dedup_cur_" <> tableName
 
 populateSingle
-  :: ( HasCallStack
-     , HasTracer env
+  :: ( HasTracer env
      , HasControlConnection env
      , MonadReader env m
      , MonadIO m
@@ -419,8 +417,7 @@ populateSingle tableName keyCol store =
       (\(rowId, key) -> insertExisting (SBS.toShort key) rowId store)
 
 populateMultiAsset
-  :: ( HasCallStack
-     , HasTracer env
+  :: ( HasTracer env
      , HasControlConnection env
      , MonadReader env m
      , MonadIO m
@@ -435,8 +432,7 @@ populateMultiAsset store =
       (\(rowId, policy, name) -> insertExisting (hashDedupKey (policy <> name)) rowId store)
 
 populateDrepHash
-  :: ( HasCallStack
-     , HasTracer env
+  :: ( HasTracer env
      , HasControlConnection env
      , MonadReader env m
      , MonadIO m
@@ -451,8 +447,7 @@ populateDrepHash store =
     pure (fromIntegral (length rows))
 
 populateCommitteeHash
-  :: ( HasCallStack
-     , HasTracer env
+  :: ( HasTracer env
      , HasControlConnection env
      , MonadReader env m
      , MonadIO m
@@ -467,8 +462,7 @@ populateCommitteeHash store =
     pure (fromIntegral (length rows))
 
 populateVotingAnchor
-  :: ( HasCallStack
-     , HasTracer env
+  :: ( HasTracer env
      , HasControlConnection env
      , MonadReader env m
      , MonadIO m
@@ -496,8 +490,7 @@ populateVotingAnchor store =
 -- Skipped when @cost_model@ is absent from the active schema —
 -- callers run this unconditionally; the empty result is harmless.
 populateCostModelCache
-  :: ( HasCallStack
-     , HasTracer env
+  :: ( HasTracer env
      , HasControlConnection env
      , MonadReader env m
      , MonadIO m
@@ -509,7 +502,7 @@ populateCostModelCache tableDefs
   | otherwise = do
       tracer <- asks getTracer
       liftIO $ traceWith tracer $ LogMsg Info "DedupRebuild"
-        "cost_model: loading" Nothing
+        "cost_model: loading"
       start <- liftIO getCurrentTime
       rows  <- runCtrlStmt "populateCostModelCache" ()
                  (selectDedupSingleStmt "cost_model" "hash")
@@ -519,15 +512,14 @@ populateCostModelCache tableDefs
           "cost_model: " <> fmtCount (fromIntegral (Map.size cache) :: Int64)
             <> " rows in "
             <> fmtDuration (realToFrac (diffUTCTime end start))
-        ) Nothing
+        )
       pure cache
 
 -- | Seed @(tx_hash, proposal_index) -> gov_action_proposal.id@ from PG
 -- so vote rows landing in resumed blocks can resolve their proposal
 -- targets without a SELECT round-trip.
 populateGovActionProposalCache
-  :: ( HasCallStack
-     , HasTracer env
+  :: ( HasTracer env
      , HasControlConnection env
      , MonadReader env m
      , MonadIO m
@@ -539,7 +531,7 @@ populateGovActionProposalCache tableDefs
   | otherwise = do
       tracer <- asks getTracer
       liftIO $ traceWith tracer $ LogMsg Info "DedupRebuild"
-        "gov_action_proposal cache: loading" Nothing
+        "gov_action_proposal cache: loading"
       start <- liftIO getCurrentTime
       rows  <- runCtrlStmt "populateGovActionProposalCache" ()
                  selectGovActionProposalCacheStmt
@@ -550,7 +542,7 @@ populateGovActionProposalCache tableDefs
             <> fmtCount (fromIntegral (Map.size cache) :: Int64)
             <> " rows in "
             <> fmtDuration (realToFrac (diffUTCTime end start))
-        ) Nothing
+        )
       pure cache
 
 -- | Wrap one table's repopulation in start/end trace lines and time
@@ -562,14 +554,14 @@ timedRebuild
 timedRebuild tableName action = do
   tracer <- asks getTracer
   liftIO $ traceWith tracer $ LogMsg Info "DedupRebuild"
-    (tableName <> ": loading") Nothing
+    (tableName <> ": loading")
   start <- liftIO getCurrentTime
   rows  <- action
   end   <- liftIO getCurrentTime
   liftIO $ traceWith tracer $ LogMsg Info "DedupRebuild" (
       tableName <> ": " <> fmtCount rows <> " rows in "
         <> fmtDuration (realToFrac (diffUTCTime end start))
-    ) Nothing
+    )
 
 -- ---------------------------------------------------------------------------
 -- * Internal: statement runner
@@ -578,7 +570,7 @@ timedRebuild tableName action = do
 -- | Run a 'Stmt.Statement' against the env's control connection;
 -- lift any 'SessionError' into 'AppDatabaseError'.
 runCtrlStmt
-  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => Text
   -> p
   -> Stmt.Statement p r
@@ -593,7 +585,7 @@ runCtrlStmt callerName params stmt = do
 -- | Throw a uniform diagnostic when an UPDATE\/INSERT didn't affect
 -- exactly one row (the singleton-row invariant).
 expectOneRowAffected
-  :: (HasCallStack, MonadIO m) => Text -> Int64 -> m ()
+  :: MonadIO m => Text -> Int64 -> m ()
 expectOneRowAffected callerName = \case
   1 -> pure ()
   n ->

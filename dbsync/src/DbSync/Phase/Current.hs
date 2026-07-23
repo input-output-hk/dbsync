@@ -49,7 +49,6 @@ setCurrentPhase (CurrentPhase v) next = do
   when (prev /= next) $
     liftIO $ traceWith tracer $ LogMsg Info "Phase"
       (renderPhase prev <> " -> " <> renderPhase next)
-      Nothing
 
 -- ---------------------------------------------------------------------------
 -- * Env accessor

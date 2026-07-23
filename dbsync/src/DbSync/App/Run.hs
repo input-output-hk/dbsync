@@ -19,6 +19,7 @@ import Cardano.Prelude
 
 import Control.Concurrent.STM (newTBQueueIO, newTVarIO)
 import qualified Control.Concurrent.STM as STM
+import Control.Exception.Backtrace (BacktraceMechanism (..), setBacktraceMechanismState)
 import Data.IORef (newIORef)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Text as T
@@ -189,6 +190,14 @@ runApp tracer args = do
       topLevelCfg  = mkTopLevelConfig nodeCfg genesisCfg
       networkMagic = getNetworkMagic genesisCfg
       network      = sgNetworkId (scConfig (gcShelley genesisCfg))
+
+  -- Collect a real backtrace at each throw site. IPE frames need
+  -- -finfo-table-map (set in cabal.project); DbSync.Error.Render turns
+  -- the attached annotation into the crash log. The throwers capture
+  -- their own SrcInfo, so the HasCallStack annotation would only repeat
+  -- that one frozen frame — disable it and keep the IPE stack alone.
+  setBacktraceMechanismState IPEBacktrace True
+  setBacktraceMechanismState HasCallStackBacktrace False
 
   -- 1. Raise the open-file soft limit before any LSM session opens.
   raiseFdLimit tracer

@@ -104,7 +104,7 @@ withHeartbeatIO tracer component prefix intervalSeconds action = do
       traceWith tracer $ LogMsg Info component
         ( prefix <> " (" <> fmtDuration (realToFrac (diffUTCTime now start))
             <> " elapsed)"
-        ) Nothing
+        )
 
 timedTraceIO :: AppTracer -> Text -> Text -> IO Int64 -> IO Int64
 timedTraceIO tracer component label action = do
@@ -130,7 +130,7 @@ timedTraceIO_ tracer component label action = do
 
 emitTrace :: AppTracer -> Text -> Text -> IO ()
 emitTrace tracer component msg =
-  traceWith tracer $ LogMsg Info component msg Nothing
+  traceWith tracer $ LogMsg Info component msg
 
 -- ---------------------------------------------------------------------------
 -- * Formatting

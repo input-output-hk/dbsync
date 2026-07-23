@@ -27,7 +27,8 @@ import qualified Hasql.Connection as Conn
 import qualified Hasql.Connection.Settings as Settings
 
 import DbSync.Error (throwDb)
-import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..), logThreadExit)
+import DbSync.Error.Render (logThreadExit)
+import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 
 -- ---------------------------------------------------------------------------
 -- * Types
@@ -119,7 +120,6 @@ runOneCycle tracer component conn batchSize hooks = do
     traceWith tracer $
       LogMsg Info component
         ("processing " <> show (length refs) <> " ref(s)")
-        Nothing
   for_ refs $ \r -> do
     outcome <- ohFetch hooks r
     ohPersist hooks conn r outcome

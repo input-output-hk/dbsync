@@ -86,8 +86,7 @@ data CleanupMode
 -- given tables. Returns the total number of rows deleted. No-op when
 -- the row reports no committed progress.
 deleteRowsPastSlot
-  :: ( HasCallStack
-     , HasTracer env
+  :: ( HasTracer env
      , HasControlConnection env
      , MonadReader env m
      , MonadIO m
@@ -148,7 +147,7 @@ deleteRowsPastSlot mode tableDefs row =
 -- ---------------------------------------------------------------------------
 
 runByParam
-  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => AppTracer
   -> Word64
   -> (Text -> Stmt.Statement Word64 Int64)
@@ -161,7 +160,7 @@ runByParam tracer slotNo mkStmt acc td =
     acc
 
 runByFk
-  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => AppTracer
   -> Word64
   -> (Text -> Text -> Stmt.Statement Word64 Int64)
@@ -174,7 +173,7 @@ runByFk tracer slotNo mkStmt acc (td, fkCol) =
     acc
 
 runByCounter
-  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => AppTracer
   -> SyncStateRow
   -> Int64
@@ -272,7 +271,7 @@ classify td = CleanupShape
 -- wrapping it in a 5-second heartbeat so a slow DELETE still emits
 -- progress while it runs.
 runDelete
-  :: (HasCallStack, HasControlConnection env, MonadReader env m, MonadIO m)
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => AppTracer
   -> p
   -> Stmt.Statement p r
@@ -288,4 +287,4 @@ runDelete tracer params stmt label = do
     Right r  -> pure r
 
 emit :: MonadIO m => AppTracer -> Text -> m ()
-emit tracer msg = liftIO $ traceWith tracer $ LogMsg Info "ResumeCleanup" msg Nothing
+emit tracer msg = liftIO $ traceWith tracer $ LogMsg Info "ResumeCleanup" msg

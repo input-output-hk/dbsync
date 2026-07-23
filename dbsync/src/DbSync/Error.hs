@@ -9,6 +9,8 @@
 module DbSync.Error
   ( -- * Types
     AppError (..)
+  , BlockAnnotation (..)
+  , renderBlockAnnotation
 
     -- * Throwing — generic
   , throwAppError
@@ -29,8 +31,12 @@ module DbSync.Error
 import Cardano.Prelude
 
 import qualified Control.Exception as Exception
+import Control.Exception.Annotation (ExceptionAnnotation (..))
 import Control.Monad.IO.Unlift (MonadUnliftIO, withRunInIO)
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Base16 as Base16
 import qualified Data.Text as Text
+import qualified Data.Text.Encoding as TE
 
 import DbSync.Trace.Types (SrcInfo, captureCallSite)
 
@@ -50,6 +56,28 @@ data AppError
   deriving stock (Show)
 
 instance Exception AppError
+
+-- ---------------------------------------------------------------------------
+-- * Block context annotation
+-- ---------------------------------------------------------------------------
+
+-- | Attached with 'Control.Exception.annotateIO' around per-block
+-- processing so a crash names the block in flight. Rendered by
+-- "DbSync.Error.Render".
+data BlockAnnotation = BlockAnnotation
+  { baSlot    :: !Word64
+  , baBlockNo :: !Word64
+  , baHash    :: !ByteString
+  }
+
+instance ExceptionAnnotation BlockAnnotation where
+  displayExceptionAnnotation = toS . renderBlockAnnotation
+
+renderBlockAnnotation :: BlockAnnotation -> Text
+renderBlockAnnotation (BlockAnnotation slot blockNo hash) =
+  "while processing block " <> show blockNo
+    <> " (slot " <> show slot
+    <> ", hash " <> TE.decodeUtf8 (Base16.encode (BS.take 8 hash)) <> "…)"
 
 -- ---------------------------------------------------------------------------
 -- * Throwing — generic
@@ -105,10 +133,15 @@ rethrowAs
 rethrowAs ctor context action =
   withFrozenCallStack $
     withRunInIO $ \run ->
-      run action `Exception.catch` \(e :: Exception.SomeException) -> do
-        case Exception.fromException e :: Maybe Exception.SomeAsyncException of
-          Just _  -> Exception.throwIO e
-          Nothing -> throwIO $
-            ctor
-              (captureCallSite callStack)
-              (context <> ": " <> Text.pack (Exception.displayException e))
+      run action `Exception.catchNoPropagate` \(ewc :: Exception.ExceptionWithContext Exception.SomeException) ->
+        let Exception.ExceptionWithContext _ e = ewc
+        in case Exception.fromException e :: Maybe Exception.SomeAsyncException of
+             -- Async exceptions propagate untouched, keeping their context.
+             Just _  -> Exception.rethrowIO ewc
+             -- Wrap synchronous failures, nesting the original as the cause.
+             Nothing ->
+               Exception.annotateIO (Exception.WhileHandling (Exception.toException ewc)) $
+                 throwIO $
+                   ctor
+                     (captureCallSite callStack)
+                     (context <> ": " <> Text.pack (Exception.displayException e))

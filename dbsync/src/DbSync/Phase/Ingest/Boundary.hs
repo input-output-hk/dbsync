@@ -249,7 +249,7 @@ handleEpochBoundary cls prev slot = do
         -- performMajorGC here (it cannot be interrupted).
         when (minSev <= Debug) $ liftIO $ do
           let tag m = traceWith tracer $ LogMsg Debug "TxOutProbe"
-                ("epoch " <> show (unEpochNo prev) <> " " <> m) Nothing
+                ("epoch " <> show (unEpochNo prev) <> " " <> m)
           l0 <- sampleHeapBytes
           tag ("preForce live=" <> maybe "n/a" fmtBytes l0)
           r <- Timeout.timeout 60000000 $ do
@@ -330,10 +330,10 @@ handleEpochBoundary cls prev slot = do
                   storeStats (msPeakInUse memStats) mBoundary securityParam
                   (fmap (\(_, b, _) -> b) mLastBlock)
 
-  liftIO $ traceWith tracer $ LogMsg Info "Ingest" summary Nothing
+  liftIO $ traceWith tracer $ LogMsg Info "Ingest" summary
   when (minSev <= Debug) $ liftIO $
     for_ (renderMemCurve prev memStats) $ \line ->
-      traceWith tracer $ LogMsg Debug "Ingest" line Nothing
+      traceWith tracer $ LogMsg Debug "Ingest" line
 
   -- Dedup-store size + heap diagnostic. Gated on Debug because
   -- sampling 'getRTSStats' isn't free.
@@ -347,7 +347,7 @@ handleEpochBoundary cls prev slot = do
       ( "Epoch " <> show (unEpochNo prev)
         <> " | " <> renderDedupCounts dedupCounts
         <> heapText
-      ) Nothing
+      )
 
   -- Reset for the next epoch.
   liftIO $ do

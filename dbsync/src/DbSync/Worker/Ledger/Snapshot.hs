@@ -92,7 +92,8 @@ import DbSync.Worker.Ledger.Types
   , toConsensusStateRef
   )
 import DbSync.Parser.Types (CardanoPoint)
-import DbSync.Trace.Types (LogMsg (..), Severity (..), logThreadExit)
+import DbSync.Error.Render (logThreadExit)
+import DbSync.Trace.Types (LogMsg (..), Severity (..))
 
 -- ---------------------------------------------------------------------------
 -- * Listing
@@ -230,7 +231,7 @@ snapshotWriteLoop = do
   liftIO $ do
     traceWith (leTracer env) $
       LogMsg Info "LedgerSnapshot"
-        "snapshot-writer starting (draining snapshot queue)" Nothing
+        "snapshot-writer starting (draining snapshot queue)"
     forever $ do
       sref <- atomically $ readTBQueue (leSnapshotQueue env)
       processOneSnapshot env sref
@@ -238,7 +239,7 @@ snapshotWriteLoop = do
   where
     logMsg :: LedgerEnv -> Severity -> Text -> IO ()
     logMsg env sev msg =
-      traceWith (leTracer env) (LogMsg sev "LedgerSnapshot" msg Nothing)
+      traceWith (leTracer env) (LogMsg sev "LedgerSnapshot" msg)
 
     processOneSnapshot :: LedgerEnv -> DbSyncStateRef -> IO ()
     processOneSnapshot env sref = do
@@ -345,7 +346,6 @@ safeDeleteSnapshot ds = do
         traceWith (leTracer env) $
           LogMsg Debug "LedgerSnapshot"
             ("Deleted temporary snapshot at slot " <> show (dsNumber ds))
-            Nothing
       Left ex ->
         traceWith (leTracer env) $
           LogMsg Warning "LedgerSnapshot"
@@ -354,7 +354,6 @@ safeDeleteSnapshot ds = do
                 <> " (probable orphan from a crashed write); ignoring — "
                 <> Text.pack (Exception.displayException ex)
             )
-            Nothing
 
 -- | Delete every disk snapshot strictly newer than the given slot.
 -- Used by the rollback path and by the boot-flow resume-constraint

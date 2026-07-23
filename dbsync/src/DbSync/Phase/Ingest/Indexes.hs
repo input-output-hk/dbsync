@@ -47,7 +47,7 @@ component = "IngestIndexes"
 createIngestResolveIndexes :: AppTracer -> Conn.Connection -> IO ()
 createIngestResolveIndexes tracer conn = do
   traceWith tracer $ LogMsg Info component
-    "building per-epoch resolver indexes" Nothing
+    "building per-epoch resolver indexes"
   for_ ingestResolveIndexStatements $ \ix ->
     timedTraceIO_ tracer component
       ("ingest-resolve index " <> isName ix)

@@ -53,6 +53,7 @@ library
     DbSync.App
     DbSync.AppM
     DbSync.Error
+    DbSync.Error.Render
     DbSync.Util
     DbSync.Metrics
 
@@ -367,7 +368,8 @@ executable dbsync
     -threaded -rtsopts
     "-with-rtsopts=-A64m -N6 -T -I0 --disable-delayed-os-memory-return"
   build-depends:
-      dbsync
+      base >= 4.14 && < 5
+    , dbsync
     , cardano-prelude
     , contra-tracer
     , filepath

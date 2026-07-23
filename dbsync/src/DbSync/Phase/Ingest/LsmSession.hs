@@ -166,7 +166,7 @@ nullLsmSessionTracer = nullTracer
 lsmSessionTracerFromApp :: AppTracer -> LsmSessionTracer
 lsmSessionTracerFromApp inner = Tracer $ \e ->
   unless (isHotPathLsmTrace e) $
-    traceWith inner (LogMsg Debug "LsmIngest" (show e) Nothing)
+    traceWith inner (LogMsg Debug "LsmIngest" (show e))
 
 -- | True for 'LSMTree.LSMTreeTrace' events that fire on every
 -- batched table operation. These flood the log during ingest and

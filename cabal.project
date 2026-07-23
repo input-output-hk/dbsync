@@ -34,9 +34,14 @@ packages:
 -- measurements/ taken before 2026-06-12 are of -O1 builds.
 package dbsync
   optimization: 2
+  -- Embed the IPE info-table map so throwIO collects a real multi-frame
+  -- backtrace at the throw site (rendered by DbSync.Error.Render). Costs
+  -- binary size only; nothing on the happy path.
+  ghc-options: -finfo-table-map
 
 package dbsync-db
   optimization: 2
+  ghc-options: -finfo-table-map
 
 package postgresql-libpq
   flags: +use-pkg-config

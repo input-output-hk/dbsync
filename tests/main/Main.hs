@@ -39,6 +39,7 @@ import qualified DbSync.App.Config.TypesSpec as ConfigTypesSpec
 import qualified DbSync.App.Config.ValidationSpec as ConfigValidationSpec
 import qualified DbSync.Db.Statement.IndexesSpec as DbStatementIndexesSpec
 import qualified DbSync.Db.TypesSpec as DbTypesSpec
+import qualified DbSync.Error.RenderSpec as ErrorRenderSpec
 import qualified DbSync.Extractor.CoreSpec as ExtractorCoreSpec
 import qualified DbSync.Extractor.EpochBoundarySpec as ExtractorEpochBoundarySpec
 import qualified DbSync.Extractor.GovernanceSpec as ExtractorGovernanceSpec
@@ -179,6 +180,7 @@ main = hspec $ do
     ConfigValidationSpec.spec
     DbStatementIndexesSpec.spec
     DbTypesSpec.spec
+    ErrorRenderSpec.spec
     ExtractorCoreSpec.spec
     ExtractorEpochBoundarySpec.spec
     ExtractorGovernanceSpec.spec

@@ -65,7 +65,8 @@ import DbSync.StateQuery
   , getSlotDetailsIO
   , seedInterpreterFromLedgerState
   )
-import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..), logThreadExit)
+import DbSync.Error.Render (logThreadExit)
+import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 
 -- ---------------------------------------------------------------------------
 -- * Hooks
@@ -137,7 +138,7 @@ chainSyncWorkerLoop
   -> IO ()
 chainSyncWorkerLoop env hooks = do
   traceWith (leTracer env) $ LogMsg Info "LedgerWorker"
-    "starting (draining ledger queue)" Nothing
+    "starting (draining ledger queue)"
   chainSyncDispatchLoop
     (Just (leTracer env))
     (applyForward env hooks)
@@ -174,7 +175,7 @@ handleRollback env p = do
   case result of
     Right _ ->
       traceWith (leTracer env) $ LogMsg Info "LedgerWorker"
-        ("rolled back to " <> show p) Nothing
+        ("rolled back to " <> show p)
     Left _ -> do
       let targetSlot = case pointSlot p of
             Origin        -> 0
@@ -187,7 +188,7 @@ handleRollback env p = do
             <> "Recorded in dbsync_sync_state.pending_rollback_slot = "
             <> show targetSlot
             <> "; the next dbsync restart will replay the rollback from a disk snapshot."
-        ) Nothing
+        )
       throwLedger $
         "chain rollback to slot " <> show targetSlot
           <> " crosses the k-safe rollback boundary "

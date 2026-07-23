@@ -142,7 +142,7 @@ chunkQueueBound = 64
 -- Opens one loader connection per table, creates bounded 'TBQueue's,
 -- and spawns writer threads. Each writer thread is linked to the
 -- calling thread so exceptions propagate immediately.
-mkLoaderStream :: HasCallStack => ByteString -> [TableDef] -> IO LoaderStream
+mkLoaderStream :: ByteString -> [TableDef] -> IO LoaderStream
 mkLoaderStream connStr tableDefs = do
   channels <- forM tableDefs $ \td -> do
     bc     <- openLoaderConnection connStr td

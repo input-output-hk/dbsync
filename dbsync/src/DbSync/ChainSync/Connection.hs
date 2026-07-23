@@ -178,7 +178,7 @@ connectToNode iomgr topLevelCfg networkMagic socketPath intersect = do
   rollbackBoundary  <- asks getRollbackBoundary
   latestTipBlock    <- asks getLatestTipBlock
   liftIO $ do
-    traceWith tracer $ LogMsg Info "Connection" ("Connecting to node via " <> toS socketPath) Nothing
+    traceWith tracer $ LogMsg Info "Connection" ("Connecting to node via " <> toS socketPath)
     void $
       subscribe
         (localSnocket iomgr)
@@ -236,14 +236,14 @@ connectToNode iomgr topLevelCfg networkMagic socketPath intersect = do
 formatSubscriptionTrace :: SubscriptionTrace () -> LogMsg
 formatSubscriptionTrace ev = case ev of
   SubscriptionReconnect ->
-    LogMsg Debug "Connection" "Will retry connection in 5s" Nothing
+    LogMsg Debug "Connection" "Will retry connection in 5s"
   SubscriptionError e -> case classifyConnectError e of
     Just reason ->
-      LogMsg Info "Connection" reason Nothing
+      LogMsg Info "Connection" reason
     Nothing ->
-      LogMsg Warning "Connection" ("Connection error: " <> show e) Nothing
+      LogMsg Warning "Connection" ("Connection error: " <> show e)
   _ ->
-    LogMsg Info "Connection" (show ev) Nothing
+    LogMsg Info "Connection" (show ev)
 
 -- | Recognise transient cardano-node-startup connect() failures.
 classifyConnectError :: SomeException -> Maybe Text
@@ -407,7 +407,7 @@ blockFetchClient appTracer blockQueue mLedgerQueue latestPointRef rollbackBounda
           Nothing -> (bootIntersectPoints, False)
     when isResume $
       traceWith appTracer $ LogMsg Info "ChainSync"
-        ("Resuming from last received point " <> show mLatest) Nothing
+        ("Resuming from last received point " <> show mLatest)
     pure $
       SendMsgFindIntersect
         intersectPoints
@@ -425,7 +425,7 @@ blockFetchClient appTracer blockQueue mLedgerQueue latestPointRef rollbackBounda
     -- list contains fallbacks beyond the newest snapshot.
     onIntersectFound ss chosen tip = do
       traceWith appTracer $ LogMsg Info "ChainSync"
-        ("Intersected at " <> show chosen <> " (server tip " <> show tip <> ")") Nothing
+        ("Intersected at " <> show chosen <> " (server tip " <> show tip <> ")")
       atomicWriteIORef (ssPostIntersect ss) False
       pure $ goTip ss policy Zero Origin tip
 
@@ -439,7 +439,7 @@ blockFetchClient appTracer blockQueue mLedgerQueue latestPointRef rollbackBounda
       | otherwise = case intersect of
           IntersectGenesis -> do
             traceWith appTracer $ LogMsg Info "ChainSync"
-              "Node also has no chain yet; following from origin" Nothing
+              "Node also has no chain yet; following from origin"
             atomicWriteIORef (ssPostIntersect ss) False
             pure $ goTip ss policy Zero Origin tip
           IntersectAt ps ->
@@ -515,7 +515,7 @@ blockFetchClient appTracer blockQueue mLedgerQueue latestPointRef rollbackBounda
               traceWith appTracer $ LogMsg Info "ChainSync"
                 ( "First post-intersect block at slot " <> show blkSlot
                     <> ", block " <> show bn
-                ) Nothing
+                )
             -- Mark the post-intersect handshake as complete; any
             -- subsequent rollback is a real chain reorganisation.
             atomicWriteIORef (ssPostIntersect ss) True
@@ -544,7 +544,7 @@ blockFetchClient appTracer blockQueue mLedgerQueue latestPointRef rollbackBounda
                         <> " (confirming intersect — protocol step, no rows deleted)"
                   | otherwise =
                       "Rollback to " <> show point
-            traceWith appTracer $ LogMsg sev "ChainSync" logText Nothing
+            traceWith appTracer $ LogMsg sev "ChainSync" logText
             publishTipMarkers tip
             deliverRollback blockQueue mLedgerQueue latestPointRef
               isConfirmingRollback point

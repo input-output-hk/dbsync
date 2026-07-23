@@ -129,4 +129,4 @@ heartbeat tracer prefix start = forever $ do
   emit tracer ("Running   | " <> prefix <> " | " <> dur)
 
 emit :: AppTracer -> Text -> IO ()
-emit tracer msg = traceWith tracer $ LogMsg Info prepComponent msg Nothing
+emit tracer msg = traceWith tracer $ LogMsg Info prepComponent msg

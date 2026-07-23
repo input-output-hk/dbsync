@@ -140,8 +140,7 @@ import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 -- Reads the tracer, 'StateQueryVar' and 'SystemStart' from env;
 -- delegates to 'getSlotDetailsIO' for the actual resolution.
 getSlotDetails
-  :: ( HasCallStack
-     , HasTracer env
+  :: ( HasTracer env
      , HasStateQueryVar env
      , HasSystemStart env
      , MonadReader env m
@@ -164,8 +163,7 @@ getSlotDetails slot = do
 -- Uses 'defaultRetryConfig' for the node fallback; tests inject a
 -- faster schedule via 'getSlotDetailsIOWith'.
 getSlotDetailsIO
-  :: HasCallStack
-  => AppTracer
+  :: AppTracer
   -> StateQueryVar
   -> SystemStart
   -> SlotNo
@@ -189,8 +187,7 @@ getSlotDetailsIO = getSlotDetailsIOWith defaultRetryConfig
 -- channel returns an unexpected 'AcquireFailure' other than
 -- 'AcquireFailurePointTooOld'.
 getSlotDetailsIOWith
-  :: HasCallStack
-  => RetryConfig
+  :: RetryConfig
   -> AppTracer
   -> StateQueryVar
   -> SystemStart
@@ -230,8 +227,7 @@ tryLocalInterpreters sqv eval = do
 -- | Acquire an interpreter from the node, retrying on too-narrow
 -- horizon and on transient 'AcquireFailurePointTooOld' replies.
 fetchFromNodeWithRetry
-  :: HasCallStack
-  => RetryConfig
+  :: RetryConfig
   -> AppTracer
   -> StateQueryVar
   -> SystemStart
@@ -248,7 +244,7 @@ fetchFromNodeWithRetry rc tracer sqv systemStart slot = go (0 :: Int)
               ( "local interpreter caught up while waiting for node; "
                   <> "slot " <> show (unSlotNo slot)
                   <> " resolved after " <> show n <> " backoff(s)"
-              ) Nothing
+              )
           insertCurrentTime sd
         Nothing -> queryNode n
 
@@ -257,7 +253,7 @@ fetchFromNodeWithRetry rc tracer sqv systemStart slot = go (0 :: Int)
         traceWith tracer $ LogMsg Info "StateQuery"
           ( "Acquiring history interpreter from node for slot "
               <> show (unSlotNo slot) <> "…"
-          ) Nothing
+          )
       respVar <- newEmptyTMVarIO
       atomically $ putTMVar (sqvRequestVar sqv)
         (BlockQuery $ QueryHardFork GetInterpreter, respVar)
@@ -269,7 +265,7 @@ fetchFromNodeWithRetry rc tracer sqv systemStart slot = go (0 :: Int)
               traceWith tracer $ LogMsg Info "StateQuery"
                 ( "Node ledger caught up; interpreter acquired after "
                     <> show n <> " retry(s)"
-                ) Nothing
+                )
             atomically $ writeTVar (sqvInterpreterVar sqv) (Just interp)
             insertCurrentTime sd
           Left _ -> backoff n
@@ -295,7 +291,7 @@ fetchFromNodeWithRetry rc tracer sqv systemStart slot = go (0 :: Int)
                 <> " (attempt " <> show (n + 1)
                 <> "/" <> show (rcMaxAttempts rc)
                 <> "); retrying in " <> show secs <> "s"
-            ) Nothing
+            )
           threadDelay micros
           go (n + 1)
 

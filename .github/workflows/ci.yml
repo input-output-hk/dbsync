@@ -1,0 +1,137 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # GitHub evicts caches after 7 idle days. Rebuild the shared main
+  # cache every 5 days so pull requests always have a warm base.
+  schedule:
+    - cron: '0 3 */5 * *'
+  workflow_dispatch:
+
+# Cancel superseded pull-request runs, but never cancel a main run: its
+# job is what populates the cache every other branch restores from.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build & test (GHC 9.14.1, PostgreSQL 18)
+    runs-on: ubuntu-latest
+
+    # The app connects over TCP to localhost:5432 as the OS user with no
+    # password (its profile hardcodes host/port; empty user resolves to
+    # the OS user). POSTGRES_USER=runner creates that superuser role,
+    # POSTGRES_DB pre-creates the database, and trust auth satisfies the
+    # empty password.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: runner
+          POSTGRES_DB: dbsync_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U runner -d dbsync_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Bump to force a cold rebuild of every cache in this workflow.
+      CABAL_CACHE_VERSION: '1'
+      GHC_VERSION: '9.14.1'
+      CABAL_VERSION: '3.16.1.0'
+      # libpq defaults for the test suite's psql / pg_dump shell-outs.
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGUSER: runner
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GHC and cabal
+        id: setup
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: ${{ env.GHC_VERSION }}
+          cabal-version: ${{ env.CABAL_VERSION }}
+          cabal-update: false
+
+      # libsodium (VRF fork), libsecp256k1, libblst and liburing. These
+      # are not in stock apt; the iohk-nix release .debs are the only
+      # reliable source. Also exports PKG_CONFIG_PATH / LD_LIBRARY_PATH.
+      - name: Install IOG C libraries
+        uses: input-output-hk/actions/base@dbb6ea6d50ffc37a2d481fd8047aff028bac3223
+        with:
+          use-sodium-vrf: true
+
+      # PostgreSQL 18 client tools (psql / pg_dump for the test suite's
+      # shell-outs; the server itself is the service container above).
+      # From the PGDG apt repo since ubuntu-latest doesn't ship 18. Plus
+      # the remaining C libraries: libpq for postgresql-libpq, libsnappy
+      # for lsm-tree's snappy-c, and protobuf-compiler (protoc) for the
+      # proto-lens packages cardano-node pulls in for gRPC.
+      - name: Install PostgreSQL 18 client and system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y --no-install-recommends \
+            postgresql-client-18 \
+            libpq-dev \
+            libsnappy-dev \
+            protobuf-compiler \
+            pkg-config \
+            zlib1g-dev \
+            libtinfo-dev \
+            libgmp-dev
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+
+      # Dependency store: every external package plus the pinned
+      # cardano-node / ouroboros-consensus source-repository forks. The
+      # key tracks only the build plan, so it is a hit until a .cabal or
+      # cabal.project change alters the plan; then the restore-key seeds
+      # the previous store and cabal rebuilds only what actually moved.
+      - name: Cache cabal store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.setup.outputs.cabal-store }}
+          key: dbsync-store-${{ runner.os }}-ghc${{ env.GHC_VERSION }}-v${{ env.CABAL_CACHE_VERSION }}-${{ hashFiles('cabal.project', '**/*.cabal') }}
+          restore-keys: |
+            dbsync-store-${{ runner.os }}-ghc${{ env.GHC_VERSION }}-v${{ env.CABAL_CACHE_VERSION }}-
+
+      # Local build products. The SHA in the key makes every run save a
+      # fresh entry, and the restore-keys pull the newest prior build so
+      # each run recompiles only the modules that changed.
+      - name: Cache dist-newstyle
+        uses: actions/cache@v4
+        with:
+          path: dist-newstyle
+          key: dbsync-dist-${{ runner.os }}-ghc${{ env.GHC_VERSION }}-v${{ env.CABAL_CACHE_VERSION }}-${{ hashFiles('cabal.project', '**/*.cabal') }}-${{ github.sha }}
+          restore-keys: |
+            dbsync-dist-${{ runner.os }}-ghc${{ env.GHC_VERSION }}-v${{ env.CABAL_CACHE_VERSION }}-${{ hashFiles('cabal.project', '**/*.cabal') }}-
+            dbsync-dist-${{ runner.os }}-ghc${{ env.GHC_VERSION }}-v${{ env.CABAL_CACHE_VERSION }}-
+
+      - name: Cabal update
+        run: cabal update
+
+      # Build dependencies first so the store cache is populated even if
+      # a local package later fails to compile.
+      - name: Build dependencies
+        run: cabal build all --enable-tests --only-dependencies -j
+
+      - name: Build
+        run: cabal build all --enable-tests -j
+
+      # -j1: the integration and e2e tiers share the single dbsync_test
+      # database, and one spec issues DROP SCHEMA public CASCADE.
+      - name: Test
+        run: cabal test all -j1 --test-show-details=direct

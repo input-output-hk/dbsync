@@ -13,10 +13,12 @@ What you need installed before building or running dbsync.
 | Tool | Version |
 |---|---|
 | GHC | 9.14.1 |
-| cabal-install | ≥ 3.6 |
-| PostgreSQL | ≥ 16 |
+| cabal-install | 3.16.1.0 |
+| PostgreSQL | ≥ 16 (18 recommended) |
 
-GHC and cabal are easiest to install via [`ghcup`](https://www.haskell.org/ghcup/);
+These GHC and cabal versions are the known-good pair CI builds
+against; other combinations may fail to solve against the pinned
+`index-state`. Install both via [`ghcup`](https://www.haskell.org/ghcup/);
 the platform pages cover the per-OS specifics.
 
 ## System libraries
@@ -35,8 +37,10 @@ fallback automatically — no manual flag required. See the
 
 ## PostgreSQL
 
-PostgreSQL 16 or newer is required. dbsync uses 16-only features in
-the COPY path and the LOGGED/UNLOGGED machinery.
+PostgreSQL 16 or newer is required — dbsync uses features in the COPY
+path and the LOGGED/UNLOGGED machinery that landed in 16. PostgreSQL
+18 is recommended, and is the version CI and the installation guides
+below target.
 
 You don't need a separate database account — the connection string is
 read from the profile JSON, and a local installation with peer

@@ -15,7 +15,7 @@ mithril-bootstrap caveat below.
 brew install \
   pkg-config \
   snappy \
-  postgresql@16 \
+  postgresql@18 \
   ghcup
 ```
 
@@ -28,11 +28,11 @@ operator action needed.
 Start PostgreSQL via brew services:
 
 ```bash
-brew services start postgresql@16
+brew services start postgresql@18
 ```
 
-The `postgresql@16` formula is keg-only — you may need to put its
-binaries on PATH (`brew info postgresql@16` shows the exact line) so
+The `postgresql@18` formula is keg-only — you may need to put its
+binaries on PATH (`brew info postgresql@18` shows the exact line) so
 `psql`, `createdb`, etc. resolve.
 
 ## Haskell toolchain
@@ -40,7 +40,8 @@ binaries on PATH (`brew info postgresql@16` shows the exact line) so
 ```bash
 ghcup install ghc 9.14.1
 ghcup set ghc 9.14.1
-ghcup install cabal latest
+ghcup install cabal 3.16.1.0
+ghcup set cabal 3.16.1.0
 ```
 
 `ghcup tui` if you want the menu interface.

@@ -1,6 +1,9 @@
 name: Docs
 
 on:
+  # Build (no deploy) on doc PRs for validation; build and deploy when
+  # docs land on main (i.e. a PR merge). The deploy steps below are
+  # gated on the main ref, so pull-request runs stop after the build.
   push:
     branches: [main]
     paths:
@@ -45,14 +48,14 @@ jobs:
         run: npm run build
 
       - name: Upload Pages artefact
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        if: github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3
         with:
           path: docs/build
 
   deploy:
     name: Deploy to GitHub Pages
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     needs: build-site
     permissions:

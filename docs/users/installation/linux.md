@@ -19,7 +19,6 @@ sudo apt install \
   libpq-dev \
   libsnappy-dev \
   liburing-dev \
-  postgresql-16 \
   zlib1g-dev \
   libtinfo-dev \
   libgmp-dev \
@@ -34,10 +33,16 @@ support. The build falls back to `+serialblockio` if it's missing,
 but the LedgerDB is noticeably slower without it.
 :::
 
-`postgresql-16` is the server package; the client tools (`psql`) come
-with it. If your distro defaults to an older PostgreSQL, see the
-[PostgreSQL APT repository](https://wiki.postgresql.org/wiki/Apt) for
-the official PG 16 packages.
+PostgreSQL isn't in the list above because most distributions don't
+ship version 18 yet. Install the server (`postgresql-18`, which brings
+the `psql` / `pg_dump` client tools with it) from the official
+[PostgreSQL APT repository](https://wiki.postgresql.org/wiki/Apt):
+
+```bash
+sudo apt install -y postgresql-common
+sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+sudo apt install -y postgresql-18 postgresql-client-18
+```
 
 ## Fedora / RHEL
 
@@ -66,7 +71,8 @@ Then install the required versions:
 ```bash
 ghcup install ghc 9.14.1
 ghcup set ghc 9.14.1
-ghcup install cabal latest
+ghcup install cabal 3.16.1.0
+ghcup set cabal 3.16.1.0
 ```
 
 `ghcup tui` is the easier way to manage versions if you have several
@@ -96,7 +102,7 @@ the system libraries:
 { pkgs }: pkgs.mkShell {
   buildInputs = with pkgs; [
     pkg-config snappy liburing zlib gmp
-    postgresql_16
+    postgresql_18
     ghc cabal-install
   ];
 }

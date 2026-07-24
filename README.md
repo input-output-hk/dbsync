@@ -1,7 +1,8 @@
 # dbsync
 
 [![Docs](https://github.com/input-output-hk/dbsync/actions/workflows/docs.yml/badge.svg)](https://github.com/input-output-hk/dbsync/actions/workflows/docs.yml)
-[![GHC](https://img.shields.io/badge/GHC-9.8.4-purple)](https://www.haskell.org/ghc/)
+[![GHC](https://img.shields.io/badge/GHC-9.14.1-purple)](https://www.haskell.org/ghc/)
+[![Cabal](https://img.shields.io/badge/cabal--install-3.16.1.0-purple)](https://www.haskell.org/cabal/)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
 A fast, modular indexer for the Cardano blockchain. dbsync follows a Cardano
@@ -16,6 +17,10 @@ table via **profiles**.
 | **[Developer documentation](https://input-output-hk.github.io/dbsync/developers/intro)** | Architecture, extractors, contribution guide. |
 
 ## Quick start
+
+Requires **GHC 9.14.1** and **cabal-install 3.16.1.0** — install both via
+[ghcup](https://www.haskell.org/ghcup/). Other combinations may fail to solve
+against the pinned `index-state`.
 
 ```bash
 git clone https://github.com/input-output-hk/dbsync.git

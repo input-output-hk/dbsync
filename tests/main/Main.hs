@@ -32,11 +32,13 @@ import Test.Hspec (SpecWith, around_, describe, expectationFailure, hspec)
 -- Unit tests
 import qualified DbSync.AppSpec as AppSpec
 import qualified DbSync.App.CliSpec as CliSpec
+import qualified DbSync.App.Config.DatabaseSpec as ConfigDatabaseSpec
+import qualified DbSync.App.Config.ExamplesSpec as ConfigExamplesSpec
 import qualified DbSync.App.Config.GenesisSpec as ConfigGenesisSpec
 import qualified DbSync.App.Config.NodeSpec as ConfigNodeSpec
-import qualified DbSync.App.Config.ProfilesSpec as ConfigProfilesSpec
 import qualified DbSync.App.Config.TypesSpec as ConfigTypesSpec
 import qualified DbSync.App.Config.ValidationSpec as ConfigValidationSpec
+import qualified DbSync.ChainSync.ConnectionSpec as ChainSyncConnectionSpec
 import qualified DbSync.Db.Statement.IndexesSpec as DbStatementIndexesSpec
 import qualified DbSync.Db.TypesSpec as DbTypesSpec
 import qualified DbSync.Error.RenderSpec as ErrorRenderSpec
@@ -98,6 +100,7 @@ import qualified DbSync.Util.DedupHashSpec as UtilDedupHashSpec
 import qualified DbSync.PropertySpec as PropertySpec
 
 -- Database integration
+import qualified DbSync.App.NetworkGateSpec as NetworkGateSpec
 import qualified DbSync.ChainSync.DeliverSpec as ChainSyncDeliverSpec
 import qualified DbSync.SyncState.ManagerSpec as SyncStateManagerSpec
 import qualified DbSync.SyncState.ResumeSpec as SyncStateResumeSpec
@@ -173,11 +176,13 @@ main = hspec $ do
   describe "Unit tests" $ withTimeoutSeconds unitTimeoutSeconds $ do
     AppSpec.spec
     CliSpec.spec
+    ConfigDatabaseSpec.spec
+    ConfigExamplesSpec.spec
     ConfigGenesisSpec.spec
     ConfigNodeSpec.spec
-    ConfigProfilesSpec.spec
     ConfigTypesSpec.spec
     ConfigValidationSpec.spec
+    ChainSyncConnectionSpec.spec
     DbStatementIndexesSpec.spec
     DbTypesSpec.spec
     ErrorRenderSpec.spec
@@ -242,6 +247,7 @@ main = hspec $ do
     PropertySpec.spec
 
   describe "Database integration" $ withTimeoutSeconds integrationTimeoutSeconds $ do
+    NetworkGateSpec.spec
     ChainSyncDeliverSpec.spec
     SyncStateManagerSpec.spec
     SyncStateResumeSpec.spec

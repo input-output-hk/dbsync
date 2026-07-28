@@ -94,6 +94,6 @@ for ~218 GB on its own — roughly half of an `everything`-profile
 database. If your consumers don't need to re-serialise or replay
 transactions, disabling `cbor` in a custom profile derived from one
 of the bigger presets cuts the database nearly in half. See
-[Preset profiles](../profiles/presets) for the per-extractor
+[Preset configs](../profiles/presets) for the per-extractor
 breakdown.
 :::

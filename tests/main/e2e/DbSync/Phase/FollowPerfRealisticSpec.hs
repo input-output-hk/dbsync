@@ -45,7 +45,7 @@ import DbSync.Db.Schema.Core (blockTableDef, txTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Schema.UTxO (txOutTableDef)
 import DbSync.Test.AppHarness
-  ( defaultTestProfile
+  ( defaultTestConfig
   , quietTracer
   , waitForSyncComplete
   , withTempDir
@@ -81,7 +81,7 @@ spec = describe "FollowingChainTip throughput on realistic blocks" $ do
         _ <- forgeAndPushBlocks mn 150
 
         tracer <- quietTracer
-        withAppSession tracer defaultTestProfile mn ledgerDir $ \_ -> do
+        withAppSession tracer defaultTestConfig mn ledgerDir $ \_ -> do
           waitForSyncComplete 60
 
           ingestBlocks <- countRows (tdName blockTableDef)

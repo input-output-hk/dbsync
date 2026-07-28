@@ -75,7 +75,7 @@ freshSchema = dropSchema coreTables testConnStr >> initSchema coreTables testCon
 seedExtractors :: [Text] -> IO ()
 seedExtractors names =
   bracket (openControlConnection testHasqlSettings) closeControlConnection $ \ctrl ->
-    runAppM ctrl (seedSyncState 1 (Fingerprint "test-fp") False names)
+    runAppM ctrl (seedSyncState 1 (Fingerprint "test-fp") False names 42 "magic-42")
 
 spec :: Spec
 spec = describe "DbSync.Db.Schema.Init" $ do

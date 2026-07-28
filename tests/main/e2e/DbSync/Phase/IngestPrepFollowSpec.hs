@@ -28,9 +28,9 @@ import DbSync.Db.Schema.UTxO
   , txOutTableDef
   )
 import DbSync.Test.AppHarness
-  ( defaultTestProfile
-  , profileExpectedIndexes
-  , profileTableNames
+  ( defaultTestConfig
+  , configExpectedIndexes
+  , configTableNames
   , quietTracer
   , waitForSyncComplete
   , withTempDir
@@ -70,7 +70,7 @@ spec = describe "IngestChainHistory \x2192 PreparingForVolatileTail \x2192 Follo
         _ <- forgeAndPushBlocks mn 150
 
         tracer <- quietTracer
-        withAppSession tracer defaultTestProfile mn ledgerDir $ \_ -> do
+        withAppSession tracer defaultTestConfig mn ledgerDir $ \_ -> do
           waitForSyncComplete 60
 
           syncComplete <-
@@ -80,8 +80,8 @@ spec = describe "IngestChainHistory \x2192 PreparingForVolatileTail \x2192 Follo
               )
           syncComplete `shouldBe` "t"
 
-          let expectedTables  = profileTableNames defaultTestProfile
-              expectedIndexes = profileExpectedIndexes defaultTestProfile
+          let expectedTables  = configTableNames defaultTestConfig
+              expectedIndexes = configExpectedIndexes defaultTestConfig
           length expectedTables `shouldSatisfy` (> 20)
 
           -- The flip and index build commit asynchronously across a

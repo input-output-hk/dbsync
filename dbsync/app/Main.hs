@@ -8,19 +8,19 @@ import Cardano.Prelude
 
 import qualified Control.Exception as Exception
 import Control.Tracer (traceWith)
-import System.FilePath (takeDirectory, (</>))
+import System.FilePath (takeDirectory)
 
 import DbSync.App.Args (AppArgs (..))
 import DbSync.App.Run (runApp)
 import DbSync.App.Cli (CliArgs (..), parseCliArgs)
-import DbSync.App.Config.Types (parseConfig)
+import DbSync.App.Config.Database (DatabaseConfig, parseDatabaseConfig)
 import DbSync.App.Config.Genesis (GenesisConfig, readCardanoGenesisConfig)
-import DbSync.App.Config.Node (parseDbSyncNodeConfig, parseNodeConfig)
+import DbSync.App.Config.Node (parseNodeConfig)
 import DbSync.App.Config.Types
-  ( DbSyncNodeConfig (..)
-  , LoggingConfig (..)
+  ( LoggingConfig (..)
   , NodeConfig
   , SyncConfig (..)
+  , parseConfig
   )
 import DbSync.App.Config.Validation (validateConfig)
 import DbSync.Error.Render (renderCrash)
@@ -41,34 +41,34 @@ main = realMain
 
 realMain :: IO ()
 realMain = do
-  -- Bootstrap tracer so profile-parse errors get logged before the
-  -- profile-configured tracer exists.
+  -- Bootstrap tracer so config-parse errors get logged before the
+  -- configured tracer exists.
   args       <- parseCliArgs
   bootTracer <- mkStdErrTracer Info
   let bootLogError msg = traceWith bootTracer $ LogMsg Error "App" msg
 
-  -- 1. Profile (database, sync options, ledger flag, logging).
-  validProfile <- loadProfile bootLogError (caProfile args)
+  -- 1. Behaviour config (sync mode, ledger flag, db profile, logging).
+  validConfig <- loadConfig bootLogError (caConfig args)
 
-  -- 2. Rebuild the tracer at the profile-configured severity.
-  let minSeverity = severityFromText (lgLevel (scLogging validProfile))
+  -- 2. Rebuild the tracer at the configured severity.
+  let minSeverity = severityFromText (lgLevel (scLogging validConfig))
   tracer <- mkStdErrTracer minSeverity
   let logError msg = traceWith tracer $ LogMsg Error "App" msg
       logInfo  msg = traceWith tracer $ LogMsg Info  "App" msg
 
-  -- 3. db-sync-config: provides the cardano-node config path.
-  dbSyncCfg <- loadDbSyncConfig logError (caDbSyncConfig args)
+  -- 3. PostgreSQL connection settings (password_file resolved here).
+  dbConfig <- loadPgConfig logError (caPgConfig args)
 
   -- 4. cardano-node config (era boundaries, genesis hashes).
-  let configDir = takeDirectory (caDbSyncConfig args)
-      nodePath  = configDir </> dscNodeConfigFile dbSyncCfg
-  nodeCfg <- loadNodeConfig logError nodePath
+  nodeCfg <- loadNodeConfig logError (caNodeConfig args)
 
-  -- 5. Genesis files (all eras).
+  -- 5. Genesis files (all eras), resolved relative to the node config.
+  let configDir = takeDirectory (caNodeConfig args)
   genesisCfg <- loadGenesis logError logInfo nodeCfg configDir
 
   runApp tracer AppArgs
-    { aaProfile           = validProfile
+    { aaConfig            = validConfig
+    , aaDatabase          = dbConfig
     , aaNodeConfig        = nodeCfg
     , aaGenesisConfig     = genesisCfg
     , aaSocketPath        = caSocketPath args
@@ -98,25 +98,25 @@ handleFatalError tracer e = case fromException e of
 -- * Config loading helpers
 -- ---------------------------------------------------------------------------
 
-loadProfile :: (Text -> IO ()) -> FilePath -> IO SyncConfig
-loadProfile logError path = do
-  profileResult <- parseConfig path
-  profile <- case profileResult of
-    Left err -> logError ("Error parsing profile: " <> show err) >> exitFailure
+loadConfig :: (Text -> IO ()) -> FilePath -> IO SyncConfig
+loadConfig logError path = do
+  result <- parseConfig path
+  cfg <- case result of
+    Left err -> logError ("Error parsing config: " <> show err) >> exitFailure
     Right cfg -> pure cfg
-  case validateConfig profile of
+  case validateConfig cfg of
     Left errs -> do
-      logError "Profile validation errors:"
+      logError "Config validation errors:"
       for_ errs $ \err -> logError $ "  - " <> show err
       exitFailure
-    Right cfg -> pure cfg
+    Right valid -> pure valid
 
-loadDbSyncConfig :: (Text -> IO ()) -> FilePath -> IO DbSyncNodeConfig
-loadDbSyncConfig logError path = do
-  result <- parseDbSyncNodeConfig path
+loadPgConfig :: (Text -> IO ()) -> FilePath -> IO DatabaseConfig
+loadPgConfig logError path = do
+  result <- parseDatabaseConfig path
   case result of
     Left err -> do
-      logError $ "Error parsing db-sync-config.json: " <> show err
+      logError $ "Error parsing pg-config (" <> toS path <> "): " <> show err
       exitFailure
     Right cfg -> pure cfg
 

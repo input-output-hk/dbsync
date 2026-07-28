@@ -32,6 +32,7 @@ import DbSync.SyncState.Row
   , closeControlConnection
   , markSnapshotComplete
   , openControlConnection
+  , readNetwork
   , readSyncState
   , seedSyncState
   , writeSyncState
@@ -59,10 +60,22 @@ spec = describe "DbSync.SyncState.Row" $
           row <- runAppM conn readSyncState
           row `shouldBe` Nothing
 
+    describe "readNetwork" $ do
+      it "returns Nothing on an un-seeded table" $
+        withControlConnection $ \conn -> do
+          network <- runAppM conn readNetwork
+          network `shouldBe` Nothing
+
+      it "returns the identity recorded at seed time" $
+        withControlConnection $ \conn -> do
+          runAppM conn (seedSyncState 1 testFp False [] 42 "magic-42")
+          network <- runAppM conn readNetwork
+          network `shouldBe` Just (42, "magic-42")
+
     describe "seedSyncState" $ do
       it "inserts the singleton row with all defaults" $
         withControlConnection $ \conn -> do
-          runAppM conn (seedSyncState 1 testFp False [])
+          runAppM conn (seedSyncState 1 testFp False [] 42 "magic-42")
           mRow <- runAppM conn readSyncState
           mRow `shouldSatisfy` isJust
           case mRow of
@@ -81,7 +94,7 @@ spec = describe "DbSync.SyncState.Row" $
 
       it "captures ledger_enabled = True when requested" $
         withControlConnection $ \conn -> do
-          runAppM conn (seedSyncState 1 testFp True [])
+          runAppM conn (seedSyncState 1 testFp True [] 42 "magic-42")
           mRow <- runAppM conn readSyncState
           case mRow of
             Just row -> ssrLedgerEnabled row `shouldBe` True
@@ -89,9 +102,9 @@ spec = describe "DbSync.SyncState.Row" $
 
       it "is idempotent — second call does not create a second row" $
         withControlConnection $ \conn -> do
-          runAppM conn (seedSyncState 1 testFp False [])
-          runAppM conn (seedSyncState 1 testFp False [])
-          runAppM conn (seedSyncState 1 testFp True [])    -- different args — still a no-op
+          runAppM conn (seedSyncState 1 testFp False [] 42 "magic-42")
+          runAppM conn (seedSyncState 1 testFp False [] 42 "magic-42")
+          runAppM conn (seedSyncState 1 testFp True [] 42 "magic-42")    -- different args — still a no-op
           rowCount <- T.strip <$> queryTestDb
             ("SELECT count(*) FROM " <> tdName syncStateTableDef <> ";")
           rowCount `shouldBe` "1"
@@ -108,7 +121,7 @@ spec = describe "DbSync.SyncState.Row" $
     describe "writeSyncState round-trip" $ do
       it "writes every field, then readSyncState returns the same row" $
         withControlConnection $ \conn -> do
-          runAppM conn (seedSyncState 1 testFp True [])
+          runAppM conn (seedSyncState 1 testFp True [] 42 "magic-42")
           runAppM conn (writeSyncState sampleRow)
           mReadBack <- runAppM conn readSyncState
           case mReadBack of
@@ -117,7 +130,7 @@ spec = describe "DbSync.SyncState.Row" $
 
       it "overwrites previous values on repeated writes" $
         withControlConnection $ \conn -> do
-          runAppM conn (seedSyncState 1 testFp True [])
+          runAppM conn (seedSyncState 1 testFp True [] 42 "magic-42")
           runAppM conn (writeSyncState sampleRow)
           runAppM conn (writeSyncState sampleRow { ssrLastCommittedSlot = Just 12345 })
           mReadBack <- runAppM conn readSyncState
@@ -137,7 +150,7 @@ spec = describe "DbSync.SyncState.Row" $
 
       it "preserves NULL in last_committed_block_hash" $
         withControlConnection $ \conn -> do
-          runAppM conn (seedSyncState 1 testFp False [])
+          runAppM conn (seedSyncState 1 testFp False [] 42 "magic-42")
           runAppM conn (writeSyncState sampleRow { ssrLastCommittedBlockHash = Nothing })
           mReadBack <- runAppM conn readSyncState
           case mReadBack of
@@ -146,7 +159,7 @@ spec = describe "DbSync.SyncState.Row" $
 
       it "round-trips a realistic 32-byte block hash" $
         withControlConnection $ \conn -> do
-          runAppM conn (seedSyncState 1 testFp False [])
+          runAppM conn (seedSyncState 1 testFp False [] 42 "magic-42")
           let bigHash = BS.pack
                 [ 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89
                 , 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89
@@ -162,7 +175,7 @@ spec = describe "DbSync.SyncState.Row" $
     describe "markSnapshotComplete" $ do
       it "writes last_snapshot_slot without touching other fields" $
         withControlConnection $ \conn -> do
-          runAppM conn (seedSyncState 1 testFp True [])
+          runAppM conn (seedSyncState 1 testFp True [] 42 "magic-42")
           runAppM conn (writeSyncState sampleRow)
           runAppM conn (markSnapshotComplete 7777)
           mReadBack <- runAppM conn readSyncState
@@ -179,7 +192,7 @@ spec = describe "DbSync.SyncState.Row" $
 
       it "is idempotent on the same slot" $
         withControlConnection $ \conn -> do
-          runAppM conn (seedSyncState 1 testFp True [])
+          runAppM conn (seedSyncState 1 testFp True [] 42 "magic-42")
           runAppM conn (markSnapshotComplete 1234)
           runAppM conn (markSnapshotComplete 1234)
           mReadBack <- runAppM conn readSyncState
@@ -189,7 +202,7 @@ spec = describe "DbSync.SyncState.Row" $
 
       it "writeSyncState does not overwrite a previously recorded snapshot slot" $
         withControlConnection $ \conn -> do
-          runAppM conn (seedSyncState 1 testFp True [])
+          runAppM conn (seedSyncState 1 testFp True [] 42 "magic-42")
           runAppM conn (markSnapshotComplete 999)
           runAppM conn (writeSyncState sampleRow { ssrLastSnapshotSlot = Just 0 })
           mReadBack <- runAppM conn readSyncState
@@ -235,8 +248,8 @@ tryRaisingInsert = do
     , "-c"
     , T.unpack $
         "INSERT INTO " <> tdName syncStateTableDef
-          <> " (id, schema_version_applied, ledger_enabled, schema_fingerprint, extractors)"
-          <> " VALUES (2, 1, false, 'test-fp', '{}');"
+          <> " (id, schema_version_applied, ledger_enabled, schema_fingerprint, extractors, network_magic, network_name)"
+          <> " VALUES (2, 1, false, 'test-fp', '{}', 42, 'magic-42');"
     ]
     ""
   case exit of

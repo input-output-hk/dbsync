@@ -17,7 +17,7 @@ const sidebars: SidebarsConfig = {
     'node-setup',
     {
       type: 'category',
-      label: 'Profiles',
+      label: 'Configuration',
       collapsed: false,
       items: [
         'profiles/overview',

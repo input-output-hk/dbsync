@@ -34,7 +34,7 @@ import DbSync.Db.Schema.EpochSyncStats (epochSyncStatsTableDef)
 import DbSync.Db.Schema.SyncState (syncStateTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Test.AppHarness
-  ( defaultTestProfile
+  ( defaultTestConfig
   , mkAppArgsFromMockNode
   , newShutdown
   , quietTracer
@@ -93,7 +93,7 @@ spec = describe "Ingest LSM session lifecycle" $ do
         _ <- forgeAndPushBlocks mn 150
 
         tracer <- quietTracer
-        withAppSession tracer defaultTestProfile mn ledgerDir $ \_ -> do
+        withAppSession tracer defaultTestConfig mn ledgerDir $ \_ -> do
           waitForSyncComplete 60
           -- 'markSyncComplete' fires just before 'closeAndDeleteLsmSession'
           -- on the Prep thread, so the removal races 'waitForSyncComplete'.
@@ -168,7 +168,7 @@ spec = describe "Ingest LSM session lifecycle" $ do
         -- moment later; probe before opening a fresh session.
         waitForLsmLockReleased ledgerDir 10
 
-        withAppSessionResume tracer defaultTestProfile mn ledgerDir $ \_ -> do
+        withAppSessionResume tracer defaultTestConfig mn ledgerDir $ \_ -> do
           waitForSyncComplete 120
           -- Same post-Prep deletion race as the happy path: poll for the
           -- directory to disappear rather than reading once.
@@ -189,7 +189,7 @@ runUntilLsmDirExistsThenCancel :: AppTracer -> MockNode -> FilePath -> IO ()
 runUntilLsmDirExistsThenCancel tracer mn ledgerDir = do
   clearSyncCompleteFlag
   (_, waitSig) <- newShutdown
-  let args = mkAppArgsFromMockNode defaultTestProfile mn ledgerDir (Just waitSig)
+  let args = mkAppArgsFromMockNode defaultTestConfig mn ledgerDir (Just waitSig)
   withAsync (runApp tracer args) $ \app -> do
     waitFor "ingest-lsm/ dir to appear" (ingestLsmExists ledgerDir) 30
     cancel app
@@ -201,7 +201,7 @@ runUntilTwoBoundariesThenCancel :: AppTracer -> MockNode -> FilePath -> IO ()
 runUntilTwoBoundariesThenCancel tracer mn ledgerDir = do
   clearSyncCompleteFlag
   (_, waitSig) <- newShutdown
-  let args = mkAppArgsFromMockNode defaultTestProfile mn ledgerDir (Just waitSig)
+  let args = mkAppArgsFromMockNode defaultTestConfig mn ledgerDir (Just waitSig)
   withAsync (runApp tracer args) $ \app -> do
     waitFor "≥ 2 epoch_sync_stats rows AND last_committed_slot set"
       ((&&) <$> twoEpochSyncStatsRows <*> lastCommittedSlotSet)

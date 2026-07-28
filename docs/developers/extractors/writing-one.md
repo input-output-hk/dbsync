@@ -183,12 +183,12 @@ optionalExtractors =
   ]
 ```
 
-Finally add `pcClaim :: !OptionFlag` to `DbSyncOptions` in
+Finally add `pcClaim :: !OptionFlag` to `DbProfile` in
 [`DbSync.App.Config.Types`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/App/Config/Types.hs)
 with a disabled default, and — if the extractor depends on another —
 a rule in
 [`DbSync.App.Config.Validation`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/App/Config/Validation.hs).
-Profiles opt in by setting `"claim": true` in `db_options`.
+Configs opt in by setting `"claim": true` in `db_profile`.
 
 If your extractor warrants structured config (like `utxo` does with
 its `consumed_by_tx_id` / `strategy` knobs), use the `UtxoOption`

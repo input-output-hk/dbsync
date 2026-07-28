@@ -1,19 +1,14 @@
 {
-  "database": {
-    "host": "localhost",
-    "port": 5432,
-    "name": "cexplorer",
-    "user": "",
-    "password": ""
-  },
   "sync": {
     "mode": "auto"
   },
   "ledger": {
     "enabled": false
   },
-  "db_options": {
-    "epoch_sync_stats": true
+  "db_profile": {
+    "utxo": true,
+    "epoch_sync_stats": true,
+    "epoch": false
   },
   "metrics": {
     "prometheus_port": 8080

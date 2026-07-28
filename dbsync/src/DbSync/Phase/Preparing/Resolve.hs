@@ -11,7 +11,7 @@ import Cardano.Prelude
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import qualified Hasql.Session as Sess
 
-import DbSync.App.Config.Types (SyncConfig (..), DbSyncOptions (..), UtxoOption (..))
+import DbSync.App.Config.Types (SyncConfig (..), DbProfile (..), UtxoOption (..))
 import DbSync.App.Env (HasConfig (..))
 import DbSync.Db.Run (useConn)
 import DbSync.Db.Schema.Init (analyzeSql)
@@ -43,7 +43,7 @@ resolveForeignKeys
   :: (HasTracer env, HasHasqlConnection env, HasConfig env, MonadReader env m, MonadUnliftIO m)
   => m ()
 resolveForeignKeys = do
-  utxoOpts <- asks (pcUtxo . scOptions . getConfig)
+  utxoOpts <- asks (pcUtxo . scDbProfile . getConfig)
   step ResolveStep "tx_in.tx_out_id (table rebuild)" $
     runScript resolveTxInScript
   step ResolveStep "collateral_tx_in.tx_out_id (table rebuild)" $

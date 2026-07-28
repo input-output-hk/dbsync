@@ -5,6 +5,7 @@
 -- 'DbSync.Db.Schema.SyncState'.
 module DbSync.Db.Statement.SyncState
   ( seedSyncStateStmt
+  , readNetworkStmt
   , readSyncStateStmt
   , writeSyncStateStmt
   , writeSyncStateSlotStmt
@@ -34,9 +35,10 @@ import DbSync.Db.Sql.Refs (col, table)
 import DbSync.Db.Statement.Common (arrayParam)
 
 -- | Idempotent seed @INSERT@. Only @schema_version_applied@,
--- @schema_fingerprint@, @ledger_enabled@ and the @extractors@ set come
--- from the caller; other columns use their @DEFAULT@.
-seedSyncStateStmt :: Stmt.Statement (Int32, Text, Bool, [Text]) ()
+-- @schema_fingerprint@, @ledger_enabled@, the @extractors@ set and the
+-- network identity come from the caller; other columns use their
+-- @DEFAULT@.
+seedSyncStateStmt :: Stmt.Statement (Int32, Text, Bool, [Text], Int64, Text) ()
 seedSyncStateStmt =
   Stmt.preparable sql encoder D.noResult
   where
@@ -45,15 +47,36 @@ seedSyncStateStmt =
       , " (", col syncStateCols.sscSchemaVersionApplied
       , ", ", col syncStateCols.sscSchemaFingerprint
       , ", ", col syncStateCols.sscLedgerEnabled
-      , ", ", col syncStateCols.sscExtractors, ")"
-      , " VALUES ($1, $2, $3, $4)"
+      , ", ", col syncStateCols.sscExtractors
+      , ", ", col syncStateCols.sscNetworkMagic
+      , ", ", col syncStateCols.sscNetworkName, ")"
+      , " VALUES ($1, $2, $3, $4, $5, $6)"
       , " ON CONFLICT (", col syncStateCols.sscId, ") DO NOTHING"
       ]
     encoder =
-         ((\(v, _, _, _)  -> v)  >$< E.param (E.nonNullable E.int4))
-      <> ((\(_, f, _, _)  -> f)  >$< E.param (E.nonNullable E.text))
-      <> ((\(_, _, l, _)  -> l)  >$< E.param (E.nonNullable E.bool))
-      <> ((\(_, _, _, es) -> es) >$< arrayParam E.text)
+         ((\(v, _, _, _, _, _)  -> v)  >$< E.param (E.nonNullable E.int4))
+      <> ((\(_, f, _, _, _, _)  -> f)  >$< E.param (E.nonNullable E.text))
+      <> ((\(_, _, l, _, _, _)  -> l)  >$< E.param (E.nonNullable E.bool))
+      <> ((\(_, _, _, es, _, _) -> es) >$< arrayParam E.text)
+      <> ((\(_, _, _, _, m, _)  -> m)  >$< E.param (E.nonNullable E.int8))
+      <> ((\(_, _, _, _, _, n)  -> n)  >$< E.param (E.nonNullable E.text))
+
+-- | The network identity recorded at seed time. 'Nothing' if the
+-- singleton has never been seeded.
+readNetworkStmt :: Stmt.Statement () (Maybe (Int64, Text))
+readNetworkStmt =
+  Stmt.preparable
+    ( "SELECT " <> col syncStateCols.sscNetworkMagic
+        <> ", " <> col syncStateCols.sscNetworkName
+        <> " FROM " <> table syncStateTableDef
+        <> " WHERE " <> col syncStateCols.sscId <> " = 1"
+    )
+    E.noParams
+    ( D.rowMaybe $
+        (,)
+          <$> D.column (D.nonNullable D.int8)
+          <*> D.column (D.nonNullable D.text)
+    )
 
 -- | 'Nothing' if the singleton has never been seeded.
 readSyncStateStmt :: Stmt.Statement () (Maybe SyncStateRow)

@@ -63,8 +63,14 @@ per-block `SlotDetails` (wall-clock time from a slot number).
 
 ## dbsync concepts
 
-**Profile** — The JSON file you pass via `--profile`. Decides which
-projections run. See [Profiles](profiles/overview).
+**Config** — The JSON file you pass via `--config`. Decides which
+projections run and how dbsync behaves. Contains no connection
+details — those live in the pg-config file (`--pg-config`). See
+[The config file](profiles/overview).
+
+**Profile** — The `db_profile` section of the config: the set of
+enabled projections. The presets shipped in `config-examples/` are
+named after their profile.
 
 **Projection** / **Extractor** — A pure mapping from a parsed block
 to a set of database rows. Each owns a set of tables and is enabled

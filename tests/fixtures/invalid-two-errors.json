@@ -1,15 +1,8 @@
 {
-  "database": {
-    "host": "localhost",
-    "port": 5432,
-    "name": "dbsync_test",
-    "user": "",
-    "password": ""
-  },
   "ledger": {
     "enabled": false
   },
-  "db_options": {
+  "db_profile": {
     "epoch_boundary": true,
     "multi_asset": true
   }

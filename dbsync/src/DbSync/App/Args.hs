@@ -2,7 +2,7 @@
 
 -- | Inputs to 'DbSync.App.Run.runApp'.
 --
--- The executable parses the CLI, reads profile / db-sync-config /
+-- The executable parses the CLI, reads config / pg-config /
 -- node-config / genesis files, and assembles an 'AppArgs'. Tests
 -- assemble one directly from a 'MockNode' plus a hand-built
 -- 'SyncConfig'. Either way, 'runApp' is the single entry point that
@@ -13,6 +13,7 @@ module DbSync.App.Args
 
 import Cardano.Prelude
 
+import DbSync.App.Config.Database (DatabaseConfig)
 import DbSync.App.Config.Genesis (GenesisConfig)
 import DbSync.App.Config.Types (NodeConfig, SyncConfig)
 import DbSync.StateQuery.Types (StateQueryVar)
@@ -22,9 +23,11 @@ import DbSync.StateQuery.Types (StateQueryVar)
 -- 'aaShutdownSignal' and 'aaStateQueryVar' are test hooks; the
 -- executable passes 'Nothing' for both.
 data AppArgs = AppArgs
-  { aaProfile           :: !SyncConfig
-    -- ^ Resolved sync profile (enabled extractors, ledger flags,
-    --   batch sizes).
+  { aaConfig            :: !SyncConfig
+    -- ^ Behaviour config (enabled extractors, ledger flags,
+    --   sync mode, logging).
+  , aaDatabase          :: !DatabaseConfig
+    -- ^ PostgreSQL connection settings, password already resolved.
   , aaNodeConfig        :: !NodeConfig
     -- ^ Parsed cardano-node configuration.
   , aaGenesisConfig     :: !GenesisConfig

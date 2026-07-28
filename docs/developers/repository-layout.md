@@ -19,7 +19,7 @@ themselves — start here, then `grep` or open the source.
 ├── tests/
 │   ├── dbsync-tests.cabal   # test-suite + dbsync-testlib helper library
 │   └── dbsync-mock/         # mock cardano-node forging primitives
-├── profiles/      # preset profile JSON files
+├── config-examples/  # preset config JSON files + pg-config example
 ├── scripts/       # operator scripts
 ├── docs/          # this documentation site
 └── cabal.project  # workspace + CHaP pin
@@ -97,7 +97,8 @@ each era and push them through a mock chainsync server. Lives in its own
 cabal package because its dependency footprint is large enough that you
 don't want it on every unit-test compile.
 
-## `profiles/`, `scripts/`, `docs/`
+## `config-examples/`, `scripts/`, `docs/`
 
-Not Haskell. `profiles/` is the canonical home for shipped profile JSON,
+Not Haskell. `config-examples/` is the canonical home for shipped
+config JSON (the six presets plus `pg-config.example.json`),
 `scripts/` for operator-facing helpers, `docs/` for this site.

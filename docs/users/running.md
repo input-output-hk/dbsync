@@ -16,29 +16,31 @@ Before launching dbsync:
 - [ ] `cardano-node` is running and producing blocks.
 - [ ] The node's Unix socket is readable by the user running dbsync.
 - [ ] PostgreSQL is running and the user / database referenced in the
-  profile JSON exist.
+  [pg-config file](#the-postgresql-connection-file) exist.
 - [ ] The `dbsync-ledger/` directory's parent (the `--ledger-state-dir`
   argument) is writable.
-- [ ] You've picked a [profile](profiles/overview).
+- [ ] You've picked a [config](profiles/overview).
 
 ## CLI
 
-dbsync takes four required flags:
+dbsync takes five required flags:
 
 ```bash
 dbsync \
-  --db-sync-config   ~/cardano/mainnet/db-sync-config.json \
+  --config           ./config-examples/everything-no-ledger.json \
+  --pg-config        ~/cardano/pg-config.json \
+  --node-config      ~/cardano/mainnet/config.json \
   --socket-path      ~/cardano/mainnet/db/node.socket \
-  --ledger-state-dir ~/cardano/mainnet \
-  --profile          ./profiles/everything-no-ledger-profile.json
+  --ledger-state-dir ~/cardano/mainnet
 ```
 
 | Flag | Required | Description |
 |---|---|---|
-| `--db-sync-config` | yes | Path to `db-sync-config.json` (the small file from the Cardano book that points at the node config). |
+| `--config` | yes | Path to your [dbsync config JSON](profiles/overview) — sync mode, ledger, `db_profile`, logging. |
+| `--pg-config` | yes | Path to the [PostgreSQL connection file](#the-postgresql-connection-file). |
+| `--node-config` | yes | Path to the `cardano-node` `config.json` (the one from the Cardano book). Genesis files are resolved relative to it. |
 | `--socket-path` | yes | Path to the `cardano-node` Unix socket. Same value you pass to the node's `--socket-path`. |
 | `--ledger-state-dir` | yes | Parent directory under which the `dbsync-ledger/` sub-directory is created. Holds the LSM session, on-disk LedgerDB snapshots (if enabled), and the per-network fingerprint file. |
-| `--profile` | yes | Path to your [profile JSON](profiles/overview). |
 
 Plus two optional flags for recovery:
 
@@ -46,6 +48,40 @@ Plus two optional flags for recovery:
 |---|---|
 | `--resync-from-genesis` | Wipe the database schema and ledger state, then re-sync from genesis. Destructive. |
 | `--rollback-to-slot SLOT` | Roll the database back to the nearest block at or after `SLOT` before resuming. Pure recovery hatch — no migration semantics. See [Recovery](operations/recovery). |
+
+## The PostgreSQL connection file
+
+The file passed via `--pg-config` holds the connection settings and
+nothing else, so it is the one file that carries credentials:
+
+```json
+{
+  "host": "localhost",
+  "port": 5432,
+  "name": "cexplorer",
+  "user": "dbsync",
+  "password_file": "/run/secrets/dbsync-pg-password"
+}
+```
+
+| Field | Required | Default | Notes |
+|---|---|---|---|
+| `host` | yes | — | Host name, IP, or socket directory. |
+| `port` | no | `5432` | |
+| `name` | yes | — | Database name. |
+| `user` | no | `postgres` | `""` falls back to the OS user (peer authentication on a local install). |
+| `password_file` | no | — | Path to a file whose contents are the password. Relative paths resolve against the pg-config file's own directory. |
+
+There is deliberately no inline `password` field. When `password_file`
+is absent the password is empty — fine for local peer / trust auth.
+For anything else, point `password_file` at a file readable only by
+the user running dbsync (`chmod 0400`), a Docker secret
+(`/run/secrets/...`), or a mounted Kubernetes `Secret`. Trailing
+newlines are stripped, so `echo`-created files and Kubernetes Secrets
+work as-is.
+
+`config-examples/pg-config.example.json` is a working starting point
+for a local install.
 
 ## Two-terminal invocation
 
@@ -65,10 +101,11 @@ cardano-node run \
 ```bash
 # terminal 2 — dbsync
 dbsync \
-  --db-sync-config   ~/cardano/mainnet/db-sync-config.json \
+  --config           ./config-examples/dapp.json \
+  --pg-config        ~/cardano/pg-config.json \
+  --node-config      ~/cardano/mainnet/config.json \
   --socket-path      ~/cardano/mainnet/db/node.socket \
-  --ledger-state-dir ~/cardano/mainnet \
-  --profile          ./profiles/dapp-profile.json
+  --ledger-state-dir ~/cardano/mainnet
 ```
 
 :::tip
@@ -89,7 +126,12 @@ IngestChainHistory  ─►  PreparingForVolatileTail  ─►  FollowingVolatileT
 
 What you'll see in the log:
 
-1. **Startup** — config validated, schema created, extractors listed.
+1. **Startup** — config validated, schema created, extractors listed,
+   and a `Network: mainnet (magic 764824073)` line naming the network
+   the genesis describes. The network is recorded in the database on
+   first run; later boots
+   [refuse to start](operations/troubleshooting#cannot-resume-the-database-was-synced-against-a-different-network)
+   if `--node-config` points at a different network.
 2. **`IngestChainHistory`** — per-epoch summary lines as bulk-load
    progresses. On mainnet this is the longest phase (hours, not
    minutes).
@@ -128,13 +170,11 @@ stuck.
 
 dbsync reads no environment variables of its own. Standard PostgreSQL
 environment variables (`PGHOST`, `PGUSER`, ...) are *not* consulted —
-the connection comes from the profile JSON.
-
-`DBSYNC_TEST_DB` is a test-only variable; production runs ignore it.
+the connection comes exclusively from the `--pg-config` file.
 
 ## Logs
 
-Logs go to stderr. Format follows the profile's `logging.format`:
+Logs go to stderr. Format follows the config's `logging.format`:
 
 - `text` — human-readable, one line per event, `[severity] component:
   message` shape.

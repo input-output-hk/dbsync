@@ -1,22 +1,15 @@
 {
-  "database": {
-    "host": "localhost",
-    "port": 5432,
-    "name": "cexplorer",
-    "user": "",
-    "password": ""
-  },
   "sync": {
     "mode": "auto"
   },
   "ledger": {
     "enabled": false
   },
-  "db_options": {
+  "db_profile": {
     "utxo": true,
+    "multi_asset": true,
     "metadata": true,
-    "stake_delegation": true,
-    "pool": true,
+    "scripts_datums": true,
     "epoch_sync_stats": true,
     "epoch": false
   },

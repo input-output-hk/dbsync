@@ -96,7 +96,7 @@ import qualified DbSync.Phase.Preparing.Resolve as Resolve
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
 import DbSync.Test.Lsm (withTestIngestStores)
-import DbSync.Test.AppHarness (defaultTestProfile)
+import DbSync.Test.AppHarness (defaultTestConfig)
 import DbSync.Test.Database
   ( execTestDb
   , queryTestDb
@@ -197,7 +197,7 @@ setUp = do
     closeLoaderStream bs
 
   withTestConnection $ \conn -> do
-    let prepEnv = TracerWithConn mkNullTracer conn defaultTestProfile
+    let prepEnv = TracerWithConn mkNullTracer conn defaultTestConfig
     runAppM prepEnv PreResolveIndexes.createPreResolveIndexes
     runAppM prepEnv Resolve.resolveForeignKeys
     runAppM prepEnv PreResolveIndexes.createPostResolveIndexes

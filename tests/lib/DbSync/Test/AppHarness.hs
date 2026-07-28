@@ -5,19 +5,19 @@
 -- 'DbSync.App.Run.runApp' directly against the same code path
 -- production uses.
 --
--- All profiles point at the @dbsync_test@ database. Tests that need
--- different settings build their own 'SyncConfig' via
--- 'profileWithOptions'.
+-- All 'AppArgs' point at the @dbsync_test@ database. Tests that
+-- need different behaviour settings build their own 'SyncConfig'
+-- via 'configWithProfile'.
 module DbSync.Test.AppHarness
-  ( -- * Profile builders
-    defaultTestProfile
-  , ledgerEnabledTestProfile
-  , profileWithOptions
+  ( -- * Config builders
+    defaultTestConfig
+  , ledgerEnabledTestConfig
+  , configWithProfile
   , allImplementedExtractors
 
-    -- * Profile introspection
-  , profileTableNames
-  , profileExpectedIndexes
+    -- * Config introspection
+  , configTableNames
+  , configExpectedIndexes
 
     -- * AppArgs builders
   , mkAppArgsFromMockNode
@@ -53,15 +53,15 @@ import DbSync.Db.Statement.Indexes (uniqueConstraintIndexName)
 import DbSync.Extractor (ExtractorDef (..))
 import DbSync.Trace.Backend (mkNullTracer, mkStdErrTracer)
 import DbSync.Trace.Types (AppTracer, Severity)
+import DbSync.App.Config.Database (DatabaseConfig (..))
 import DbSync.App.Config.Types
-  ( DatabaseConfig (..)
-  , LedgerConfig (..)
+  ( LedgerConfig (..)
   , LogFormat (..)
   , LoggingConfig (..)
   , MetricsConfig (..)
   , SyncConfig (..)
   , OptionFlag (..)
-  , DbSyncOptions (..)
+  , DbProfile (..)
   , SyncMode (..)
   , SyncSettings (..)
   , UtxoOption (..)
@@ -76,25 +76,25 @@ import DbSync.Test.MockNode (MockNode (..))
 import DbSync.Test.PgAssertions (tableColumn)
 
 -- ---------------------------------------------------------------------------
--- * Profile builders
+-- * Config builders
 -- ---------------------------------------------------------------------------
 
 -- | The standard test profile: every currently-implemented
 -- extractor enabled. Matches what an "everything" production
 -- profile would do for the extractors the codebase has landed.
-defaultTestProfile :: SyncConfig
-defaultTestProfile = profileWithOptions allImplementedExtractors
+defaultTestConfig :: SyncConfig
+defaultTestConfig = configWithProfile allImplementedExtractors
 
--- | Same as 'defaultTestProfile' but with the ledger feature on.
+-- | Same as 'defaultTestConfig' but with the ledger feature on.
 -- Tests that exercise the LedgerWorker / snapshot writer / Follow
 -- restart snapshot loading need ledger enabled.
 --
 -- The snapshot near-tip threshold is lowered to @2@ so snapshots
 -- fire on the short fixture chains; production default of @580@
 -- would mean no snapshot ever lands during a typical test run.
-ledgerEnabledTestProfile :: SyncConfig
-ledgerEnabledTestProfile =
-  defaultTestProfile
+ledgerEnabledTestConfig :: SyncConfig
+ledgerEnabledTestConfig =
+  defaultTestConfig
     { scLedger = LedgerConfig
         { lcEnabled              = True
         , lcBackend              = defaultLedgerBackend
@@ -105,8 +105,8 @@ ledgerEnabledTestProfile =
 -- | All extractors with a real (non-stub) implementation today —
 -- see 'DbSync.App.resolveExtractor'. Skipped: @scripts_datums@,
 -- @governance@, @current_state@ (stubs).
-allImplementedExtractors :: DbSyncOptions
-allImplementedExtractors = DbSyncOptions
+allImplementedExtractors :: DbProfile
+allImplementedExtractors = DbProfile
   { pcUtxo                  = defaultUtxoOption { uoEnabled = True }
   , pcMultiAsset            = OptionFlag True
   , pcMetadata              = OptionFlag True
@@ -125,18 +125,10 @@ allImplementedExtractors = DbSyncOptions
   , pcOffChainVotes         = OptionFlag False
   }
 
--- | A ledger-off profile against @dbsync_test@ with caller-supplied
--- 'DbSyncOptions'.
-profileWithOptions :: DbSyncOptions -> SyncConfig
-profileWithOptions opts = SyncConfig
-  { scDatabase = DatabaseConfig
-      { dcHost     = "localhost"
-      , dcPort     = 5432
-      , dcName     = testDbName
-      , dcUser     = ""
-      , dcPassword = ""
-      }
-  , scSync = SyncSettings
+-- | A ledger-off config with a caller-supplied 'DbProfile'.
+configWithProfile :: DbProfile -> SyncConfig
+configWithProfile opts = SyncConfig
+  { scSync = SyncSettings
       { ssMode = SyncModeAuto
       }
   , scLedger = LedgerConfig
@@ -144,7 +136,7 @@ profileWithOptions opts = SyncConfig
       , lcBackend              = defaultLedgerBackend
       , lcSnapshotNearTipEpoch = defaultSnapshotNearTipEpoch
       }
-  , scOptions = opts
+  , scDbProfile = opts
   , scMetrics = MetricsConfig { mcPrometheusPort = 9999 }
   , scLogging = LoggingConfig
       { lgLevel  = "info"
@@ -153,7 +145,7 @@ profileWithOptions opts = SyncConfig
   }
 
 -- ---------------------------------------------------------------------------
--- * Profile introspection
+-- * Config introspection
 -- ---------------------------------------------------------------------------
 
 -- | Names of every table the enabled extractors on this profile own.
@@ -164,8 +156,8 @@ profileWithOptions opts = SyncConfig
 -- extractor depends on something disabled). The same configuration
 -- would refuse to run via 'runApp', so test calls that drove a real
 -- sync first don't hit this case.
-profileTableNames :: SyncConfig -> [Text]
-profileTableNames cfg = case buildExtractors (scOptions cfg) of
+configTableNames :: SyncConfig -> [Text]
+configTableNames cfg = case buildExtractors (scDbProfile cfg) of
   Right exts -> map tdName (concatMap pdTables exts)
   Left _err  -> []
 
@@ -182,8 +174,8 @@ profileTableNames cfg = case buildExtractors (scOptions cfg) of
 -- The resolve-support scaffolding is intentionally absent: Prep
 -- drops it before the UNLOGGED → LOGGED flip (see
 -- 'DbSync.Db.Statement.Indexes.resolveScaffoldingIndexNames').
-profileExpectedIndexes :: SyncConfig -> [Text]
-profileExpectedIndexes cfg = case buildExtractors (scOptions cfg) of
+configExpectedIndexes :: SyncConfig -> [Text]
+configExpectedIndexes cfg = case buildExtractors (scDbProfile cfg) of
   Left _err  -> []
   Right exts ->
     List.nub (concatMap tableIndexNames (concatMap pdTables exts))
@@ -240,8 +232,9 @@ mkAppArgsWithResync
   -> FilePath
   -> Maybe (IO ())
   -> AppArgs
-mkAppArgsWithResync resync profile mn ledgerDir mShutdown = AppArgs
-  { aaProfile           = profile
+mkAppArgsWithResync resync cfg mn ledgerDir mShutdown = AppArgs
+  { aaConfig            = cfg
+  , aaDatabase          = testDatabaseConfig
   , aaNodeConfig        = mcNodeConfig (mnChain mn)
   , aaGenesisConfig     = mcGenesisConfig (mnChain mn)
   , aaSocketPath        = mnSocketPath mn
@@ -250,6 +243,17 @@ mkAppArgsWithResync resync profile mn ledgerDir mShutdown = AppArgs
   , aaRollbackToSlot    = Nothing
   , aaShutdownSignal    = mShutdown
   , aaStateQueryVar     = Just (mcStateQueryVar (mnChain mn))
+  }
+
+-- | Connection to the local @dbsync_test@ database used by every
+-- test 'AppArgs'.
+testDatabaseConfig :: DatabaseConfig
+testDatabaseConfig = DatabaseConfig
+  { dcHost     = "localhost"
+  , dcPort     = 5432
+  , dcName     = testDbName
+  , dcUser     = ""
+  , dcPassword = ""
   }
 
 -- | Allocate a tmp dir under @/tmp@ for the action; remove it on

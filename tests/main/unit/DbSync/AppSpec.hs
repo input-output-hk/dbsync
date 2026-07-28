@@ -18,10 +18,10 @@ import DbSync.App.Config.Node (parseNodeConfig)
 import DbSync.App.Config.Types
   ( NodeConfig
   , SyncConfig (..)
-  , DbSyncOptions (..)
+  , DbProfile (..)
   , OptionFlag (..)
   , UtxoOption (..)
-  , defaultDbSyncOptions
+  , defaultDbProfile
   , defaultUtxoOption
   )
 import DbSync.App.Config.Validation (validateConfig)
@@ -38,9 +38,9 @@ loadTestConfigs = do
   Right nodeCfg <- parseNodeConfig "fixtures/node-config.json"
   pure (validCfg, nodeCfg)
 
--- | Build DbSyncOptions with selected extractors enabled.
-optionsWith :: [Text] -> DbSyncOptions
-optionsWith enabled = DbSyncOptions
+-- | Build DbProfile with selected extractors enabled.
+profileWith :: [Text] -> DbProfile
+profileWith enabled = DbProfile
   { pcUtxo                  = defaultUtxoOption { uoEnabled = "utxo" `elem` enabled }
   , pcMultiAsset            = mk "multi_asset"
   , pcMetadata              = mk "metadata"
@@ -86,7 +86,7 @@ spec = describe "DbSync.App" $ do
 
   describe "buildExtractors" $ do
     it "core always comes first and is unconditional" $ do
-      let result = buildExtractors (optionsWith ["utxo", "multi_asset", "stake_delegation", "pool"])
+      let result = buildExtractors (profileWith ["utxo", "multi_asset", "stake_delegation", "pool"])
       case result of
         Left err -> panic ("unexpected failure: " <> err)
         Right xs -> headDef "" (map pdName xs) `shouldBe` "core"
@@ -95,13 +95,13 @@ spec = describe "DbSync.App" $ do
       -- Enabling utxo, stake_delegation, and multi_asset resolves to the
       -- order they appear in the option list (utxo, multi_asset, …,
       -- stake_delegation), with core prepended.
-      let result = buildExtractors (optionsWith ["utxo", "stake_delegation", "multi_asset"])
+      let result = buildExtractors (profileWith ["utxo", "stake_delegation", "multi_asset"])
       case result of
         Left err -> panic ("unexpected failure: " <> err)
         Right xs ->
           map pdName xs `shouldBe` ["core", "utxo", "multi_asset", "stake_delegation"]
 
     it "default options yield core + epoch (epoch defaults to true)" $ do
-      case buildExtractors defaultDbSyncOptions of
+      case buildExtractors defaultDbProfile of
         Left err -> panic ("unexpected failure: " <> err)
         Right xs -> map pdName xs `shouldBe` ["core", "epoch"]

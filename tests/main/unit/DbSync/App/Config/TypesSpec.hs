@@ -1,4 +1,4 @@
--- | Tests for profile JSON parsing.
+-- | Tests for config file parsing.
 --
 -- Tests read from actual JSON files in @tests/fixtures/@, so the fixtures
 -- double as documentation and examples of valid configs.
@@ -13,14 +13,13 @@ import qualified Data.Text as Text
 
 import DbSync.App.Config.Types (parseConfig)
 import DbSync.App.Config.Types
-  ( DatabaseConfig (..)
-  , LedgerBackend (..)
+  ( LedgerBackend (..)
   , LedgerConfig (..)
   , LogFormat (..)
   , LoggingConfig (..)
   , MetricsConfig (..)
   , OptionFlag (..)
-  , DbSyncOptions (..)
+  , DbProfile (..)
   , SyncConfig (..)
   , SyncMode (..)
   , SyncSettings (..)
@@ -38,24 +37,17 @@ spec = describe "DbSync.App.Config.Types" $ do
       case result of
         Left err -> panic $ "Parse failed: " <> show err
         Right cfg -> do
-          -- Database
-          dcHost (scDatabase cfg) `shouldBe` "localhost"
-          dcPort (scDatabase cfg) `shouldBe` 5432
-          dcName (scDatabase cfg) `shouldBe` "dbsync_test"
-          dcUser (scDatabase cfg) `shouldBe` ""
-          dcPassword (scDatabase cfg) `shouldBe` ""
-
           -- Sync settings
           ssMode (scSync cfg) `shouldBe` SyncModeAuto
 
           -- Ledger
           lcEnabled (scLedger cfg) `shouldBe` True
 
-          -- db_options: every key listed in the fixture is on, the rest are off.
-          uoEnabled (pcUtxo (scOptions cfg))            `shouldBe` True
-          prEnabled (pcEpochBoundary (scOptions cfg))   `shouldBe` True
-          prEnabled (pcCbor (scOptions cfg))            `shouldBe` False  -- omitted
-          prEnabled (pcCurrentState (scOptions cfg))    `shouldBe` False  -- omitted
+          -- db_profile: every key listed in the fixture is on, the rest are off.
+          uoEnabled (pcUtxo (scDbProfile cfg))            `shouldBe` True
+          prEnabled (pcEpochBoundary (scDbProfile cfg))   `shouldBe` True
+          prEnabled (pcCbor (scDbProfile cfg))            `shouldBe` False  -- omitted
+          prEnabled (pcCurrentState (scDbProfile cfg))    `shouldBe` False  -- omitted
 
           -- Metrics
           mcPrometheusPort (scMetrics cfg) `shouldBe` 8080
@@ -65,6 +57,7 @@ spec = describe "DbSync.App.Config.Types" $ do
           lgFormat (scLogging cfg) `shouldBe` LogFormatText
 
   describe "parseConfig (minimal-config.json)" $ do
+    -- The fixture is an empty object: every section is optional.
     it "uses defaults for all optional fields" $ do
       result <- parseConfig "fixtures/minimal-config.json"
       case result of
@@ -85,33 +78,28 @@ spec = describe "DbSync.App.Config.Types" $ do
 
           -- All optional extractors default to OFF (opt-in semantics).
           -- The unconditional 'core' extractor isn't represented in
-          -- DbSyncOptions — it's added by buildExtractors regardless.
-          uoEnabled (pcUtxo (scOptions cfg))            `shouldBe` False
+          -- DbProfile — it's added by buildExtractors regardless.
+          uoEnabled (pcUtxo (scDbProfile cfg))            `shouldBe` False
           -- Per-utxo defaults — opt-in extractor, but back-pointer
           -- on by default once enabled, tx_in populated, archive.
-          uoConsumedByTxId (pcUtxo (scOptions cfg))     `shouldBe` True
-          uoTxIn (pcUtxo (scOptions cfg))               `shouldBe` True
-          uoStrategy (pcUtxo (scOptions cfg))           `shouldBe` StrategyArchive
-          prEnabled (pcMultiAsset (scOptions cfg))      `shouldBe` False
-          prEnabled (pcMetadata (scOptions cfg))        `shouldBe` False
-          prEnabled (pcStakeDelegation (scOptions cfg)) `shouldBe` False
-          prEnabled (pcStakeDelegationLedger (scOptions cfg)) `shouldBe` False
-          prEnabled (pcPool (scOptions cfg))            `shouldBe` False
-          prEnabled (pcScriptsDatums (scOptions cfg))   `shouldBe` False
-          prEnabled (pcGovernance (scOptions cfg))      `shouldBe` False
-          prEnabled (pcCbor (scOptions cfg))            `shouldBe` False
-          prEnabled (pcEpochSyncStats (scOptions cfg))  `shouldBe` False
-          prEnabled (pcEpochBoundary (scOptions cfg))   `shouldBe` False
-          prEnabled (pcPoolStats (scOptions cfg))       `shouldBe` False
+          uoConsumedByTxId (pcUtxo (scDbProfile cfg))     `shouldBe` True
+          uoTxIn (pcUtxo (scDbProfile cfg))               `shouldBe` True
+          uoStrategy (pcUtxo (scDbProfile cfg))           `shouldBe` StrategyArchive
+          prEnabled (pcMultiAsset (scDbProfile cfg))      `shouldBe` False
+          prEnabled (pcMetadata (scDbProfile cfg))        `shouldBe` False
+          prEnabled (pcStakeDelegation (scDbProfile cfg)) `shouldBe` False
+          prEnabled (pcStakeDelegationLedger (scDbProfile cfg)) `shouldBe` False
+          prEnabled (pcPool (scDbProfile cfg))            `shouldBe` False
+          prEnabled (pcScriptsDatums (scDbProfile cfg))   `shouldBe` False
+          prEnabled (pcGovernance (scDbProfile cfg))      `shouldBe` False
+          prEnabled (pcCbor (scDbProfile cfg))            `shouldBe` False
+          prEnabled (pcEpochSyncStats (scDbProfile cfg))  `shouldBe` False
+          prEnabled (pcEpochBoundary (scDbProfile cfg))   `shouldBe` False
+          prEnabled (pcPoolStats (scDbProfile cfg))       `shouldBe` False
           -- 'epoch' is the sole opt-out: defaults to true when the
           -- profile omits the key.
-          prEnabled (pcEpoch (scOptions cfg))           `shouldBe` True
-          prEnabled (pcCurrentState (scOptions cfg))    `shouldBe` False
-
-  describe "parseConfig (no-database.json)" $ do
-    it "fails with a config error" $ do
-      result <- parseConfig "fixtures/no-database.json"
-      result `shouldSatisfy` isLeft
+          prEnabled (pcEpoch (scDbProfile cfg))           `shouldBe` True
+          prEnabled (pcCurrentState (scDbProfile cfg))    `shouldBe` False
 
   describe "parseConfig (override-options.json)" $ do
     it "enables only the listed options; everything else stays off" $ do
@@ -120,31 +108,31 @@ spec = describe "DbSync.App.Config.Types" $ do
         Left err -> panic $ "Parse failed: " <> show err
         Right cfg -> do
           -- Listed in fixture
-          prEnabled (pcMetadata (scOptions cfg))        `shouldBe` True
-          prEnabled (pcStakeDelegation (scOptions cfg)) `shouldBe` True
+          prEnabled (pcMetadata (scDbProfile cfg))        `shouldBe` True
+          prEnabled (pcStakeDelegation (scDbProfile cfg)) `shouldBe` True
           -- Not listed → off (opt-in)
-          uoEnabled (pcUtxo (scOptions cfg))            `shouldBe` False
-          prEnabled (pcGovernance (scOptions cfg))      `shouldBe` False
-          prEnabled (pcPool (scOptions cfg))            `shouldBe` False
+          uoEnabled (pcUtxo (scDbProfile cfg))            `shouldBe` False
+          prEnabled (pcGovernance (scDbProfile cfg))      `shouldBe` False
+          prEnabled (pcPool (scDbProfile cfg))            `shouldBe` False
 
   describe "pcEpoch opt-out semantics" $ do
-    it "defaults to true when db_options omits 'epoch'" $ do
+    it "defaults to true when db_profile omits 'epoch'" $ do
       result <- parseConfig "fixtures/full-config.json"
       case result of
         Left err  -> panic $ "Parse failed: " <> show err
-        Right cfg -> prEnabled (pcEpoch (scOptions cfg)) `shouldBe` True
+        Right cfg -> prEnabled (pcEpoch (scDbProfile cfg)) `shouldBe` True
 
-    it "defaults to true on a profile with no db_options block at all" $ do
+    it "defaults to true on a config with no db_profile block at all" $ do
       result <- parseConfig "fixtures/minimal-config.json"
       case result of
         Left err  -> panic $ "Parse failed: " <> show err
-        Right cfg -> prEnabled (pcEpoch (scOptions cfg)) `shouldBe` True
+        Right cfg -> prEnabled (pcEpoch (scDbProfile cfg)) `shouldBe` True
 
     it "accepts 'epoch': false explicitly" $ do
       result <- parseConfig "fixtures/epoch-disabled.json"
       case result of
         Left err  -> panic $ "Parse failed: " <> show err
-        Right cfg -> prEnabled (pcEpoch (scOptions cfg)) `shouldBe` False
+        Right cfg -> prEnabled (pcEpoch (scDbProfile cfg)) `shouldBe` False
 
   describe "parseConfig (ingest-mode.json)" $ do
     it "parses ingest sync mode" $ do

@@ -16,113 +16,93 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 spec :: Spec
 spec = describe "DbSync.App.Cli" $ do
   describe "cliArgsParser" $ do
-    it "parses all four required arguments" $ do
+    it "parses all five required arguments" $ do
       let result = parseArgs
-            [ "--db-sync-config", "/path/to/db-sync-config.json"
+            [ "--config", "/path/to/config.json"
+            , "--pg-config", "/path/to/pg-config.json"
+            , "--node-config", "/path/to/node-config.json"
             , "--socket-path", "/path/to/node.socket"
             , "--ledger-state-dir", "/data/dbsync"
-            , "--profile", "/path/to/dbsync-profile.json"
             ]
       result `shouldBe` Right CliArgs
-        { caDbSyncConfig      = "/path/to/db-sync-config.json"
+        { caConfig            = "/path/to/config.json"
+        , caPgConfig          = "/path/to/pg-config.json"
+        , caNodeConfig        = "/path/to/node-config.json"
         , caSocketPath        = "/path/to/node.socket"
         , caLedgerStateDir    = "/data/dbsync"
-        , caProfile           = "/path/to/dbsync-profile.json"
         , caResyncFromGenesis = False
         , caRollbackToSlot    = Nothing
         }
 
     it "accepts arguments in any order" $ do
       let result = parseArgs
-            [ "--profile", "dbsync-profile.json"
-            , "--ledger-state-dir", "/tmp/state"
+            [ "--ledger-state-dir", "/tmp/state"
+            , "--node-config", "node-config.json"
             , "--socket-path", "/run/node.socket"
-            , "--db-sync-config", "db-sync-config.json"
+            , "--pg-config", "pg-config.json"
+            , "--config", "config.json"
             ]
       result `shouldBe` Right CliArgs
-        { caDbSyncConfig      = "db-sync-config.json"
+        { caConfig            = "config.json"
+        , caPgConfig          = "pg-config.json"
+        , caNodeConfig        = "node-config.json"
         , caSocketPath        = "/run/node.socket"
         , caLedgerStateDir    = "/tmp/state"
-        , caProfile           = "dbsync-profile.json"
         , caResyncFromGenesis = False
         , caRollbackToSlot    = Nothing
         }
 
-    it "defaults --resync-from-genesis to False when omitted" $ do
-      let result = parseArgs
-            [ "--db-sync-config",   "x"
-            , "--socket-path",      "y"
-            , "--ledger-state-dir", "z"
-            , "--profile",          "w"
-            ]
-      fmap caResyncFromGenesis result `shouldBe` Right False
+    it "defaults --resync-from-genesis to False when omitted" $
+      fmap caResyncFromGenesis (parseArgs requiredArgs) `shouldBe` Right False
 
-    it "sets --resync-from-genesis to True when supplied" $ do
-      let result = parseArgs
-            [ "--db-sync-config",   "x"
-            , "--socket-path",      "y"
-            , "--ledger-state-dir", "z"
-            , "--profile",          "w"
-            , "--resync-from-genesis"
-            ]
-      fmap caResyncFromGenesis result `shouldBe` Right True
+    it "sets --resync-from-genesis to True when supplied" $
+      fmap caResyncFromGenesis (parseArgs (requiredArgs <> ["--resync-from-genesis"]))
+        `shouldBe` Right True
 
-    it "defaults --rollback-to-slot to Nothing when omitted" $ do
-      let result = parseArgs
-            [ "--db-sync-config",   "x"
-            , "--socket-path",      "y"
-            , "--ledger-state-dir", "z"
-            , "--profile",          "w"
-            ]
-      fmap caRollbackToSlot result `shouldBe` Right Nothing
+    it "defaults --rollback-to-slot to Nothing when omitted" $
+      fmap caRollbackToSlot (parseArgs requiredArgs) `shouldBe` Right Nothing
 
-    it "parses --rollback-to-slot SLOTNO into a Just" $ do
-      let result = parseArgs
-            [ "--db-sync-config",    "x"
-            , "--socket-path",       "y"
-            , "--ledger-state-dir",  "z"
-            , "--profile",           "w"
-            , "--rollback-to-slot",  "12345"
-            ]
-      fmap caRollbackToSlot result `shouldBe` Right (Just 12345)
+    it "parses --rollback-to-slot SLOTNO into a Just" $
+      fmap caRollbackToSlot (parseArgs (requiredArgs <> ["--rollback-to-slot", "12345"]))
+        `shouldBe` Right (Just 12345)
 
-    it "fails when --db-sync-config is missing" $ do
-      let result = parseArgs
-            [ "--socket-path", "/path/to/node.socket"
-            , "--ledger-state-dir", "/data"
-            , "--profile", "dbsync-profile.json"
-            ]
-      result `shouldSatisfy` isLeft
+    it "fails when --config is missing" $
+      parseArgs (without "--config") `shouldSatisfy` isLeft
 
-    it "fails when --socket-path is missing" $ do
-      let result = parseArgs
-            [ "--db-sync-config", "db-sync-config.json"
-            , "--ledger-state-dir", "/data"
-            , "--profile", "dbsync-profile.json"
-            ]
-      result `shouldSatisfy` isLeft
+    it "fails when --pg-config is missing" $
+      parseArgs (without "--pg-config") `shouldSatisfy` isLeft
 
-    it "fails when --ledger-state-dir is missing" $ do
-      let result = parseArgs
-            [ "--db-sync-config", "db-sync-config.json"
-            , "--socket-path", "/path/to/node.socket"
-            , "--profile", "dbsync-profile.json"
-            ]
-      result `shouldSatisfy` isLeft
+    it "fails when --node-config is missing" $
+      parseArgs (without "--node-config") `shouldSatisfy` isLeft
 
-    it "fails when --profile is missing" $ do
-      let result = parseArgs
-            [ "--db-sync-config", "db-sync-config.json"
-            , "--socket-path", "/path/to/node.socket"
-            , "--ledger-state-dir", "/data"
-            ]
-      result `shouldSatisfy` isLeft
+    it "fails when --socket-path is missing" $
+      parseArgs (without "--socket-path") `shouldSatisfy` isLeft
 
-    it "fails with no arguments" $ do
-      let result = parseArgs []
-      result `shouldSatisfy` isLeft
+    it "fails when --ledger-state-dir is missing" $
+      parseArgs (without "--ledger-state-dir") `shouldSatisfy` isLeft
+
+    it "fails with no arguments" $
+      parseArgs [] `shouldSatisfy` isLeft
 
 -- * Helpers
+
+requiredArgs :: [Text]
+requiredArgs =
+  [ "--config", "config.json"
+  , "--pg-config", "pg-config.json"
+  , "--node-config", "node-config.json"
+  , "--socket-path", "node.socket"
+  , "--ledger-state-dir", "/data"
+  ]
+
+-- | 'requiredArgs' with one flag/value pair removed.
+without :: Text -> [Text]
+without flag = go requiredArgs
+  where
+    go (f : v : rest)
+      | f == flag = rest
+      | otherwise = f : v : go rest
+    go xs = xs
 
 -- | Parse a list of arguments using the CLI parser, returning Left on failure.
 parseArgs :: [Text] -> Either Text CliArgs

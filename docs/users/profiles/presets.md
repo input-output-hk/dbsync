@@ -1,13 +1,13 @@
 ---
 id: presets
-title: Preset profiles
+title: Preset configs
 sidebar_position: 2
 ---
 
-# Preset profiles
+# Preset configs
 
-Six ready-to-use profiles ship in
-[`profiles/`](https://github.com/input-output-hk/dbsync/tree/main/profiles).
+Six ready-to-use configs ship in
+[`config-examples/`](https://github.com/input-output-hk/dbsync/tree/main/config-examples).
 Each is a small JSON file you can copy and adjust if needed.
 
 Pick one based on what you'll query, not on what looks comprehensive
@@ -16,16 +16,16 @@ on sync time and disk usage.
 
 | Preset | Projections enabled | Ledger | Approximate size (mainnet) |
 |---|---|---|---|
-| `minimal-profile.json` | (core only) | off | ~30 GB |
-| `utxo-only-profile.json` | `utxo` | off | ~160 GB |
-| `spo-profile.json` | `utxo`, `metadata`, `stake_delegation`, `pool` | off | ~185 GB |
-| `dapp-profile.json` | `utxo`, `multi_asset`, `metadata`, `scripts_datums` | off | ~265 GB |
-| `everything-no-ledger-profile.json` | all non-ledger projections | off | ~475 GB |
-| `everything-profile.json` | every projection, ledger on | on | ~480 GB |
+| `minimal.json` | (core only) | off | ~30 GB |
+| `utxo-only.json` | `utxo` | off | ~160 GB |
+| `spo.json` | `utxo`, `metadata`, `stake_delegation`, `pool` | off | ~185 GB |
+| `dapp.json` | `utxo`, `multi_asset`, `metadata`, `scripts_datums` | off | ~265 GB |
+| `everything-no-ledger.json` | all non-ledger projections | off | ~475 GB |
+| `everything.json` | every projection, ledger on | on | ~480 GB |
 
-The `everything-profile` figure is measured at mainnet tip; the
-smaller-profile figures are approximations derived from that
-profile's per-table breakdown.
+The `everything` figure is measured at mainnet tip; the
+smaller-preset figures are approximations derived from its
+per-table breakdown.
 
 Every preset also enables `epoch_sync_stats` so the per-epoch sync
 progress table gets populated. It's cheap and useful for diagnostics.
@@ -33,8 +33,8 @@ progress table gets populated. It's cheap and useful for diagnostics.
 :::tip The `cbor` tax
 `tx_cbor` (raw transaction CBOR bytes) accounts for ~218 GB on its
 own at mainnet tip — nearly half of an `everything`-profile
-database. Both `everything-no-ledger-profile.json` and
-`everything-profile.json` enable `cbor` by default. If your
+database. Both `everything-no-ledger.json` and
+`everything.json` enable `cbor` by default. If your
 consumers don't need to re-serialise or replay transactions,
 copying one of those presets and setting `"cbor": false` cuts the
 database from ~475 GB to ~260 GB.
@@ -94,7 +94,7 @@ Suitable for:
 - Reward-address resolution.
 
 Ledger is off, so reward amounts and deposit values aren't in the
-database. If you need those, use `everything-profile` instead.
+database. If you need those, use the `everything` preset instead.
 
 ## `dapp`
 

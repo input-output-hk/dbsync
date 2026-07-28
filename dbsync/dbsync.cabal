@@ -61,6 +61,7 @@ library
     DbSync.App.Args
     DbSync.App.Boot
     DbSync.App.Cli
+    DbSync.App.Config.Database
     DbSync.App.Config.Genesis
     DbSync.App.Config.Node
     DbSync.App.Config.Types

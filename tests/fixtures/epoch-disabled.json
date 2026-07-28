@@ -1,12 +1,5 @@
 {
-  "database": {
-    "host": "localhost",
-    "port": 5432,
-    "name": "dbsync_test",
-    "user": "",
-    "password": ""
-  },
-  "db_options": {
+  "db_profile": {
     "epoch": false
   }
 }

@@ -29,7 +29,7 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe, shouldSatisfy)
 import DbSync.App.Config.Types
   ( SyncConfig (..)
   , OptionFlag (..)
-  , DbSyncOptions (..)
+  , DbProfile (..)
   )
 import DbSync.Db.Schema.AdaPots (adaPotsTableDef)
 import DbSync.Db.Schema.Core (blockTableDef)
@@ -42,7 +42,7 @@ import DbSync.Db.Schema.EpochSyncStats (epochSyncStatsTableDef)
 import DbSync.Db.Schema.Pool (poolStatTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Test.AppHarness
-  ( ledgerEnabledTestProfile
+  ( ledgerEnabledTestConfig
   , quietTracer
   , waitForSyncComplete
   , withTempDir
@@ -163,7 +163,7 @@ spec = describe "Follow boundary writes" $ do
       withTempDir "dbsync-test-epoch-current-live" $ \ledgerDir -> do
         tracer <- quietTracer
         _ <- forgeAndPushBlocks mn 250
-        withAppSession tracer ledgerEnabledTestProfile mn ledgerDir $ \_ -> do
+        withAppSession tracer ledgerEnabledTestConfig mn ledgerDir $ \_ -> do
           waitForSyncComplete 120
 
           -- Land at the start of a fresh epoch so the ten-block probe
@@ -210,11 +210,11 @@ spec = describe "Follow boundary writes" $ do
 -- * Profile
 -- ---------------------------------------------------------------------------
 
--- | 'ledgerEnabledTestProfile' with @pool_stats@ on so the boundary
+-- | 'ledgerEnabledTestConfig' with @pool_stats@ on so the boundary
 -- crossing also exercises the pool_stat writer.
 boundaryProfile :: SyncConfig
-boundaryProfile = ledgerEnabledTestProfile
-  { scOptions = (scOptions ledgerEnabledTestProfile)
+boundaryProfile = ledgerEnabledTestConfig
+  { scDbProfile = (scDbProfile ledgerEnabledTestConfig)
       { pcPoolStats = OptionFlag True
       }
   }

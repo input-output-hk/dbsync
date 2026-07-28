@@ -36,8 +36,8 @@ tables it would own.
   platform-specific instructions for Linux and macOS, then the build.
 - [Cardano node setup](node-setup) — running the `cardano-node`
   dbsync follows.
-- [Profiles](profiles/overview) — what they are, the six presets that
-  ship, and how to write your own.
+- [Configuration](profiles/overview) — the config file, the six
+  presets that ship, and how to write your own.
 - [Running dbsync](running) — CLI flags, environment, first-run
   expectations.
 - [Operations](operations/metrics) — metrics, troubleshooting,

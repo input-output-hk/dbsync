@@ -34,8 +34,8 @@ import DbSync.Db.Schema.UTxO (txOutTableDef)
 import DbSync.Trace.Backend (mkTestTracer)
 import DbSync.Trace.Types (LogMsg (..))
 import DbSync.Test.AppHarness
-  ( defaultTestProfile
-  , ledgerEnabledTestProfile
+  ( defaultTestConfig
+  , ledgerEnabledTestConfig
   , quietTracer
   , waitForSyncComplete
   , withTempDir
@@ -57,14 +57,14 @@ spec :: Spec
 spec = describe "FollowingChainTip restart" $ do
 
   it "preserves dedup rows and resumes inserting (ledger off)" $
-    runRestartScenario defaultTestProfile RequireNoSnapshot
+    runRestartScenario defaultTestConfig RequireNoSnapshot
 
   it "loads snapshot and resumes inserting (ledger on)" $
-    -- 'ledgerEnabledTestProfile' lowers the snapshot near-tip
+    -- 'ledgerEnabledTestConfig' lowers the snapshot near-tip
     -- threshold to epoch 2 so snapshots fire on the short fixture
     -- chains; production default of @580@ would mean no snapshot
     -- ever lands during a typical test run.
-    runRestartScenario ledgerEnabledTestProfile RequireSnapshot
+    runRestartScenario ledgerEnabledTestConfig RequireSnapshot
 
   it "replays the natural mid-epoch gap without rolling PG back (ledger on)" $
     runMidEpochReplayScenario
@@ -163,7 +163,7 @@ runMidEpochReplayScenario =
       _ <- forgeAndPushBlocks mn 200
 
       (preBlocks, preCounts, lastCommitted, newestSnapshotSlot) <-
-        withAppSession firstTracer ledgerEnabledTestProfile mn ledgerDir $ \_ -> do
+        withAppSession firstTracer ledgerEnabledTestConfig mn ledgerDir $ \_ -> do
           waitForSyncComplete 60
           forgeAndWaitForBlocks mn 130 330 90
           blockCount    <- countRows (tdName blockTableDef)
@@ -181,7 +181,7 @@ runMidEpochReplayScenario =
       secondLogs <- newIORef []
       let secondTracer = mkTestTracer secondLogs
 
-      withAppSessionResume secondTracer ledgerEnabledTestProfile mn ledgerDir $ \_ -> do
+      withAppSessionResume secondTracer ledgerEnabledTestConfig mn ledgerDir $ \_ -> do
         waitFor "sync_complete remains true on restart" syncCompleteTrue 60
 
         -- Block count is unchanged across the restart: Follow's

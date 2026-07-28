@@ -1,0 +1,18 @@
+{
+  "sync": {
+    "mode": "auto"
+  },
+  "ledger": {
+    "enabled": false
+  },
+  "db_profile": {
+    "epoch_sync_stats": true
+  },
+  "metrics": {
+    "prometheus_port": 8080
+  },
+  "logging": {
+    "level": "info",
+    "format": "text"
+  }
+}

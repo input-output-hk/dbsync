@@ -48,7 +48,7 @@ import qualified Cardano.Mock.Forging.Types as Mock
 import DbSync.App.Config.Types
   ( SyncConfig (..)
   , OptionFlag (..)
-  , DbSyncOptions (..)
+  , DbProfile (..)
   )
 import DbSync.Db.Schema.Core (blockTableDef, txTableDef)
 import DbSync.Db.Schema.MultiAsset (maTxMintTableDef)
@@ -66,7 +66,7 @@ import DbSync.Db.Schema.UTxO
   , txOutTableDef
   )
 import DbSync.Test.AppHarness
-  ( ledgerEnabledTestProfile
+  ( ledgerEnabledTestConfig
   , quietTracer
   , waitForSyncComplete
   , withTempDir
@@ -358,11 +358,11 @@ spec = describe "Follow scripts/datums writes" $ do
 -- * Profile
 -- ---------------------------------------------------------------------------
 
--- | 'ledgerEnabledTestProfile' with @pcScriptsDatums@ flipped on.
+-- | 'ledgerEnabledTestConfig' with @pcScriptsDatums@ flipped on.
 scriptsDatumsTestProfile :: SyncConfig
 scriptsDatumsTestProfile =
-  ledgerEnabledTestProfile
-    { scOptions = (scOptions ledgerEnabledTestProfile)
+  ledgerEnabledTestConfig
+    { scDbProfile = (scDbProfile ledgerEnabledTestConfig)
         { pcScriptsDatums = OptionFlag True
         }
     }

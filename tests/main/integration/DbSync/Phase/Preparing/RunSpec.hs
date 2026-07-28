@@ -96,7 +96,7 @@ import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
 import DbSync.Test.Lsm (withTestIngestStores)
-import DbSync.Test.AppHarness (defaultTestProfile)
+import DbSync.Test.AppHarness (defaultTestConfig)
 import DbSync.Test.Database
   ( queryTestDb
   , testConnBs
@@ -174,7 +174,7 @@ runPipelineThenPrepare blocks = withTestIngestStores $ \utxoStore dedupStores ->
   lsCommit bs
   closeLoaderStream bs
   withTestConnection $ \conn ->
-    runAppM (TracerWithConn mkNullTracer conn defaultTestProfile)
+    runAppM (TracerWithConn mkNullTracer conn defaultTestConfig)
       (Prep.run testHasqlSettings defaultPrepTuning tables)
 
 -- ---------------------------------------------------------------------------

@@ -23,7 +23,7 @@ import DbSync.Db.Schema.EpochSyncStats (epochSyncStatsTableDef)
 import DbSync.Db.Schema.SyncState (syncStateTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Test.AppHarness
-  ( defaultTestProfile
+  ( defaultTestConfig
   , mkAppArgsFromMockNode
   , newShutdown
   , quietTracer
@@ -61,7 +61,7 @@ spec = describe "IngestChainHistory restart" $
         -- async and the test fails with that message. With the
         -- cleanup fixed, Prep succeeds and we fall through to the
         -- @duplicates@ assertion.
-        withAppSessionResume tracer defaultTestProfile mn ledgerDir $ \_ ->
+        withAppSessionResume tracer defaultTestConfig mn ledgerDir $ \_ ->
           waitForSyncComplete 90
 
         waitForTableQueryable (tdName epochSyncStatsTableDef) 30
@@ -89,7 +89,7 @@ runMidIngestSession :: AppTracer -> MockNode -> FilePath -> IO Int
 runMidIngestSession tracer mn ledgerDir = do
   clearSyncCompleteFlag
   (_, waitSig) <- newShutdown
-  let args = mkAppArgsFromMockNode defaultTestProfile mn ledgerDir (Just waitSig)
+  let args = mkAppArgsFromMockNode defaultTestConfig mn ledgerDir (Just waitSig)
   withAsync (runApp tracer args) $ \app -> do
     waitFor "≥ 2 epoch_sync_stats rows AND last_committed_slot set"
       ((&&) <$> twoEpochSyncStatsRows <*> lastCommittedSlotSet)

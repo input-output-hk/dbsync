@@ -87,8 +87,12 @@ table definitions and the boot operations:
 - `dropSchema` tears all of that down (used by `--resync-from-genesis`
   and by tests).
 - The boot path seeds `dbsync_sync_state` with `currentSchemaVersion`,
-  `declaredSchemaFingerprint`, and the enabled-extractor set via
+  `declaredSchemaFingerprint`, the enabled-extractor set, and the
+  network identity (`network_magic` from the Shelley genesis plus a
+  derived `network_name`) via
   [`seedSyncState`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/SyncState/Row.hs).
+  On resume the network gate compares the recorded magic against the
+  configured genesis and aborts on mismatch.
 
 ## Migrations
 

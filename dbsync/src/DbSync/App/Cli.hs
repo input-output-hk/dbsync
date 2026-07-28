@@ -35,11 +35,12 @@ import Options.Applicative
 
 -- | Parsed CLI arguments.
 data CliArgs = CliArgs
-  { caDbSyncConfig    :: !FilePath  -- ^ Path to db-sync-config.json (from the Cardano book)
+  { caConfig          :: !FilePath  -- ^ Path to the dbsync config file (sync mode, ledger, db_profile, logging)
+  , caPgConfig        :: !FilePath  -- ^ Path to the PostgreSQL connection file (host, port, name, user, password_file)
+  , caNodeConfig      :: !FilePath  -- ^ Path to the cardano-node config.json (genesis files resolve relative to it)
   , caSocketPath      :: !FilePath  -- ^ Path to the cardano-node Unix socket
   , caLedgerStateDir  :: !FilePath  -- ^ Parent directory under which the @dbsync-ledger/@
                                     --   sub-directory is created (LSM session + snapshots)
-  , caProfile         :: !FilePath  -- ^ Path to dbsync-profile.json (database, options, sync mode)
   , caResyncFromGenesis :: !Bool    -- ^ If 'True', wipe the schema + ledger state and re-sync from genesis
   , caRollbackToSlot  :: !(Maybe Word64)
     -- ^ Roll the database back to the nearest block at-or-after this
@@ -67,9 +68,19 @@ cliArgsP :: Parser CliArgs
 cliArgsP =
   CliArgs
     <$> strOption
-      ( long "db-sync-config"
+      ( long "config"
           <> metavar "FILEPATH"
-          <> help "Path to db-sync-config.json (from the Cardano book)"
+          <> help "Path to the dbsync config file (sync mode, ledger, db_profile, logging)"
+      )
+    <*> strOption
+      ( long "pg-config"
+          <> metavar "FILEPATH"
+          <> help "Path to the PostgreSQL connection file (host, port, name, user, password_file)"
+      )
+    <*> strOption
+      ( long "node-config"
+          <> metavar "FILEPATH"
+          <> help "Path to the cardano-node config.json; genesis files are resolved relative to it"
       )
     <*> strOption
       ( long "socket-path"
@@ -82,11 +93,6 @@ cliArgsP =
           <> help
               "Parent directory in which a 'dbsync-ledger/' sub-directory \
               \will be created and used for the LSM session and snapshot headers"
-      )
-    <*> strOption
-      ( long "profile"
-          <> metavar "FILEPATH"
-          <> help "Path to profile.json (database, sync options, logging)"
       )
     <*> switch
       ( long "resync-from-genesis"

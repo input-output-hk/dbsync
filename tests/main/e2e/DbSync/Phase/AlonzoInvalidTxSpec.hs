@@ -39,7 +39,7 @@ import DbSync.Db.Schema.Core (txTableDef)
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Schema.UTxO (collateralTxInTableDef, txInTableDef)
 import DbSync.Test.AppHarness
-  ( ledgerEnabledTestProfile
+  ( ledgerEnabledTestConfig
   , quietTracer
   , waitForSyncComplete
   , withTempDir
@@ -70,7 +70,7 @@ spec = describe "Alonzo phase-2 invalid tx" $
         _ <- forgeAndPush mn =<< buildLockFailUnlock mn
         _ <- forgeAndPushBlocks mn 250
 
-        withAppSession tracer ledgerEnabledTestProfile mn ledgerDir $ \_ -> do
+        withAppSession tracer ledgerEnabledTestConfig mn ledgerDir $ \_ -> do
           waitForSyncComplete 120
 
           invalidTxs <- queryText $

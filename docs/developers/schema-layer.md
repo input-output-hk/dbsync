@@ -215,7 +215,7 @@ allTables = syncStateTableDef : concatMap pdTables enabledExtractors
 `initSchema` walks `allTables` once at boot, generates the DDL, and
 pipes through `psql`. The shape of the database is decided by the
 profile and is fixed for the lifetime of that database — see
-[Profiles](/users/profiles/overview) on the user side.
+[The config file](/users/profiles/overview) on the user side.
 
 No JSON-RPC, no admin endpoints, no schema_version row that lets you
 toggle extractors at runtime. A profile change means a fresh sync.

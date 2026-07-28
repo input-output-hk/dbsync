@@ -13,6 +13,9 @@
 -- the same 'AppArgs' from a 'MockNode' and calls 'runApp' directly.
 module DbSync.App.Run
   ( runApp
+
+    -- * Exported for the network-gate integration tests
+  , runNetworkGate
   ) where
 
 import Cardano.Prelude
@@ -37,7 +40,7 @@ import Ouroboros.Consensus.Config (TopLevelConfig)
 import qualified Ouroboros.Consensus.Node.ProtocolInfo as Consensus
 import Ouroboros.Consensus.Shelley.Node (ShelleyGenesis (..))
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (listSnapshots)
-import Ouroboros.Network.Magic (NetworkMagic)
+import Ouroboros.Network.Magic (NetworkMagic (..))
 
 import DbSync.App.Setup
   ( buildCoreEnv
@@ -53,6 +56,7 @@ import DbSync.SyncState.Row
   , closeControlConnection
   , markSyncComplete
   , openControlConnection
+  , readNetwork
   , readSyncState
   , seedSyncState
   )
@@ -67,11 +71,11 @@ import DbSync.App.Config.Genesis
   , mkProtocolInfoCardano
   , mkTopLevelConfig
   )
+import DbSync.App.Config.Database (DatabaseConfig (..))
 import DbSync.App.Config.Types
-    ( DatabaseConfig(..),
-      LedgerConfig(..),
+    ( LedgerConfig(..),
       SyncConfig(..),
-      DbSyncOptions(..),
+      DbProfile(..),
       UtxoOption(..) )
 import DbSync.Db.Loader (LoaderStream (..), closeLoaderStream, mkLoaderStream)
 import DbSync.Db.Schema.Types (TableDef)
@@ -113,6 +117,7 @@ import DbSync.ChainSync.Connection
   ( IntersectionRequirement (..)
   , connectToNode
   , getNetworkMagic
+  , networkNameFromMagic
   )
 
 import DbSync.App.Boot
@@ -182,7 +187,7 @@ import qualified DbSync.Phase.Ingest.Writer as IngestWriter
 --     Ingest → Prep → Follow pipeline.
 runApp :: AppTracer -> AppArgs -> IO ()
 runApp tracer args = do
-  let validProfile = aaProfile args
+  let validConfig = aaConfig args
       nodeCfg      = aaNodeConfig args
       genesisCfg   = aaGenesisConfig args
       socketPath   = aaSocketPath args
@@ -203,7 +208,7 @@ runApp tracer args = do
   raiseFdLimit tracer
 
   -- 2. Shared core environment + startup log line.
-  coreEnv <- buildCoreEnv tracer validProfile nodeCfg network
+  coreEnv <- buildCoreEnv tracer validConfig nodeCfg network
   runAppM coreEnv runStartup
 
   let ledgerStateDir = aaLedgerStateDir args </> "dbsync-ledger"
@@ -214,8 +219,8 @@ runApp tracer args = do
   -- production starts empty and the receiver fills it from LocalStateQuery.
   stateQueryVar <- maybe (newStateQueryVar topLevelCfg) pure (aaStateQueryVar args)
 
-  -- 4. Database connection settings from profile.
-  let dbCfg   = scDatabase validProfile
+  -- 4. Database connection settings from the pg-config file.
+  let dbCfg   = aaDatabase args
       connStr = TE.encodeUtf8 $ "dbname=" <> dcName dbCfg
       hasqlSettings =
         mconcat
@@ -233,28 +238,32 @@ runApp tracer args = do
       extractorNames   = map pdName extractors
       connStrTxt       = TE.decodeUtf8 connStr
       schemaVersion    = currentSchemaVersion
-      ledgerEnabledCfg = lcEnabled (scLedger validProfile)
+      ledgerEnabledCfg = lcEnabled (scLedger validConfig)
   freshInit <- setupSchema
     tracer ledgerEnabledCfg ledgerStateDir
     tableDefs extractorNames connStrTxt (aaResyncFromGenesis args)
 
   -- 6. Open the consumer's control connection; seed @dbsync_sync_state@
   -- on a fresh schema, then apply any schema migrations between the
-  -- database's recorded version and this binary's. The gate is a no-op on
-  -- a fresh schema and aborts on a newer database or uncovered drift.
+  -- database's recorded version and this binary's. The migration gate is
+  -- a no-op on a fresh schema and aborts on a newer database or uncovered
+  -- drift; the network gate aborts when the database was synced against a
+  -- different network than the configured genesis.
   consumerCtrlConn <- openControlConnection hasqlSettings
   when freshInit $
     setupFreshSyncState
       tracer consumerCtrlConn connStrTxt
       schemaVersion declaredSchemaFingerprint ledgerEnabledCfg extractorNames
+      networkMagic
   runMigrationGate
     tracer consumerCtrlConn schemaVersion declaredSchemaFingerprint extractorNames
+  runNetworkGate tracer consumerCtrlConn networkMagic
 
   -- 7. SystemStart + ledger subsystem (fingerprint check, LSM
   -- session, snapshot manager).
   let systemStart = SystemStart (sgSystemStart $ scConfig $ gcShelley genesisCfg)
       pinfo       = mkProtocolInfoCardano nodeCfg genesisCfg
-      ledgerCfg   = scLedger validProfile
+      ledgerCfg   = scLedger validConfig
   hasLedgerEnv <- setupLedgerEnv
     tracer hasqlSettings coreEnv ledgerCfg ledgerStateDir
     genesisCfg pinfo systemStart network
@@ -324,7 +333,7 @@ runApp tracer args = do
       -- 12. Ingest → Prep → Follow. No-op on 'BootFollowRestart' ('Nothing').
       for_ mIngestState $
         runIngestThenFollow
-          tracer hasqlSettings connStr coreEnv validProfile
+          tracer hasqlSettings connStr coreEnv validConfig
           topLevelCfg networkMagic socketPath systemStart stateQueryVar
           hasLedgerEnv consumerCtrlConn lsmSession tableDefs mShutdown
           (gcByron genesisCfg)
@@ -356,6 +365,24 @@ runMigrationGate tracer ctrlConn target declaredFp extractors = do
       abortBoot tracer (BootSchemaNewerThanBinary database binary)
     SchemaDriftUncovered stored declared ->
       abortBoot tracer (BootSchemaDriftUncovered stored declared)
+
+-- | Run the network gate: abort when the database's recorded network
+-- magic differs from the configured genesis. Quietly passes while the
+-- sync-state row is missing — 'decideBoot' classifies that case.
+-- Comparison happens in the 'Int64' domain of the stored column so a
+-- tampered out-of-range value cannot alias into a match.
+runNetworkGate :: AppTracer -> ControlConnection -> NetworkMagic -> IO ()
+runNetworkGate tracer ctrlConn networkMagic = do
+  mStored <- runAppM ctrlConn readNetwork
+  for_ mStored $ \(storedMagic, _storedName) ->
+    when (storedMagic /= fromIntegral (unNetworkMagic networkMagic)) $
+      abortBoot tracer $
+        BootNetworkMismatch
+          (NetworkMagic (fromIntegral storedMagic))
+          networkMagic
+  logInfoIO tracer "App" $
+    "Network: " <> networkNameFromMagic networkMagic
+      <> " (magic " <> show (unNetworkMagic networkMagic) <> ")"
 
 -- | Step 5: dispatch the schema decision.
 --
@@ -421,9 +448,13 @@ setupFreshSyncState
   -> Fingerprint                  -- ^ declared schema fingerprint
   -> Bool                         -- ^ @ledger.enabled@
   -> [Text]                       -- ^ enabled extractor names
+  -> NetworkMagic
   -> IO ()
-setupFreshSyncState tracer ctrl connStrTxt schemaVersion fingerprint ledgerEnabledCfg extractorNames = do
-  runAppM ctrl (seedSyncState schemaVersion fingerprint ledgerEnabledCfg extractorNames)
+setupFreshSyncState tracer ctrl connStrTxt schemaVersion fingerprint ledgerEnabledCfg extractorNames networkMagic = do
+  runAppM ctrl $
+    seedSyncState
+      schemaVersion fingerprint ledgerEnabledCfg extractorNames
+      (unNetworkMagic networkMagic) (networkNameFromMagic networkMagic)
   logInfoIO tracer "App" "Sync-state seeded"
   walLevel <- showWalLevel connStrTxt
   unless (walLevel == "minimal") $
@@ -433,7 +464,7 @@ setupFreshSyncState tracer ctrl connStrTxt schemaVersion fingerprint ledgerEnabl
       , "  wal_level = minimal"
       , "  max_wal_senders = 0"
       , "  archive_mode = off"
-      , "See profiles/postgres-tuning.conf for the full snippet."
+      , "See scripts/postgres-tuning.conf for the full snippet."
       , "Note: replicas will need a full re-base after reverting to"
       , "wal_level = replica. Acceptable on a one-time fresh sync."
       ]
@@ -543,7 +574,7 @@ runIngestThenFollow
   -> IngestBootState
   -> IO ()
 runIngestThenFollow
-  tracer hasqlSettings connStr coreEnv validProfile
+  tracer hasqlSettings connStr coreEnv validConfig
   topLevelCfg networkMagic socketPath systemStart stateQueryVar
   hasLedgerEnv consumerCtrlConn lsmSession tableDefs mShutdown byronCfg
   IngestBootState
@@ -575,11 +606,11 @@ runIngestThenFollow
     addrBuffer       <- newAddressBufferRef
     txOutWorker      <- mkTxOutWorker tracer hasqlSettings initialAddressId
     mPoolWorker      <-
-      setupOffChainPoolWorker tracer hasqlSettings (scOptions validProfile)
+      setupOffChainPoolWorker tracer hasqlSettings (scDbProfile validConfig)
     mVoteWorker      <-
-      setupOffChainVoteWorker tracer hasqlSettings (scOptions validProfile)
+      setupOffChainVoteWorker tracer hasqlSettings (scDbProfile validConfig)
     utxoStore        <- openUtxoStore lsmSession
-    let consumedByOn = uoConsumedByTxId (pcUtxo (scOptions validProfile))
+    let consumedByOn = uoConsumedByTxId (pcUtxo (scDbProfile validConfig))
     mConsumedByBuf <-
       if consumedByOn then Just <$> newConsumedByBufferRef else pure Nothing
     latestPointRef   <- newTVarIO Nothing
@@ -821,7 +852,7 @@ handoffToFollow
     -- 'runFollowSession' opens a fresh one starting at the
     -- post-Ingest commit point.
     let consumedTracking =
-          if uoConsumedByTxId (pcUtxo (scOptions (ceConfig (ieCore ie))))
+          if uoConsumedByTxId (pcUtxo (scDbProfile (ceConfig (ieCore ie))))
             then TrackConsumedBy
             else SkipConsumedBy
     runFollowSession tracer "App" iomgr hasqlSettings topLevelCfg

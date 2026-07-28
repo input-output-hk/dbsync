@@ -7,7 +7,7 @@ sidebar_position: 3
 # Existing extractors
 
 The projections that ship with dbsync. Names match the keys in a
-profile's `db_options` block. Every extractor lives under
+config's `db_profile` block. Every extractor lives under
 `DbSync.Extractor.*` in the [`dbsync` package](https://github.com/input-output-hk/dbsync/tree/main/dbsync/src/DbSync/Extractor);
 each is registered in
 [`DbSync.App.Setup.buildExtractors`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/App/Setup.hs).
@@ -32,7 +32,7 @@ each is registered in
 | `off_chain_votes` | no | the seven `off_chain_vote_*` tables |
 | `current_state` | no | — (reserved stub) |
 
-Every extractor except `core` is opt-in through its `db_options` key.
+Every extractor except `core` is opt-in through its `db_profile` key.
 Several also need `ledger.enabled = true` to produce anything:
 `stake_delegation_ledger`, `pool_stats`, and `epoch_boundary` are
 driven by the ledger worker's per-epoch output, and `core` / `pool`
@@ -236,7 +236,7 @@ for downstream consumers that need to re-serialise or replay txs.
 :::warning Big single contributor
 `tx_cbor` accounts for ~218 GB on its own at mainnet tip — roughly
 half of an `everything`-profile database. Both
-`everything-no-ledger-profile.json` and `everything-profile.json`
+`everything-no-ledger.json` and `everything.json`
 enable `cbor` by default. If your consumers don't need raw CBOR,
 disabling this one option nearly halves the database.
 :::

@@ -68,7 +68,7 @@ import Ouroboros.Consensus.Shelley.HFEras ()                     -- per-era HFC 
 import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()    -- 'LedgerSupportsProtocol' orphans
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..))
 import Ouroboros.Network.Block (data BlockPoint, data GenesisPoint)
-import Ouroboros.Network.Magic (NetworkMagic)
+import Ouroboros.Network.Magic (NetworkMagic (..))
 
 import DbSync.AppM (runAppM)
 import DbSync.App.Env
@@ -80,6 +80,7 @@ import DbSync.App.Env
 import DbSync.ChainSync.Connection
   ( IntersectionRequirement (..)
   , connectToNode
+  , networkNameFromMagic
   )
 import DbSync.Db.Schema.SyncState (SyncStateRow (..))
 import DbSync.Db.Schema.Types (TableDef)
@@ -134,7 +135,7 @@ import DbSync.Worker.OffChain.Pool (closeOffChainPoolWorker)
 import DbSync.Worker.OffChain.Vote (closeOffChainVoteWorker)
 import DbSync.App.Setup (setupOffChainPoolWorker, setupOffChainVoteWorker)
 import DbSync.App.Config.Types
-  ( DbSyncOptions (..)
+  ( DbProfile (..)
   , SyncConfig (..)
   , UtxoOption (..)
   )
@@ -276,6 +277,9 @@ data BootError
   | BootSchemaDriftUncovered !Text !Text
     -- ^ Versions match but the stored @schema_fingerprint@ differs from the
     -- declared one. Fields: @(stored, declared)@.
+  | BootNetworkMismatch !NetworkMagic !NetworkMagic
+    -- ^ The database's recorded @network_magic@ differs from the magic in
+    -- the configured genesis. Fields: @(database, config)@.
   deriving stock (Eq, Show)
 
 -- ---------------------------------------------------------------------------
@@ -548,6 +552,22 @@ renderBootError = \case
       , "Recovery: add a migration that raises the schema version to cover the"
       , "change, or restart with --resync-from-genesis to rebuild from genesis."
       ]
+
+  BootNetworkMismatch database config ->
+    T.unlines
+      [ "Cannot resume: the database was synced against a different network."
+      , ""
+      , "  Database : " <> renderNetwork database
+      , "  This run : " <> renderNetwork config
+      , ""
+      , "Resuming would interleave two chains. Check --node-config: it must"
+      , "point at the config.json of the network this database was synced"
+      , "against. To sync the configured network instead, use a fresh database"
+      , "or restart with --resync-from-genesis to wipe and re-sync."
+      ]
+    where
+      renderNetwork m =
+        networkNameFromMagic m <> " (magic " <> show (unNetworkMagic m) <> ")"
 
 -- ---------------------------------------------------------------------------
 -- * Lifecycle
@@ -910,10 +930,10 @@ runBootFollowRestart
       -- epochs are already represented in PG / on disk.
       withLedgerThreads hasLedgerEnv mReplayBoot stateQueryVar $
         bracket
-          (setupOffChainPoolWorker tracer hasqlSettings (scOptions (ceConfig coreEnv)))
+          (setupOffChainPoolWorker tracer hasqlSettings (scDbProfile (ceConfig coreEnv)))
           (mapM_ closeOffChainPoolWorker) $ \mPoolWorker ->
         bracket
-          (setupOffChainVoteWorker tracer hasqlSettings (scOptions (ceConfig coreEnv)))
+          (setupOffChainVoteWorker tracer hasqlSettings (scDbProfile (ceConfig coreEnv)))
           (mapM_ closeOffChainVoteWorker) $ \mVoteWorker -> do
           -- A fresh receiver-side state. Ingest has been bypassed on this
           -- restart path, so none of it is inherited from an upstream env.
@@ -949,7 +969,7 @@ runBootFollowRestart
           let mLastBlock = ssrLastCommittedBlockNo (frcSyncState frc)
               kBlocks    = ceSecurityParam coreEnv
               consumedTracking =
-                if uoConsumedByTxId (pcUtxo (scOptions (ceConfig coreEnv)))
+                if uoConsumedByTxId (pcUtxo (scDbProfile (ceConfig coreEnv)))
                   then TrackConsumedBy
                   else SkipConsumedBy
           withAsync (checkResumeGap tracer kBlocks mLastBlock rollbackBoundary) $ \gapThread -> do

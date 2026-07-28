@@ -19,6 +19,7 @@ module DbSync.SyncState.Row
 
     -- * Read \/ write
   , readSyncState
+  , readNetwork
   , writeSyncState
   , seedSyncState
   , markSnapshotComplete
@@ -113,6 +114,7 @@ import DbSync.Db.Statement.SyncState
   ( clearPendingRollbackSlotStmt
   , markSnapshotCompleteStmt
   , markSyncCompleteStmt
+  , readNetworkStmt
   , readPendingRollbackSlotStmt
   , readSyncStateStmt
   , seedSyncStateStmt
@@ -178,6 +180,13 @@ readSyncState
   => m (Maybe SyncStateRow)
 readSyncState = runCtrlStmt "readSyncState" () readSyncStateStmt
 
+-- | The @(network_magic, network_name)@ pair recorded when the
+-- singleton was seeded. 'Nothing' if it has never been seeded.
+readNetwork
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
+  => m (Maybe (Int64, Text))
+readNetwork = runCtrlStmt "readNetwork" () readNetworkStmt
+
 -- | Overwrite the consumer-owned columns of the singleton row.
 -- Throws 'AppDatabaseError' if zero rows are affected (i.e. when
 -- 'seedSyncState' was never called).
@@ -198,10 +207,18 @@ seedSyncState
   -> Fingerprint  -- ^ @schema_fingerprint@
   -> Bool         -- ^ @ledger_enabled@
   -> [Text]       -- ^ enabled extractor names (@extractors@)
+  -> Word32       -- ^ @network_magic@
+  -> Text         -- ^ @network_name@
   -> m ()
-seedSyncState schemaVersion fingerprint ledgerEnabled extractorNames =
+seedSyncState schemaVersion fingerprint ledgerEnabled extractorNames networkMagic networkName =
   runCtrlStmt "seedSyncState"
-    (fromIntegral schemaVersion, unFingerprint fingerprint, ledgerEnabled, extractorNames)
+    ( fromIntegral schemaVersion
+    , unFingerprint fingerprint
+    , ledgerEnabled
+    , extractorNames
+    , fromIntegral networkMagic
+    , networkName
+    )
     seedSyncStateStmt
 
 -- | Record that a ledger snapshot at the given slot has been

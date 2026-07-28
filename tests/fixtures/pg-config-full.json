@@ -1,0 +1,7 @@
+{
+  "host": "db.internal",
+  "port": 6432,
+  "name": "cexplorer",
+  "user": "dbsync",
+  "password_file": "pg-password.txt"
+}

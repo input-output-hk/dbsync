@@ -115,7 +115,7 @@ the `--resync-from-genesis` flag, which drops the schema, wipes the
 on-disk ledger state, and rebuilds from genesis in a single boot:
 
 ```bash
-dbsync --config my-profile.json --resync-from-genesis ...
+dbsync --config my-config.json --resync-from-genesis ...
 ```
 
 :::danger Destructive

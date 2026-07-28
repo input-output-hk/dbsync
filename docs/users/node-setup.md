@@ -36,14 +36,13 @@ Three things:
    (mainnet, preprod, preview, custom testnet).
 2. **A reachable Unix socket** — wherever you pointed
    `--socket-path` on the `cardano-node` command line.
-3. **Four config files**: `db-sync-config.json`, plus the
-   `cardano-node` config it references (`config.json`,
-   `topology.json`, and the per-era genesis files).
+3. **The node's config files**: `config.json` and the per-era
+   genesis files it references. dbsync reads the same `config.json`
+   you start the node with (pass it via `--node-config`) and resolves
+   the genesis files relative to it.
 
-The genesis bundle for each network is published in the
-[Cardano book](https://book.world.dev.cardano.org/environments.html);
-the same place provides a matching `db-sync-config.json` that points
-at the node config.
+The config and genesis bundle for each network is published in the
+[Cardano book](https://book.world.dev.cardano.org/environments.html).
 
 ## Socket path
 
@@ -109,4 +108,5 @@ cardano-cli query tip --mainnet --socket-path ~/cardano/mainnet/db/node.socket
 
 ## Next
 
-[Profiles](profiles/overview) — pick which tables you want populated.
+[The config file](profiles/overview) — pick which tables you want
+populated.

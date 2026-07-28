@@ -1,18 +1,11 @@
 {
-  "database": {
-    "host": "localhost",
-    "port": 5432,
-    "name": "cexplorer",
-    "user": "",
-    "password": ""
-  },
   "sync": {
     "mode": "auto"
   },
   "ledger": {
-    "enabled": false
+    "enabled": true
   },
-  "db_options": {
+  "db_profile": {
     "utxo": {
       "enabled": true,
       "consumed_by_tx_id": true,
@@ -22,11 +15,17 @@
     "multi_asset": true,
     "metadata": true,
     "stake_delegation": true,
+    "stake_delegation_ledger": true,
     "pool": true,
+    "pool_stats": true,
     "scripts_datums": true,
     "governance": true,
+    "off_chain_votes": true,
+    "off_chain_pools": true,
     "cbor": true,
     "epoch_sync_stats": true,
+    "epoch_boundary": true,
+    "current_state": true,
     "epoch": true
   },
   "metrics": {

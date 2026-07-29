@@ -157,6 +157,7 @@ test-suite dbsync-test
     DbSync.Extractor.OffChainVotesSpec
     DbSync.Extractor.PipelineSpec
     DbSync.Extractor.PoolSpec
+    DbSync.Extractor.PoolStatsSpec
     DbSync.Extractor.ScriptsDatumsSpec
     DbSync.Extractor.StakeDelegationSpec
     DbSync.Extractor.UTxOSpec
@@ -241,6 +242,7 @@ test-suite dbsync-test
     , cardano-strict-containers
     , bytestring
     , containers
+    , data-default
     , directory
     , filepath
     , io-classes:strict-stm

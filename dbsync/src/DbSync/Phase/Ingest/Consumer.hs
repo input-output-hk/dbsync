@@ -432,7 +432,7 @@ runBoundaryExtractor hasLedger extractStRef = case hasLedger of
         runGovernanceBoundary applyResult (BlockId lastBid)
       runEpochBoundary applyResult (BlockId lastBid)
       when poolStatsOn $
-        runPoolStatsBoundary applyResult (BlockId lastBid)
+        runPoolStatsBoundary governanceOn applyResult (BlockId lastBid)
       when sdlOn $
         runStakeDelegationLedgerBoundary applyResult (BlockId lastBid)
 

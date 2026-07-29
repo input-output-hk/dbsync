@@ -16,6 +16,7 @@ module DbSync.Test.MockNode
 
     -- * Forging into the live server
   , forgeAndPush
+  , forgeAndPushAfter
   , forgeAndPushBlocks
   , forgeAndPushBlocksWith
   , forgeAndPushWithStakeCreds
@@ -156,6 +157,18 @@ initialChainState mc = do
 forgeAndPush :: MockNode -> [Mock.TxEra] -> IO (CardanoBlock StandardCrypto)
 forgeAndPush mn txs = do
   blk <- forgeNextBlock (mnChain mn) txs
+  atomically $ MockServer.addBlock (mnServer mn) blk
+  reseedStateQueryFromLedger (mnChain mn)
+  pure blk
+
+-- | Forge one empty block at least @skipSlots@ slots past the
+-- interpreter's current slot and publish it. The skip must stay
+-- inside the ledger's forecast horizon (the stability window,
+-- @3k/f@ slots), so sparse epochs are built from repeated
+-- window-sized hops rather than one big jump.
+forgeAndPushAfter :: MockNode -> Word64 -> IO (CardanoBlock StandardCrypto)
+forgeAndPushAfter mn skipSlots = do
+  blk <- Mock.forgeNextAfter (mcInterpreter (mnChain mn)) skipSlots []
   atomically $ MockServer.addBlock (mnServer mn) blk
   reseedStateQueryFromLedger (mnChain mn)
   pure blk

@@ -411,11 +411,12 @@ conwayBlock epoch txs = GenericBlock
 boundaryApplyData :: ApplyResult -> BoundaryApplyData
 boundaryApplyData ar =
   BoundaryApplyData
-    { bndNewEpoch        = apNewEpoch ar
-    , bndEvents          = apEvents ar
-    , bndGovActionState  = apGovActionState ar
-    , bndGovExpiresAfter = apGovExpiresAfter ar
-    , bndSlotDetails     = apSlotDetails ar
+    { bndNewEpoch          = apNewEpoch ar
+    , bndEvents            = apEvents ar
+    , bndGovActionState    = apGovActionState ar
+    , bndGovExpiresAfter   = apGovExpiresAfter ar
+    , bndSlotDetails       = apSlotDetails ar
+    , bndCatchupStakeSlice = Generic.NoSlices
     }
 
 mkApplyResult :: Strict.Maybe Generic.NewEpoch -> ApplyResult

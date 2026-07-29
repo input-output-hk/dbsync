@@ -10,16 +10,20 @@ module DbSync.Worker.Ledger.TypesSpec
 import Cardano.Prelude
 
 import Cardano.Ledger.Coin (Coin (..))
+import Cardano.Slotting.Slot (EpochNo (..), EpochSize (..), SlotNo (..))
 
 import qualified Data.Map.Lazy as LMap
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Strict.Maybe as Strict
+import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldThrow)
 
+import DbSync.StateQuery (SlotDetails (..))
 import qualified DbSync.Worker.Ledger.StakeDist as Generic
 import DbSync.Worker.Ledger.Types
   ( BlockApplyData (..)
+  , BoundaryApplyData (..)
   , DepositsMap (..)
   , ProposedCommitteeMember (..)
   , emptyDepositsMap
@@ -56,3 +60,31 @@ spec =
                     [ProposedCommitteeMember (panic "unforced cold key") False 0]
               }
        in evaluate (force bomb) `shouldThrow` anyException
+
+    it "BoundaryApplyData: a thunked catch-up stake entry explodes under force" $
+      let bomb =
+            BoundaryApplyData
+              { bndNewEpoch          = Strict.Nothing
+              , bndEvents            = []
+              , bndGovActionState    = Nothing
+              , bndGovExpiresAfter   = Strict.Nothing
+              , bndSlotDetails       = dummySlotDetails
+              , bndCatchupStakeSlice =
+                  Generic.Slice
+                    (Generic.StakeSlice (EpochNo 1) [panic "unforced stake entry"])
+                    True
+              }
+       in evaluate (force bomb) `shouldThrow` anyException
+
+dummySlotDetails :: SlotDetails
+dummySlotDetails = SlotDetails
+  { sdSlotTime    = epochZero
+  , sdCurrentTime = epochZero
+  , sdEpochNo     = EpochNo 0
+  , sdSlotNo      = SlotNo 0
+  , sdEpochSlot   = 0
+  , sdEpochSize   = EpochSize 21600
+  }
+  where
+    epochZero :: UTCTime
+    epochZero = UTCTime (toEnum 0) (secondsToDiffTime 0)

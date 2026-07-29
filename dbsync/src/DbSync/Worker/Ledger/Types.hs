@@ -515,18 +515,22 @@ instance NFData BlockApplyData where
 -- form before being enqueued on 'leBoundaryApplyResults', so a queued
 -- entry never pins the 'NewEpochState' generation it was derived from.
 data BoundaryApplyData = BoundaryApplyData
-  { bndNewEpoch        :: !(Strict.Maybe Generic.NewEpoch)
-  , bndEvents          :: ![LedgerEvent]
-  , bndGovActionState  :: !(Maybe (ConwayGovState ConwayEra))
-  , bndGovExpiresAfter :: !(Strict.Maybe Ledger.EpochInterval)
-  , bndSlotDetails     :: !SlotDetails
+  { bndNewEpoch          :: !(Strict.Maybe Generic.NewEpoch)
+  , bndEvents            :: ![LedgerEvent]
+  , bndGovActionState    :: !(Maybe (ConwayGovState ConwayEra))
+  , bndGovExpiresAfter   :: !(Strict.Maybe Ledger.EpochInterval)
+  , bndSlotDetails       :: !SlotDetails
+  , bndCatchupStakeSlice :: !Generic.StakeSliceRes
+      -- ^ Tail of the ended epoch's stake distribution that per-block
+      -- slicing never reached (epochs with fewer than @k@ blocks).
+      -- 'Generic.NoSlices' when the per-block path covered everything.
   }
 
 instance NFData BoundaryApplyData where
   -- 'bndSlotDetails' is a strict field of small scalars (already WHNF when
   -- the record is), so only the heavy projections need forcing to normal form.
-  rnf (BoundaryApplyData newEpoch events govActionState govExpiresAfter _slotDetails) =
-    rnf ((newEpoch, events), (govActionState, govExpiresAfter))
+  rnf (BoundaryApplyData newEpoch events govActionState govExpiresAfter _slotDetails catchupSlice) =
+    rnf ((newEpoch, events), (govActionState, govExpiresAfter, catchupSlice))
 
 -- | Target epoch at which a governance-action deposit will expire,
 -- given the current epoch and the 'apGovExpiresAfter' delta.

@@ -39,6 +39,7 @@ import DbSync.Test.Lsm (withTestIngestStores)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnv)
 import DbSync.Test.Writer (TestWriterState (..), emptyTestWriterState, mkTestWriter)
 import qualified DbSync.Worker.Ledger.EpochUpdate as Generic
+import qualified DbSync.Worker.Ledger.StakeDist as Generic
 import DbSync.Worker.Ledger.Keys (PoolKeyHash)
 import DbSync.Worker.Ledger.Types (BoundaryApplyData (..))
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
@@ -108,11 +109,12 @@ spec = do
 -- | Boundary payload with everything empty except the supplied epoch.
 mkBoundary :: Strict.Maybe Generic.NewEpoch -> BoundaryApplyData
 mkBoundary ne = BoundaryApplyData
-  { bndNewEpoch        = ne
-  , bndEvents          = []
-  , bndGovActionState  = Nothing
-  , bndGovExpiresAfter = Strict.Nothing
-  , bndSlotDetails     = dummySlotDetails
+  { bndNewEpoch          = ne
+  , bndEvents            = []
+  , bndGovActionState    = Nothing
+  , bndGovExpiresAfter   = Strict.Nothing
+  , bndSlotDetails       = dummySlotDetails
+  , bndCatchupStakeSlice = Generic.NoSlices
   }
 
 -- | Epoch-300 crossing with three disjoint pools: 0x01 has active

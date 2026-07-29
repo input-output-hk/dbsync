@@ -9,9 +9,9 @@
 --   * 'StakeSlice' / 'StakeSliceRes' — the era-collapsed shape for
 --     incrementally inserting stake-distribution rows across the blocks
 --     of an epoch.
---   * 'getStakeSlice', 'countEpochStake', 'fullEpochStake',
---     'getPoolDistr' — projections that slice the @ssStakeMark@ snapshot
---     out of a Shelley-family 'ExtLedgerState'.
+--   * 'getStakeSlice', 'catchupStakeSlice', 'getPoolDistr' —
+--     projections that slice the @ssStakeMark@ snapshot out of a
+--     Shelley-family 'ExtLedgerState'.
 --
 -- Slices are anchored on the /next/ epoch: the \"mark\" snapshot's
 -- values activate on @current epoch + 1@, so 'sliceEpochNo' is
@@ -25,8 +25,7 @@ module DbSync.Worker.Ledger.StakeDist
     -- * Projections
   , getSecurityParameter
   , getStakeSlice
-  , countEpochStake
-  , fullEpochStake
+  , catchupStakeSlice
   , getPoolDistr
   ) where
 
@@ -153,48 +152,24 @@ genericStakeSlice
   -> StakeSliceRes
 genericStakeSlice pInfo epochBlockNo lstate mode
   | index > delegationsLen                    = NoSlices
-  | index == delegationsLen                   = Slice (emptySlice epoch) True
-  | index + size > delegationsLen             = Slice (mkSlice (delegationsLen - index)) True
-  | otherwise                                 = Slice (mkSlice size) False
+  | index == delegationsLen                   = Slice (emptySlice (scEpoch ctx)) True
+  | index + size > delegationsLen             = Slice (ctxSlice ctx index (delegationsLen - index)) True
+  | otherwise                                 = Slice (ctxSlice ctx index size) False
   where
+    ctx :: SliceCtx
+    ctx = sliceCtx pInfo lstate
+
     isMigration :: Bool
     isMigration = mode == EraMigrationSlice
 
-    epoch :: EpochNo
-    epoch = EpochNo $ 1 + unEpochNo (Shelley.nesEL (Consensus.shelleyLedgerState lstate))
-
-    minSliceSize :: Word64
-    minSliceSize = 2000
-
-    -- On mainnet this is 2160.
     k :: Word64
-    k = unNonZero $ getSecurityParameter pInfo
-
-    -- The \"mark\" snapshot activates at current-epoch + 1. Picking it
-    -- means rows land in the DB tagged for the next epoch.
-    stakeSnapshot :: Ledger.SnapShot
-    stakeSnapshot =
-      Ledger.ssStakeMark . Shelley.esSnapshots . Shelley.nesEs $
-        Consensus.shelleyLedgerState lstate
-
-    activeStakeEntries :: VMap.KVVector VB VS (Credential Staking, StakeWithDelegation)
-    activeStakeEntries = VMap.unVMap $ Ledger.unActiveStake $ Ledger.ssActiveStake stakeSnapshot
+    k = scK ctx
 
     delegationsLen :: Word64
-    delegationsLen = fromIntegral $ VG.length activeStakeEntries
+    delegationsLen = scDelegationsLen ctx
 
-    -- Deterministic across the whole epoch. The last slice can be
-    -- smaller; any slice after that is empty.
     epochSliceSize :: Word64
-    epochSliceSize = max minSliceSize defaultEpochSliceSize
-      where
-        -- On mainnet this is 2160.
-        expectedBlocks :: Word64
-        expectedBlocks = 10 * k
-
-        -- Sized so even at 20% block-production rate we cover everything.
-        defaultEpochSliceSize :: Word64
-        defaultEpochSliceSize = 1 + div (delegationsLen * 5) expectedBlocks
+    epochSliceSize = scSliceSize ctx
 
     -- Starting index into the delegation vector.
     index :: Word64
@@ -209,92 +184,44 @@ genericStakeSlice pInfo epochBlockNo lstate mode
       | isMigration                       = (epochBlockNo + 1 - k) * epochSliceSize
       | otherwise                         = epochSliceSize
 
-    mkSlice :: Word64 -> StakeSlice
-    mkSlice actualSize =
-      StakeSlice
-        { sliceEpochNo = epoch
-        , sliceDistr   = distribution
-        }
-      where
-        activeStakeSliced :: VMap VB VS (Credential Staking) StakeWithDelegation
-        activeStakeSliced =
-          VMap $ VG.slice (fromIntegral index) (fromIntegral actualSize) activeStakeEntries
-
-        distribution :: [(StakeCred, (Coin, PoolKeyHash))]
-        distribution =
-          VMap.foldlWithKey
-            (\acc cred swd ->
-              (cred, (Ledger.fromCompact (unNonZero (swdStake swd)), swdDelegation swd)) : acc
-            )
-            []
-            activeStakeSliced
-
 -- ---------------------------------------------------------------------------
--- * Counting & full-epoch projections
+-- * Shared slice context
 -- ---------------------------------------------------------------------------
 
--- | Total number of (non-zero) stake entries in the current \"mark\"
--- snapshot, tagged with the epoch they belong to. 'Nothing' for
--- Byron.
-countEpochStake
-  :: ExtLedgerState (CardanoBlock StandardCrypto) mk
-  -> Maybe (Word64, EpochNo)
-countEpochStake els =
-  case ledgerState els of
-    LedgerStateByron _      -> Nothing
-    LedgerStateShelley sls  -> genericCountEpochStake sls
-    LedgerStateAllegra als  -> genericCountEpochStake als
-    LedgerStateMary mls     -> genericCountEpochStake mls
-    LedgerStateAlonzo als   -> genericCountEpochStake als
-    LedgerStateBabbage bls  -> genericCountEpochStake bls
-    LedgerStateConway cls   -> genericCountEpochStake cls
-    LedgerStateDijkstra dls -> genericCountEpochStake dls
+-- | Quantities every slice computation over a \"mark\" snapshot needs.
+-- Both the per-block slicer and the boundary catch-up derive their
+-- indices from the same context, which is what guarantees the two
+-- never overlap and never leave a gap between them.
+data SliceCtx = SliceCtx
+  { scEpoch          :: !EpochNo
+  , scK              :: !Word64
+  , scEntries        :: !(VMap.KVVector VB VS (Credential Staking, StakeWithDelegation))
+  , scDelegationsLen :: !Word64
+  , scSliceSize      :: !Word64
+  }
 
-genericCountEpochStake
-  :: LedgerState (ShelleyBlock p era) mk
-  -> Maybe (Word64, EpochNo)
-genericCountEpochStake lstate = Just (delegationsLen, epoch)
+sliceCtx
+  :: ConsensusProtocol (BlockProtocol blk)
+  => ProtocolInfo blk
+  -> LedgerState (ShelleyBlock p era) mk
+  -> SliceCtx
+sliceCtx pInfo lstate =
+  SliceCtx
+    { scEpoch          = epoch
+    , scK              = k
+    , scEntries        = activeStakeEntries
+    , scDelegationsLen = delegationsLen
+    , scSliceSize      = max minSliceSize defaultEpochSliceSize
+    }
   where
+    -- The "mark" snapshot activates at current-epoch + 1. Picking it
+    -- means rows land in the DB tagged for the next epoch.
     epoch :: EpochNo
     epoch = EpochNo $ 1 + unEpochNo (Shelley.nesEL (Consensus.shelleyLedgerState lstate))
 
-    stakeSnapshot :: Ledger.SnapShot
-    stakeSnapshot =
-      Ledger.ssStakeMark . Shelley.esSnapshots . Shelley.nesEs $
-        Consensus.shelleyLedgerState lstate
-
-    activeStake :: VMap VB VS (Credential Staking) StakeWithDelegation
-    activeStake = Ledger.unActiveStake $ Ledger.ssActiveStake stakeSnapshot
-
-    -- @ActiveStake@ only stores non-zero entries, no filtering needed.
-    delegationsLen :: Word64
-    delegationsLen = fromIntegral $ VMap.size activeStake
-
--- | Whole-epoch stake distribution as a single 'StakeSliceRes'. Used
--- by migration paths that want every row in one go rather than sliced
--- across the blocks of the epoch.
-fullEpochStake
-  :: ExtLedgerState (CardanoBlock StandardCrypto) mk
-  -> StakeSliceRes
-fullEpochStake els =
-  case ledgerState els of
-    LedgerStateByron _      -> NoSlices
-    LedgerStateShelley sls  -> genericFullStakeSlice sls
-    LedgerStateAllegra als  -> genericFullStakeSlice als
-    LedgerStateMary mls     -> genericFullStakeSlice mls
-    LedgerStateAlonzo als   -> genericFullStakeSlice als
-    LedgerStateBabbage bls  -> genericFullStakeSlice bls
-    LedgerStateConway cls   -> genericFullStakeSlice cls
-    LedgerStateDijkstra dls -> genericFullStakeSlice dls
-
-genericFullStakeSlice
-  :: forall era p mk
-   . LedgerState (ShelleyBlock p era) mk
-  -> StakeSliceRes
-genericFullStakeSlice lstate = Slice stakeSlice True
-  where
-    epoch :: EpochNo
-    epoch = EpochNo $ 1 + unEpochNo (Shelley.nesEL (Consensus.shelleyLedgerState lstate))
+    -- On mainnet this is 2160.
+    k :: Word64
+    k = unNonZero $ getSecurityParameter pInfo
 
     stakeSnapshot :: Ledger.SnapShot
     stakeSnapshot =
@@ -307,25 +234,95 @@ genericFullStakeSlice lstate = Slice stakeSlice True
     delegationsLen :: Word64
     delegationsLen = fromIntegral $ VG.length activeStakeEntries
 
-    stakeSlice :: StakeSlice
-    stakeSlice =
-      StakeSlice
-        { sliceEpochNo = epoch
-        , sliceDistr   = distribution
-        }
-      where
-        activeStakeSliced :: VMap VB VS (Credential Staking) StakeWithDelegation
-        activeStakeSliced =
-          VMap $ VG.slice 0 (fromIntegral delegationsLen) activeStakeEntries
+    minSliceSize :: Word64
+    minSliceSize = 2000
 
-        distribution :: [(StakeCred, (Coin, PoolKeyHash))]
-        distribution =
-          VMap.foldlWithKey
-            (\acc cred swd ->
-              (cred, (Ledger.fromCompact (unNonZero (swdStake swd)), swdDelegation swd)) : acc
-            )
-            []
-            activeStakeSliced
+    -- Deterministic across the whole epoch. The last slice can be
+    -- smaller; any slice after that is empty. Sized so even at 20%
+    -- block-production rate we cover everything.
+    defaultEpochSliceSize :: Word64
+    defaultEpochSliceSize = 1 + div (delegationsLen * 5) (10 * k)
+
+-- | Slice @[start, start + len)@ of the context's delegation vector.
+ctxSlice :: SliceCtx -> Word64 -> Word64 -> StakeSlice
+ctxSlice ctx start len =
+  StakeSlice
+    { sliceEpochNo = scEpoch ctx
+    , sliceDistr   = distribution
+    }
+  where
+    activeStakeSliced :: VMap VB VS (Credential Staking) StakeWithDelegation
+    activeStakeSliced =
+      VMap $ VG.slice (fromIntegral start) (fromIntegral len) (scEntries ctx)
+
+    distribution :: [(StakeCred, (Coin, PoolKeyHash))]
+    distribution =
+      VMap.foldlWithKey
+        (\acc cred swd ->
+          (cred, (Ledger.fromCompact (unNonZero (swdStake swd)), swdDelegation swd)) : acc
+        )
+        []
+        activeStakeSliced
+
+-- ---------------------------------------------------------------------------
+-- * Boundary catch-up
+-- ---------------------------------------------------------------------------
+
+-- | Suffix of the just-ended epoch's stake distribution that per-block
+-- slicing never emitted.
+--
+-- Per-block slices only start at epoch-block @k@, so an epoch with
+-- fewer than @k + 1@ blocks emits nothing at all, and a short epoch
+-- can end before its slices reach the end of the delegation vector.
+-- Called at the epoch boundary with the /pre-boundary/ ledger state
+-- (whose \"mark\" snapshot fed the ended epoch's slices) and that
+-- epoch's final epoch-block counter; returns the un-emitted tail as a
+-- final slice, or 'NoSlices' when the per-block path already covered
+-- the whole vector.
+catchupStakeSlice
+  :: ConsensusProtocol (BlockProtocol blk)
+  => ProtocolInfo blk
+  -> Word64
+  -- ^ Epoch-block counter of the ended epoch's last block.
+  -> ExtLedgerState (CardanoBlock StandardCrypto) mk
+  -> StakeSliceRes
+catchupStakeSlice pInfo !finalEpochBlockNo els =
+  case ledgerState els of
+    LedgerStateByron _      -> NoSlices
+    LedgerStateShelley sls  -> genericCatchupSlice pInfo finalEpochBlockNo sls
+    LedgerStateAllegra als  -> genericCatchupSlice pInfo finalEpochBlockNo als
+    LedgerStateMary mls     -> genericCatchupSlice pInfo finalEpochBlockNo mls
+    LedgerStateAlonzo als   -> genericCatchupSlice pInfo finalEpochBlockNo als
+    LedgerStateBabbage bls  -> genericCatchupSlice pInfo finalEpochBlockNo bls
+    LedgerStateConway cls   -> genericCatchupSlice pInfo finalEpochBlockNo cls
+    LedgerStateDijkstra dls -> genericCatchupSlice pInfo finalEpochBlockNo dls
+
+genericCatchupSlice
+  :: ConsensusProtocol (BlockProtocol blk)
+  => ProtocolInfo blk
+  -> Word64
+  -> LedgerState (ShelleyBlock p era) mk
+  -> StakeSliceRes
+genericCatchupSlice pInfo finalEpochBlockNo lstate
+  | emittedEnd >= delegationsLen = NoSlices
+  | otherwise =
+      Slice (ctxSlice ctx emittedEnd (delegationsLen - emittedEnd)) True
+  where
+    ctx :: SliceCtx
+    ctx = sliceCtx pInfo lstate
+
+    delegationsLen :: Word64
+    delegationsLen = scDelegationsLen ctx
+
+    -- End (exclusive) of the prefix the per-block slices covered: the
+    -- block at epoch-block @b >= k@ emits @[(b - k) * size, (b - k)
+    -- * size + size)@, so after the last block the prefix reaches
+    -- @(final - k + 1) * size@. Nothing was emitted if the epoch
+    -- never reached block @k@.
+    emittedEnd :: Word64
+    emittedEnd
+      | finalEpochBlockNo < scK ctx = 0
+      | otherwise = (finalEpochBlockNo - scK ctx + 1) * scSliceSize ctx
 
 -- ---------------------------------------------------------------------------
 -- * Pool distribution

@@ -130,12 +130,12 @@ canonicalType t
       ]
 
 -- Ratios the old schema stores as double precision and the new one as
--- text (protocol parameters, pool margin). The content checks compare
--- them through a double-precision cast.
+-- exact numeric (protocol parameters, pool margin). The content checks
+-- compare them through a double-precision cast.
 allowedTypeDiff :: Text -> Text -> Text -> Text -> Bool
 allowedTypeDiff table col oldBucket newBucket =
   oldBucket == "float"
-    && newBucket == "text"
+    && newBucket == "num"
     && (table `elem` ["param_proposal", "epoch_param"] || (table, col) == ("pool_update", "margin"))
 
 -- Old columns replaced by the address-normalisation FK on the new side.

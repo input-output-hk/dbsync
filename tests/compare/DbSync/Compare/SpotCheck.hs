@@ -684,10 +684,10 @@ governanceSpecs =
   ]
 
 -- param_proposal stores protocol-parameter ratios as double precision in the
--- old schema and as text in the new one, and a few governance-threshold columns
--- were renamed (dvt_p_p_* -> dvt_pp_*). Compare every shared parameter, casting
--- both sides to double precision so the text/float encodings line up, and map
--- the renamed columns per side.
+-- old schema and as exact numeric in the new one, and a few
+-- governance-threshold columns were renamed (dvt_p_p_* -> dvt_pp_*). Compare
+-- every shared parameter, casting both sides to double precision so the float
+-- and numeric encodings line up, and map the renamed columns per side.
 paramProposalFields :: [FieldSpec]
 paramProposalFields =
   map numeric integerParams
@@ -716,7 +716,7 @@ paramProposalFields =
       , "dvt_update_to_constitution", "dvt_hard_fork_initiation", "dvt_treasury_withdrawal"
       , "min_fee_ref_script_cost_per_byte"
       ]
-    -- A ratio compared as double precision so old (float) and new (text) agree.
+    -- A ratio compared as double precision so old (float) and new (numeric) agree.
     ratio col = both col (floatText ("t." <> col))
     renamedRatio newCol oldCol = FieldSpec newCol (floatText ("t." <> oldCol)) (floatText ("t." <> newCol))
 

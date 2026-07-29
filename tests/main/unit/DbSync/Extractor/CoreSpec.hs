@@ -24,10 +24,13 @@ import Cardano.Ledger.BaseTypes (Network (..))
 import Cardano.Ledger.Coin (Coin (..))
 
 import DbSync.Parser.Types
-  ( BlockEra (..)
+  ( AnchorData (..)
+  , BlockEra (..)
   , CertAction (..)
   , CredHash (..)
   , GenericBlock (..)
+  , GenericGovAction (..)
+  , GenericGovActionProposal (..)
   , GenericTx (..)
   , GenericTxCertificate (..)
   , GenericTxIn (..)
@@ -244,6 +247,18 @@ spec = do
           [(_, tx)] -> SC.txDeposit tx `shouldBe` Nothing
           _ -> panic "expected exactly one tx"
 
+      it "fills deposit from the deposits map for a proposal-only tx" $ do
+        -- Conway TotalDeposits includes the govActionDeposit, so the
+        -- proposal must not short-circuit to the conservation zero.
+        let bld = LedgerDataOn $ emptyLedgerOutputs
+              { loDepositsMap = DepositsMap
+                  (Map.singleton (G.txHash proposalTx) (Coin 100_000_000_000))
+              }
+        written <- runCoreWith bld IngestChainHistory [] (blockWithTx proposalTx)
+        case twTxs written of
+          [(_, tx)] -> SC.txDeposit tx `shouldBe` Just 100_000_000_000
+          _ -> panic "expected exactly one tx"
+
     describe "activity-bearing tx, ledger OFF" $ do
       it "Follow computes deposit via the inputs + withdrawals identity" $ do
         -- 10_000_000 (in) + 0 (wd) - 9_000_000 (out) - 200_000 (fee)
@@ -266,6 +281,13 @@ spec = do
       it "Ingest leaves deposit NULL for the SQL backfill to fill in" $ do
         written <- runCoreWith emptyBlockLedgerData IngestChainHistory
                      [] (blockWithTx regTx)
+        case twTxs written of
+          [(_, tx)] -> SC.txDeposit tx `shouldBe` Nothing
+          _ -> panic "expected exactly one tx"
+
+      it "Ingest leaves deposit NULL for a proposal-only tx" $ do
+        written <- runCoreWith emptyBlockLedgerData IngestChainHistory
+                     [] (blockWithTx proposalTx)
         case twTxs written of
           [(_, tx)] -> SC.txDeposit tx `shouldBe` Nothing
           _ -> panic "expected exactly one tx"
@@ -320,6 +342,9 @@ spec = do
     it "False for a DRep-registration cert" $
       hasNoDepositActivity (validTx { G.txCertificates = [certFor drepRegAction] })
         `shouldBe` False
+
+    it "False for a gov-action-proposal-only tx" $
+      hasNoDepositActivity proposalTx `shouldBe` False
 
   describe "affectsDeposit" $ do
     it "True for CertStakeRegistration"    $ affectsDeposit (CertStakeRegistration (CredHash "" False) Nothing)         `shouldBe` True
@@ -506,6 +531,23 @@ validTx = mkTx 0 "validtx"
 regTx :: GenericTx
 regTx = (mkTx 0 "regtx")
   { G.txCertificates = [certFor (CertStakeRegistration (CredHash (BS.replicate 28 0xee) False) Nothing)]
+  }
+
+-- | A valid tx whose only deposit activity is a Conway gov-action
+-- proposal — no certificates at all.
+proposalTx :: GenericTx
+proposalTx = (mkTx 0 "proposaltx")
+  { G.txProposals = [infoProposal]
+  }
+
+infoProposal :: GenericGovActionProposal
+infoProposal = GenericGovActionProposal
+  { ggapTxIndex         = 0
+  , ggapReturnAddrCred  = CredHash (BS.replicate 28 0xee) False
+  , ggapDeposit         = 100_000_000_000
+  , ggapAnchor          = AnchorData "https://prop.example" (BS.replicate 32 0xdd)
+  , ggapAction          = GovInfoAction
+  , ggapDescriptionJson = "{}"
   }
 
 -- | One zero-amount withdrawal.

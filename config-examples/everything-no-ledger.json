@@ -1,24 +1,26 @@
 {
-  "database": {
-    "host": "localhost",
-    "port": 5432,
-    "name": "cexplorer",
-    "user": "",
-    "password": ""
-  },
   "sync": {
     "mode": "auto"
   },
   "ledger": {
     "enabled": false
   },
-  "db_options": {
-    "utxo": true,
+  "db_profile": {
+    "utxo": {
+      "enabled": true,
+      "consumed_by_tx_id": true,
+      "tx_in": true,
+      "strategy": "archive"
+    },
     "multi_asset": true,
     "metadata": true,
+    "stake_delegation": true,
+    "pool": true,
     "scripts_datums": true,
+    "governance": true,
+    "cbor": true,
     "epoch_sync_stats": true,
-    "epoch": false
+    "epoch": true
   },
   "metrics": {
     "prometheus_port": 8080

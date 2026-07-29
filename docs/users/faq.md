@@ -33,7 +33,7 @@ Note: `tx_cbor` alone is ~218 GB and dominates the `everything` and
 `everything-no-ledger` totals. If you don't need raw transaction
 CBOR, disabling `cbor` in a custom profile derived from one of those
 presets nearly halves the database. See
-[Preset profiles](profiles/presets) for the breakdown.
+[Preset configs](profiles/presets) for the breakdown.
 
 ## Do I need ledger state for my use case?
 

@@ -38,7 +38,7 @@ setup, prerequisites by platform, and how to choose a profile.
 - `dbsync-db/` — schema types, DDL, COPY encoders, hasql statements
 - `dbsync-smash/` — SMASH stake-pool metadata server
 - `tests/` — test suites and `dbsync-mock` (mock-chain forging primitives)
-- `profiles/` — preset profile JSON files
+- `config-examples/` — preset config JSON files and a pg-config example
 - `docs/` — Docusaurus source for the documentation site
 
 ## License

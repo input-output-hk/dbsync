@@ -33,7 +33,7 @@ import DbSync.Db.Schema.EpochBoundary
 import DbSync.Db.Schema.EpochView (EpochFinalizedCols (..), epochFinalizedCols)
 import DbSync.Db.Schema.Types (TableColumn (..), TableDef (..))
 import DbSync.Test.AppHarness
-  ( ledgerEnabledTestProfile
+  ( ledgerEnabledTestConfig
   , quietTracer
   , waitForSyncComplete
   , withTempDir
@@ -68,7 +68,7 @@ spec = describe "Boundary rollback-recross" $
       withTempDir "dbsync-test-boundary-recross" $ \ledgerDir -> do
         tracer <- quietTracer
         _ <- forgeAndPushBlocks mn 250
-        withAppSession tracer ledgerEnabledTestProfile mn ledgerDir $ \_ -> do
+        withAppSession tracer ledgerEnabledTestConfig mn ledgerDir $ \_ -> do
           waitForSyncComplete 120
 
           baselineBlocks <- countRows (tdName blockTableDef)

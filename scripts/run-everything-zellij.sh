@@ -38,8 +38,9 @@ fi
 
 echo "Using dbsync binary: $dbsync"
 
-# Default profile (uses the full-config test fixture)
-PROFILE="${PROFILE:-$PROJECT_DIR/profiles/everything-profile.json}"
+# Default configs (override via CONFIG / PG_CONFIG)
+CONFIG="${CONFIG:-$PROJECT_DIR/config-examples/everything.json}"
+PG_CONFIG="${PG_CONFIG:-$PROJECT_DIR/config-examples/pg-config.example.json}"
 
 # Kill any previous instances
 echo "Cleaning up previous instances..."
@@ -72,7 +73,7 @@ layout {
         }
         pane name="cardano-db-sync" {
             command "bash"
-            args "-c" "cd $PROJECT_DIR/ && echo 'Starting DbSync...' && ${GHC_DEBUG_SOCKET:+GHC_DEBUG_SOCKET=$GHC_DEBUG_SOCKET }$dbsync --db-sync-config $TESTNET_DIR/db-sync-config.json --socket-path $TESTNET_DIR/db/node.socket --ledger-state-dir $TESTNET_DIR --profile $PROFILE "
+            args "-c" "cd $PROJECT_DIR/ && echo 'Starting DbSync...' && ${GHC_DEBUG_SOCKET:+GHC_DEBUG_SOCKET=$GHC_DEBUG_SOCKET }$dbsync --config $CONFIG --pg-config $PG_CONFIG --node-config $TESTNET_DIR/config.json --socket-path $TESTNET_DIR/db/node.socket --ledger-state-dir $TESTNET_DIR "
       }
     }
 }

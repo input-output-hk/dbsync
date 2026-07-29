@@ -28,7 +28,7 @@ import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Trace.Backend (mkTestTracer)
 import DbSync.Trace.Types (AppTracer, LogMsg (..))
 import DbSync.Test.AppHarness
-  ( defaultTestProfile
+  ( defaultTestConfig
   , waitForSyncComplete
   , withTempDir
   )
@@ -157,7 +157,7 @@ spec = describe "FollowingChainTip at-tip behaviour" $ do
         -- Ingest seed. 'runApp' drives Ingest -> Prep -> Follow.
         _ <- forgeAndPushBlocks mn 150
 
-        withAppSession tracer defaultTestProfile mn ledgerDir $ \_app -> do
+        withAppSession tracer defaultTestConfig mn ledgerDir $ \_app -> do
           waitForSyncComplete 90
 
           -- Continuous forge stream, started before the flip can be
@@ -203,7 +203,7 @@ runAtTipScenario body =
       -- before the chain advances further.
       _ <- forgeAndPushBlocks mn 150
 
-      withAppSession tracer defaultTestProfile mn ledgerDir $ \_app -> do
+      withAppSession tracer defaultTestConfig mn ledgerDir $ \_app -> do
         waitForSyncComplete 90
 
         ingestBlocks <- countRows (tdName blockTableDef)

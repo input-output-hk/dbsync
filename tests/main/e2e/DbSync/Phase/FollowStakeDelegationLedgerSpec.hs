@@ -42,7 +42,7 @@ import qualified Cardano.Mock.Forging.Types as Mock
 import DbSync.App.Config.Types
   ( SyncConfig (..)
   , OptionFlag (..)
-  , DbSyncOptions (..)
+  , DbProfile (..)
   )
 import DbSync.Db.Schema.Core (blockTableDef)
 import DbSync.Db.Schema.Governance (drepDistrTableDef)
@@ -54,7 +54,7 @@ import DbSync.Db.Schema.StakeDelegation
   )
 import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Test.AppHarness
-  ( ledgerEnabledTestProfile
+  ( ledgerEnabledTestConfig
   , quietTracer
   , waitForSyncComplete
   , withTempDir
@@ -230,8 +230,8 @@ spec = describe "Follow stake_delegation_ledger writes" $ do
 -- | Ledger on, @stake_delegation_ledger@ on. Enough for the reward
 -- assertion: no governance txs are submitted in that test.
 rewardProfile :: SyncConfig
-rewardProfile = ledgerEnabledTestProfile
-  { scOptions = (scOptions ledgerEnabledTestProfile)
+rewardProfile = ledgerEnabledTestConfig
+  { scDbProfile = (scDbProfile ledgerEnabledTestConfig)
       { pcStakeDelegationLedger = OptionFlag True
       }
   }
@@ -239,8 +239,8 @@ rewardProfile = ledgerEnabledTestProfile
 -- | Ledger on, @stake_delegation_ledger@ on, @governance@ on so the
 -- proposal and vote txs land their per-block rows.
 treasuryProfile :: SyncConfig
-treasuryProfile = ledgerEnabledTestProfile
-  { scOptions = (scOptions ledgerEnabledTestProfile)
+treasuryProfile = ledgerEnabledTestConfig
+  { scDbProfile = (scDbProfile ledgerEnabledTestConfig)
       { pcStakeDelegationLedger = OptionFlag True
       , pcGovernance            = OptionFlag True
       }

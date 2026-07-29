@@ -108,10 +108,13 @@ test-suite dbsync-test
   other-modules:
     DbSync.AppSpec
     DbSync.App.CliSpec
+    DbSync.App.NetworkGateSpec
+    DbSync.ChainSync.ConnectionSpec
     DbSync.ChainSync.DeliverSpec
     DbSync.App.Config.TypesSpec
     DbSync.App.Config.NodeSpec
-    DbSync.App.Config.ProfilesSpec
+    DbSync.App.Config.DatabaseSpec
+    DbSync.App.Config.ExamplesSpec
     DbSync.App.Config.ValidationSpec
     DbSync.App.Config.GenesisSpec
     DbSync.Db.Statement.BackfillSpec

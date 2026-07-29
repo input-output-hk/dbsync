@@ -1,16 +1,16 @@
--- | Types and 'FromJSON' decoders for the db-sync profile YAML file.
+-- | Types and 'FromJSON' decoders for the dbsync config file.
 --
--- The profile is network-agnostic: operational paths (socket,
--- ledger state dir) live on the CLI so the same profile travels
--- across mainnet, preprod, etc.
+-- The config is network-agnostic and carries no credentials:
+-- operational paths (socket, ledger state dir) live on the CLI and
+-- the PostgreSQL connection in the @--pg-config@ file, so the same
+-- config travels across mainnet, preprod, etc.
 --
--- @db_options@ is opt-in: every extractor defaults to disabled and
+-- @db_profile@ is opt-in: every extractor defaults to disabled and
 -- must be enabled explicitly. The @core@ extractor is unconditional
--- and not represented in 'DbSyncOptions'.
+-- and not represented in 'DbProfile'.
 module DbSync.App.Config.Types
   ( -- * Top-level config
     SyncConfig (..)
-  , DatabaseConfig (..)
   , SyncSettings (..)
   , SyncMode (..)
   , LedgerConfig (..)
@@ -19,8 +19,8 @@ module DbSync.App.Config.Types
   , LoggingConfig (..)
   , LogFormat (..)
 
-    -- * Sync options
-  , DbSyncOptions (..)
+    -- * DB profile
+  , DbProfile (..)
   , OptionFlag (..)
   , UtxoOption (..)
   , UtxoStrategy (..)
@@ -34,11 +34,8 @@ module DbSync.App.Config.Types
   , defaultSnapshotNearTipEpoch
   , defaultMetricsConfig
   , defaultLoggingConfig
-  , defaultDbSyncOptions
+  , defaultDbProfile
   , defaultUtxoOption
-
-    -- * DB-sync node config (from db-sync-config.json)
-  , DbSyncNodeConfig (..)
 
     -- * Node config (from config.json)
   , NodeConfig (..)
@@ -47,7 +44,7 @@ module DbSync.App.Config.Types
     -- * Errors
   , ConfigError (..)
 
-    -- * Profile parsing
+    -- * Config parsing
   , parseConfig
   , parseConfigBS
   ) where
@@ -63,45 +60,25 @@ import qualified Data.Yaml as Yaml
 -- * Top-level config
 -- ---------------------------------------------------------------------------
 
--- | Top-level sync configuration, parsed from the profile JSON file.
+-- | Top-level sync configuration. Every section is optional, so an
+-- empty object is a valid (all-defaults) config.
 data SyncConfig = SyncConfig
-  { scDatabase :: !DatabaseConfig
-  , scSync     :: !SyncSettings
-  , scLedger   :: !LedgerConfig
-  , scOptions  :: !DbSyncOptions
-  , scMetrics  :: !MetricsConfig
-  , scLogging  :: !LoggingConfig
+  { scSync      :: !SyncSettings
+  , scLedger    :: !LedgerConfig
+  , scDbProfile :: !DbProfile
+  , scMetrics   :: !MetricsConfig
+  , scLogging   :: !LoggingConfig
   }
   deriving stock (Eq, Show)
 
 instance FromJSON SyncConfig where
   parseJSON = Aeson.withObject "SyncConfig" $ \o ->
     SyncConfig
-      <$> o .:  "database"
-      <*> o .:? "sync"           .!= defaultSyncSettings
-      <*> o .:? "ledger"         .!= defaultLedgerConfig
-      <*> o .:? "db_options"     .!= defaultDbSyncOptions
-      <*> o .:? "metrics"        .!= defaultMetricsConfig
-      <*> o .:? "logging"        .!= defaultLoggingConfig
-
--- | PostgreSQL connection configuration.
-data DatabaseConfig = DatabaseConfig
-  { dcHost     :: !Text
-  , dcPort     :: !Int
-  , dcName     :: !Text
-  , dcUser     :: !Text
-  , dcPassword :: !Text
-  }
-  deriving stock (Eq, Show)
-
-instance FromJSON DatabaseConfig where
-  parseJSON = Aeson.withObject "DatabaseConfig" $ \o ->
-    DatabaseConfig
-      <$> o .:  "host"
-      <*> o .:? "port"     .!= 5432
-      <*> o .:  "name"
-      <*> o .:? "user"     .!= "postgres"
-      <*> o .:? "password" .!= ""
+      <$> o .:? "sync"       .!= defaultSyncSettings
+      <*> o .:? "ledger"     .!= defaultLedgerConfig
+      <*> o .:? "db_profile" .!= defaultDbProfile
+      <*> o .:? "metrics"    .!= defaultMetricsConfig
+      <*> o .:? "logging"    .!= defaultLoggingConfig
 
 -- | Sync behaviour settings.
 data SyncSettings = SyncSettings
@@ -243,15 +220,15 @@ instance FromJSON LogFormat where
       _      -> Aeson.typeMismatch "LogFormat (text|json)" (Aeson.String t)
 
 -- ---------------------------------------------------------------------------
--- * Sync options
+-- * DB profile
 -- ---------------------------------------------------------------------------
 
--- | Per-extractor configuration. Omit a key to disable; set
--- @"key": true@ to enable.
+-- | Per-extractor configuration: which tables get populated. Omit a
+-- key to disable; set @"key": true@ to enable.
 --
 -- 'pcUtxo' has its own record because the UTxO extractor needs
 -- multiple knobs; the rest are flat bools.
-data DbSyncOptions = DbSyncOptions
+data DbProfile = DbProfile
   { pcUtxo                  :: !UtxoOption
   , pcMultiAsset            :: !OptionFlag
   , pcMetadata              :: !OptionFlag
@@ -271,9 +248,9 @@ data DbSyncOptions = DbSyncOptions
   }
   deriving stock (Eq, Show)
 
-instance FromJSON DbSyncOptions where
-  parseJSON = Aeson.withObject "DbSyncOptions" $ \o ->
-    DbSyncOptions
+instance FromJSON DbProfile where
+  parseJSON = Aeson.withObject "DbProfile" $ \o ->
+    DbProfile
       <$> o .:? "utxo"                    .!= defaultUtxoOption
       <*> o .:? "multi_asset"             .!= disabled
       <*> o .:? "metadata"                .!= disabled
@@ -294,11 +271,11 @@ instance FromJSON DbSyncOptions where
       disabled     = OptionFlag False
       epochDefault = OptionFlag True
 
--- | Default option config used when @"db_options"@ is omitted:
--- every optional extractor off /except/ 'pcEpoch', so the @epoch@
--- view machinery is available without an explicit opt-in.
-defaultDbSyncOptions :: DbSyncOptions
-defaultDbSyncOptions = DbSyncOptions
+-- | Default profile used when @"db_profile"@ is omitted: every
+-- optional extractor off /except/ 'pcEpoch', so the @epoch@ view
+-- machinery is available without an explicit opt-in.
+defaultDbProfile :: DbProfile
+defaultDbProfile = DbProfile
   { pcUtxo                  = defaultUtxoOption
   , pcMultiAsset            = OptionFlag False
   , pcMetadata              = OptionFlag False
@@ -321,7 +298,7 @@ defaultDbSyncOptions = DbSyncOptions
 --
 -- Wraps a 'Bool' explicitly so options that grow variants (e.g.
 -- multi-asset policy allowlists, metadata key filters) can extend
--- without touching the @DbSyncOptions@ record.
+-- without touching the @DbProfile@ record.
 data OptionFlag = OptionFlag
   { prEnabled :: !Bool
   }
@@ -422,28 +399,6 @@ data GovernanceVariant
   deriving stock (Eq, Show)
 
 -- ---------------------------------------------------------------------------
--- * DB-sync node config (from db-sync-config.json)
--- ---------------------------------------------------------------------------
-
--- | Fields we read from the user's db-sync-config.json (the file
--- downloadable from the Cardano book): the path to the real
--- @config.json@ plus optional metadata. iohk-monitoring keys and
--- @insert_options@ are ignored.
-data DbSyncNodeConfig = DbSyncNodeConfig
-  { dscNodeConfigFile :: !FilePath     -- ^ Path to the real node config.json (relative)
-  , dscNetworkName    :: !(Maybe Text) -- ^ "mainnet", "preprod", etc.
-  , dscPrometheusPort :: !(Maybe Int)  -- ^ Prometheus metrics port
-  }
-  deriving stock (Eq, Show)
-
-instance FromJSON DbSyncNodeConfig where
-  parseJSON = Aeson.withObject "DbSyncNodeConfig" $ \o ->
-    DbSyncNodeConfig
-      <$> o .:  "NodeConfigFile"
-      <*> o .:? "NetworkName"
-      <*> o .:? "PrometheusPort"
-
--- ---------------------------------------------------------------------------
 -- * Node config (from config.json)
 -- ---------------------------------------------------------------------------
 
@@ -519,10 +474,10 @@ data ConfigError
 instance Exception ConfigError
 
 -- ---------------------------------------------------------------------------
--- * Profile parsing
+-- * Config parsing
 -- ---------------------------------------------------------------------------
 
--- | Parse a db-sync YAML config file from a file path.
+-- | Parse a dbsync config file (YAML or JSON) from a file path.
 parseConfig :: FilePath -> IO (Either ConfigError SyncConfig)
 parseConfig fp =
   first (ConfigParseError . show) <$> Yaml.decodeFileEither fp

@@ -155,7 +155,7 @@ Extractors are wired up in
 [`DbSync.App.Setup.buildExtractors`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/App/Setup.hs)
 by name. The `core` extractor is unconditional and leads the list;
 the rest are resolved from a `(name, enabled?)` table built from the
-profile's `db_options` against the registry in
+config's `db_profile` against the registry in
 [`DbSync.Extractor.Registry`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/Extractor/Registry.hs).
 A name with no implementation (today only `current_state`) resolves to
 a no-op stub, so enabling it is accepted but writes nothing.

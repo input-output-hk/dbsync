@@ -193,7 +193,7 @@ spec = describe "DbSync.SyncState.Manager.commitEpoch" $
     it "flushes bulk data AND advances dbsync_sync_state atomically" $ do
       -- Arrange: control conn seeded, loader stream primed.
       withControlConnection $ \ctrl -> do
-        runAppM ctrl (seedSyncState 1 testFp False [])
+        runAppM ctrl (seedSyncState 1 testFp False [] 42 "magic-42")
         bs <- mkLoaderStream testConnBs coreTables
         -- Act: push one row through each of the three tables, commit.
         writeOneOfEach bs 1
@@ -214,7 +214,7 @@ spec = describe "DbSync.SyncState.Manager.commitEpoch" $
 
     it "counters advance monotonically across two epochs" $
       withControlConnection $ \ctrl -> do
-        runAppM ctrl (seedSyncState 1 testFp False [])
+        runAppM ctrl (seedSyncState 1 testFp False [] 42 "magic-42")
         bs <- mkLoaderStream testConnBs coreTables
         let env = LoaderWithControl bs ctrl
         -- Epoch 5
@@ -235,7 +235,7 @@ spec = describe "DbSync.SyncState.Manager.commitEpoch" $
 
     it "data table grows by one row per epoch" $
       withControlConnection $ \ctrl -> do
-        runAppM ctrl (seedSyncState 1 testFp False [])
+        runAppM ctrl (seedSyncState 1 testFp False [] 42 "magic-42")
         bs <- mkLoaderStream testConnBs coreTables
         let env = LoaderWithControl bs ctrl
         writeOneOfEach bs 1

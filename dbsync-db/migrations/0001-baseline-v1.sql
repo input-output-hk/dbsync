@@ -37,6 +37,8 @@ CREATE TABLE "dbsync_sync_state" (
   "pending_rollback_slot" BIGINT,
   "schema_fingerprint" TEXT NOT NULL,
   "extractors" TEXT[] NOT NULL,
+  "network_magic" BIGINT NOT NULL,
+  "network_name" TEXT NOT NULL,
   "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
   PRIMARY KEY ("id"),
   CHECK ("id" = 1)

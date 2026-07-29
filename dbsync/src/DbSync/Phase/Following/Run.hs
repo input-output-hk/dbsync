@@ -51,7 +51,7 @@ import DbSync.Db.Statement.Transaction (beginSql, commitSql, rollbackSql)
 import DbSync.App.Config.Types
   ( SyncConfig (..)
   , OptionFlag (..)
-  , DbSyncOptions (..)
+  , DbProfile (..)
   , UtxoOption (..)
   )
 import DbSync.App.Env (CoreEnv (..), FollowEnv (..), HasConfig (..), HasNetwork)
@@ -303,7 +303,7 @@ processForward progressRef replayRef lastAppliedRef cardanoBlock = do
           epochViewOn = any ((== tdName epochFinalizedTableDef) . tdName)
                             (concatMap pdTables (ceExtractors feCore))
           consumedTracking =
-            if uoConsumedByTxId (pcUtxo (scOptions (getConfig env)))
+            if uoConsumedByTxId (pcUtxo (scDbProfile (getConfig env)))
               then TrackConsumedBy
               else SkipConsumedBy
           !genBlock = parseBlock cborEnabled sd cardanoBlock
@@ -380,9 +380,9 @@ runFollowBoundary = \case
     applyResult  <- liftIO $ readBoundaryApplyResult lenv
     resolver     <- asks getResolver
     mBlockId     <- liftIO $ lookupLastBlockId resolver
-    governanceOn <- asks (prEnabled . pcGovernance . scOptions . getConfig)
-    poolStatsOn  <- asks (prEnabled . pcPoolStats  . scOptions . getConfig)
-    sdlOn        <- asks (prEnabled . pcStakeDelegationLedger . scOptions . getConfig)
+    governanceOn <- asks (prEnabled . pcGovernance . scDbProfile . getConfig)
+    poolStatsOn  <- asks (prEnabled . pcPoolStats  . scDbProfile . getConfig)
+    sdlOn        <- asks (prEnabled . pcStakeDelegationLedger . scDbProfile . getConfig)
     for_ mBlockId $ \blockId -> do
       when governanceOn $ runGovernanceBoundary applyResult blockId
       runEpochBoundary applyResult blockId

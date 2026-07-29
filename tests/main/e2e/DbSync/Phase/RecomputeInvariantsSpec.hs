@@ -11,7 +11,7 @@ import Cardano.Prelude
 import Test.Hspec (Spec, describe, it, shouldReturn, shouldSatisfy)
 
 import DbSync.Test.AppHarness
-  ( defaultTestProfile
+  ( defaultTestConfig
   , quietTracer
   , waitForSyncComplete
   , withTempDir
@@ -39,7 +39,7 @@ spec = describe "Recompute invariants" $
         _ <- forgeAndPushBlocksWith mn 250 mainnetLikeWorkload
 
         tracer <- quietTracer
-        withAppSession tracer defaultTestProfile mn ledgerDir $ \_ -> do
+        withAppSession tracer defaultTestConfig mn ledgerDir $ \_ -> do
           waitForSyncComplete 120
 
           -- A finalized epoch must exist, otherwise the epoch check is vacuous.

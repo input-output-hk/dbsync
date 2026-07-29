@@ -1,0 +1,5 @@
+{
+  "host": "localhost",
+  "name": "cexplorer",
+  "password_file": "does-not-exist.txt"
+}

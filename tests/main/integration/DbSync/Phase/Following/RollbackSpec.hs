@@ -298,8 +298,8 @@ cascadeSpec = describe "Rollback.rollbackToPoint" $
       -- Seed the sync-state row so the UPDATE has somewhere to land.
       _ <- queryTestDb $
         "INSERT INTO " <> tdName syncStateTableDef
-          <> " (schema_version_applied, ledger_enabled, schema_fingerprint, extractors)"
-          <> " VALUES (1, false, 'test-fp', '{}') ON CONFLICT (id) DO NOTHING;"
+          <> " (schema_version_applied, ledger_enabled, schema_fingerprint, extractors, network_magic, network_name)"
+          <> " VALUES (1, false, 'test-fp', '{}', 42, 'magic-42') ON CONFLICT (id) DO NOTHING;"
 
       withTestConnection $ \conn ->
         runAppM (RollbackTestEnv conn cardanoSecurityParam)

@@ -30,7 +30,7 @@ import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Trace.Backend (mkTestTracer)
 import DbSync.Trace.Types (AppTracer, LogMsg (..))
 import DbSync.Test.AppHarness
-  ( ledgerEnabledTestProfile
+  ( ledgerEnabledTestConfig
   , waitForSyncComplete
   , withTempDir
   )
@@ -60,7 +60,7 @@ spec = describe "Ingest \x2192 Follow handoff re-delivery safety" $
         logs <- newIORef []
         let tracer = mkTestTracer logs :: AppTracer
 
-        withAppSession tracer ledgerEnabledTestProfile mn ledgerDir $ \_ -> do
+        withAppSession tracer ledgerEnabledTestConfig mn ledgerDir $ \_ -> do
           -- Forge while Ingest and Prep are still running so the
           -- handoff starts with a genuinely buffered volatile tail —
           -- the production shape in which the re-delivery bug fired.

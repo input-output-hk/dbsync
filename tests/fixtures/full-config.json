@@ -1,18 +1,11 @@
 {
-  "database": {
-    "host": "localhost",
-    "port": 5432,
-    "name": "dbsync_test",
-    "user": "",
-    "password": ""
-  },
   "sync": {
     "mode": "auto"
   },
   "ledger": {
     "enabled": true
   },
-  "db_options": {
+  "db_profile": {
     "utxo": {
       "enabled": true
     },

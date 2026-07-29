@@ -29,19 +29,19 @@ PG isn't reachable on the configured host/port.
 
 - On a local install: `systemctl status postgresql` (Linux) or
   `brew services list | grep postgres` (macOS).
-- Check the host / port in your profile's `database` section.
+- Check the host / port in your `--pg-config` file.
 - For remote PG, confirm `pg_hba.conf` allows the dbsync host.
 
 ## "FATAL: role "..." does not exist"
 
-The PG user named in the profile doesn't exist. Create it:
+The PG user named in the pg-config file doesn't exist. Create it:
 
 ```bash
 createuser --createdb dbsync
 ```
 
-Or set `user: ""` in the profile to fall back to the OS user (peer
-authentication on a local install).
+Or set `user: ""` in the pg-config file to fall back to the OS user
+(peer authentication on a local install).
 
 ## "permission denied for database "cexplorer""
 
@@ -53,8 +53,8 @@ grant `CONNECT`, `CREATE`, and `USAGE` on the `public` schema.
 
 ## "… extractor requires … to be enabled"
 
-Profile validation rejected the combination and named the missing
-dependency. Add it to `db_options`, or enable `ledger`. The enforced
+Config validation rejected the combination and named the missing
+dependency. Add it to `db_profile`, or enable `ledger`. The enforced
 rules:
 
 - `multi_asset` → needs `utxo`.
@@ -63,18 +63,35 @@ rules:
 - `epoch_boundary`, `pool_stats`, `stake_delegation_ledger`,
   `current_state` → need `ledger.enabled = true`.
 
-See [Custom profiles](../profiles/custom) for the dependency table.
+See [Custom configs](../profiles/custom) for the dependency table.
 
-## "Profile mismatch — database was synced with X, profile says Y"
+## "Schema mismatch — refusing to start"
 
-You changed the profile against an existing database. This is the
+You changed the config against an existing database. This is the
 [profile immutability](../profiles/overview#profile-immutability)
 guard. Your options:
 
-- Revert the profile to match what's in the database (resume the
+- Revert the config to match what's in the database (resume the
   existing sync).
 - Re-sync against a fresh database (drop the existing one).
 - Pass `--resync-from-genesis` to wipe and start over (destructive).
+
+## "Cannot resume: the database was synced against a different network"
+
+On first run dbsync records the network in the database
+(`dbsync_sync_state.network_magic` / `network_name`); every later boot
+compares that against the genesis reachable through `--node-config`
+and refuses to interleave two chains. The message names both sides:
+
+```
+  Database : preview (magic 2)
+  This run : mainnet (magic 764824073)
+```
+
+- Wrong `--node-config` (the common case): point it at the
+  `config.json` of the network this database was synced against.
+- Actually switching networks: use a fresh database, or pass
+  `--resync-from-genesis` to wipe this one (destructive).
 
 ## "WARN: wal_level is replica; consider 'minimal' during initial sync"
 
@@ -145,7 +162,7 @@ If the process is OOM-killed:
 - Confirm you have at least 16 GB of RAM total (8 for the ledger,
   plus PG's `shared_buffers`, plus the sync's working set).
 - If memory is genuinely tight, disable the ledger and use
-  `everything-no-ledger-profile.json` instead. You lose rewards /
+  `everything-no-ledger.json` instead. You lose rewards /
   deposits / protocol-param tables; everything else still works.
 
 ## Slow Ingest — diagnostics

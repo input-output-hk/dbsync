@@ -1,50 +1,20 @@
--- | Tests for node configuration parsing.
---
--- Two-stage parsing:
---   1. Parse db-sync-config.json → extract NodeConfigFile path
---   2. Parse the referenced config.json → NodeConfig with genesis paths, hashes, triggers
+-- | Tests for cardano-node config parsing: genesis paths, hashes,
+-- network magic, and hard-fork trigger epochs.
 module DbSync.App.Config.NodeSpec
   ( spec
   ) where
 
 import Cardano.Prelude
 
-import DbSync.App.Config.Node (parseDbSyncNodeConfig, parseNodeConfig)
+import DbSync.App.Config.Node (parseNodeConfig)
 import DbSync.App.Config.Types
-  ( DbSyncNodeConfig (..)
-  , NetworkMagicConfig (..)
+  ( NetworkMagicConfig (..)
   , NodeConfig (..)
   )
 import Test.Hspec (Spec, describe, it, shouldBe)
 
 spec :: Spec
 spec = describe "DbSync.App.Config.Node" $ do
-  describe "parseDbSyncNodeConfig" $ do
-    it "extracts NodeConfigFile from db-sync-config.json" $ do
-      result <- parseDbSyncNodeConfig "fixtures/db-sync-config.json"
-      case result of
-        Left err -> panic $ "Parse failed: " <> show err
-        Right dsc ->
-          dscNodeConfigFile dsc `shouldBe` "config.json"
-
-    it "extracts optional NetworkName" $ do
-      result <- parseDbSyncNodeConfig "fixtures/db-sync-config.json"
-      case result of
-        Left err -> panic $ "Parse failed: " <> show err
-        Right dsc ->
-          dscNetworkName dsc `shouldBe` Just "mainnet"
-
-    -- Verbatim snapshot of a real mainnet db-sync-config.json,
-    -- captured from a running deployment. Exercises the full
-    -- field set our parser sees in production, not the trimmed
-    -- shape of 'fixtures/db-sync-config.json'.
-    it "parses a real production db-sync-config.json" $ do
-      result <- parseDbSyncNodeConfig "fixtures/db-sync-config-real-mainnet.json"
-      case result of
-        Left err -> panic $ "Parse failed: " <> show err
-        Right dsc ->
-          dscNodeConfigFile dsc `shouldBe` "config.json"
-
   describe "parseNodeConfig (mainnet-style)" $ do
     it "extracts genesis file paths" $ do
       result <- parseNodeConfig "fixtures/node-config.json"

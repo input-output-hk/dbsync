@@ -15,6 +15,7 @@ module DbSync.ChainSync.Connection
     -- * Running
   , connectToNode
   , getNetworkMagic
+  , networkNameFromMagic
 
     -- * Block delivery
     --
@@ -145,6 +146,17 @@ data IntersectionRequirement
 -- Comes from the Shelley genesis 'sgNetworkMagic' field.
 getNetworkMagic :: GenesisConfig -> NetworkMagic
 getNetworkMagic gc = NetworkMagic $ sgNetworkMagic (scConfig $ gcShelley gc)
+
+-- | Human-readable label for the well-known network magics; any other
+-- magic renders as @magic-\<N\>@. The magic is the identity — the name
+-- exists for log lines and the @dbsync_sync_state.network_name@ column.
+networkNameFromMagic :: NetworkMagic -> Text
+networkNameFromMagic (NetworkMagic magic) = case magic of
+  764824073 -> "mainnet"
+  1         -> "preprod"
+  2         -> "preview"
+  4         -> "sanchonet"
+  n         -> "magic-" <> show n
 
 -- ---------------------------------------------------------------------------
 -- * Connection

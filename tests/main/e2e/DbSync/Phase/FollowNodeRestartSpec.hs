@@ -25,7 +25,7 @@ import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Trace.Backend (mkTestTracer)
 import DbSync.Trace.Types (AppTracer, LogMsg (..))
 import DbSync.Test.AppHarness
-  ( defaultTestProfile
+  ( defaultTestConfig
   , waitForSyncComplete
   , withTempDir
   )
@@ -57,7 +57,7 @@ spec = describe "Node-restart reconnect resilience" $
         -- Seed enough history to run Ingest -> Prep -> Follow.
         _ <- forgeAndPushBlocks mn 150
 
-        withAppSession tracer defaultTestProfile mn ledgerDir $ \_app -> do
+        withAppSession tracer defaultTestConfig mn ledgerDir $ \_app -> do
           waitForSyncComplete 90
 
           -- Advance in Follow so the receiver's latest received point

@@ -35,7 +35,7 @@ import DbSync.App.Config.Types
   ( LoggingConfig (..)
   , NodeConfig
   , OptionFlag (..)
-  , DbSyncOptions (..)
+  , DbProfile (..)
   , SyncConfig (..)
   , UtxoOption (..)
   )
@@ -76,7 +76,7 @@ import DbSync.Worker.OffChain.Vote
 -- first subsystem log onwards.
 buildCoreEnv :: AppTracer -> SyncConfig -> NodeConfig -> Network -> IO CoreEnv
 buildCoreEnv tracer syncCfg nodeCfg network = do
-  extractors <- case buildExtractors (scOptions syncCfg) of
+  extractors <- case buildExtractors (scDbProfile syncCfg) of
     Left err  -> throwInternal err
     Right xs  -> pure xs
   curPhase <- newCurrentPhase IngestChainHistory
@@ -97,13 +97,13 @@ buildCoreEnv tracer syncCfg nodeCfg network = do
 --
 -- 'coreExtractor' is unconditional — every other extractor's tables
 -- reference its block / tx / slot_leader rows — and so leads the list.
--- Optional extractors come from @db_options@ and are resolved against
+-- Optional extractors come from @db_profile@ and are resolved against
 -- 'allKnownExtractors'; a name with no implementation yet (e.g.
 -- @current_state@) gets a no-op stub so its enablement is still
 -- recorded and the schema reflects it once the work lands.
 --
 -- Returns 'Either' for call-site symmetry, though construction cannot fail.
-buildExtractors :: DbSyncOptions -> Either Text [ExtractorDef]
+buildExtractors :: DbProfile -> Either Text [ExtractorDef]
 buildExtractors pc =
   Right (coreExtractor : mapMaybe mkProj optionalExtractors)
   where
@@ -207,7 +207,7 @@ showExtractorList = mconcat . intersperse ", "
 setupOffChainPoolWorker
   :: AppTracer
   -> HasqlSettings.Settings
-  -> DbSyncOptions
+  -> DbProfile
   -> IO (Maybe OffChainPoolWorker)
 setupOffChainPoolWorker tracer hasqlSettings opts
   | prEnabled (pcOffChainPools opts) = do
@@ -224,7 +224,7 @@ setupOffChainPoolWorker tracer hasqlSettings opts
 setupOffChainVoteWorker
   :: AppTracer
   -> HasqlSettings.Settings
-  -> DbSyncOptions
+  -> DbProfile
   -> IO (Maybe OffChainVoteWorker)
 setupOffChainVoteWorker tracer hasqlSettings opts
   | prEnabled (pcOffChainVotes opts) = do

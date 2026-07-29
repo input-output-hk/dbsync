@@ -12,7 +12,7 @@ import DbSync.App.Config.Types
   ( ConfigError (..)
   , LedgerConfig (..)
   , OptionFlag (..)
-  , DbSyncOptions (..)
+  , DbProfile (..)
   , SyncConfig (..)
   , UtxoOption (..)
   )
@@ -48,7 +48,7 @@ checkEpochBoundaryRequiresLedger cfg
       ]
   | otherwise = []
   where
-    extractors = scOptions cfg
+    extractors = scDbProfile cfg
     ledger = scLedger cfg
 
 checkPoolStatsRequiresLedger :: SyncConfig -> [ConfigError]
@@ -61,7 +61,7 @@ checkPoolStatsRequiresLedger cfg
       ]
   | otherwise = []
   where
-    extractors = scOptions cfg
+    extractors = scDbProfile cfg
     ledger = scLedger cfg
 
 checkStakeDelegationLedgerRequiresLedger :: SyncConfig -> [ConfigError]
@@ -75,7 +75,7 @@ checkStakeDelegationLedgerRequiresLedger cfg
       ]
   | otherwise = []
   where
-    extractors = scOptions cfg
+    extractors = scDbProfile cfg
     ledger = scLedger cfg
 
 checkCurrentStateRequiresLedger :: SyncConfig -> [ConfigError]
@@ -88,7 +88,7 @@ checkCurrentStateRequiresLedger cfg
       ]
   | otherwise = []
   where
-    extractors = scOptions cfg
+    extractors = scDbProfile cfg
     ledger = scLedger cfg
 
 checkMultiAssetRequiresUtxo :: SyncConfig -> [ConfigError]
@@ -101,7 +101,7 @@ checkMultiAssetRequiresUtxo cfg
       ]
   | otherwise = []
   where
-    extractors = scOptions cfg
+    extractors = scDbProfile cfg
 
 checkOffChainPoolsRequiresPool :: SyncConfig -> [ConfigError]
 checkOffChainPoolsRequiresPool cfg
@@ -113,7 +113,7 @@ checkOffChainPoolsRequiresPool cfg
       ]
   | otherwise = []
   where
-    extractors = scOptions cfg
+    extractors = scDbProfile cfg
 
 checkOffChainVotesRequiresGovernance :: SyncConfig -> [ConfigError]
 checkOffChainVotesRequiresGovernance cfg
@@ -125,4 +125,4 @@ checkOffChainVotesRequiresGovernance cfg
       ]
   | otherwise = []
   where
-    extractors = scOptions cfg
+    extractors = scDbProfile cfg

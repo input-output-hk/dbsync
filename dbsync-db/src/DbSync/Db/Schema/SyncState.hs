@@ -156,6 +156,8 @@ syncStateTableDef = TableDef
       , ColumnDef "pending_rollback_slot"           PgBigInt      True
       , ColumnDef "schema_fingerprint"              PgText        False
       , ColumnDef "extractors"                      PgTextArray   False
+      , ColumnDef "network_magic"                   PgBigInt      False
+      , ColumnDef "network_name"                    PgText        False
       , ColumnDef "updated_at"                      PgTimestampTz False
       ]
   , tdMode          = TableLogged
@@ -267,6 +269,8 @@ data SyncStateCols = SyncStateCols
   , sscPendingRollbackSlot         :: !TableColumn
   , sscSchemaFingerprint           :: !TableColumn
   , sscExtractors                  :: !TableColumn
+  , sscNetworkMagic                :: !TableColumn
+  , sscNetworkName                 :: !TableColumn
   , sscUpdatedAt                   :: !TableColumn
   }
 
@@ -305,6 +309,8 @@ syncStateCols =
        , sscPendingRollbackSlot        = c "pending_rollback_slot"
        , sscSchemaFingerprint          = c "schema_fingerprint"
        , sscExtractors                 = c "extractors"
+       , sscNetworkMagic               = c "network_magic"
+       , sscNetworkName                = c "network_name"
        , sscUpdatedAt                  = c "updated_at"
        }
 
@@ -341,6 +347,8 @@ syncStateColsList =
   , syncStateCols.sscPendingRollbackSlot
   , syncStateCols.sscSchemaFingerprint
   , syncStateCols.sscExtractors
+  , syncStateCols.sscNetworkMagic
+  , syncStateCols.sscNetworkName
   , syncStateCols.sscUpdatedAt
   ]
 
@@ -393,10 +401,12 @@ syncStateRowEncoder =
 --
 -- Consumes every column of the table in 'tdColumns' order so the
 -- statement can use a plain @SELECT *@. The leading @id@ and the
--- trailing @schema_fingerprint@ / @extractors@ / @updated_at@ are
--- discarded — none belongs in 'SyncStateRow' (the id is fixed at 1 by
--- CHECK; the fingerprint and extractor set are owned by the
--- schema-version gate; @updated_at@ is managed by the SET clause).
+-- trailing @schema_fingerprint@ / @extractors@ / @network_magic@ /
+-- @network_name@ / @updated_at@ are discarded — none belongs in
+-- 'SyncStateRow' (the id is fixed at 1 by CHECK; the fingerprint and
+-- extractor set are owned by the schema-version gate; the network
+-- identity by the network gate; @updated_at@ is managed by the SET
+-- clause).
 syncStateRowDecoder :: D.Row SyncStateRow
 syncStateRowDecoder =
        skipCol D.int2                                          -- id
@@ -432,6 +442,8 @@ syncStateRowDecoder =
        )
     <* skipCol D.text                                          -- schema_fingerprint
     <* skipCol (D.array (D.dimension replicateM (D.element (D.nonNullable D.text))))  -- extractors
+    <* skipCol D.int8                                          -- network_magic
+    <* skipCol D.text                                          -- network_name
     <* skipCol D.timestamptz                                   -- updated_at
   where
     -- Read a column at the current position and discard the value.

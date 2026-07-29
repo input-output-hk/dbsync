@@ -46,7 +46,7 @@ import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Trace.Backend (mkTestTracer)
 import DbSync.Trace.Types (LogMsg (..))
 import DbSync.Test.AppHarness
-  ( ledgerEnabledTestProfile
+  ( ledgerEnabledTestConfig
   , waitForSyncComplete
   , withTempDir
   )
@@ -87,7 +87,7 @@ spec = describe "FollowingChainTip restart replay on boot" $
         _ <- forgeAndPushBlocks mn 400
 
         (preBlocks, preDedupCounts, lastCommitted, snapshotsAfterFirst) <-
-          withAppSession firstTracer ledgerEnabledTestProfile mn ledgerDir $ \_ -> do
+          withAppSession firstTracer ledgerEnabledTestConfig mn ledgerDir $ \_ -> do
             waitForSyncComplete 90
             -- 250 Follow blocks ≈ 1300 slots, enough to cross two
             -- epoch boundaries (~slot 2500, ~slot 3000) and so write
@@ -118,7 +118,7 @@ spec = describe "FollowingChainTip restart replay on boot" $
         secondLogs <- newIORef []
         let secondTracer = mkTestTracer secondLogs
 
-        withAppSessionResume secondTracer ledgerEnabledTestProfile mn ledgerDir $ \_ -> do
+        withAppSessionResume secondTracer ledgerEnabledTestConfig mn ledgerDir $ \_ -> do
           waitFor "sync_complete remains true on restart" syncCompleteTrue 60
 
           -- Count-preservation. Read before any new block streams: the

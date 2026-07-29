@@ -88,7 +88,7 @@ the `-Wwarn` override in
 ├── dbsync-db/     # schema layer
 ├── dbsync-smash/  # SMASH server (stub)
 ├── tests/         # tests + dbsync-testlib + dbsync-mock
-├── profiles/      # shipped profile JSON
+├── config-examples/  # shipped config JSON (presets + pg-config example)
 ├── scripts/       # operator scripts
 ├── docs/          # this documentation site
 └── cabal.project  # workspace + CHaP pin

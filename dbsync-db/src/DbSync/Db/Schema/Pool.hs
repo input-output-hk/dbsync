@@ -93,15 +93,15 @@ import DbSync.Db.Schema.Types
 import DbSync.Db.Types
   ( DbLovelace (..)
   , DbWord64 (..)
-  , bDouble
+  , bRational
   , dbLovelaceValueDecoder
   , dbLovelaceValueEncoder
   , dbWord64ValueDecoder
   , dbWord64ValueEncoder
-  , doubleAsTextDecoder
-  , doubleAsTextEncoder
   , maybeDbLovelaceDecoder
   , maybeDbLovelaceEncoder
+  , rationalAsNumericDecoder
+  , rationalAsNumericEncoder
   )
 import DbSync.Db.Loader.Encoder (buildCopyRow, bHex, bInt64, bText, bWord64)
 
@@ -130,7 +130,7 @@ data PoolUpdate = PoolUpdate
   , poolUpdatePledge        :: !DbLovelace
   , poolUpdateActiveEpochNo :: !Word64
   , poolUpdateMetaId        :: !(Maybe PoolMetadataRefId)
-  , poolUpdateMargin        :: !Double
+  , poolUpdateMargin        :: !Rational
   , poolUpdateFixedCost     :: !DbLovelace
   , poolUpdateRegisteredTxId :: !TxId
   , poolUpdateRewardAddrId  :: !StakeAddressId
@@ -217,7 +217,7 @@ poolUpdateTableDef = TableDef
       , ColumnDef "pledge"           PgNumeric  False
       , ColumnDef "active_epoch_no"  PgBigInt   False
       , ColumnDef "meta_id"          PgBigInt   True
-      , ColumnDef "margin"           PgText     False
+      , ColumnDef "margin"           PgNumeric  False
       , ColumnDef "fixed_cost"       PgNumeric  False
       , ColumnDef "registered_tx_id" PgBigInt   False
       , ColumnDef "reward_addr_id"   PgBigInt   False
@@ -651,7 +651,7 @@ encodePoolUpdateCopy (PoolUpdateId puid) pu =
     , Just $ bWord64 (unDbLovelace $ poolUpdatePledge pu)
     , Just $ bWord64 (poolUpdateActiveEpochNo pu)
     , bInt64 . getPoolMetadataRefId <$> poolUpdateMetaId pu
-    , Just $ bDouble (poolUpdateMargin pu)
+    , Just $ bRational (poolUpdateMargin pu)
     , Just $ bWord64 (unDbLovelace $ poolUpdateFixedCost pu)
     , Just $ bInt64 (getTxId $ poolUpdateRegisteredTxId pu)
     , Just $ bInt64 (getStakeAddressId $ poolUpdateRewardAddrId pu)
@@ -732,7 +732,7 @@ poolUpdateEncoder = mconcat
   , poolUpdatePledge        >$< E.param (E.nonNullable dbLovelaceValueEncoder)
   , poolUpdateActiveEpochNo >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
   , poolUpdateMetaId        >$< maybeIdEncoder getPoolMetadataRefId
-  , poolUpdateMargin        >$< E.param (E.nonNullable doubleAsTextEncoder)
+  , poolUpdateMargin        >$< E.param (E.nonNullable rationalAsNumericEncoder)
   , poolUpdateFixedCost     >$< E.param (E.nonNullable dbLovelaceValueEncoder)
   , poolUpdateRegisteredTxId >$< idEncoder getTxId
   , poolUpdateRewardAddrId  >$< idEncoder getStakeAddressId
@@ -747,7 +747,7 @@ poolUpdateDecoder = PoolUpdate
   <*> D.column (D.nonNullable dbLovelaceValueDecoder)
   <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
   <*> maybeIdDecoder PoolMetadataRefId
-  <*> D.column (D.nonNullable doubleAsTextDecoder)
+  <*> D.column (D.nonNullable rationalAsNumericDecoder)
   <*> D.column (D.nonNullable dbLovelaceValueDecoder)
   <*> idDecoder TxId
   <*> idDecoder StakeAddressId

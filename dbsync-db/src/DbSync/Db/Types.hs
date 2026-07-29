@@ -69,7 +69,7 @@ module DbSync.Db.Types
     -- * COPY encoding helpers
   , bInt65
   , bWord128
-  , bDouble
+  , bRational
   , bScriptPurpose
   , bScriptType
   , bRewardSource
@@ -79,11 +79,12 @@ module DbSync.Db.Types
   , bGovActionType
   , bAnchorType
 
-    -- * Double-as-text hasql codecs (PostgreSQL @text@ column type)
-  , doubleAsTextEncoder
-  , doubleAsTextDecoder
-  , maybeDoubleAsTextEncoder
-  , maybeDoubleAsTextDecoder
+    -- * Rational-as-numeric hasql codecs (PostgreSQL @numeric@ column type)
+  , rationalToScientific
+  , rationalAsNumericEncoder
+  , rationalAsNumericDecoder
+  , maybeRationalAsNumericEncoder
+  , maybeRationalAsNumericDecoder
 
     -- * Double-as-numeric hasql codecs (PostgreSQL @numeric@ column type)
   , doubleAsNumericEncoder
@@ -116,11 +117,9 @@ import Data.ByteString.Builder (Builder, byteString)
 import qualified Data.ByteString.Char8 as BS8
 import Data.Functor.Contravariant ((>$<))
 import qualified Data.Scientific as Sci
-import qualified Data.Text as T
 import Data.WideWord (Word128)
 import qualified Hasql.Decoders as D
 import qualified Hasql.Encoders as E
-import qualified Text.Read as TR
 
 import DbSync.Db.Loader.Encoder (bInt64)
 
@@ -327,11 +326,13 @@ bInt65 = bInt64 . fromDbInt65
 bWord128 :: Word128 -> Builder
 bWord128 = byteString . BS8.pack . show . toInteger
 
--- | COPY-builder for a 'Double' that lands in a TEXT column. The
--- wire format is @show \@Double@.
-{-# INLINE bDouble #-}
-bDouble :: Double -> Builder
-bDouble = byteString . BS8.pack . show
+-- | COPY-builder for a 'Rational' that lands in a @numeric@ column.
+-- Emits plain fixed-notation decimal via 'rationalToScientific', so
+-- the wire value matches 'rationalAsNumericEncoder'.
+{-# INLINE bRational #-}
+bRational :: Rational -> Builder
+bRational =
+  byteString . BS8.pack . Sci.formatScientific Sci.Fixed Nothing . rationalToScientific
 
 -- ---------------------------------------------------------------------------
 -- ** Per-enum COPY builders
@@ -510,25 +511,34 @@ word128Encoder = word128ToScientific >$< E.numeric
 word128Decoder :: D.Value Word128
 word128Decoder = scientificToWord128 <$> D.numeric
 
--- | 'Double' encoder against a @text@ column. Encodes via 'show' so
--- the wire format matches 'bDouble'.
-doubleAsTextEncoder :: E.Value Double
-doubleAsTextEncoder = (T.pack . show) >$< E.text
+-- | Fractional-digit cap when encoding a 'Rational' to @numeric@.
+-- 80 covers every terminating decimal with a 'Word64'-bounded
+-- denominator (at most 63 digits), so ledger rationals encode
+-- exactly; non-terminating expansions truncate here instead of
+-- looping.
+rationalNumericScale :: Int
+rationalNumericScale = 80
 
--- | 'Double' decoder against a @text@ column. A malformed value
--- surfaces as a 'D.refine' error rather than a silent default.
-doubleAsTextDecoder :: D.Value Double
-doubleAsTextDecoder = D.refine parse D.text
-  where
-    parse t = case TR.readMaybe (T.unpack t) of
-      Just d  -> Right d
-      Nothing -> Left ("doubleAsTextDecoder: not a Double: " <> t)
+-- | Exact for decimals terminating within 'rationalNumericScale'
+-- digits; truncated toward zero otherwise.
+rationalToScientific :: Rational -> Sci.Scientific
+rationalToScientific r =
+  case Sci.fromRationalRepetend (Just rationalNumericScale) r of
+    Right (s, Nothing) -> s
+    _ -> Sci.scientific (truncate (r * 10 ^ rationalNumericScale)) (negate rationalNumericScale)
 
-maybeDoubleAsTextEncoder :: E.Params (Maybe Double)
-maybeDoubleAsTextEncoder = E.param (E.nullable doubleAsTextEncoder)
+rationalAsNumericEncoder :: E.Value Rational
+rationalAsNumericEncoder = rationalToScientific >$< E.numeric
 
-maybeDoubleAsTextDecoder :: D.Row (Maybe Double)
-maybeDoubleAsTextDecoder = D.column (D.nullable doubleAsTextDecoder)
+-- | Exact: a @numeric@ value is always a terminating decimal.
+rationalAsNumericDecoder :: D.Value Rational
+rationalAsNumericDecoder = toRational <$> D.numeric
+
+maybeRationalAsNumericEncoder :: E.Params (Maybe Rational)
+maybeRationalAsNumericEncoder = E.param (E.nullable rationalAsNumericEncoder)
+
+maybeRationalAsNumericDecoder :: D.Row (Maybe Rational)
+maybeRationalAsNumericDecoder = D.column (D.nullable rationalAsNumericDecoder)
 
 -- | 'Double' encoder against a @numeric@ column.
 doubleAsNumericEncoder :: E.Value Double

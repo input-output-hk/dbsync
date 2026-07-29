@@ -81,20 +81,20 @@ import DbSync.Db.Types
   ( DbInt65
   , DbLovelace (..)
   , DbWord64 (..)
-  , bDouble
   , bInt65
+  , bRational
   , dbInt65Encoder
   , dbInt65Decoder
   , dbLovelaceValueDecoder
   , dbLovelaceValueEncoder
-  , doubleAsTextDecoder
-  , doubleAsTextEncoder
   , maybeDbLovelaceDecoder
   , maybeDbLovelaceEncoder
   , maybeDbWord64Decoder
   , maybeDbWord64Encoder
-  , maybeDoubleAsTextDecoder
-  , maybeDoubleAsTextEncoder
+  , maybeRationalAsNumericDecoder
+  , maybeRationalAsNumericEncoder
+  , rationalAsNumericDecoder
+  , rationalAsNumericEncoder
   )
 import DbSync.Db.Loader.Encoder
   ( buildCopyRow
@@ -137,18 +137,18 @@ data EpochParam = EpochParam
   , epochParamPoolDeposit                :: !DbLovelace
   , epochParamMaxEpoch                   :: !Word64
   , epochParamOptimalPoolCount           :: !Word64
-  , epochParamInfluence                  :: !Double
-  , epochParamMonetaryExpandRate         :: !Double
-  , epochParamTreasuryGrowthRate         :: !Double
-  , epochParamDecentralisation           :: !Double
+  , epochParamInfluence                  :: !Rational
+  , epochParamMonetaryExpandRate         :: !Rational
+  , epochParamTreasuryGrowthRate         :: !Rational
+  , epochParamDecentralisation           :: !Rational
   , epochParamProtocolMajor              :: !Word16
   , epochParamProtocolMinor              :: !Word16
   , epochParamMinUtxoValue               :: !DbLovelace
   , epochParamMinPoolCost                :: !DbLovelace
   , epochParamNonce                      :: !(Maybe ByteString)
   , epochParamCostModelId                :: !(Maybe CostModelId)
-  , epochParamPriceMem                   :: !(Maybe Double)
-  , epochParamPriceStep                  :: !(Maybe Double)
+  , epochParamPriceMem                   :: !(Maybe Rational)
+  , epochParamPriceStep                  :: !(Maybe Rational)
   , epochParamMaxTxExMem                 :: !(Maybe DbWord64)
   , epochParamMaxTxExSteps               :: !(Maybe DbWord64)
   , epochParamMaxBlockExMem              :: !(Maybe DbWord64)
@@ -159,28 +159,28 @@ data EpochParam = EpochParam
   , epochParamBlockId                    :: !BlockId
   , epochParamExtraEntropy               :: !(Maybe ByteString)
   , epochParamCoinsPerUtxoSize           :: !(Maybe DbLovelace)
-  , epochParamPvtMotionNoConfidence      :: !(Maybe Double)
-  , epochParamPvtCommitteeNormal         :: !(Maybe Double)
-  , epochParamPvtCommitteeNoConfidence   :: !(Maybe Double)
-  , epochParamPvtHardForkInitiation      :: !(Maybe Double)
-  , epochParamDvtMotionNoConfidence      :: !(Maybe Double)
-  , epochParamDvtCommitteeNormal         :: !(Maybe Double)
-  , epochParamDvtCommitteeNoConfidence   :: !(Maybe Double)
-  , epochParamDvtUpdateToConstitution    :: !(Maybe Double)
-  , epochParamDvtHardForkInitiation      :: !(Maybe Double)
-  , epochParamDvtPPNetworkGroup          :: !(Maybe Double)
-  , epochParamDvtPPEconomicGroup         :: !(Maybe Double)
-  , epochParamDvtPPTechnicalGroup        :: !(Maybe Double)
-  , epochParamDvtPPGovGroup              :: !(Maybe Double)
-  , epochParamDvtTreasuryWithdrawal      :: !(Maybe Double)
+  , epochParamPvtMotionNoConfidence      :: !(Maybe Rational)
+  , epochParamPvtCommitteeNormal         :: !(Maybe Rational)
+  , epochParamPvtCommitteeNoConfidence   :: !(Maybe Rational)
+  , epochParamPvtHardForkInitiation      :: !(Maybe Rational)
+  , epochParamDvtMotionNoConfidence      :: !(Maybe Rational)
+  , epochParamDvtCommitteeNormal         :: !(Maybe Rational)
+  , epochParamDvtCommitteeNoConfidence   :: !(Maybe Rational)
+  , epochParamDvtUpdateToConstitution    :: !(Maybe Rational)
+  , epochParamDvtHardForkInitiation      :: !(Maybe Rational)
+  , epochParamDvtPPNetworkGroup          :: !(Maybe Rational)
+  , epochParamDvtPPEconomicGroup         :: !(Maybe Rational)
+  , epochParamDvtPPTechnicalGroup        :: !(Maybe Rational)
+  , epochParamDvtPPGovGroup              :: !(Maybe Rational)
+  , epochParamDvtTreasuryWithdrawal      :: !(Maybe Rational)
   , epochParamCommitteeMinSize           :: !(Maybe DbWord64)
   , epochParamCommitteeMaxTermLength    :: !(Maybe DbWord64)
   , epochParamGovActionLifetime          :: !(Maybe DbWord64)
   , epochParamGovActionDeposit           :: !(Maybe DbWord64)
   , epochParamDrepDeposit                :: !(Maybe DbWord64)
   , epochParamDrepActivity               :: !(Maybe DbWord64)
-  , epochParamPvtppSecurityGroup         :: !(Maybe Double)
-  , epochParamMinFeeRefScriptCostPerByte :: !(Maybe Double)
+  , epochParamPvtppSecurityGroup         :: !(Maybe Rational)
+  , epochParamMinFeeRefScriptCostPerByte :: !(Maybe Rational)
   }
   deriving stock (Eq, Show)
 
@@ -243,9 +243,9 @@ data Reserve = Reserve
 -- * Table definitions
 -- ---------------------------------------------------------------------------
 
--- | 53-column @epoch_param@. Doubles ride a @text@ column carrying
--- their @show \@Double@ encoding. Conway-era fields (committee
--- thresholds, gov-action params) are all nullable.
+-- | 53-column @epoch_param@. Rational parameters ride @numeric@
+-- columns. Conway-era fields (committee thresholds, gov-action
+-- params) are all nullable.
 --
 -- UNIQUE on @epoch_no@: one row per epoch. A rollback re-crossing
 -- the boundary refreshes the row (including @block_id@) via upsert.
@@ -264,18 +264,18 @@ epochParamTableDef = TableDef
       , ColumnDef "pool_deposit"                    PgNumeric  False
       , ColumnDef "max_epoch"                       PgBigInt   False
       , ColumnDef "optimal_pool_count"              PgBigInt   False
-      , ColumnDef "influence"                       PgText     False
-      , ColumnDef "monetary_expand_rate"            PgText     False
-      , ColumnDef "treasury_growth_rate"            PgText     False
-      , ColumnDef "decentralisation"                PgText     False
+      , ColumnDef "influence"                       PgNumeric  False
+      , ColumnDef "monetary_expand_rate"            PgNumeric  False
+      , ColumnDef "treasury_growth_rate"            PgNumeric  False
+      , ColumnDef "decentralisation"                PgNumeric  False
       , ColumnDef "protocol_major"                  PgSmallInt False
       , ColumnDef "protocol_minor"                  PgSmallInt False
       , ColumnDef "min_utxo_value"                  PgNumeric  False
       , ColumnDef "min_pool_cost"                   PgNumeric  False
       , ColumnDef "nonce"                           PgBytea    True
       , ColumnDef "cost_model_id"                   PgBigInt   True
-      , ColumnDef "price_mem"                       PgText     True
-      , ColumnDef "price_step"                      PgText     True
+      , ColumnDef "price_mem"                       PgNumeric  True
+      , ColumnDef "price_step"                      PgNumeric  True
       , ColumnDef "max_tx_ex_mem"                   PgNumeric  True
       , ColumnDef "max_tx_ex_steps"                 PgNumeric  True
       , ColumnDef "max_block_ex_mem"                PgNumeric  True
@@ -286,28 +286,28 @@ epochParamTableDef = TableDef
       , ColumnDef "block_id"                        PgBigInt   False
       , ColumnDef "extra_entropy"                   PgBytea    True
       , ColumnDef "coins_per_utxo_size"             PgNumeric  True
-      , ColumnDef "pvt_motion_no_confidence"        PgText     True
-      , ColumnDef "pvt_committee_normal"            PgText     True
-      , ColumnDef "pvt_committee_no_confidence"     PgText     True
-      , ColumnDef "pvt_hard_fork_initiation"        PgText     True
-      , ColumnDef "dvt_motion_no_confidence"        PgText     True
-      , ColumnDef "dvt_committee_normal"            PgText     True
-      , ColumnDef "dvt_committee_no_confidence"     PgText     True
-      , ColumnDef "dvt_update_to_constitution"      PgText     True
-      , ColumnDef "dvt_hard_fork_initiation"        PgText     True
-      , ColumnDef "dvt_pp_network_group"            PgText     True
-      , ColumnDef "dvt_pp_economic_group"           PgText     True
-      , ColumnDef "dvt_pp_technical_group"          PgText     True
-      , ColumnDef "dvt_pp_gov_group"                PgText     True
-      , ColumnDef "dvt_treasury_withdrawal"         PgText     True
+      , ColumnDef "pvt_motion_no_confidence"        PgNumeric  True
+      , ColumnDef "pvt_committee_normal"            PgNumeric  True
+      , ColumnDef "pvt_committee_no_confidence"     PgNumeric  True
+      , ColumnDef "pvt_hard_fork_initiation"        PgNumeric  True
+      , ColumnDef "dvt_motion_no_confidence"        PgNumeric  True
+      , ColumnDef "dvt_committee_normal"            PgNumeric  True
+      , ColumnDef "dvt_committee_no_confidence"     PgNumeric  True
+      , ColumnDef "dvt_update_to_constitution"      PgNumeric  True
+      , ColumnDef "dvt_hard_fork_initiation"        PgNumeric  True
+      , ColumnDef "dvt_pp_network_group"            PgNumeric  True
+      , ColumnDef "dvt_pp_economic_group"           PgNumeric  True
+      , ColumnDef "dvt_pp_technical_group"          PgNumeric  True
+      , ColumnDef "dvt_pp_gov_group"                PgNumeric  True
+      , ColumnDef "dvt_treasury_withdrawal"         PgNumeric  True
       , ColumnDef "committee_min_size"              PgNumeric  True
       , ColumnDef "committee_max_term_length"       PgNumeric  True
       , ColumnDef "gov_action_lifetime"             PgNumeric  True
       , ColumnDef "gov_action_deposit"              PgNumeric  True
       , ColumnDef "drep_deposit"                    PgNumeric  True
       , ColumnDef "drep_activity"                   PgNumeric  True
-      , ColumnDef "pvtpp_security_group"            PgText     True
-      , ColumnDef "min_fee_ref_script_cost_per_byte" PgText    True
+      , ColumnDef "pvtpp_security_group"            PgNumeric  True
+      , ColumnDef "min_fee_ref_script_cost_per_byte" PgNumeric True
       ]
   , tdMode = TableUnlogged
   , tdPrimaryKey        = Nothing
@@ -780,18 +780,18 @@ encodeEpochParamCopy ep =
     , Just $ bWord64 (unDbLovelace $ epochParamPoolDeposit ep)
     , Just $ bWord64 (epochParamMaxEpoch ep)
     , Just $ bWord64 (epochParamOptimalPoolCount ep)
-    , Just $ bDouble (epochParamInfluence ep)
-    , Just $ bDouble (epochParamMonetaryExpandRate ep)
-    , Just $ bDouble (epochParamTreasuryGrowthRate ep)
-    , Just $ bDouble (epochParamDecentralisation ep)
+    , Just $ bRational (epochParamInfluence ep)
+    , Just $ bRational (epochParamMonetaryExpandRate ep)
+    , Just $ bRational (epochParamTreasuryGrowthRate ep)
+    , Just $ bRational (epochParamDecentralisation ep)
     , Just $ bInt64 (fromIntegral $ epochParamProtocolMajor ep)
     , Just $ bInt64 (fromIntegral $ epochParamProtocolMinor ep)
     , Just $ bWord64 (unDbLovelace $ epochParamMinUtxoValue ep)
     , Just $ bWord64 (unDbLovelace $ epochParamMinPoolCost ep)
     , bHex   <$> epochParamNonce ep
     , bInt64 . getCostModelId <$> epochParamCostModelId ep
-    , bDouble <$> epochParamPriceMem ep
-    , bDouble <$> epochParamPriceStep ep
+    , bRational <$> epochParamPriceMem ep
+    , bRational <$> epochParamPriceStep ep
     , bWord64 . unDbWord64 <$> epochParamMaxTxExMem ep
     , bWord64 . unDbWord64 <$> epochParamMaxTxExSteps ep
     , bWord64 . unDbWord64 <$> epochParamMaxBlockExMem ep
@@ -802,28 +802,28 @@ encodeEpochParamCopy ep =
     , Just $ bInt64 (getBlockId $ epochParamBlockId ep)
     , bHex <$> epochParamExtraEntropy ep
     , bWord64 . unDbLovelace <$> epochParamCoinsPerUtxoSize ep
-    , bDouble <$> epochParamPvtMotionNoConfidence ep
-    , bDouble <$> epochParamPvtCommitteeNormal ep
-    , bDouble <$> epochParamPvtCommitteeNoConfidence ep
-    , bDouble <$> epochParamPvtHardForkInitiation ep
-    , bDouble <$> epochParamDvtMotionNoConfidence ep
-    , bDouble <$> epochParamDvtCommitteeNormal ep
-    , bDouble <$> epochParamDvtCommitteeNoConfidence ep
-    , bDouble <$> epochParamDvtUpdateToConstitution ep
-    , bDouble <$> epochParamDvtHardForkInitiation ep
-    , bDouble <$> epochParamDvtPPNetworkGroup ep
-    , bDouble <$> epochParamDvtPPEconomicGroup ep
-    , bDouble <$> epochParamDvtPPTechnicalGroup ep
-    , bDouble <$> epochParamDvtPPGovGroup ep
-    , bDouble <$> epochParamDvtTreasuryWithdrawal ep
+    , bRational <$> epochParamPvtMotionNoConfidence ep
+    , bRational <$> epochParamPvtCommitteeNormal ep
+    , bRational <$> epochParamPvtCommitteeNoConfidence ep
+    , bRational <$> epochParamPvtHardForkInitiation ep
+    , bRational <$> epochParamDvtMotionNoConfidence ep
+    , bRational <$> epochParamDvtCommitteeNormal ep
+    , bRational <$> epochParamDvtCommitteeNoConfidence ep
+    , bRational <$> epochParamDvtUpdateToConstitution ep
+    , bRational <$> epochParamDvtHardForkInitiation ep
+    , bRational <$> epochParamDvtPPNetworkGroup ep
+    , bRational <$> epochParamDvtPPEconomicGroup ep
+    , bRational <$> epochParamDvtPPTechnicalGroup ep
+    , bRational <$> epochParamDvtPPGovGroup ep
+    , bRational <$> epochParamDvtTreasuryWithdrawal ep
     , bWord64 . unDbWord64 <$> epochParamCommitteeMinSize ep
     , bWord64 . unDbWord64 <$> epochParamCommitteeMaxTermLength ep
     , bWord64 . unDbWord64 <$> epochParamGovActionLifetime ep
     , bWord64 . unDbWord64 <$> epochParamGovActionDeposit ep
     , bWord64 . unDbWord64 <$> epochParamDrepDeposit ep
     , bWord64 . unDbWord64 <$> epochParamDrepActivity ep
-    , bDouble <$> epochParamPvtppSecurityGroup ep
-    , bDouble <$> epochParamMinFeeRefScriptCostPerByte ep
+    , bRational <$> epochParamPvtppSecurityGroup ep
+    , bRational <$> epochParamMinFeeRefScriptCostPerByte ep
     ]
 
 encodeEpochStateCopy :: EpochState -> ByteString
@@ -888,18 +888,18 @@ epochParamEncoder = mconcat
   , epochParamPoolDeposit                >$< E.param (E.nonNullable dbLovelaceValueEncoder)
   , epochParamMaxEpoch                   >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
   , epochParamOptimalPoolCount           >$< E.param (E.nonNullable $ fromIntegral >$< E.int8)
-  , epochParamInfluence                  >$< E.param (E.nonNullable doubleAsTextEncoder)
-  , epochParamMonetaryExpandRate         >$< E.param (E.nonNullable doubleAsTextEncoder)
-  , epochParamTreasuryGrowthRate         >$< E.param (E.nonNullable doubleAsTextEncoder)
-  , epochParamDecentralisation           >$< E.param (E.nonNullable doubleAsTextEncoder)
+  , epochParamInfluence                  >$< E.param (E.nonNullable rationalAsNumericEncoder)
+  , epochParamMonetaryExpandRate         >$< E.param (E.nonNullable rationalAsNumericEncoder)
+  , epochParamTreasuryGrowthRate         >$< E.param (E.nonNullable rationalAsNumericEncoder)
+  , epochParamDecentralisation           >$< E.param (E.nonNullable rationalAsNumericEncoder)
   , epochParamProtocolMajor              >$< E.param (E.nonNullable $ (fromIntegral :: Word16 -> Int16) >$< E.int2)
   , epochParamProtocolMinor              >$< E.param (E.nonNullable $ (fromIntegral :: Word16 -> Int16) >$< E.int2)
   , epochParamMinUtxoValue               >$< E.param (E.nonNullable dbLovelaceValueEncoder)
   , epochParamMinPoolCost                >$< E.param (E.nonNullable dbLovelaceValueEncoder)
   , epochParamNonce                      >$< E.param (E.nullable E.bytea)
   , epochParamCostModelId                >$< maybeIdEncoder getCostModelId
-  , epochParamPriceMem                   >$< maybeDoubleAsTextEncoder
-  , epochParamPriceStep                  >$< maybeDoubleAsTextEncoder
+  , epochParamPriceMem                   >$< maybeRationalAsNumericEncoder
+  , epochParamPriceStep                  >$< maybeRationalAsNumericEncoder
   , epochParamMaxTxExMem                 >$< maybeDbWord64Encoder
   , epochParamMaxTxExSteps               >$< maybeDbWord64Encoder
   , epochParamMaxBlockExMem              >$< maybeDbWord64Encoder
@@ -910,28 +910,28 @@ epochParamEncoder = mconcat
   , epochParamBlockId                    >$< idEncoder getBlockId
   , epochParamExtraEntropy               >$< E.param (E.nullable E.bytea)
   , epochParamCoinsPerUtxoSize           >$< maybeDbLovelaceEncoder
-  , epochParamPvtMotionNoConfidence      >$< maybeDoubleAsTextEncoder
-  , epochParamPvtCommitteeNormal         >$< maybeDoubleAsTextEncoder
-  , epochParamPvtCommitteeNoConfidence   >$< maybeDoubleAsTextEncoder
-  , epochParamPvtHardForkInitiation      >$< maybeDoubleAsTextEncoder
-  , epochParamDvtMotionNoConfidence      >$< maybeDoubleAsTextEncoder
-  , epochParamDvtCommitteeNormal         >$< maybeDoubleAsTextEncoder
-  , epochParamDvtCommitteeNoConfidence   >$< maybeDoubleAsTextEncoder
-  , epochParamDvtUpdateToConstitution    >$< maybeDoubleAsTextEncoder
-  , epochParamDvtHardForkInitiation      >$< maybeDoubleAsTextEncoder
-  , epochParamDvtPPNetworkGroup          >$< maybeDoubleAsTextEncoder
-  , epochParamDvtPPEconomicGroup         >$< maybeDoubleAsTextEncoder
-  , epochParamDvtPPTechnicalGroup        >$< maybeDoubleAsTextEncoder
-  , epochParamDvtPPGovGroup              >$< maybeDoubleAsTextEncoder
-  , epochParamDvtTreasuryWithdrawal      >$< maybeDoubleAsTextEncoder
+  , epochParamPvtMotionNoConfidence      >$< maybeRationalAsNumericEncoder
+  , epochParamPvtCommitteeNormal         >$< maybeRationalAsNumericEncoder
+  , epochParamPvtCommitteeNoConfidence   >$< maybeRationalAsNumericEncoder
+  , epochParamPvtHardForkInitiation      >$< maybeRationalAsNumericEncoder
+  , epochParamDvtMotionNoConfidence      >$< maybeRationalAsNumericEncoder
+  , epochParamDvtCommitteeNormal         >$< maybeRationalAsNumericEncoder
+  , epochParamDvtCommitteeNoConfidence   >$< maybeRationalAsNumericEncoder
+  , epochParamDvtUpdateToConstitution    >$< maybeRationalAsNumericEncoder
+  , epochParamDvtHardForkInitiation      >$< maybeRationalAsNumericEncoder
+  , epochParamDvtPPNetworkGroup          >$< maybeRationalAsNumericEncoder
+  , epochParamDvtPPEconomicGroup         >$< maybeRationalAsNumericEncoder
+  , epochParamDvtPPTechnicalGroup        >$< maybeRationalAsNumericEncoder
+  , epochParamDvtPPGovGroup              >$< maybeRationalAsNumericEncoder
+  , epochParamDvtTreasuryWithdrawal      >$< maybeRationalAsNumericEncoder
   , epochParamCommitteeMinSize           >$< maybeDbWord64Encoder
   , epochParamCommitteeMaxTermLength     >$< maybeDbWord64Encoder
   , epochParamGovActionLifetime          >$< maybeDbWord64Encoder
   , epochParamGovActionDeposit           >$< maybeDbWord64Encoder
   , epochParamDrepDeposit                >$< maybeDbWord64Encoder
   , epochParamDrepActivity               >$< maybeDbWord64Encoder
-  , epochParamPvtppSecurityGroup         >$< maybeDoubleAsTextEncoder
-  , epochParamMinFeeRefScriptCostPerByte >$< maybeDoubleAsTextEncoder
+  , epochParamPvtppSecurityGroup         >$< maybeRationalAsNumericEncoder
+  , epochParamMinFeeRefScriptCostPerByte >$< maybeRationalAsNumericEncoder
   ]
 
 epochParamDecoder :: D.Row EpochParam
@@ -946,18 +946,18 @@ epochParamDecoder = EpochParam
   <*> D.column (D.nonNullable dbLovelaceValueDecoder)
   <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
   <*> (fromIntegral <$> D.column (D.nonNullable D.int8))
-  <*> D.column (D.nonNullable doubleAsTextDecoder)
-  <*> D.column (D.nonNullable doubleAsTextDecoder)
-  <*> D.column (D.nonNullable doubleAsTextDecoder)
-  <*> D.column (D.nonNullable doubleAsTextDecoder)
+  <*> D.column (D.nonNullable rationalAsNumericDecoder)
+  <*> D.column (D.nonNullable rationalAsNumericDecoder)
+  <*> D.column (D.nonNullable rationalAsNumericDecoder)
+  <*> D.column (D.nonNullable rationalAsNumericDecoder)
   <*> (fromIntegral <$> D.column (D.nonNullable D.int2))
   <*> (fromIntegral <$> D.column (D.nonNullable D.int2))
   <*> D.column (D.nonNullable dbLovelaceValueDecoder)
   <*> D.column (D.nonNullable dbLovelaceValueDecoder)
   <*> D.column (D.nullable D.bytea)
   <*> maybeIdDecoder CostModelId
-  <*> maybeDoubleAsTextDecoder
-  <*> maybeDoubleAsTextDecoder
+  <*> maybeRationalAsNumericDecoder
+  <*> maybeRationalAsNumericDecoder
   <*> maybeDbWord64Decoder
   <*> maybeDbWord64Decoder
   <*> maybeDbWord64Decoder
@@ -968,28 +968,28 @@ epochParamDecoder = EpochParam
   <*> idDecoder BlockId
   <*> D.column (D.nullable D.bytea)
   <*> maybeDbLovelaceDecoder
-  <*> maybeDoubleAsTextDecoder
-  <*> maybeDoubleAsTextDecoder
-  <*> maybeDoubleAsTextDecoder
-  <*> maybeDoubleAsTextDecoder
-  <*> maybeDoubleAsTextDecoder
-  <*> maybeDoubleAsTextDecoder
-  <*> maybeDoubleAsTextDecoder
-  <*> maybeDoubleAsTextDecoder
-  <*> maybeDoubleAsTextDecoder
-  <*> maybeDoubleAsTextDecoder
-  <*> maybeDoubleAsTextDecoder
-  <*> maybeDoubleAsTextDecoder
-  <*> maybeDoubleAsTextDecoder
-  <*> maybeDoubleAsTextDecoder
+  <*> maybeRationalAsNumericDecoder
+  <*> maybeRationalAsNumericDecoder
+  <*> maybeRationalAsNumericDecoder
+  <*> maybeRationalAsNumericDecoder
+  <*> maybeRationalAsNumericDecoder
+  <*> maybeRationalAsNumericDecoder
+  <*> maybeRationalAsNumericDecoder
+  <*> maybeRationalAsNumericDecoder
+  <*> maybeRationalAsNumericDecoder
+  <*> maybeRationalAsNumericDecoder
+  <*> maybeRationalAsNumericDecoder
+  <*> maybeRationalAsNumericDecoder
+  <*> maybeRationalAsNumericDecoder
+  <*> maybeRationalAsNumericDecoder
   <*> maybeDbWord64Decoder
   <*> maybeDbWord64Decoder
   <*> maybeDbWord64Decoder
   <*> maybeDbWord64Decoder
   <*> maybeDbWord64Decoder
   <*> maybeDbWord64Decoder
-  <*> maybeDoubleAsTextDecoder
-  <*> maybeDoubleAsTextDecoder
+  <*> maybeRationalAsNumericDecoder
+  <*> maybeRationalAsNumericDecoder
 
 entityEpochParamDecoder :: D.Row (EpochParamId, EpochParam)
 entityEpochParamDecoder = (,)

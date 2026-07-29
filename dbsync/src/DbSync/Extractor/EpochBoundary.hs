@@ -68,7 +68,7 @@ import qualified DbSync.Worker.Ledger.ProtoParams as Proto
 import DbSync.Worker.Ledger.Types (BoundaryApplyData (..))
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
 import DbSync.StateQuery (SlotDetails (..))
-import DbSync.Util (coinToDbLovelace, nonceToBytes, unitIntervalToDouble)
+import DbSync.Util (coinToDbLovelace, nonceToBytes, unitIntervalToRational)
 import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- ---------------------------------------------------------------------------
@@ -266,13 +266,13 @@ mkEpochParamRow pp epoch blockId nonce mCostModelId =
     , epochParamMaxEpoch                   =
         fromIntegral (Ledger.unEpochInterval (Proto.ppMaxEpoch pp))
     , epochParamOptimalPoolCount           = fromIntegral (Proto.ppOptimalPoolCount pp)
-    , epochParamInfluence                  = fromRational (Proto.ppInfluence pp)
+    , epochParamInfluence                  = Proto.ppInfluence pp
     , epochParamMonetaryExpandRate         =
-        unitIntervalToDouble (Proto.ppMonetaryExpandRate pp)
+        unitIntervalToRational (Proto.ppMonetaryExpandRate pp)
     , epochParamTreasuryGrowthRate         =
-        unitIntervalToDouble (Proto.ppTreasuryGrowthRate pp)
+        unitIntervalToRational (Proto.ppTreasuryGrowthRate pp)
     , epochParamDecentralisation           =
-        unitIntervalToDouble (Proto.ppDecentralisation pp)
+        unitIntervalToRational (Proto.ppDecentralisation pp)
     , epochParamProtocolMajor              =
         fromIntegral @Word64 @Word16
           (Ledger.getVersion (Ledger.pvMajor (Proto.ppProtocolVersion pp)))
@@ -282,8 +282,8 @@ mkEpochParamRow pp epoch blockId nonce mCostModelId =
     , epochParamMinPoolCost                = coinToDbLovelace (Proto.ppMinPoolCost pp)
     , epochParamNonce                      = nonceToBytes nonce
     , epochParamCostModelId                = mCostModelId
-    , epochParamPriceMem                   = fmap fromRational (Proto.ppPriceMem pp)
-    , epochParamPriceStep                  = fmap fromRational (Proto.ppPriceStep pp)
+    , epochParamPriceMem                   = Proto.ppPriceMem pp
+    , epochParamPriceStep                  = Proto.ppPriceStep pp
     , epochParamMaxTxExMem                 = DbWord64 <$> Proto.ppMaxTxExMem pp
     , epochParamMaxTxExSteps               = DbWord64 <$> Proto.ppMaxTxExSteps pp
     , epochParamMaxBlockExMem              = DbWord64 <$> Proto.ppMaxBlockExMem pp
@@ -298,33 +298,33 @@ mkEpochParamRow pp epoch blockId nonce mCostModelId =
     , epochParamExtraEntropy               = nonceToBytes (Proto.ppExtraEntropy pp)
     , epochParamCoinsPerUtxoSize           = coinToDbLovelace <$> Proto.ppCoinsPerUtxo pp
     , epochParamPvtMotionNoConfidence      =
-        unitIntervalToDouble . pvtMotionNoConfidence <$> Proto.ppPoolVotingThresholds pp
+        unitIntervalToRational . pvtMotionNoConfidence <$> Proto.ppPoolVotingThresholds pp
     , epochParamPvtCommitteeNormal         =
-        unitIntervalToDouble . pvtCommitteeNormal <$> Proto.ppPoolVotingThresholds pp
+        unitIntervalToRational . pvtCommitteeNormal <$> Proto.ppPoolVotingThresholds pp
     , epochParamPvtCommitteeNoConfidence   =
-        unitIntervalToDouble . pvtCommitteeNoConfidence <$> Proto.ppPoolVotingThresholds pp
+        unitIntervalToRational . pvtCommitteeNoConfidence <$> Proto.ppPoolVotingThresholds pp
     , epochParamPvtHardForkInitiation      =
-        unitIntervalToDouble . pvtHardForkInitiation <$> Proto.ppPoolVotingThresholds pp
+        unitIntervalToRational . pvtHardForkInitiation <$> Proto.ppPoolVotingThresholds pp
     , epochParamDvtMotionNoConfidence      =
-        unitIntervalToDouble . dvtMotionNoConfidence <$> Proto.ppDRepVotingThresholds pp
+        unitIntervalToRational . dvtMotionNoConfidence <$> Proto.ppDRepVotingThresholds pp
     , epochParamDvtCommitteeNormal         =
-        unitIntervalToDouble . dvtCommitteeNormal <$> Proto.ppDRepVotingThresholds pp
+        unitIntervalToRational . dvtCommitteeNormal <$> Proto.ppDRepVotingThresholds pp
     , epochParamDvtCommitteeNoConfidence   =
-        unitIntervalToDouble . dvtCommitteeNoConfidence <$> Proto.ppDRepVotingThresholds pp
+        unitIntervalToRational . dvtCommitteeNoConfidence <$> Proto.ppDRepVotingThresholds pp
     , epochParamDvtUpdateToConstitution    =
-        unitIntervalToDouble . dvtUpdateToConstitution <$> Proto.ppDRepVotingThresholds pp
+        unitIntervalToRational . dvtUpdateToConstitution <$> Proto.ppDRepVotingThresholds pp
     , epochParamDvtHardForkInitiation      =
-        unitIntervalToDouble . dvtHardForkInitiation <$> Proto.ppDRepVotingThresholds pp
+        unitIntervalToRational . dvtHardForkInitiation <$> Proto.ppDRepVotingThresholds pp
     , epochParamDvtPPNetworkGroup          =
-        unitIntervalToDouble . dvtPPNetworkGroup <$> Proto.ppDRepVotingThresholds pp
+        unitIntervalToRational . dvtPPNetworkGroup <$> Proto.ppDRepVotingThresholds pp
     , epochParamDvtPPEconomicGroup         =
-        unitIntervalToDouble . dvtPPEconomicGroup <$> Proto.ppDRepVotingThresholds pp
+        unitIntervalToRational . dvtPPEconomicGroup <$> Proto.ppDRepVotingThresholds pp
     , epochParamDvtPPTechnicalGroup        =
-        unitIntervalToDouble . dvtPPTechnicalGroup <$> Proto.ppDRepVotingThresholds pp
+        unitIntervalToRational . dvtPPTechnicalGroup <$> Proto.ppDRepVotingThresholds pp
     , epochParamDvtPPGovGroup              =
-        unitIntervalToDouble . dvtPPGovGroup <$> Proto.ppDRepVotingThresholds pp
+        unitIntervalToRational . dvtPPGovGroup <$> Proto.ppDRepVotingThresholds pp
     , epochParamDvtTreasuryWithdrawal      =
-        unitIntervalToDouble . dvtTreasuryWithdrawal <$> Proto.ppDRepVotingThresholds pp
+        unitIntervalToRational . dvtTreasuryWithdrawal <$> Proto.ppDRepVotingThresholds pp
     , epochParamCommitteeMinSize           =
         DbWord64 . fromIntegral <$> Proto.ppCommitteeMinSize pp
     , epochParamCommitteeMaxTermLength     =
@@ -338,9 +338,8 @@ mkEpochParamRow pp epoch blockId nonce mCostModelId =
     , epochParamDrepActivity               =
         DbWord64 . fromIntegral . Ledger.unEpochInterval <$> Proto.ppDRepActivity pp
     , epochParamPvtppSecurityGroup         =
-        unitIntervalToDouble . pvtPPSecurityGroup <$> Proto.ppPoolVotingThresholds pp
-    , epochParamMinFeeRefScriptCostPerByte =
-        fmap fromRational (Proto.ppMinFeeRefScriptCostPerByte pp)
+        unitIntervalToRational . pvtPPSecurityGroup <$> Proto.ppPoolVotingThresholds pp
+    , epochParamMinFeeRefScriptCostPerByte = Proto.ppMinFeeRefScriptCostPerByte pp
     }
 
 -- | Build the 'EpochState' row. The three FK columns come from

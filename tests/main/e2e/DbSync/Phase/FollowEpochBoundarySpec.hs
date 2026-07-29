@@ -149,6 +149,15 @@ spec = describe "Follow boundary writes" $ do
             )
           mostRecentCostModelId `shouldNotBe` ""
 
+          -- Rational params land as queryable numerics: genesis sets
+          -- a0 = 0.3 and rho = 0, which must compare equal as numbers.
+          influenceMatches <- T.strip <$> queryTestDb
+            ( "SELECT (influence = 0.3 AND monetary_expand_rate = 0)::text FROM "
+                <> tdName epochParamTableDef
+                <> " ORDER BY id DESC LIMIT 1"
+            )
+          influenceMatches `shouldBe` "true"
+
           -- Governance Follow is still stubbed; the three governance
           -- FK columns on epoch_state stay NULL.
           mostRecentCommitteeId <- T.strip <$> queryTestDb

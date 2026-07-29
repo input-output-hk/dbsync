@@ -134,20 +134,20 @@ import DbSync.Db.Types
   , anchorTypeDecoder
   , anchorTypeEncoder
   , bAnchorType
-  , bDouble
   , bGovActionType
+  , bRational
   , bVote
   , bVoterRole
   , dbLovelaceValueDecoder
   , dbLovelaceValueEncoder
-  , doubleAsTextDecoder
-  , doubleAsTextEncoder
   , govActionTypeDecoder
   , govActionTypeEncoder
   , maybeDbLovelaceDecoder
   , maybeDbLovelaceEncoder
   , maybeDbWord64Decoder
   , maybeDbWord64Encoder
+  , rationalAsNumericDecoder
+  , rationalAsNumericEncoder
   , voteDecoder
   , voteEncoder
   , voterRoleDecoder
@@ -354,18 +354,18 @@ data ParamProposal = ParamProposal
   , paramProposalPoolDeposit                :: !(Maybe DbLovelace)
   , paramProposalMaxEpoch                   :: !(Maybe DbWord64)
   , paramProposalOptimalPoolCount           :: !(Maybe DbWord64)
-  , paramProposalInfluence                  :: !(Maybe Double)
-  , paramProposalMonetaryExpandRate         :: !(Maybe Double)
-  , paramProposalTreasuryGrowthRate         :: !(Maybe Double)
-  , paramProposalDecentralisation           :: !(Maybe Double)
+  , paramProposalInfluence                  :: !(Maybe Rational)
+  , paramProposalMonetaryExpandRate         :: !(Maybe Rational)
+  , paramProposalTreasuryGrowthRate         :: !(Maybe Rational)
+  , paramProposalDecentralisation           :: !(Maybe Rational)
   , paramProposalEntropy                    :: !(Maybe ByteString)
   , paramProposalProtocolMajor              :: !(Maybe Word16)
   , paramProposalProtocolMinor              :: !(Maybe Word16)
   , paramProposalMinUtxoValue               :: !(Maybe DbLovelace)
   , paramProposalMinPoolCost                :: !(Maybe DbLovelace)
   , paramProposalCostModelId                :: !(Maybe CostModelId)
-  , paramProposalPriceMem                   :: !(Maybe Double)
-  , paramProposalPriceStep                  :: !(Maybe Double)
+  , paramProposalPriceMem                   :: !(Maybe Rational)
+  , paramProposalPriceStep                  :: !(Maybe Rational)
   , paramProposalMaxTxExMem                 :: !(Maybe DbWord64)
   , paramProposalMaxTxExSteps               :: !(Maybe DbWord64)
   , paramProposalMaxBlockExMem              :: !(Maybe DbWord64)
@@ -375,28 +375,28 @@ data ParamProposal = ParamProposal
   , paramProposalMaxCollateralInputs        :: !(Maybe Word16)
   , paramProposalRegisteredTxId             :: !TxId
   , paramProposalCoinsPerUtxoSize           :: !(Maybe DbLovelace)
-  , paramProposalPvtMotionNoConfidence      :: !(Maybe Double)
-  , paramProposalPvtCommitteeNormal         :: !(Maybe Double)
-  , paramProposalPvtCommitteeNoConfidence   :: !(Maybe Double)
-  , paramProposalPvtHardForkInitiation      :: !(Maybe Double)
-  , paramProposalPvtppSecurityGroup         :: !(Maybe Double)
-  , paramProposalDvtMotionNoConfidence      :: !(Maybe Double)
-  , paramProposalDvtCommitteeNormal         :: !(Maybe Double)
-  , paramProposalDvtCommitteeNoConfidence   :: !(Maybe Double)
-  , paramProposalDvtUpdateToConstitution    :: !(Maybe Double)
-  , paramProposalDvtHardForkInitiation      :: !(Maybe Double)
-  , paramProposalDvtPPNetworkGroup          :: !(Maybe Double)
-  , paramProposalDvtPPEconomicGroup         :: !(Maybe Double)
-  , paramProposalDvtPPTechnicalGroup        :: !(Maybe Double)
-  , paramProposalDvtPPGovGroup              :: !(Maybe Double)
-  , paramProposalDvtTreasuryWithdrawal      :: !(Maybe Double)
+  , paramProposalPvtMotionNoConfidence      :: !(Maybe Rational)
+  , paramProposalPvtCommitteeNormal         :: !(Maybe Rational)
+  , paramProposalPvtCommitteeNoConfidence   :: !(Maybe Rational)
+  , paramProposalPvtHardForkInitiation      :: !(Maybe Rational)
+  , paramProposalPvtppSecurityGroup         :: !(Maybe Rational)
+  , paramProposalDvtMotionNoConfidence      :: !(Maybe Rational)
+  , paramProposalDvtCommitteeNormal         :: !(Maybe Rational)
+  , paramProposalDvtCommitteeNoConfidence   :: !(Maybe Rational)
+  , paramProposalDvtUpdateToConstitution    :: !(Maybe Rational)
+  , paramProposalDvtHardForkInitiation      :: !(Maybe Rational)
+  , paramProposalDvtPPNetworkGroup          :: !(Maybe Rational)
+  , paramProposalDvtPPEconomicGroup         :: !(Maybe Rational)
+  , paramProposalDvtPPTechnicalGroup        :: !(Maybe Rational)
+  , paramProposalDvtPPGovGroup              :: !(Maybe Rational)
+  , paramProposalDvtTreasuryWithdrawal      :: !(Maybe Rational)
   , paramProposalCommitteeMinSize           :: !(Maybe DbWord64)
   , paramProposalCommitteeMaxTermLength     :: !(Maybe DbWord64)
   , paramProposalGovActionLifetime          :: !(Maybe DbWord64)
   , paramProposalGovActionDeposit           :: !(Maybe DbWord64)
   , paramProposalDrepDeposit                :: !(Maybe DbWord64)
   , paramProposalDrepActivity               :: !(Maybe DbWord64)
-  , paramProposalMinFeeRefScriptCostPerByte :: !(Maybe Double)
+  , paramProposalMinFeeRefScriptCostPerByte :: !(Maybe Rational)
   }
   deriving stock (Eq, Show)
 
@@ -698,8 +698,8 @@ committeeDeRegistrationTableDef = TableDef
   , tdForeignKeys = []
   }
 
--- | 53-column @param_proposal@. Doubles ride a TEXT column matching
--- the pattern in @pool_update.margin@ / @epoch_sync_stats@.
+-- | 53-column @param_proposal@. Rational parameters ride @numeric@
+-- columns, matching @epoch_param@ / @pool_update.margin@.
 -- @committee_max_term_length@ uses the @numeric@ shape shared by every
 -- other @DbWord64@ column.
 paramProposalTableDef :: TableDef
@@ -718,18 +718,18 @@ paramProposalTableDef = TableDef
       , ColumnDef "pool_deposit"                  PgNumeric  True
       , ColumnDef "max_epoch"                     PgNumeric  True
       , ColumnDef "optimal_pool_count"            PgNumeric  True
-      , ColumnDef "influence"                     PgText     True
-      , ColumnDef "monetary_expand_rate"          PgText     True
-      , ColumnDef "treasury_growth_rate"          PgText     True
-      , ColumnDef "decentralisation"              PgText     True
+      , ColumnDef "influence"                     PgNumeric  True
+      , ColumnDef "monetary_expand_rate"          PgNumeric  True
+      , ColumnDef "treasury_growth_rate"          PgNumeric  True
+      , ColumnDef "decentralisation"              PgNumeric  True
       , ColumnDef "entropy"                       PgBytea    True
       , ColumnDef "protocol_major"                PgSmallInt True
       , ColumnDef "protocol_minor"                PgSmallInt True
       , ColumnDef "min_utxo_value"                PgNumeric  True
       , ColumnDef "min_pool_cost"                 PgNumeric  True
       , ColumnDef "cost_model_id"                 PgBigInt   True
-      , ColumnDef "price_mem"                     PgText     True
-      , ColumnDef "price_step"                    PgText     True
+      , ColumnDef "price_mem"                     PgNumeric  True
+      , ColumnDef "price_step"                    PgNumeric  True
       , ColumnDef "max_tx_ex_mem"                 PgNumeric  True
       , ColumnDef "max_tx_ex_steps"               PgNumeric  True
       , ColumnDef "max_block_ex_mem"              PgNumeric  True
@@ -739,28 +739,28 @@ paramProposalTableDef = TableDef
       , ColumnDef "max_collateral_inputs"         PgSmallInt True
       , ColumnDef "registered_tx_id"              PgBigInt   False
       , ColumnDef "coins_per_utxo_size"           PgNumeric  True
-      , ColumnDef "pvt_motion_no_confidence"      PgText     True
-      , ColumnDef "pvt_committee_normal"          PgText     True
-      , ColumnDef "pvt_committee_no_confidence"   PgText     True
-      , ColumnDef "pvt_hard_fork_initiation"      PgText     True
-      , ColumnDef "pvtpp_security_group"          PgText     True
-      , ColumnDef "dvt_motion_no_confidence"      PgText     True
-      , ColumnDef "dvt_committee_normal"          PgText     True
-      , ColumnDef "dvt_committee_no_confidence"   PgText     True
-      , ColumnDef "dvt_update_to_constitution"    PgText     True
-      , ColumnDef "dvt_hard_fork_initiation"      PgText     True
-      , ColumnDef "dvt_pp_network_group"          PgText     True
-      , ColumnDef "dvt_pp_economic_group"         PgText     True
-      , ColumnDef "dvt_pp_technical_group"        PgText     True
-      , ColumnDef "dvt_pp_gov_group"              PgText     True
-      , ColumnDef "dvt_treasury_withdrawal"       PgText     True
+      , ColumnDef "pvt_motion_no_confidence"      PgNumeric  True
+      , ColumnDef "pvt_committee_normal"          PgNumeric  True
+      , ColumnDef "pvt_committee_no_confidence"   PgNumeric  True
+      , ColumnDef "pvt_hard_fork_initiation"      PgNumeric  True
+      , ColumnDef "pvtpp_security_group"          PgNumeric  True
+      , ColumnDef "dvt_motion_no_confidence"      PgNumeric  True
+      , ColumnDef "dvt_committee_normal"          PgNumeric  True
+      , ColumnDef "dvt_committee_no_confidence"   PgNumeric  True
+      , ColumnDef "dvt_update_to_constitution"    PgNumeric  True
+      , ColumnDef "dvt_hard_fork_initiation"      PgNumeric  True
+      , ColumnDef "dvt_pp_network_group"          PgNumeric  True
+      , ColumnDef "dvt_pp_economic_group"         PgNumeric  True
+      , ColumnDef "dvt_pp_technical_group"        PgNumeric  True
+      , ColumnDef "dvt_pp_gov_group"              PgNumeric  True
+      , ColumnDef "dvt_treasury_withdrawal"       PgNumeric  True
       , ColumnDef "committee_min_size"            PgNumeric  True
       , ColumnDef "committee_max_term_length"     PgNumeric  True
       , ColumnDef "gov_action_lifetime"           PgNumeric  True
       , ColumnDef "gov_action_deposit"            PgNumeric  True
       , ColumnDef "drep_deposit"                  PgNumeric  True
       , ColumnDef "drep_activity"                 PgNumeric  True
-      , ColumnDef "min_fee_ref_script_cost_per_byte" PgText  True
+      , ColumnDef "min_fee_ref_script_cost_per_byte" PgNumeric True
       ]
   , tdMode = TableUnlogged
   , tdPrimaryKey        = Nothing
@@ -1613,8 +1613,6 @@ encodeCommitteeDeRegistrationCopy cdr =
     ]
 
 -- | 53 nullable parameter columns plus id and registered_tx_id.
--- Doubles serialise as ASCII via 'show'; the matching column type is
--- TEXT and the hasql codec round-trips through 'Read'.
 encodeParamProposalCopy :: ParamProposalId -> ParamProposal -> ByteString
 encodeParamProposalCopy (ParamProposalId rid) pp =
   buildCopyRow
@@ -1630,18 +1628,18 @@ encodeParamProposalCopy (ParamProposalId rid) pp =
     , bWord64 . unDbLovelace <$> paramProposalPoolDeposit pp
     , bWord64 . unDbWord64 <$> paramProposalMaxEpoch pp
     , bWord64 . unDbWord64 <$> paramProposalOptimalPoolCount pp
-    , bDouble <$> paramProposalInfluence pp
-    , bDouble <$> paramProposalMonetaryExpandRate pp
-    , bDouble <$> paramProposalTreasuryGrowthRate pp
-    , bDouble <$> paramProposalDecentralisation pp
+    , bRational <$> paramProposalInfluence pp
+    , bRational <$> paramProposalMonetaryExpandRate pp
+    , bRational <$> paramProposalTreasuryGrowthRate pp
+    , bRational <$> paramProposalDecentralisation pp
     , bHex <$> paramProposalEntropy pp
     , bInt64 . fromIntegral <$> paramProposalProtocolMajor pp
     , bInt64 . fromIntegral <$> paramProposalProtocolMinor pp
     , bWord64 . unDbLovelace <$> paramProposalMinUtxoValue pp
     , bWord64 . unDbLovelace <$> paramProposalMinPoolCost pp
     , bInt64 . getCostModelId <$> paramProposalCostModelId pp
-    , bDouble <$> paramProposalPriceMem pp
-    , bDouble <$> paramProposalPriceStep pp
+    , bRational <$> paramProposalPriceMem pp
+    , bRational <$> paramProposalPriceStep pp
     , bWord64 . unDbWord64 <$> paramProposalMaxTxExMem pp
     , bWord64 . unDbWord64 <$> paramProposalMaxTxExSteps pp
     , bWord64 . unDbWord64 <$> paramProposalMaxBlockExMem pp
@@ -1651,28 +1649,28 @@ encodeParamProposalCopy (ParamProposalId rid) pp =
     , bInt64 . fromIntegral <$> paramProposalMaxCollateralInputs pp
     , Just $ bInt64 (getTxId $ paramProposalRegisteredTxId pp)
     , bWord64 . unDbLovelace <$> paramProposalCoinsPerUtxoSize pp
-    , bDouble <$> paramProposalPvtMotionNoConfidence pp
-    , bDouble <$> paramProposalPvtCommitteeNormal pp
-    , bDouble <$> paramProposalPvtCommitteeNoConfidence pp
-    , bDouble <$> paramProposalPvtHardForkInitiation pp
-    , bDouble <$> paramProposalPvtppSecurityGroup pp
-    , bDouble <$> paramProposalDvtMotionNoConfidence pp
-    , bDouble <$> paramProposalDvtCommitteeNormal pp
-    , bDouble <$> paramProposalDvtCommitteeNoConfidence pp
-    , bDouble <$> paramProposalDvtUpdateToConstitution pp
-    , bDouble <$> paramProposalDvtHardForkInitiation pp
-    , bDouble <$> paramProposalDvtPPNetworkGroup pp
-    , bDouble <$> paramProposalDvtPPEconomicGroup pp
-    , bDouble <$> paramProposalDvtPPTechnicalGroup pp
-    , bDouble <$> paramProposalDvtPPGovGroup pp
-    , bDouble <$> paramProposalDvtTreasuryWithdrawal pp
+    , bRational <$> paramProposalPvtMotionNoConfidence pp
+    , bRational <$> paramProposalPvtCommitteeNormal pp
+    , bRational <$> paramProposalPvtCommitteeNoConfidence pp
+    , bRational <$> paramProposalPvtHardForkInitiation pp
+    , bRational <$> paramProposalPvtppSecurityGroup pp
+    , bRational <$> paramProposalDvtMotionNoConfidence pp
+    , bRational <$> paramProposalDvtCommitteeNormal pp
+    , bRational <$> paramProposalDvtCommitteeNoConfidence pp
+    , bRational <$> paramProposalDvtUpdateToConstitution pp
+    , bRational <$> paramProposalDvtHardForkInitiation pp
+    , bRational <$> paramProposalDvtPPNetworkGroup pp
+    , bRational <$> paramProposalDvtPPEconomicGroup pp
+    , bRational <$> paramProposalDvtPPTechnicalGroup pp
+    , bRational <$> paramProposalDvtPPGovGroup pp
+    , bRational <$> paramProposalDvtTreasuryWithdrawal pp
     , bWord64 . unDbWord64 <$> paramProposalCommitteeMinSize pp
     , bWord64 . unDbWord64 <$> paramProposalCommitteeMaxTermLength pp
     , bWord64 . unDbWord64 <$> paramProposalGovActionLifetime pp
     , bWord64 . unDbWord64 <$> paramProposalGovActionDeposit pp
     , bWord64 . unDbWord64 <$> paramProposalDrepDeposit pp
     , bWord64 . unDbWord64 <$> paramProposalDrepActivity pp
-    , bDouble <$> paramProposalMinFeeRefScriptCostPerByte pp
+    , bRational <$> paramProposalMinFeeRefScriptCostPerByte pp
     ]
 
 encodeTreasuryWithdrawalCopy :: TreasuryWithdrawal -> ByteString
@@ -2033,10 +2031,10 @@ paramProposalEncoder = mconcat
   , paramProposalPoolDeposit                >$< maybeDbLovelaceEncoder
   , paramProposalMaxEpoch                   >$< maybeDbWord64Encoder
   , paramProposalOptimalPoolCount           >$< maybeDbWord64Encoder
-  , paramProposalInfluence                  >$< E.param (E.nullable doubleAsTextEncoder)
-  , paramProposalMonetaryExpandRate         >$< E.param (E.nullable doubleAsTextEncoder)
-  , paramProposalTreasuryGrowthRate         >$< E.param (E.nullable doubleAsTextEncoder)
-  , paramProposalDecentralisation           >$< E.param (E.nullable doubleAsTextEncoder)
+  , paramProposalInfluence                  >$< E.param (E.nullable rationalAsNumericEncoder)
+  , paramProposalMonetaryExpandRate         >$< E.param (E.nullable rationalAsNumericEncoder)
+  , paramProposalTreasuryGrowthRate         >$< E.param (E.nullable rationalAsNumericEncoder)
+  , paramProposalDecentralisation           >$< E.param (E.nullable rationalAsNumericEncoder)
   , paramProposalEntropy                    >$< E.param (E.nullable E.bytea)
   , (fmap fromIntegral :: Maybe Word16 -> Maybe Int16) . paramProposalProtocolMajor
                                             >$< E.param (E.nullable E.int2)
@@ -2045,8 +2043,8 @@ paramProposalEncoder = mconcat
   , paramProposalMinUtxoValue               >$< maybeDbLovelaceEncoder
   , paramProposalMinPoolCost                >$< maybeDbLovelaceEncoder
   , paramProposalCostModelId                >$< maybeIdEncoder getCostModelId
-  , paramProposalPriceMem                   >$< E.param (E.nullable doubleAsTextEncoder)
-  , paramProposalPriceStep                  >$< E.param (E.nullable doubleAsTextEncoder)
+  , paramProposalPriceMem                   >$< E.param (E.nullable rationalAsNumericEncoder)
+  , paramProposalPriceStep                  >$< E.param (E.nullable rationalAsNumericEncoder)
   , paramProposalMaxTxExMem                 >$< maybeDbWord64Encoder
   , paramProposalMaxTxExSteps               >$< maybeDbWord64Encoder
   , paramProposalMaxBlockExMem              >$< maybeDbWord64Encoder
@@ -2058,28 +2056,28 @@ paramProposalEncoder = mconcat
                                             >$< E.param (E.nullable E.int2)
   , paramProposalRegisteredTxId             >$< idEncoder getTxId
   , paramProposalCoinsPerUtxoSize           >$< maybeDbLovelaceEncoder
-  , paramProposalPvtMotionNoConfidence      >$< E.param (E.nullable doubleAsTextEncoder)
-  , paramProposalPvtCommitteeNormal         >$< E.param (E.nullable doubleAsTextEncoder)
-  , paramProposalPvtCommitteeNoConfidence   >$< E.param (E.nullable doubleAsTextEncoder)
-  , paramProposalPvtHardForkInitiation      >$< E.param (E.nullable doubleAsTextEncoder)
-  , paramProposalPvtppSecurityGroup         >$< E.param (E.nullable doubleAsTextEncoder)
-  , paramProposalDvtMotionNoConfidence      >$< E.param (E.nullable doubleAsTextEncoder)
-  , paramProposalDvtCommitteeNormal         >$< E.param (E.nullable doubleAsTextEncoder)
-  , paramProposalDvtCommitteeNoConfidence   >$< E.param (E.nullable doubleAsTextEncoder)
-  , paramProposalDvtUpdateToConstitution    >$< E.param (E.nullable doubleAsTextEncoder)
-  , paramProposalDvtHardForkInitiation      >$< E.param (E.nullable doubleAsTextEncoder)
-  , paramProposalDvtPPNetworkGroup          >$< E.param (E.nullable doubleAsTextEncoder)
-  , paramProposalDvtPPEconomicGroup         >$< E.param (E.nullable doubleAsTextEncoder)
-  , paramProposalDvtPPTechnicalGroup        >$< E.param (E.nullable doubleAsTextEncoder)
-  , paramProposalDvtPPGovGroup              >$< E.param (E.nullable doubleAsTextEncoder)
-  , paramProposalDvtTreasuryWithdrawal      >$< E.param (E.nullable doubleAsTextEncoder)
+  , paramProposalPvtMotionNoConfidence      >$< E.param (E.nullable rationalAsNumericEncoder)
+  , paramProposalPvtCommitteeNormal         >$< E.param (E.nullable rationalAsNumericEncoder)
+  , paramProposalPvtCommitteeNoConfidence   >$< E.param (E.nullable rationalAsNumericEncoder)
+  , paramProposalPvtHardForkInitiation      >$< E.param (E.nullable rationalAsNumericEncoder)
+  , paramProposalPvtppSecurityGroup         >$< E.param (E.nullable rationalAsNumericEncoder)
+  , paramProposalDvtMotionNoConfidence      >$< E.param (E.nullable rationalAsNumericEncoder)
+  , paramProposalDvtCommitteeNormal         >$< E.param (E.nullable rationalAsNumericEncoder)
+  , paramProposalDvtCommitteeNoConfidence   >$< E.param (E.nullable rationalAsNumericEncoder)
+  , paramProposalDvtUpdateToConstitution    >$< E.param (E.nullable rationalAsNumericEncoder)
+  , paramProposalDvtHardForkInitiation      >$< E.param (E.nullable rationalAsNumericEncoder)
+  , paramProposalDvtPPNetworkGroup          >$< E.param (E.nullable rationalAsNumericEncoder)
+  , paramProposalDvtPPEconomicGroup         >$< E.param (E.nullable rationalAsNumericEncoder)
+  , paramProposalDvtPPTechnicalGroup        >$< E.param (E.nullable rationalAsNumericEncoder)
+  , paramProposalDvtPPGovGroup              >$< E.param (E.nullable rationalAsNumericEncoder)
+  , paramProposalDvtTreasuryWithdrawal      >$< E.param (E.nullable rationalAsNumericEncoder)
   , paramProposalCommitteeMinSize           >$< maybeDbWord64Encoder
   , paramProposalCommitteeMaxTermLength     >$< maybeDbWord64Encoder
   , paramProposalGovActionLifetime          >$< maybeDbWord64Encoder
   , paramProposalGovActionDeposit           >$< maybeDbWord64Encoder
   , paramProposalDrepDeposit                >$< maybeDbWord64Encoder
   , paramProposalDrepActivity               >$< maybeDbWord64Encoder
-  , paramProposalMinFeeRefScriptCostPerByte >$< E.param (E.nullable doubleAsTextEncoder)
+  , paramProposalMinFeeRefScriptCostPerByte >$< E.param (E.nullable rationalAsNumericEncoder)
   ]
 
 paramProposalDecoder :: D.Row ParamProposal
@@ -2095,18 +2093,18 @@ paramProposalDecoder = ParamProposal
   <*> maybeDbLovelaceDecoder
   <*> maybeDbWord64Decoder
   <*> maybeDbWord64Decoder
-  <*> D.column (D.nullable doubleAsTextDecoder)
-  <*> D.column (D.nullable doubleAsTextDecoder)
-  <*> D.column (D.nullable doubleAsTextDecoder)
-  <*> D.column (D.nullable doubleAsTextDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
   <*> D.column (D.nullable D.bytea)
   <*> (fmap fromIntegral <$> D.column (D.nullable D.int2))
   <*> (fmap fromIntegral <$> D.column (D.nullable D.int2))
   <*> maybeDbLovelaceDecoder
   <*> maybeDbLovelaceDecoder
   <*> maybeIdDecoder CostModelId
-  <*> D.column (D.nullable doubleAsTextDecoder)
-  <*> D.column (D.nullable doubleAsTextDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
   <*> maybeDbWord64Decoder
   <*> maybeDbWord64Decoder
   <*> maybeDbWord64Decoder
@@ -2116,28 +2114,28 @@ paramProposalDecoder = ParamProposal
   <*> (fmap fromIntegral <$> D.column (D.nullable D.int2))
   <*> idDecoder TxId
   <*> maybeDbLovelaceDecoder
-  <*> D.column (D.nullable doubleAsTextDecoder)
-  <*> D.column (D.nullable doubleAsTextDecoder)
-  <*> D.column (D.nullable doubleAsTextDecoder)
-  <*> D.column (D.nullable doubleAsTextDecoder)
-  <*> D.column (D.nullable doubleAsTextDecoder)
-  <*> D.column (D.nullable doubleAsTextDecoder)
-  <*> D.column (D.nullable doubleAsTextDecoder)
-  <*> D.column (D.nullable doubleAsTextDecoder)
-  <*> D.column (D.nullable doubleAsTextDecoder)
-  <*> D.column (D.nullable doubleAsTextDecoder)
-  <*> D.column (D.nullable doubleAsTextDecoder)
-  <*> D.column (D.nullable doubleAsTextDecoder)
-  <*> D.column (D.nullable doubleAsTextDecoder)
-  <*> D.column (D.nullable doubleAsTextDecoder)
-  <*> D.column (D.nullable doubleAsTextDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
   <*> maybeDbWord64Decoder
   <*> maybeDbWord64Decoder
   <*> maybeDbWord64Decoder
   <*> maybeDbWord64Decoder
   <*> maybeDbWord64Decoder
   <*> maybeDbWord64Decoder
-  <*> D.column (D.nullable doubleAsTextDecoder)
+  <*> D.column (D.nullable rationalAsNumericDecoder)
 
 entityParamProposalDecoder :: D.Row (ParamProposalId, ParamProposal)
 entityParamProposalDecoder = (,)

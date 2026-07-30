@@ -9,10 +9,12 @@ module DbSync.Extractor
     ExtractorDef (..)
   , ProcessBlockFn
   , cborCaptureEnabled
+  , scriptsDatumsEnabled
 
     -- * Block context (pre-assigned shared IDs)
   , BlockContext (..)
   , TxContext (..)
+  , redeemerIdAt
 
     -- * Per-block ledger output
   , BlockLedgerData (..)
@@ -52,7 +54,7 @@ import qualified Data.Strict.Maybe as SMaybe
 
 import DbSync.Parser.Types (GenericBlock, GenericTx)
 import DbSync.Phase.Ingest.Counter (IdCounters, freshIdCounters)
-import DbSync.Db.Schema.Ids (BlockId, PoolHashId, SlotLeaderId, StakeAddressId, TxId, TxOutId)
+import DbSync.Db.Schema.Ids (BlockId, PoolHashId, RedeemerId, SlotLeaderId, StakeAddressId, TxId, TxOutId)
 import DbSync.Db.Schema.Types (TableDef)
 import qualified DbSync.Worker.Ledger.StakeDist as Generic
 import DbSync.Worker.Ledger.Types
@@ -96,6 +98,12 @@ data ExtractorDef = ExtractorDef
 -- building (and retaining) @tx_cbor@ payloads when nothing will read them.
 cborCaptureEnabled :: [ExtractorDef] -> Bool
 cborCaptureEnabled = any ((== "cbor") . pdName)
+
+-- | Whether the @scripts_datums@ extractor is active. Gates redeemer id
+-- assignment and counting: when it is off no @redeemer@ rows are written
+-- (the table's sequence may not even exist), so no ids may be drawn.
+scriptsDatumsEnabled :: [ExtractorDef] -> Bool
+scriptsDatumsEnabled = any ((== "scripts_datums") . pdName)
 
 -- | Process a single block through this extractor.
 --
@@ -160,7 +168,20 @@ data TxContext = TxContext
       -- ^ One stake-address FK per output, in the same order. 'Nothing'
       -- when the address carries no inline stake credential (Byron,
       -- enterprise, pointer, reward).
+  , tcRedeemerIds :: ![RedeemerId]
+      -- ^ One id per entry of @txRedeemers gtx@, in the same order.
+      -- Empty when the @scripts_datums@ extractor is off or the tx
+      -- failed phase-2 validation — no redeemer rows exist to point at.
   }
+
+-- | Look up the pre-assigned redeemer id for a parser annotation
+-- (a position into @txRedeemers@). 'Nothing' passes through, and an
+-- annotation without a matching id (@scripts_datums@ off) resolves to
+-- 'Nothing' so the FK cell stays NULL.
+redeemerIdAt :: TxContext -> Maybe Word64 -> Maybe RedeemerId
+redeemerIdAt tc mIx = do
+  ix <- mIx
+  listToMaybe (drop (fromIntegral ix) (tcRedeemerIds tc))
 
 -- ---------------------------------------------------------------------------
 -- * Per-block ledger output

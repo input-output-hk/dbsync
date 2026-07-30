@@ -46,6 +46,7 @@ import DbSync.Extractor
   , ProcessBlockFn
   , TxContext (..)
   , blockStakeKeyDeposit
+  , redeemerIdAt
   )
 import DbSync.Extractor.SharedDedup (resolveAndWritePoolHash, resolveStakeCred)
 import DbSync.Resolver (HasResolver (..))
@@ -112,7 +113,7 @@ processStakeDelegation ctx = do
             , stakeDeregistrationCertIndex  = certIdx
             , stakeDeregistrationEpochNo    = epochNo
             , stakeDeregistrationTxId       = txId
-            , stakeDeregistrationRedeemerId = Nothing
+            , stakeDeregistrationRedeemerId = redeemerIdAt tc (txCertRedeemerIx cert)
             }
 
         -- Delegation
@@ -126,7 +127,7 @@ processStakeDelegation ctx = do
             , delegationActiveEpochNo = epochNo + 2
             , delegationTxId          = txId
             , delegationSlotNo        = slotNo
-            , delegationRedeemerId    = Nothing
+            , delegationRedeemerId    = redeemerIdAt tc (txCertRedeemerIx cert)
             }
 
         -- Conway combined: register + delegate
@@ -147,7 +148,7 @@ processStakeDelegation ctx = do
             , delegationActiveEpochNo = epochNo + 2
             , delegationTxId          = txId
             , delegationSlotNo        = slotNo
-            , delegationRedeemerId    = Nothing
+            , delegationRedeemerId    = redeemerIdAt tc (txCertRedeemerIx cert)
             }
 
         -- DRep-only delegation. The DRep half is consumed by the
@@ -186,7 +187,7 @@ processStakeDelegation ctx = do
             , delegationActiveEpochNo = epochNo + 2
             , delegationTxId          = txId
             , delegationSlotNo        = slotNo
-            , delegationRedeemerId    = Nothing
+            , delegationRedeemerId    = redeemerIdAt tc (txCertRedeemerIx cert)
             }
 
         -- Move-Instantaneous-Reward cert (Shelley-Babbage only).
@@ -203,7 +204,7 @@ processStakeDelegation ctx = do
         { withdrawalAddrId     = saId
         , withdrawalTxId       = txId
         , withdrawalAmount     = DbLovelace (txwAmount w)
-        , withdrawalRedeemerId = Nothing
+        , withdrawalRedeemerId = redeemerIdAt tc (txwRedeemerIx w)
         }
   where
     -- Conway+ certs carry the deposit inline; Shelley-Babbage rely

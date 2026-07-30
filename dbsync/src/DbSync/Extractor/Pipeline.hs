@@ -3,8 +3,8 @@
 
 -- | Block processing pipeline.
 --
--- Pre-assigns shared IDs (BlockId, TxId, TxOutId) centrally, builds
--- a 'BlockContext', then runs all enabled extractors. Works identically
+-- Pre-assigns shared IDs (BlockId, TxId, TxOutId, RedeemerId) centrally,
+-- builds a 'BlockContext', then runs all enabled extractors. Works identically
 -- in both 'IngestChainHistory' and 'FollowingChainTip' — only the
 -- 'IdResolver' and 'Writer' implementations carried by the env differ.
 module DbSync.Extractor.Pipeline
@@ -25,6 +25,7 @@ import DbSync.Extractor
   , HasExtractors (..)
   , HasLedgerData (..)
   , TxContext (..)
+  , scriptsDatumsEnabled
   )
 import DbSync.Extractor.Core (mkSlotLeader)
 import DbSync.Extractor.SharedDedup (resolveStakeCred)
@@ -42,7 +43,7 @@ import DbSync.Writer (HasWriter (..))
 -- | Process a single 'GenericBlock' through all enabled extractors.
 --
 -- 1. Pre-assigns shared IDs: BlockId, SlotLeaderId, per-tx TxId,
---    per-output TxOutId.
+--    per-output TxOutId, per-redeemer RedeemerId.
 -- 2. Builds a 'BlockContext' containing these IDs.
 -- 3. Calls each extractor's 'pdProcess' with the context.
 --
@@ -89,10 +90,18 @@ processBlock block = do
   -- it the tuple's second field is a thunk that retains its captured
   -- @o :: GenericTxOut@ (and through it the raw address ByteString),
   -- pinning that memory for every tx held in the cache.
+  let redeemersOn = scriptsDatumsEnabled extractors
   txCtxs <- forM (blkTxs block) $ \gtx -> do
     txId <- liftIO $ assignTxId resolver
     outIds <- forM (txOutputs gtx) $ \_ -> liftIO $ assignTxOutId resolver
     stakeIds <- forM (txOutputs gtx) resolveOutStakeId
+    -- Redeemer ids are drawn only when the scripts_datums extractor
+    -- will write the rows: a failed phase-2 tx materialises none, and
+    -- a disabled extractor must not advance the sequence.
+    redeemerIds <-
+      if redeemersOn && txValidContract gtx
+        then forM (txRedeemers gtx) $ \_ -> liftIO $ assignRedeemerId resolver
+        else pure []
     liftIO $ recordTxOutputs resolver (txHash gtx) UtxoTxEntry
       { uteTxId    = txId
       , uteOutputs = Seq.fromList
@@ -101,7 +110,7 @@ processBlock block = do
           | (outId, o) <- zip outIds (txOutputs gtx)
           ]
       }
-    pure $ TxContext txId gtx outIds stakeIds
+    pure $ TxContext txId gtx outIds stakeIds redeemerIds
 
   network <- asks getNetwork
   let ctx = BlockContext

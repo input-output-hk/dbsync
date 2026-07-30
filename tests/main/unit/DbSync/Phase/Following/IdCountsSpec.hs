@@ -24,12 +24,16 @@ import qualified Data.ByteString as BS
 
 import Test.Hspec (Spec, describe, it, shouldBe)
 
+import DbSync.Db.Types (ScriptPurpose (..))
+import DbSync.Extractor (ExtractorDef)
+import DbSync.Extractor.ScriptsDatums (scriptsDatumsExtractor)
 import DbSync.Parser.Types
   ( BlockEra (..)
   , GenericBlock (..)
   , GenericTx (..)
   , GenericTxIn (..)
   , GenericTxOut (..)
+  , GenericTxRedeemer (..)
   )
 import DbSync.Phase.Following.IdCounts
   ( IdCounts (..)
@@ -43,22 +47,33 @@ spec :: Spec
 spec =
   describe "countAssignableIds" $ do
     it "counts one collateral_tx_out id for a valid tx with a collateral return" $ do
-      let counts = countAssignableIds (blockWith validTxWithCollateralReturn)
+      let counts = countAssignableIds withScriptsDatums (blockWith validTxWithCollateralReturn)
       icCollateralTxOutIds counts `shouldBe` 1
       -- The valid tx's single regular output still wants a tx_out id;
       -- the collateral return does not double-count into tx_out.
       icTxOutIds counts `shouldBe` 1
 
     it "counts no collateral_tx_out id for a failed phase-2 tx" $ do
-      let counts = countAssignableIds (blockWith failedTxFoldedCollateral)
+      let counts = countAssignableIds withScriptsDatums (blockWith failedTxFoldedCollateral)
       icCollateralTxOutIds counts `shouldBe` 0
       -- The folded collateral return is the tx's only surviving output
       -- and is written to tx_out, so it consumes a tx_out id.
       icTxOutIds counts `shouldBe` 1
 
     it "tallies one tx id per tx" $
-      icTxIds (countAssignableIds (blockWith validTxWithCollateralReturn))
+      icTxIds (countAssignableIds withScriptsDatums (blockWith validTxWithCollateralReturn))
         `shouldBe` 1
+
+    it "counts redeemer ids only when scripts_datums is enabled" $ do
+      let blk = blockWith validTxWithCollateralReturn { txRedeemers = [sampleRedeemer] }
+      icRedeemerIds (countAssignableIds withScriptsDatums blk) `shouldBe` 1
+      -- Disabled extractor writes no rows; its sequence may not even
+      -- exist, so no ids may be drawn from it.
+      icRedeemerIds (countAssignableIds [] blk) `shouldBe` 0
+
+    it "counts no redeemer ids for a failed phase-2 tx" $ do
+      let blk = blockWith failedTxFoldedCollateral { txRedeemers = [sampleRedeemer] }
+      icRedeemerIds (countAssignableIds withScriptsDatums blk) `shouldBe` 0
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -66,6 +81,21 @@ spec =
 
 blockWith :: GenericTx -> GenericBlock
 blockWith tx = emptyBlock { blkTxs = [tx] }
+
+withScriptsDatums :: [ExtractorDef]
+withScriptsDatums = [scriptsDatumsExtractor]
+
+sampleRedeemer :: GenericTxRedeemer
+sampleRedeemer = GenericTxRedeemer
+  { gtrUnitMem    = 1000
+  , gtrUnitSteps  = 250_000
+  , gtrPurpose    = Spend
+  , gtrIndex      = 0
+  , gtrScriptHash = Nothing
+  , gtrDataHash   = BS.replicate 32 0xab
+  , gtrDataBytes  = "d87980"
+  , gtrDataValue  = Nothing
+  }
 
 -- | Babbage+ valid tx that declared a collateral-return output. The
 -- parser keeps the real output in 'txOutputs' and the collateral

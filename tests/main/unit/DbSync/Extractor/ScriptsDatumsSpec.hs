@@ -22,23 +22,36 @@ import Cardano.Ledger.BaseTypes (Network (..), boundRational)
 
 import DbSync.Parser.Types
   ( BlockEra (..)
+  , CertAction (..)
+  , CredHash (..)
+  , DRepIdent (..)
   , GenericBlock (..)
   , GenericTx (..)
+  , GenericTxCertificate (..)
   , GenericTxDatum (..)
+  , GenericTxIn (..)
   , GenericTxRedeemer (..)
   , GenericTxScript (..)
+  , GenericTxWithdrawal (..)
   )
+import qualified DbSync.Db.Schema.Governance as SG
 import qualified DbSync.Db.Schema.ScriptsDatums as SSD
+import qualified DbSync.Db.Schema.StakeDelegation as SSt
+import qualified DbSync.Db.Schema.UTxO as SU
 import DbSync.Db.Types (DbLovelace (..), ScriptPurpose (..), ScriptType (..))
 import DbSync.Extractor
   ( BlockLedgerData (..)
+  , ExtractorDef (..)
   , LedgerOutputs (..)
   , emptyLedgerOutputs
   , freshExtractState
   )
 import DbSync.Extractor.Core (coreExtractor)
+import DbSync.Extractor.Governance (governanceExtractor)
 import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.Extractor.ScriptsDatums (redeemerScriptFee, scriptsDatumsExtractor)
+import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
+import DbSync.Extractor.UTxO (utxoExtractor)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
 import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Test.Lsm (withTestIngestStores)
@@ -144,6 +157,41 @@ spec = do
         [(_, r)] -> SSD.redeemerFee r `shouldBe` Just (DbLovelace 76)
         _        -> panic "expected exactly one redeemer"
 
+  describe "redeemer FK back-references" $ do
+
+    it "points witnessed rows at the pipeline-assigned redeemer ids" $ do
+      written <- runExtractors fkExtractors fkTx
+      case map fst (twRedeemers written) of
+        [r1, r2, r3] -> do
+          map SU.txInRedeemerId (twTxIns written)
+            `shouldBe` [Just r1, Nothing]
+          map SSt.stakeDeregistrationRedeemerId (twStakeDeregistrations written)
+            `shouldBe` [Just r2]
+          map SSt.delegationRedeemerId (twDelegations written)
+            `shouldBe` [Nothing]
+          map SG.delegationVoteRedeemerId (twDelegationVotes written)
+            `shouldBe` [Just r2]
+          map SSt.withdrawalRedeemerId (twWithdrawals written)
+            `shouldBe` [Just r3]
+        _ -> panic "expected exactly three redeemer rows"
+
+    it "leaves every redeemer FK NULL when scripts_datums is disabled" $ do
+      -- The other tables may still be enabled; their annotations have
+      -- no rows to point at, so the cells stay NULL.
+      written <- runExtractors (filter ((/= "scripts_datums") . pdName) fkExtractors) fkTx
+      length (twRedeemers written) `shouldBe` 0
+      map SU.txInRedeemerId (twTxIns written) `shouldBe` [Nothing, Nothing]
+      map SSt.stakeDeregistrationRedeemerId (twStakeDeregistrations written)
+        `shouldBe` [Nothing]
+      map SG.delegationVoteRedeemerId (twDelegationVotes written)
+        `shouldBe` [Nothing]
+      map SSt.withdrawalRedeemerId (twWithdrawals written) `shouldBe` [Nothing]
+
+    it "assigns no redeemer ids to a phase-2 failed tx" $ do
+      written <- runExtractors fkExtractors fkTx { txValidContract = False }
+      length (twRedeemers written) `shouldBe` 0
+      map SU.txInRedeemerId (twTxIns written) `shouldBe` [Nothing, Nothing]
+
 allEqual :: Eq a => [a] -> Bool
 allEqual []     = True
 allEqual (x:xs) = all (== x) xs
@@ -153,14 +201,18 @@ allEqual (x:xs) = all (== x) xs
 -- ---------------------------------------------------------------------------
 
 runOne :: GenericTx -> IO TestWriterState
-runOne tx = withTestIngestStores $ \utxoStore dedupStores -> do
+runOne = runExtractors [coreExtractor, scriptsDatumsExtractor]
+
+-- | Like 'runOne' but with a caller-supplied extractor set.
+runExtractors :: [ExtractorDef] -> GenericTx -> IO TestWriterState
+runExtractors exs tx = withTestIngestStores $ \utxoStore dedupStores -> do
   stRef   <- newIORef freshExtractState
   addrBuf <- newAddressBufferRef
   wrRef   <- newIORef emptyTestWriterState
   let env = mkTestPipelineEnvOn Mainnet
               (mkIngestResolver stRef dedupStores addrBuf utxoStore Nothing)
               (mkTestWriter wrRef)
-              [coreExtractor, scriptsDatumsExtractor]
+              exs
   runReaderT (processBlock (blockWith tx)) env
   readIORef wrRef
 
@@ -268,6 +320,59 @@ txWithExtraKeys ks = baseTx { txExtraKeyWitnesses = ks }
 
 txWithRedeemers :: [GenericTxRedeemer] -> GenericTx
 txWithRedeemers rs = baseTx { txRedeemers = rs }
+
+fkExtractors :: [ExtractorDef]
+fkExtractors =
+  [ coreExtractor
+  , utxoExtractor
+  , stakeDelegationExtractor
+  , governanceExtractor
+  , scriptsDatumsExtractor
+  ]
+
+-- | One tx exercising all four annotated element kinds: redeemer 0
+-- witnesses the first input, redeemer 1 the deregistration and the
+-- vote-delegation certs, redeemer 2 the withdrawal. The plain
+-- delegation cert carries no redeemer.
+fkTx :: GenericTx
+fkTx = baseTx
+  { txInputs =
+      [ GenericTxIn (BS.replicate 32 0x01) 0 (Just 0)
+      , GenericTxIn (BS.replicate 32 0x02) 1 Nothing
+      ]
+  , txCertificates =
+      [ GenericTxCertificate
+          { txCertIndex      = 0
+          , txCertAction     = CertStakeDeregistration (CredHash (BS.replicate 28 0xaa) True)
+          , txCertRedeemerIx = Just 1
+          }
+      , GenericTxCertificate
+          { txCertIndex      = 1
+          , txCertAction     = CertDelegation (CredHash (BS.replicate 28 0xbb) False)
+                                              (BS.replicate 28 0xcc)
+          , txCertRedeemerIx = Nothing
+          }
+      , GenericTxCertificate
+          { txCertIndex      = 2
+          , txCertAction     = CertConwayDelegVote (CredHash (BS.replicate 28 0xdd) True)
+                                                   (DRepCred (CredHash (BS.replicate 28 0xee) False))
+                                                   Nothing
+          , txCertRedeemerIx = Just 1
+          }
+      ]
+  , txWithdrawals =
+      [ GenericTxWithdrawal
+          { txwRewardAddress = BS.cons 0xf0 (BS.replicate 28 0xff)
+          , txwAmount        = 3_000_000
+          , txwRedeemerIx    = Just 2
+          }
+      ]
+  , txRedeemers =
+      [ sampleRedeemer
+      , sampleRedeemer { gtrPurpose = Cert,  gtrIndex = 0 }
+      , sampleRedeemer { gtrPurpose = Rewrd, gtrIndex = 0 }
+      ]
+  }
 
 blockWith :: GenericTx -> GenericBlock
 blockWith tx = shelleyBlock { blkTxs = [tx] }

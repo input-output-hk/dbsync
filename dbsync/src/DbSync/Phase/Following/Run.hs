@@ -308,7 +308,7 @@ processForward progressRef replayRef lastAppliedRef cardanoBlock = do
               else SkipConsumedBy
           !genBlock = parseBlock cborEnabled sd cardanoBlock
           !curEpoch = unEpochNo (blkEpochNo genBlock)
-          !counts   = countAssignableIds genBlock
+          !counts   = countAssignableIds (ceExtractors feCore) genBlock
           triple    = ( unSlotNo  (blkSlotNo  genBlock)
                       , unBlockNo (blkBlockNo genBlock)
                       , blkHash   genBlock

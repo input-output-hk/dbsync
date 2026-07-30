@@ -19,11 +19,13 @@ module DbSync.Phase.FollowScriptsDatumsSpec (spec) where
 
 import Cardano.Prelude
 
+import qualified Data.ByteString.Base16 as Base16
 import qualified Data.ByteString.Short as SBS
 import Data.List ((!!))
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Text as T
+import Data.Text.Encoding (decodeLatin1)
 
 import Test.Hspec (Spec, describe, it, shouldBe)
 
@@ -63,8 +65,10 @@ import DbSync.Db.Schema.Types (TableDef (..))
 import DbSync.Db.Schema.UTxO
   ( collateralTxOutTableDef
   , referenceTxInTableDef
+  , txInTableDef
   , txOutTableDef
   )
+import DbSync.Parser.Tx (scriptHashBytes)
 import DbSync.Test.AppHarness
   ( ledgerEnabledTestConfig
   , quietTracer
@@ -145,6 +149,21 @@ spec = describe "Follow scripts/datums writes" $ do
                 <> " WHERE redeemer_data_id IS NULL"
             )
           nullFkRows `shouldBe` "0"
+
+          -- The spent input is back-referenced to its spend redeemer.
+          spendFks <- T.strip <$> queryTestDb
+            ( "SELECT COUNT(*)::text FROM " <> tdName txInTableDef
+                <> " ti JOIN " <> tdName redeemerTableDef
+                <> " r ON ti.redeemer_id = r.id WHERE r.purpose = 'spend'"
+            )
+          spendFks `shouldBe` "1"
+
+          -- Ledger is ON, so every redeemer carries its execution fee.
+          nullFees <- T.strip <$> queryTestDb
+            ( "SELECT COUNT(*)::text FROM " <> tdName redeemerTableDef
+                <> " WHERE fee IS NULL"
+            )
+          nullFees `shouldBe` "0"
 
   it "lands one redeemer when lock and unlock share a block" $
     withScriptsDatumsSession "dbsync-test-scripts-same-block" $ \mn -> do
@@ -270,6 +289,15 @@ spec = describe "Follow scripts/datums writes" $ do
       followMint <- countRows (tdName maTxMintTableDef)
       (followMint - baselineMint) `shouldBe` 1
 
+      -- A mint redeemer's script hash is the policy id itself; the
+      -- parser resolves it without any DB lookup.
+      mintHash <- T.strip <$> queryTestDb
+        ( "SELECT encode(script_hash, 'hex') FROM " <> tdName redeemerTableDef
+            <> " WHERE purpose = 'mint' ORDER BY id DESC LIMIT 1"
+        )
+      mintHash `shouldBe`
+        decodeLatin1 (Base16.encode (scriptHashBytes Scripts.alwaysMintScriptHash))
+
   it "writes an inline-datum row and links it from tx_out at tip" $
     withScriptsDatumsSession "dbsync-test-scripts-inline-datum" $ \mn -> do
       baselineBlocks <- countRows (tdName blockTableDef)
@@ -353,6 +381,42 @@ spec = describe "Follow scripts/datums writes" $ do
       (followRefOut    - baselineRefOut)    `shouldBe` 1
       (followRefTxIn   - baselineRefTxIn)   `shouldBe` 1
       (followRedeemers - baselineRedeemers) `shouldBe` 1
+
+  it "leaves tx_in.redeemer_id NULL and draws no redeemer ids when scripts_datums is disabled" $
+    withMockNode conwayConfigDir $ \mn ->
+      withTempDir "dbsync-test-scripts-disabled" $ \ledgerDir -> do
+        tracer <- quietTracer
+        _ <- forgeAndPushBlocks mn 250
+
+        -- ledgerEnabledTestConfig keeps @scripts_datums@ OFF: no
+        -- redeemer table (or sequence) exists in this schema.
+        withAppSession tracer ledgerEnabledTestConfig mn ledgerDir $ \_ -> do
+          waitForSyncComplete 120
+          baselineBlocks <- countRows (tdName blockTableDef)
+          baselineTxIn   <- countRows (tdName txInTableDef)
+
+          lockTxs <- buildLockTxs mn
+          _ <- forgeAndPush mn lockTxs
+          unlockTxs <- buildUnlockTxs mn
+          _ <- forgeAndPush mn unlockTxs
+
+          let expectedBlocks = baselineBlocks + 2
+          waitFor
+            (tdName blockTableDef <> " count reaches " <> show expectedBlocks)
+            (do n <- countRows (tdName blockTableDef); pure (n >= expectedBlocks))
+            60
+          waitFor
+            (tdName txInTableDef <> " count grows")
+            (do n <- countRows (tdName txInTableDef); pure (n > baselineTxIn))
+            30
+
+          -- The Plutus spend still lands in tx_in; with no redeemer
+          -- rows to point at, its FK cell stays NULL.
+          fkRows <- T.strip <$> queryTestDb
+            ( "SELECT COUNT(*)::text FROM " <> tdName txInTableDef
+                <> " WHERE redeemer_id IS NOT NULL"
+            )
+          fkRows `shouldBe` "0"
 
 -- ---------------------------------------------------------------------------
 -- * Profile

@@ -20,6 +20,7 @@ module DbSync.Phase.Following.IdCounts
 
 import Cardano.Prelude
 
+import DbSync.Extractor (ExtractorDef, scriptsDatumsEnabled)
 import DbSync.Parser.Types
   ( CertAction (..)
   , GenericBlock (..)
@@ -67,11 +68,16 @@ emptyIdCounts = IdCounts
 
 -- | Walk every transaction in the block once and tally the ID
 -- demand per sequence. Pure; no IO.
-countAssignableIds :: GenericBlock -> IdCounts
-countAssignableIds blk = foldl' tally emptyIdCounts (blkTxs blk)
+--
+-- Redeemer ids match the pipeline's assignment gate: none are counted
+-- when the @scripts_datums@ extractor is off (its sequence may not
+-- exist) or for a phase-2 invalid tx (no redeemer rows are written).
+countAssignableIds :: [ExtractorDef] -> GenericBlock -> IdCounts
+countAssignableIds extractors blk =
+  foldl' (tally (scriptsDatumsEnabled extractors)) emptyIdCounts (blkTxs blk)
 
-tally :: IdCounts -> GenericTx -> IdCounts
-tally !c tx = c
+tally :: Bool -> IdCounts -> GenericTx -> IdCounts
+tally redeemersOn !c tx = c
   { icTxIds                = icTxIds c + 1
   , icTxOutIds             = icTxOutIds c + nOuts
   , icCollateralTxOutIds   = icCollateralTxOutIds c + nCollOuts
@@ -96,7 +102,9 @@ tally !c tx = c
                     then maybe 0 (const 1) (txCollateralOutput tx)
                     else 0
     !certCounts = foldl' tallyCert emptyCertCounts (txCertificates tx)
-    !nRedeemers = length (txRedeemers tx :: [GenericTxRedeemer])
+    !nRedeemers = if redeemersOn && valid
+                    then length (txRedeemers tx :: [GenericTxRedeemer])
+                    else 0
     !propCounts = foldl' tallyProposal emptyProposalCounts (txProposals tx)
 
 -- | Per-cert-kind tally accumulated while walking 'txCertificates'.

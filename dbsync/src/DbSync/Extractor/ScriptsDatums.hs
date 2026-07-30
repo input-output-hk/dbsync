@@ -26,7 +26,7 @@ import Cardano.Prelude
 
 import Cardano.Ledger.Alonzo.Scripts (ExUnits (..), Prices, txscriptfee)
 
-import DbSync.Db.Schema.Ids (TxId)
+import DbSync.Db.Schema.Ids (RedeemerId, TxId)
 import DbSync.Db.Schema.ScriptsDatums
 import DbSync.Db.Types (DbLovelace)
 import DbSync.Extractor
@@ -47,7 +47,7 @@ import DbSync.Parser.Types
   , GenericTxRedeemer (..)
   , GenericTxScript (..)
   )
-import DbSync.Resolver (HasResolver (..), IdResolver (..))
+import DbSync.Resolver (HasResolver)
 import DbSync.Util (coinToDbLovelace)
 import DbSync.Writer (HasWriter (..), Writer (..))
 
@@ -84,7 +84,8 @@ processScriptsDatums ctx = do
     forM_ (txScripts gtx)           (writeScriptEntry txId)
     forM_ (txDatums gtx)            (writeDatumEntry txId)
     forM_ (txExtraKeyWitnesses gtx) (writeExtraKey txId)
-    forM_ (txRedeemers gtx)         (writeRedeemerEntry mPrices txId)
+    forM_ (zip (tcRedeemerIds tc) (txRedeemers gtx)) $
+      uncurry (writeRedeemerEntry mPrices txId)
 
 writeScriptEntry
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
@@ -117,20 +118,20 @@ writeExtraKey txId h = do
     }
 
 -- | @redeemer.fee@ needs the block's Plutus execution prices;
--- 'Nothing' (ledger off) leaves the fee cell NULL.
+-- 'Nothing' (ledger off) leaves the fee cell NULL. The row id is
+-- pre-assigned by the pipeline so FK writers in other extractors can
+-- reference it without ordering games.
 writeRedeemerEntry
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
-  => Maybe Prices -> TxId -> GenericTxRedeemer -> m ()
-writeRedeemerEntry mPrices txId gtr = do
-  resolver <- asks getResolver
-  writer   <- asks getWriter
+  => Maybe Prices -> TxId -> RedeemerId -> GenericTxRedeemer -> m ()
+writeRedeemerEntry mPrices txId rid gtr = do
+  writer <- asks getWriter
   rdId <- resolveAndWriteRedeemerData (gtrDataHash gtr) RedeemerData
     { redeemerDataHash  = gtrDataHash gtr
     , redeemerDataTxId  = txId
     , redeemerDataValue = gtrDataValue gtr
     , redeemerDataBytes = gtrDataBytes gtr
     }
-  rid <- liftIO $ assignRedeemerId resolver
   -- Forced now so the Follow write buffer stores a value, not a closure.
   let fee = case mPrices of
         Nothing -> Nothing

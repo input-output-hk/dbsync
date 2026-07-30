@@ -131,12 +131,15 @@ writeRedeemerEntry mPrices txId gtr = do
     , redeemerDataBytes = gtrDataBytes gtr
     }
   rid <- liftIO $ assignRedeemerId resolver
+  -- Forced now so the Follow write buffer stores a value, not a closure.
+  let fee = case mPrices of
+        Nothing -> Nothing
+        Just p  -> Just $! redeemerScriptFee p (gtrUnitMem gtr) (gtrUnitSteps gtr)
   liftIO $ writeRedeemer writer rid Redeemer
     { redeemerTxId            = txId
     , redeemerUnitMem         = gtrUnitMem gtr
     , redeemerUnitSteps       = gtrUnitSteps gtr
-    , redeemerFee             =
-        (\p -> redeemerScriptFee p (gtrUnitMem gtr) (gtrUnitSteps gtr)) <$> mPrices
+    , redeemerFee             = fee
     , redeemerPurpose         = gtrPurpose gtr
     , redeemerIndex           = gtrIndex gtr
     , redeemerScriptHash      = gtrScriptHash gtr

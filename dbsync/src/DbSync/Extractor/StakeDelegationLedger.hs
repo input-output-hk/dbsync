@@ -8,7 +8,8 @@
 -- Owns four tables:
 --
 --   * @epoch_stake@ — per-(stake, pool, epoch) active stake, emitted
---     from per-block slices of the ledger's "mark" snapshot.
+--     from per-block slices of the ledger's "mark" snapshot, plus a
+--     boundary catch-up slice for epochs too short to finish slicing.
 --   * @epoch_stake_progress@ — one row per completed epoch's slicing.
 --   * @reward@ — per-block-production rewards (leader / member) and
 --     pool-deposit refunds. Boundary-only, sourced from @apEvents@.
@@ -148,11 +149,11 @@ emitSlice slice isLast = do
 -- * Boundary handler
 -- ---------------------------------------------------------------------------
 
--- | Iterate @apEvents@ and emit @reward@ + @pot_reward@ rows.
+-- | Drain the ended epoch's catch-up stake slice, then iterate
+-- @bndEvents@ and emit @reward@ + @pot_reward@ rows.
 --
--- No-op when 'apNewEpoch' is 'Strict.Nothing' (mid-epoch block). The
--- @BlockId@ argument is unused; carried for signature symmetry with
--- the other boundary handlers.
+-- The @BlockId@ argument is unused; carried for signature symmetry
+-- with the other boundary handlers.
 runStakeDelegationLedgerBoundary
   :: ( HasResolver env
      , HasWriter env
@@ -161,7 +162,10 @@ runStakeDelegationLedgerBoundary
      , MonadIO m
      )
   => BoundaryApplyData -> BlockId -> m ()
-runStakeDelegationLedgerBoundary applyResult _blockId =
+runStakeDelegationLedgerBoundary applyResult _blockId = do
+  case bndCatchupStakeSlice applyResult of
+    NoSlices           -> pure ()
+    Slice slice isLast -> emitSlice slice isLast
   case bndNewEpoch applyResult of
     Strict.Nothing       -> pure ()
     Strict.Just newEpoch -> do

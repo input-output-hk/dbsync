@@ -288,7 +288,7 @@ paramProposalSpec = describe "encodeParamProposalCopy" $ do
     let nullCount = length [ () | f <- fields, f == "\\N" ]
     nullCount `shouldBe` 53
 
-  it "round-trips a representative Double via the TEXT codec" $ do
+  it "encodes a rational parameter as fixed-notation decimal" $ do
     let row = encodeParamProposalCopy (ParamProposalId 1)
                 emptyParamProposal { paramProposalInfluence = Just 0.3 }
         fields = BS8.split '\t' (BS8.init row)

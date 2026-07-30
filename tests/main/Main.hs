@@ -49,7 +49,9 @@ import qualified DbSync.Extractor.MultiAssetSpec as ExtractorMultiAssetSpec
 import qualified DbSync.Extractor.OffChainPoolsSpec as ExtractorOffChainPoolsSpec
 import qualified DbSync.Extractor.OffChainVotesSpec as ExtractorOffChainVotesSpec
 import qualified DbSync.Extractor.PoolSpec as ExtractorPoolSpec
+import qualified DbSync.Extractor.PoolStatsSpec as ExtractorPoolStatsSpec
 import qualified DbSync.Extractor.ScriptsDatumsSpec as ExtractorScriptsDatumsSpec
+import qualified DbSync.Extractor.StakeDelegationLedgerSpec as ExtractorStakeDelegationLedgerSpec
 import qualified DbSync.Extractor.StakeDelegationSpec as ExtractorStakeDelegationSpec
 import qualified DbSync.Extractor.UTxOSpec as ExtractorUTxOSpec
 import qualified DbSync.Phase.Ingest.ConsumerSpec as IngestConsumerSpec
@@ -193,7 +195,9 @@ main = hspec $ do
     ExtractorOffChainPoolsSpec.spec
     ExtractorOffChainVotesSpec.spec
     ExtractorPoolSpec.spec
+    ExtractorPoolStatsSpec.spec
     ExtractorScriptsDatumsSpec.spec
+    ExtractorStakeDelegationLedgerSpec.spec
     ExtractorStakeDelegationSpec.spec
     ExtractorUTxOSpec.spec
     IngestConsumerSpec.spec

@@ -386,7 +386,7 @@ runFollowBoundary = \case
     for_ mBlockId $ \blockId -> do
       when governanceOn $ runGovernanceBoundary applyResult blockId
       runEpochBoundary applyResult blockId
-      when poolStatsOn  $ runPoolStatsBoundary  applyResult blockId
+      when poolStatsOn  $ runPoolStatsBoundary governanceOn applyResult blockId
       when sdlOn        $ runStakeDelegationLedgerBoundary applyResult blockId
 
 -- | Step the replay-progress state machine for this block and emit

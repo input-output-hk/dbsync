@@ -488,7 +488,7 @@ data PoolRegistrationData = PoolRegistrationData
   , prdVrfKeyHash  :: !ByteString          -- ^ VRF verification key hash (32 bytes)
   , prdPledge      :: !Word64              -- ^ Pledge in Lovelace
   , prdCost        :: !Word64              -- ^ Fixed cost in Lovelace
-  , prdMargin      :: !Double              -- ^ Pool margin (rational as Double)
+  , prdMargin      :: !Rational            -- ^ Pool margin in [0, 1]
   , prdRewardAddr  :: !ByteString          -- ^ Serialised reward account
   , prdOwners      :: ![ByteString]        -- ^ Stake key hashes of pool owners
   , prdRelays      :: ![PoolRelayData]     -- ^ Pool relay definitions

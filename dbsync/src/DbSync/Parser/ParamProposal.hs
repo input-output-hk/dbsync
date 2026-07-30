@@ -63,7 +63,7 @@ import Ouroboros.Consensus.Cardano.Block
   , ConwayEra
   )
 
-import DbSync.Util (unitIntervalToDouble)
+import DbSync.Util (unitIntervalToRational)
 
 -- ---------------------------------------------------------------------------
 -- * Type
@@ -93,10 +93,10 @@ data GenericParamProposal = GenericParamProposal
   , gppPoolDeposit                :: !(Maybe Word64)
   , gppMaxEpoch                   :: !(Maybe Word64)
   , gppOptimalPoolCount           :: !(Maybe Word64)
-  , gppInfluence                  :: !(Maybe Double)
-  , gppMonetaryExpandRate         :: !(Maybe Double)
-  , gppTreasuryGrowthRate         :: !(Maybe Double)
-  , gppDecentralisation           :: !(Maybe Double)
+  , gppInfluence                  :: !(Maybe Rational)
+  , gppMonetaryExpandRate         :: !(Maybe Rational)
+  , gppTreasuryGrowthRate         :: !(Maybe Rational)
+  , gppDecentralisation           :: !(Maybe Rational)
   , gppEntropy                    :: !(Maybe ByteString)
   , gppProtocolMajor              :: !(Maybe Word16)
   , gppProtocolMinor              :: !(Maybe Word16)
@@ -104,8 +104,8 @@ data GenericParamProposal = GenericParamProposal
   , gppMinPoolCost                :: !(Maybe Word64)
   , gppCoinsPerUtxoSize           :: !(Maybe Word64)
   , gppCostmdls                   :: !(Maybe (Map Language Alonzo.CostModel))
-  , gppPriceMem                   :: !(Maybe Double)
-  , gppPriceStep                  :: !(Maybe Double)
+  , gppPriceMem                   :: !(Maybe Rational)
+  , gppPriceStep                  :: !(Maybe Rational)
   , gppMaxTxExMem                 :: !(Maybe Word64)
   , gppMaxTxExSteps               :: !(Maybe Word64)
   , gppMaxBlockExMem              :: !(Maybe Word64)
@@ -113,28 +113,28 @@ data GenericParamProposal = GenericParamProposal
   , gppMaxValSize                 :: !(Maybe Word64)
   , gppCollateralPercent          :: !(Maybe Word16)
   , gppMaxCollateralInputs        :: !(Maybe Word16)
-  , gppPvtMotionNoConfidence      :: !(Maybe Double)
-  , gppPvtCommitteeNormal         :: !(Maybe Double)
-  , gppPvtCommitteeNoConfidence   :: !(Maybe Double)
-  , gppPvtHardForkInitiation      :: !(Maybe Double)
-  , gppPvtppSecurityGroup         :: !(Maybe Double)
-  , gppDvtMotionNoConfidence      :: !(Maybe Double)
-  , gppDvtCommitteeNormal         :: !(Maybe Double)
-  , gppDvtCommitteeNoConfidence   :: !(Maybe Double)
-  , gppDvtUpdateToConstitution    :: !(Maybe Double)
-  , gppDvtHardForkInitiation      :: !(Maybe Double)
-  , gppDvtPPNetworkGroup          :: !(Maybe Double)
-  , gppDvtPPEconomicGroup         :: !(Maybe Double)
-  , gppDvtPPTechnicalGroup        :: !(Maybe Double)
-  , gppDvtPPGovGroup              :: !(Maybe Double)
-  , gppDvtTreasuryWithdrawal      :: !(Maybe Double)
+  , gppPvtMotionNoConfidence      :: !(Maybe Rational)
+  , gppPvtCommitteeNormal         :: !(Maybe Rational)
+  , gppPvtCommitteeNoConfidence   :: !(Maybe Rational)
+  , gppPvtHardForkInitiation      :: !(Maybe Rational)
+  , gppPvtppSecurityGroup         :: !(Maybe Rational)
+  , gppDvtMotionNoConfidence      :: !(Maybe Rational)
+  , gppDvtCommitteeNormal         :: !(Maybe Rational)
+  , gppDvtCommitteeNoConfidence   :: !(Maybe Rational)
+  , gppDvtUpdateToConstitution    :: !(Maybe Rational)
+  , gppDvtHardForkInitiation      :: !(Maybe Rational)
+  , gppDvtPPNetworkGroup          :: !(Maybe Rational)
+  , gppDvtPPEconomicGroup         :: !(Maybe Rational)
+  , gppDvtPPTechnicalGroup        :: !(Maybe Rational)
+  , gppDvtPPGovGroup              :: !(Maybe Rational)
+  , gppDvtTreasuryWithdrawal      :: !(Maybe Rational)
   , gppCommitteeMinSize           :: !(Maybe Word64)
   , gppCommitteeMaxTermLength     :: !(Maybe Word64)
   , gppGovActionLifetime          :: !(Maybe Word64)
   , gppGovActionDeposit           :: !(Maybe Word64)
   , gppDrepDeposit                :: !(Maybe Word64)
   , gppDrepActivity               :: !(Maybe Word64)
-  , gppMinFeeRefScriptCostPerByte :: !(Maybe Double)
+  , gppMinFeeRefScriptCostPerByte :: !(Maybe Rational)
   }
   deriving stock (Show)
 
@@ -207,12 +207,12 @@ convertConwayParamProposal pmap =
     , gppOptimalPoolCount           =
         fromIntegral <$> strictMaybeToMaybe (pmap ^. Core.ppuNOptL)
     , gppInfluence                  =
-        fromRational . Ledger.unboundRational
+        Ledger.unboundRational
           <$> strictMaybeToMaybe (pmap ^. Core.ppuA0L)
     , gppMonetaryExpandRate         =
-        unitIntervalToDouble <$> strictMaybeToMaybe (pmap ^. Core.ppuRhoL)
+        unitIntervalToRational <$> strictMaybeToMaybe (pmap ^. Core.ppuRhoL)
     , gppTreasuryGrowthRate         =
-        unitIntervalToDouble <$> strictMaybeToMaybe (pmap ^. Core.ppuTauL)
+        unitIntervalToRational <$> strictMaybeToMaybe (pmap ^. Core.ppuTauL)
     , gppDecentralisation           = Nothing  -- removed in Babbage
     , gppEntropy                    = Nothing  -- removed in Babbage
     , gppProtocolMajor              = Nothing  -- removed in Conway
@@ -228,10 +228,10 @@ convertConwayParamProposal pmap =
         strictMaybeToMaybe
           (Alonzo.costModelsValid <$> pmap ^. ppuCostModelsL)
     , gppPriceMem                   =
-        fromRational . Ledger.unboundRational . Alonzo.prMem
+        Ledger.unboundRational . Alonzo.prMem
           <$> strictMaybeToMaybe (pmap ^. ppuPricesL)
     , gppPriceStep                  =
-        fromRational . Ledger.unboundRational . Alonzo.prSteps
+        Ledger.unboundRational . Alonzo.prSteps
           <$> strictMaybeToMaybe (pmap ^. ppuPricesL)
     , gppMaxTxExMem                 =
         fromIntegral . Plutus.exUnitsMem
@@ -252,49 +252,49 @@ convertConwayParamProposal pmap =
     , gppMaxCollateralInputs        =
         strictMaybeToMaybe (pmap ^. ppuMaxCollateralInputsL)
     , gppPvtMotionNoConfidence      =
-        unitIntervalToDouble . pvtMotionNoConfidence
+        unitIntervalToRational . pvtMotionNoConfidence
           <$> strictMaybeToMaybe (pmap ^. ppuPoolVotingThresholdsL)
     , gppPvtCommitteeNormal         =
-        unitIntervalToDouble . pvtCommitteeNormal
+        unitIntervalToRational . pvtCommitteeNormal
           <$> strictMaybeToMaybe (pmap ^. ppuPoolVotingThresholdsL)
     , gppPvtCommitteeNoConfidence   =
-        unitIntervalToDouble . pvtCommitteeNoConfidence
+        unitIntervalToRational . pvtCommitteeNoConfidence
           <$> strictMaybeToMaybe (pmap ^. ppuPoolVotingThresholdsL)
     , gppPvtHardForkInitiation      =
-        unitIntervalToDouble . pvtHardForkInitiation
+        unitIntervalToRational . pvtHardForkInitiation
           <$> strictMaybeToMaybe (pmap ^. ppuPoolVotingThresholdsL)
     , gppPvtppSecurityGroup         =
-        unitIntervalToDouble . pvtPPSecurityGroup
+        unitIntervalToRational . pvtPPSecurityGroup
           <$> strictMaybeToMaybe (pmap ^. ppuPoolVotingThresholdsL)
     , gppDvtMotionNoConfidence      =
-        unitIntervalToDouble . dvtMotionNoConfidence
+        unitIntervalToRational . dvtMotionNoConfidence
           <$> strictMaybeToMaybe (pmap ^. ppuDRepVotingThresholdsL)
     , gppDvtCommitteeNormal         =
-        unitIntervalToDouble . dvtCommitteeNormal
+        unitIntervalToRational . dvtCommitteeNormal
           <$> strictMaybeToMaybe (pmap ^. ppuDRepVotingThresholdsL)
     , gppDvtCommitteeNoConfidence   =
-        unitIntervalToDouble . dvtCommitteeNoConfidence
+        unitIntervalToRational . dvtCommitteeNoConfidence
           <$> strictMaybeToMaybe (pmap ^. ppuDRepVotingThresholdsL)
     , gppDvtUpdateToConstitution    =
-        unitIntervalToDouble . dvtUpdateToConstitution
+        unitIntervalToRational . dvtUpdateToConstitution
           <$> strictMaybeToMaybe (pmap ^. ppuDRepVotingThresholdsL)
     , gppDvtHardForkInitiation      =
-        unitIntervalToDouble . dvtHardForkInitiation
+        unitIntervalToRational . dvtHardForkInitiation
           <$> strictMaybeToMaybe (pmap ^. ppuDRepVotingThresholdsL)
     , gppDvtPPNetworkGroup          =
-        unitIntervalToDouble . dvtPPNetworkGroup
+        unitIntervalToRational . dvtPPNetworkGroup
           <$> strictMaybeToMaybe (pmap ^. ppuDRepVotingThresholdsL)
     , gppDvtPPEconomicGroup         =
-        unitIntervalToDouble . dvtPPEconomicGroup
+        unitIntervalToRational . dvtPPEconomicGroup
           <$> strictMaybeToMaybe (pmap ^. ppuDRepVotingThresholdsL)
     , gppDvtPPTechnicalGroup        =
-        unitIntervalToDouble . dvtPPTechnicalGroup
+        unitIntervalToRational . dvtPPTechnicalGroup
           <$> strictMaybeToMaybe (pmap ^. ppuDRepVotingThresholdsL)
     , gppDvtPPGovGroup              =
-        unitIntervalToDouble . dvtPPGovGroup
+        unitIntervalToRational . dvtPPGovGroup
           <$> strictMaybeToMaybe (pmap ^. ppuDRepVotingThresholdsL)
     , gppDvtTreasuryWithdrawal      =
-        unitIntervalToDouble . dvtTreasuryWithdrawal
+        unitIntervalToRational . dvtTreasuryWithdrawal
           <$> strictMaybeToMaybe (pmap ^. ppuDRepVotingThresholdsL)
     , gppCommitteeMinSize           =
         fromIntegral <$> strictMaybeToMaybe (pmap ^. ppuCommitteeMinSizeL)
@@ -314,7 +314,7 @@ convertConwayParamProposal pmap =
         fromIntegral . unEpochInterval
           <$> strictMaybeToMaybe (pmap ^. ppuDRepActivityL)
     , gppMinFeeRefScriptCostPerByte =
-        fromRational . Ledger.unboundRational
+        Ledger.unboundRational
           <$> strictMaybeToMaybe (pmap ^. ppuMinFeeRefScriptCostPerByteL)
     }
 
@@ -359,14 +359,14 @@ convertShelleyParamProposal epoch (key, pmap) =
     , gppOptimalPoolCount   =
         fromIntegral <$> strictMaybeToMaybe (pmap ^. Core.ppuNOptL)
     , gppInfluence          =
-        fromRational . Ledger.unboundRational
+        Ledger.unboundRational
           <$> strictMaybeToMaybe (pmap ^. Core.ppuA0L)
     , gppMonetaryExpandRate =
-        unitIntervalToDouble <$> strictMaybeToMaybe (pmap ^. Core.ppuRhoL)
+        unitIntervalToRational <$> strictMaybeToMaybe (pmap ^. Core.ppuRhoL)
     , gppTreasuryGrowthRate =
-        unitIntervalToDouble <$> strictMaybeToMaybe (pmap ^. Core.ppuTauL)
+        unitIntervalToRational <$> strictMaybeToMaybe (pmap ^. Core.ppuTauL)
     , gppDecentralisation   =
-        unitIntervalToDouble <$> strictMaybeToMaybe (pmap ^. Core.ppuDL)
+        unitIntervalToRational <$> strictMaybeToMaybe (pmap ^. Core.ppuDL)
     , gppEntropy            = nonceBytes =<< strictMaybeToMaybe (pmap ^. Core.ppuExtraEntropyL)
     , gppProtocolMajor      = fst <$> protoVer pmap
     , gppProtocolMinor      = snd <$> protoVer pmap
@@ -410,14 +410,14 @@ convertAlonzoParamProposal epoch (key, pmap) =
     , gppOptimalPoolCount   =
         fromIntegral <$> strictMaybeToMaybe (pmap ^. Core.ppuNOptL)
     , gppInfluence          =
-        fromRational . Ledger.unboundRational
+        Ledger.unboundRational
           <$> strictMaybeToMaybe (pmap ^. Core.ppuA0L)
     , gppMonetaryExpandRate =
-        unitIntervalToDouble <$> strictMaybeToMaybe (pmap ^. Core.ppuRhoL)
+        unitIntervalToRational <$> strictMaybeToMaybe (pmap ^. Core.ppuRhoL)
     , gppTreasuryGrowthRate =
-        unitIntervalToDouble <$> strictMaybeToMaybe (pmap ^. Core.ppuTauL)
+        unitIntervalToRational <$> strictMaybeToMaybe (pmap ^. Core.ppuTauL)
     , gppDecentralisation   =
-        unitIntervalToDouble <$> strictMaybeToMaybe (pmap ^. Core.ppuDL)
+        unitIntervalToRational <$> strictMaybeToMaybe (pmap ^. Core.ppuDL)
     , gppEntropy            = nonceBytes =<< strictMaybeToMaybe (pmap ^. Core.ppuExtraEntropyL)
     , gppProtocolMajor      = fst <$> protoVer pmap
     , gppProtocolMinor      = snd <$> protoVer pmap
@@ -432,10 +432,10 @@ convertAlonzoParamProposal epoch (key, pmap) =
         strictMaybeToMaybe
           (Alonzo.costModelsValid <$> pmap ^. ppuCostModelsL)
     , gppPriceMem           =
-        fromRational . Ledger.unboundRational . Alonzo.prMem
+        Ledger.unboundRational . Alonzo.prMem
           <$> strictMaybeToMaybe (pmap ^. ppuPricesL)
     , gppPriceStep          =
-        fromRational . Ledger.unboundRational . Alonzo.prSteps
+        Ledger.unboundRational . Alonzo.prSteps
           <$> strictMaybeToMaybe (pmap ^. ppuPricesL)
     , gppMaxTxExMem         =
         fromIntegral . Plutus.exUnitsMem
@@ -489,12 +489,12 @@ convertBabbageParamProposal epoch (key, pmap) =
     , gppOptimalPoolCount   =
         fromIntegral <$> strictMaybeToMaybe (pmap ^. Core.ppuNOptL)
     , gppInfluence          =
-        fromRational . Ledger.unboundRational
+        Ledger.unboundRational
           <$> strictMaybeToMaybe (pmap ^. Core.ppuA0L)
     , gppMonetaryExpandRate =
-        unitIntervalToDouble <$> strictMaybeToMaybe (pmap ^. Core.ppuRhoL)
+        unitIntervalToRational <$> strictMaybeToMaybe (pmap ^. Core.ppuRhoL)
     , gppTreasuryGrowthRate =
-        unitIntervalToDouble <$> strictMaybeToMaybe (pmap ^. Core.ppuTauL)
+        unitIntervalToRational <$> strictMaybeToMaybe (pmap ^. Core.ppuTauL)
     , gppDecentralisation   = Nothing  -- removed in Babbage
     , gppEntropy            = Nothing  -- removed in Babbage
     , gppProtocolMajor      = fst <$> protoVer pmap
@@ -510,10 +510,10 @@ convertBabbageParamProposal epoch (key, pmap) =
         strictMaybeToMaybe
           (Alonzo.costModelsValid <$> pmap ^. ppuCostModelsL)
     , gppPriceMem           =
-        fromRational . Ledger.unboundRational . Alonzo.prMem
+        Ledger.unboundRational . Alonzo.prMem
           <$> strictMaybeToMaybe (pmap ^. ppuPricesL)
     , gppPriceStep          =
-        fromRational . Ledger.unboundRational . Alonzo.prSteps
+        Ledger.unboundRational . Alonzo.prSteps
           <$> strictMaybeToMaybe (pmap ^. ppuPricesL)
     , gppMaxTxExMem         =
         fromIntegral . Plutus.exUnitsMem

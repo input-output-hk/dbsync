@@ -2,24 +2,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
--- | Tests for foundational types in 'DbSync.Db.Types'.
---
--- Three classes of property are exercised:
---
---   1. 'DbInt65' is a sign-magnitude packing of 'Int64' into 'Word64' —
---      encode\/decode must round-trip including the 'minBound'
---      edge case where 'abs' would overflow.
---   2. 'bInt65' \/ 'bWord128' produce decimal ASCII suitable for the
---      PostgreSQL @numeric@ COPY format.
---   3. Each enum's COPY builder emits the exact ASCII string the
---      original schema's @CHECK@ constraints require — a single
---      bad string here is a silent data-corruption bug, so we hard
---      code the expected output for every constructor.
+-- | Tests for foundational types in 'DbSync.Db.Types': 'DbInt65'
+-- round-trips (including the 'minBound' edge case), COPY builders
+-- (decimal ASCII, the exact enum strings the schema @CHECK@s require),
+-- and the @numeric@ codec conversions.
 module DbSync.Db.TypesSpec (spec) where
 
 import Cardano.Prelude
 
 import Data.ByteString.Builder (Builder, toLazyByteString)
+import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Scientific as Sci
 import Data.WideWord (Word128)
@@ -35,12 +27,14 @@ import DbSync.Db.Types
   , ScriptType (..)
   , SyncState (..)
   , bInt65
+  , bRational
   , bRewardSource
   , bScriptPurpose
   , bScriptType
   , bSyncState
   , bWord128
   , fromDbInt65
+  , rationalToScientific
   , scientificToWord128
   , scientificToWord64
   , toDbInt65
@@ -209,3 +203,31 @@ spec = do
           encoded = word64ToScientific (unDbWord64 dw)
           decoded = DbWord64 (scientificToWord64 (Sci.normalize encoded))
       in decoded == dw
+
+  describe "bRational" $ do
+    it "encodes a terminating decimal exactly" $
+      bs (bRational 0.075) `shouldBe` "0.075"
+
+    it "encodes whole numbers in fixed notation" $
+      bs (bRational 15) `shouldBe` "15.0"
+
+    it "encodes the longest terminating ledger denominator exactly" $ do
+      -- 1/2^63 = 5^63/10^63: 63 fractional digits, the worst case for
+      -- a Word64-bounded denominator.
+      let digits = show (5 ^ (63 :: Int) :: Integer)
+          expected = "0." <> BS8.pack (replicate (63 - length digits) '0' <> digits)
+      bs (bRational (1 % (2 ^ (63 :: Int)))) `shouldBe` expected
+
+    it "truncates a non-terminating expansion at the fractional-digit cap" $
+      bs (bRational (2 % 3)) `shouldBe` ("0." <> BS8.replicate 80 '6')
+
+    it "truncates negative values toward zero" $
+      bs (bRational ((-2) % 3)) `shouldBe` ("-0." <> BS8.replicate 80 '6')
+
+  describe "rationalToScientific" $
+    prop "round-trips terminating rationals exactly" $ \(n :: Int64) (a :: Word8) (b :: Word8) ->
+      -- Denominators 2^a·5^b terminate within the cap; toRational on
+      -- the Scientific must recover the input exactly.
+      let denom = 2 ^ (a `mod` 30) * 5 ^ (b `mod` 30) :: Integer
+          r = toInteger n % denom
+      in toRational (rationalToScientific r) == r

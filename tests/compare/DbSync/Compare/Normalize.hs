@@ -26,9 +26,11 @@ numericText :: Text -> Text
 numericText expr = "trim_scale(" <> expr <> ")::text"
 
 -- A protocol-parameter ratio stored as @double precision@ in the old schema and
--- as @text@ in the new one. Cast both through numeric and trim trailing zeros so
--- the float and text encodings collapse to the same canonical decimal. NULL is
--- preserved (the cast chain yields NULL, never the string \"NULL\").
+-- as exact @numeric@ in the new one. Cast both through double precision, then
+-- numeric with trailing zeros trimmed, so both sides collapse to the same
+-- canonical decimal at float precision (the old float is the lower-fidelity
+-- side). NULL is preserved (the cast chain yields NULL, never the string
+-- \"NULL\").
 floatText :: Text -> Text
 floatText expr = "trim_scale((" <> expr <> ")::double precision::numeric)::text"
 

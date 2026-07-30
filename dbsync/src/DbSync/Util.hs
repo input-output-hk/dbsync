@@ -12,7 +12,7 @@ module DbSync.Util
 
     -- * Nonce / UnitInterval conversions
   , nonceToBytes
-  , unitIntervalToDouble
+  , unitIntervalToRational
 
     -- * JSON / PostgreSQL interop
   , jsonValueContainsNul
@@ -71,10 +71,8 @@ nonceToBytes = \case
   Ledger.NeutralNonce -> Nothing
   Ledger.Nonce hash   -> Just (Crypto.hashToBytes hash)
 
--- | A 'UnitInterval' is a 'Rational' in [0, 1]; database columns
--- store it as a text-encoded 'Double'.
-unitIntervalToDouble :: Ledger.UnitInterval -> Double
-unitIntervalToDouble = fromRational . Ledger.unboundRational
+unitIntervalToRational :: Ledger.UnitInterval -> Rational
+unitIntervalToRational = Ledger.unboundRational
 
 -- ---------------------------------------------------------------------------
 -- * JSON / PostgreSQL interop

@@ -167,10 +167,12 @@ computeTxFinancials resolver ctx gtx
 
 -- | True for txs whose @tx.deposit@ is @0@ by conservation:
 -- @deposit = inputs + withdrawals - outputs - fee - treasury_donation@
--- is zero for any tx that carries no deposit-affecting certificate.
+-- is zero for any tx that carries no deposit-affecting certificate and
+-- no gov-action proposal (each proposal locks @govActionDeposit@).
 hasNoDepositActivity :: G.GenericTx -> Bool
 hasNoDepositActivity g =
   not (any (affectsDeposit . G.txCertAction) (G.txCertificates g))
+    && null (G.txProposals g)
 
 -- | Whether a single certificate kind locks or refunds ada in the
 -- deposit pot. 'G.CertOther' is treated as affecting defensively —

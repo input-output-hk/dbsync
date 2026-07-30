@@ -690,11 +690,14 @@ applyBlock blk slotDetails suppressBoundary = do
               }
           boundaryData =
             BoundaryApplyData
-              { bndNewEpoch        = maybeToStrictMaybe newEpoch
-              , bndEvents          = events
-              , bndGovActionState  = getGovState finalState
-              , bndGovExpiresAfter = getGovExpiration newCls'
-              , bndSlotDetails     = slotDetails
+              { bndNewEpoch          = maybeToStrictMaybe newEpoch
+              , bndEvents            = events
+              , bndGovActionState    = getGovState finalState
+              , bndGovExpiresAfter   = getGovExpiration newCls'
+              , bndSlotDetails       = slotDetails
+              -- The pre-block state is the ended epoch's last: its
+              -- "mark" snapshot fed that epoch's per-block slices.
+              , bndCatchupStakeSlice = getCatchupStakeSlice env oldCls
               }
       -- Force the per-block projection to normal form before queueing
       -- so a buffered entry can't pin the ledger state it came from.
@@ -1014,6 +1017,22 @@ getStakeSlice env cls mode =
         n
         (clsState cls)
         mode
+
+-- | Takes the /pre-boundary/ state: its epoch-block counter and
+-- \"mark\" snapshot describe the epoch that just ended.
+getCatchupStakeSlice
+  :: LedgerEnv
+  -> CardanoLedgerState
+  -> Generic.StakeSliceRes
+getCatchupStakeSlice env cls =
+  case clsEpochBlockNo cls of
+    ByronEpochBlockNo ->
+      Generic.NoSlices
+    EpochBlockNo n ->
+      Generic.catchupStakeSlice
+        (leProtocolInfo env)
+        n
+        (clsState cls)
 
 -- ---------------------------------------------------------------------------
 -- * Governance / ledger projections

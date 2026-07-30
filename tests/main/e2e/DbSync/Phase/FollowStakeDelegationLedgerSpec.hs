@@ -69,6 +69,7 @@ import DbSync.Test.MockChain (MockChain (..))
 import DbSync.Test.MockNode
   ( MockNode (..)
   , forgeAndPush
+  , forgeAndPushAfter
   , forgeAndPushBlocks
   , forgeAndPushCommitteeCreds
   , forgeAndPushDRepsAndDelegateVotes
@@ -151,6 +152,50 @@ spec = describe "Follow stake_delegation_ledger writes" $ do
           progressCompleted <- T.strip <$> queryTestDb
             ( "SELECT completed::text FROM " <> tdName epochStakeProgressTableDef
                 <> " ORDER BY id DESC LIMIT 1" )
+          progressCompleted `shouldBe` "true"
+
+  it "catches up epoch_stake for an epoch too short to slice" $
+    withMockNode conwayRewardsConfigDir $ \mn ->
+      withTempDir "dbsync-test-follow-sdl-catchup" $ \ledgerDir -> do
+        tracer <- quietTracer
+        _ <- forgeAndPushBlocks mn 250
+
+        withAppSession tracer rewardProfile mn ledgerDir $ \_ -> do
+          waitForSyncComplete 120
+
+          baselineBlocks <- countRows (tdName blockTableDef)
+
+          -- Land at the start of a fresh epoch, then cross it in
+          -- forecast-window-sized hops (140 of the 3k/f = 150 slots)
+          -- so the whole epoch holds only a handful of blocks — fewer
+          -- than the k = 10 security window, meaning per-block slicing
+          -- never starts and only the catch-up slice can produce the
+          -- short epoch's stake rows.
+          epochBlocks <- forgeAndPushUntilNextEpoch mn
+          _ <- forgeAndPushBlocks mn 2
+          replicateM_ 4 (void $ forgeAndPushAfter mn 140)
+
+          let expectedBlocks = baselineBlocks + length epochBlocks + 6
+          waitFor
+            (tdName blockTableDef <> " count reaches " <> show expectedBlocks)
+            (do n <- countRows (tdName blockTableDef); pure (n >= expectedBlocks))
+            120
+
+          -- The newest block's epoch is the one the jump landed in;
+          -- the catch-up rows are tagged with that same epoch.
+          newestEpoch <- T.strip <$> queryTestDb
+            ( "SELECT epoch_no::text FROM " <> tdName blockTableDef
+                <> " ORDER BY id DESC LIMIT 1" )
+          waitFor
+            (tdName epochStakeTableDef <> " has rows for epoch " <> newestEpoch)
+            (do n <- T.strip <$> queryTestDb
+                  ( "SELECT count(*) FROM " <> tdName epochStakeTableDef
+                      <> " WHERE epoch_no = " <> newestEpoch )
+                pure (n /= "0"))
+            60
+          progressCompleted <- T.strip <$> queryTestDb
+            ( "SELECT completed::text FROM " <> tdName epochStakeProgressTableDef
+                <> " WHERE epoch_no = " <> newestEpoch )
           progressCompleted `shouldBe` "true"
 
   it "lands pot_reward after a Conway treasury withdrawal enacts at tip" $

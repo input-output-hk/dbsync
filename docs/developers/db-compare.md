@@ -62,7 +62,8 @@ Compares the physical shape of every table present on both sides:
   (`bytea` vs `text`) do. An old column with no new counterpart fails the
   run; new-only columns are noted informationally. Known intentional
   differences are allowlisted: the inline address columns replaced by
-  `address_id`, and protocol-parameter ratios stored as text.
+  `address_id`, and protocol-parameter ratios stored as exact `numeric`
+  where the old schema uses `double precision`.
 - **Foreign keys** — the old database's FK constraints against the new
   schema's *declared* `ForeignKey` metadata plus any physical constraints
   (the new schema never emits `REFERENCES` constraints). An old FK edge

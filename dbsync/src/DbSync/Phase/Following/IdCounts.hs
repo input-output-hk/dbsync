@@ -109,7 +109,7 @@ emptyCertCounts :: CertCounts
 emptyCertCounts = CertCounts 0 0
 
 tallyCert :: CertCounts -> GenericTxCertificate -> CertCounts
-tallyCert !cc (GenericTxCertificate _ action) = case action of
+tallyCert !cc cert = case txCertAction cert of
   CertPoolRegistration prd ->
     cc { ccPoolUpdate  = ccPoolUpdate cc + 1
        , ccPoolMetaRef = ccPoolMetaRef cc

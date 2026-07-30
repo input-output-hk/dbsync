@@ -511,9 +511,9 @@ blockWithFailedTx tx = shelleyEmptyBlock { blkTxs = [tx] }
 alonzoFailedTx :: GenericTx
 alonzoFailedTx = (singleOutputTx (mkBaseAddr 0x00) 5_000_000)
   { txValidContract    = False
-  , txInputs           = [GenericTxIn (BS.replicate 32 0xcc) 0]
+  , txInputs           = [GenericTxIn (BS.replicate 32 0xcc) 0 Nothing]
   , txOutputs          = []
-  , txCollateralInputs = [GenericTxIn (BS.replicate 32 0xcc) 0]
+  , txCollateralInputs = [GenericTxIn (BS.replicate 32 0xcc) 0 Nothing]
   , txReferenceInputs  = []
   , txCollateralOutput = Nothing
   }
@@ -547,7 +547,7 @@ twoTxsInputSpendsFirst = shelleyEmptyBlock
     spenderTx = (singleOutputTx (mkBaseAddr 0x00) 4_500_000)
       { txHash       = BS.replicate 32 0xa2
       , txBlockIndex = 1
-      , txInputs     = [GenericTxIn producerHash 0]
+      , txInputs     = [GenericTxIn producerHash 0 Nothing]
       }
 
 -- | Same shape as 'twoTxsInputSpendsFirst' but the second tx
@@ -564,7 +564,7 @@ twoTxsReferenceSpendsFirst = shelleyEmptyBlock
     refTx = (singleOutputTx (mkBaseAddr 0x00) 4_500_000)
       { txHash            = BS.replicate 32 0xb2
       , txBlockIndex      = 1
-      , txReferenceInputs = [GenericTxIn producerHash 0]
+      , txReferenceInputs = [GenericTxIn producerHash 0 Nothing]
       }
 
 -- | Block whose only tx spends an output by a hash that was never
@@ -577,5 +577,5 @@ blockSpendingMissingTx producerHash = shelleyEmptyBlock
   where
     spender = (singleOutputTx (mkBaseAddr 0x00) 4_500_000)
       { txHash   = BS.replicate 32 0xc2
-      , txInputs = [GenericTxIn producerHash 0]
+      , txInputs = [GenericTxIn producerHash 0 Nothing]
       }

@@ -193,12 +193,13 @@ consumerTx = (emptyTx consumerHash)
   , txSize         = 200
   , txFee          = 200000
   , txOutSum       = 4500000
-  , txInputs       = [GenericTxIn producerHash 0]
+  , txInputs       = [GenericTxIn producerHash 0 Nothing]
   , txOutputs      = [mkOut 0 4500000]
   , txCertificates =
       [ GenericTxCertificate
-          { txCertIndex  = 0
-          , txCertAction = CertStakeRegistration (CredHash (BS.replicate 28 0xee) False) Nothing
+          { txCertIndex      = 0
+          , txCertAction     = CertStakeRegistration (CredHash (BS.replicate 28 0xee) False) Nothing
+          , txCertRedeemerIx = Nothing
           }
       ]
   }
@@ -219,9 +220,9 @@ phase2Tx = (emptyTx phase2Hash)
   , txSize             = 300
   , txValidContract    = False
   , txOutSum           = 2000000
-  , txInputs           = [GenericTxIn producerHash 1]
+  , txInputs           = [GenericTxIn producerHash 1 Nothing]
   , txOutputs          = [mkOut 0 2000000]
-  , txCollateralInputs = [GenericTxIn producerHash 1]
+  , txCollateralInputs = [GenericTxIn producerHash 1 Nothing]
   , txCollateralOutput = Nothing
   }
 
@@ -268,7 +269,7 @@ chainedSpenderTx = (emptyTx chainedSpenderHash)
   , txSize       = 200
   , txFee        = 200000
   , txOutSum     = 4800000
-  , txInputs     = [GenericTxIn chainedProducerHash 0]
+  , txInputs     = [GenericTxIn chainedProducerHash 0 Nothing]
   , txOutputs    = [mkOut 0 4800000]
   }
 
@@ -298,7 +299,7 @@ byronTx = (emptyTx (padHash32 "BYRON"))
   { txBlockIndex = 0
   , txSize       = 150
   , txOutSum     = 1500000
-  , txInputs     = [GenericTxIn producerHash 2]
+  , txInputs     = [GenericTxIn producerHash 2 Nothing]
   , txOutputs    = [mkOut 0 1500000]
   }
 
@@ -338,12 +339,13 @@ withdrawalTx = (emptyTx (padHash32 "WD"))
   , txSize        = 200
   , txFee         = 50000
   , txOutSum      = 50000
-  , txInputs      = [GenericTxIn producerHash 3]
+  , txInputs      = [GenericTxIn producerHash 3 Nothing]
   , txOutputs     = [mkOut 0 50000]
   , txWithdrawals =
       [ GenericTxWithdrawal
           { txwRewardAddress = BS.replicate 29 0xdd
           , txwAmount        = 0
+          , txwRedeemerIx    = Nothing
           }
       ]
   }

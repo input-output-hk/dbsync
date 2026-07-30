@@ -141,8 +141,9 @@ txWithPoolReg validContract poolHash meta = GenericTx
   , txCollateralOutput = Nothing
   , txCertificates =
       [ GenericTxCertificate
-          { txCertIndex  = 0
-          , txCertAction = CertPoolRegistration (samplePrd poolHash meta)
+          { txCertIndex      = 0
+          , txCertAction     = CertPoolRegistration (samplePrd poolHash meta)
+          , txCertRedeemerIx = Nothing
           }
       ]
   , txWithdrawals      = []

@@ -179,8 +179,9 @@ txWithStakeReg mDeposit = GenericTx
   , txCollateralOutput = Nothing
   , txCertificates =
       [ GenericTxCertificate
-          { txCertIndex  = 0
-           , txCertAction = CertStakeRegistration stakeCred mDeposit
+          { txCertIndex      = 0
+          , txCertAction     = CertStakeRegistration stakeCred mDeposit
+          , txCertRedeemerIx = Nothing
           }
       ]
   , txWithdrawals      = []
@@ -244,8 +245,9 @@ txWithMir pot act = GenericTx
   , txCollateralOutput = Nothing
   , txCertificates =
       [ GenericTxCertificate
-          { txCertIndex  = 0
-          , txCertAction = CertMir pot act
+          { txCertIndex      = 0
+          , txCertAction     = CertMir pot act
+          , txCertRedeemerIx = Nothing
           }
       ]
   , txWithdrawals      = []

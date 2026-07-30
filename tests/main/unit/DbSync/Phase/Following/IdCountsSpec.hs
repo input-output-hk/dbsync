@@ -74,7 +74,7 @@ validTxWithCollateralReturn :: GenericTx
 validTxWithCollateralReturn = baseTx
   { txValidContract    = True
   , txOutputs          = [mkOut 0 5_000_000]
-  , txCollateralInputs = [GenericTxIn (BS.replicate 32 0xcc) 0]
+  , txCollateralInputs = [GenericTxIn (BS.replicate 32 0xcc) 0 Nothing]
   , txCollateralOutput = Just (mkOut 1 4_000_000)
   }
 
@@ -84,7 +84,7 @@ failedTxFoldedCollateral :: GenericTx
 failedTxFoldedCollateral = baseTx
   { txValidContract    = False
   , txOutputs          = [mkOut 0 4_000_000]
-  , txCollateralInputs = [GenericTxIn (BS.replicate 32 0xcc) 0]
+  , txCollateralInputs = [GenericTxIn (BS.replicate 32 0xcc) 0 Nothing]
   , txCollateralOutput = Nothing
   }
 

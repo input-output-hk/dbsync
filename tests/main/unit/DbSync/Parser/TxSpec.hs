@@ -32,20 +32,35 @@ import Lens.Micro ((.~))
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 import Cardano.Ledger.Address (AccountAddress (..), AccountId (..), Addr (..), Withdrawals (..))
+import Cardano.Ledger.Alonzo.Scripts (AlonzoPlutusPurpose (..), AsIx (..))
+import Cardano.Ledger.Alonzo.Tx (Tx (..))
 import Cardano.Ledger.Alonzo.TxOut (AlonzoTxOut (..))
 import Cardano.Ledger.Babbage.Core (totalCollateralTxBodyL)
 import Cardano.Ledger.Babbage.TxOut (BabbageTxOut (..))
-import Cardano.Ledger.BaseTypes (Network (Testnet), StrictMaybe (..))
+import Cardano.Ledger.BaseTypes (Network (Testnet), StrictMaybe (..), textToUrl)
 import Cardano.Ledger.Coin (Coin (..))
+import qualified Cardano.Ledger.Conway.Governance as Governance
+import Cardano.Ledger.Conway.Scripts (ConwayPlutusPurpose (..))
+import Cardano.Ledger.Conway.Tx (Tx (..))
+import Cardano.Ledger.Conway.TxBody (TxBody (..))
 import Cardano.Ledger.Conway.TxCert (ConwayTxCert, Delegatee (..))
-import Cardano.Ledger.Credential (StakeReference (StakeRefNull))
-import Cardano.Ledger.Mary.Value (valueFromList)
+import qualified Cardano.Ledger.Core as Core
+import Cardano.Ledger.Credential (Credential (..), StakeReference (StakeRefNull))
+import Cardano.Ledger.Mary.Value (AssetName (..), MultiAsset (..), PolicyID (..), valueFromList)
 import Cardano.Ledger.Plutus.Data (Datum (NoDatum))
+import Cardano.Ledger.Shelley.TxCert (ShelleyDelegCert (..), ShelleyTxCert (..))
 import Cardano.Ledger.TxIn (TxIn)
+
+import qualified Data.OSet.Strict as OSet
 
 import Ouroboros.Consensus.Shelley.Eras (AlonzoEra, BabbageEra, ConwayEra)
 
 import qualified Cardano.Mock.Forging.Tx.Alonzo as Alonzo
+import Cardano.Mock.Forging.Tx.Alonzo.ScriptsExamples
+  ( alwaysFailsScriptHash
+  , alwaysMintScriptHash
+  , alwaysSucceedsScriptHash
+  )
 import qualified Cardano.Mock.Forging.Tx.Babbage as Babbage
 import qualified Cardano.Mock.Forging.Tx.Conway as Conway
 import Cardano.Mock.Forging.Tx.Generic
@@ -54,7 +69,8 @@ import Cardano.Mock.Forging.Tx.Generic
   , unregisteredStakeCredentials
   )
 
-import DbSync.Parser.Tx (credToCredHash, fromAlonzoTx, fromBabbageTx, fromConwayTx)
+import DbSync.Db.Types (ScriptPurpose (..))
+import DbSync.Parser.Tx (credToCredHash, fromAlonzoTx, fromBabbageTx, fromConwayTx, scriptHashBytes)
 import DbSync.Parser.Types
   ( CertAction (..)
   , CredHash
@@ -62,7 +78,9 @@ import DbSync.Parser.Types
   , GenericTxCertificate (..)
   , GenericTxIn (..)
   , GenericTxOut (..)
+  , GenericTxRedeemer (..)
   , GenericTxWithdrawal (..)
+  , GenericVotingProcedure (..)
   )
 
 spec :: Spec
@@ -87,6 +105,8 @@ spec = describe "DbSync.Parser.Tx" $ do
       map txInIndex (txInputs gtx) `shouldBe` [0]
       map txInIndex (txCollateralInputs gtx) `shouldBe` [1]
       (txOutValue <$> txCollateralOutput gtx) `shouldBe` Just 40
+      -- No redeemers: nothing gets a back-reference.
+      map txInRedeemerIx (txInputs gtx) `shouldBe` [Nothing]
 
     it "phase-2 invalid tx folds collateral into inputs/outputs and charges total collateral" $ do
       let body =
@@ -147,6 +167,130 @@ spec = describe "DbSync.Parser.Tx" $ do
               mempty mempty mempty mempty SNothing (Coin 0) mempty [] (Withdrawals mempty) (Coin 12345)
           gtx = fromConwayTx (0, Conway.mkSimpleTx True body)
       txTreasuryDonation gtx `shouldBe` 12345
+
+  describe "redeemer pointer resolution and annotations" $ do
+    it "Alonzo: spend and mint redeemers land in redeemer-list order with input annotations" $ do
+      let body =
+            Alonzo.consPaymentTxBody
+              (Set.fromList [alonzoIns !! 0, alonzoIns !! 1])
+              mempty
+              (StrictSeq.fromList [aloOut addr0 5])
+              (Coin 2)
+              mintAlwaysMint
+          rdmrs =
+            [ (AlonzoMinting (AsIx 0), Nothing) -- listed first, sorts after the spend
+            , (AlonzoSpending (AsIx 1), Nothing)
+            ]
+          gtx = fromAlonzoTx (0, MkAlonzoTx (Alonzo.mkScriptTx True rdmrs body))
+      map purposeIx (txRedeemers gtx) `shouldBe` [(Spend, 1), (Mint, 0)]
+      map gtrScriptHash (txRedeemers gtx)
+        `shouldBe` [Nothing, Just (scriptHashBytes alwaysMintScriptHash)]
+      -- The spend redeemer (list position 0) points at the second input.
+      map txInRedeemerIx (txInputs gtx) `shouldBe` [Nothing, Just 0]
+
+    it "Alonzo: cert and reward redeemers resolve script credentials and annotate their rows" $ do
+      let scriptCred = ScriptHashObj alwaysSucceedsScriptHash
+          certs =
+            [ ShelleyTxCertDelegCert (ShelleyRegCert (unregisteredStakeCredentials !! 0))
+            , ShelleyTxCertDelegCert (ShelleyUnRegCert scriptCred)
+            ]
+          wdrls =
+            Withdrawals $
+              Map.singleton (AccountAddress Testnet (AccountId scriptCred)) (Coin 500)
+          body = Alonzo.consCertTxBody certs wdrls
+          rdmrs =
+            [ (AlonzoCertifying (AsIx 1), Nothing)
+            , (AlonzoRewarding (AsIx 0), Nothing)
+            ]
+          gtx = fromAlonzoTx (0, MkAlonzoTx (Alonzo.mkScriptTx True rdmrs body))
+      map purposeIx (txRedeemers gtx) `shouldBe` [(Cert, 1), (Rewrd, 0)]
+      map gtrScriptHash (txRedeemers gtx)
+        `shouldBe` replicate 2 (Just (scriptHashBytes alwaysSucceedsScriptHash))
+      map txCertRedeemerIx (txCertificates gtx) `shouldBe` [Nothing, Just 0]
+      map txwRedeemerIx (txWithdrawals gtx) `shouldBe` [Just 1]
+
+    it "Alonzo: dangling pointers keep the hash empty and annotate nothing" $ do
+      let body =
+            Alonzo.consPaymentTxBody
+              (Set.fromList [alonzoIns !! 0])
+              mempty
+              (StrictSeq.fromList [aloOut addr0 5])
+              (Coin 2)
+              mempty
+          rdmrs =
+            [ (AlonzoSpending (AsIx 9), Nothing)
+            , (AlonzoMinting (AsIx 4), Nothing)
+            ]
+          gtx = fromAlonzoTx (0, MkAlonzoTx (Alonzo.mkScriptTx True rdmrs body))
+      map purposeIx (txRedeemers gtx) `shouldBe` [(Spend, 9), (Mint, 4)]
+      map gtrScriptHash (txRedeemers gtx) `shouldBe` [Nothing, Nothing]
+      map txInRedeemerIx (txInputs gtx) `shouldBe` [Nothing]
+
+    it "Conway: the full purpose set resolves hashes and annotations in redeemer-list order" $ do
+      let certScript = ScriptHashObj alwaysSucceedsScriptHash
+          certs = [Conway.mkDelegTxCert (DelegStake (unregisteredPools !! 0)) certScript]
+          wdrls =
+            Withdrawals $
+              Map.singleton (AccountAddress Testnet (AccountId certScript)) (Coin 700)
+          voter = Governance.DRepVoter (ScriptHashObj alwaysFailsScriptHash)
+          vp = Governance.VotingProcedure Governance.VoteYes SNothing
+          votes =
+            Governance.VotingProcedures $
+              Map.singleton voter (Map.fromList [(gaId 0, vp), (gaId 1, vp)])
+          body =
+            (Conway.consCertTxBody Nothing certs wdrls)
+              { ctbSpendInputs = Set.fromList [babbageIns !! 0, babbageIns !! 1]
+              , ctbMint = mintAlwaysMint
+              , ctbVotingProcedures = votes
+              , ctbProposalProcedures = OSet.singleton guardrailProposal
+              }
+          -- Deliberately out of purpose order: the witness map's own
+          -- ordering decides the emitted positions.
+          rdmrs =
+            [ (ConwayProposing (AsIx 0), Nothing)
+            , (ConwayVoting (AsIx 0), Nothing)
+            , (ConwayRewarding (AsIx 0), Nothing)
+            , (ConwayCertifying (AsIx 0), Nothing)
+            , (ConwayMinting (AsIx 0), Nothing)
+            , (ConwaySpending (AsIx 1), Nothing)
+            ]
+          gtx = fromConwayTx (0, MkConwayTx (Conway.mkScriptTx True rdmrs body))
+      map purposeIx (txRedeemers gtx)
+        `shouldBe` [(Spend, 1), (Mint, 0), (Cert, 0), (Rewrd, 0), (Vote, 0), (Propose, 0)]
+      map gtrScriptHash (txRedeemers gtx)
+        `shouldBe` [ Nothing
+                   , Just (scriptHashBytes alwaysMintScriptHash)
+                   , Just (scriptHashBytes alwaysSucceedsScriptHash)
+                   , Just (scriptHashBytes alwaysSucceedsScriptHash)
+                   , Just (scriptHashBytes alwaysFailsScriptHash)
+                   , Just (scriptHashBytes alwaysMintScriptHash)
+                   ]
+      map txInRedeemerIx (txInputs gtx) `shouldBe` [Nothing, Just 0]
+      map txCertRedeemerIx (txCertificates gtx) `shouldBe` [Just 2]
+      map txwRedeemerIx (txWithdrawals gtx) `shouldBe` [Just 3]
+      -- Both of the voter's votes share the one vote redeemer.
+      map gvpRedeemerIx (txVotingProcedures gtx) `shouldBe` [Just 4, Just 4]
+
+    it "Conway: key-credential elements annotate but resolve no script hash" $ do
+      let certs =
+            [ Conway.mkDelegTxCert
+                (DelegStake (unregisteredPools !! 0))
+                (unregisteredStakeCredentials !! 2)
+            ]
+          wdrls =
+            Withdrawals $
+              Map.singleton
+                (AccountAddress Testnet (AccountId (unregisteredStakeCredentials !! 1)))
+                (Coin 9)
+          body = Conway.consCertTxBody Nothing certs wdrls
+          rdmrs =
+            [ (ConwayCertifying (AsIx 0), Nothing)
+            , (ConwayRewarding (AsIx 0), Nothing)
+            ]
+          gtx = fromConwayTx (0, MkConwayTx (Conway.mkScriptTx True rdmrs body))
+      map gtrScriptHash (txRedeemers gtx) `shouldBe` [Nothing, Nothing]
+      map txCertRedeemerIx (txCertificates gtx) `shouldBe` [Just 0]
+      map txwRedeemerIx (txWithdrawals gtx) `shouldBe` [Just 1]
 
   describe "phase-2 failure shape (pins the Extractor.UTxOSpec fixtures)" $ do
     it "Alonzo failure: inputs are the collateral, outputs empty, no collateral return" $ do
@@ -220,6 +364,36 @@ alonzoIns = fst <$> Alonzo.mkUTxOAlonzo src
           (StrictSeq.fromList [aloOut addr0 1, aloOut addr0 2])
           (Coin 0)
           mempty
+
+purposeIx :: GenericTxRedeemer -> (ScriptPurpose, Word64)
+purposeIx r = (gtrPurpose r, gtrIndex r)
+
+mintAlwaysMint :: MultiAsset
+mintAlwaysMint =
+  MultiAsset $
+    Map.singleton (PolicyID alwaysMintScriptHash) (Map.singleton (AssetName "a") 1)
+
+gaId :: Word16 -> Governance.GovActionId
+gaId ix =
+  Governance.GovActionId
+    (Core.txIdTxBody (Conway.consCertTxBody Nothing [] (Withdrawals mempty)))
+    (Governance.GovActionIx ix)
+
+-- | A ParameterChange proposal whose guardrail script is the
+-- always-mint hash, so the propose redeemer resolves to it.
+guardrailProposal :: Governance.ProposalProcedure ConwayEra
+guardrailProposal =
+  Governance.ProposalProcedure
+    { Governance.pProcDeposit = Coin 0
+    , Governance.pProcReturnAddr =
+        AccountAddress Testnet (AccountId (unregisteredStakeCredentials !! 0))
+    , Governance.pProcGovAction =
+        Governance.ParameterChange SNothing Core.emptyPParamsUpdate (SJust alwaysMintScriptHash)
+    , Governance.pProcAnchor =
+        Governance.Anchor
+          (fromMaybe (panic "guardrailProposal: bad url") (textToUrl 64 "guard.cc"))
+          (Core.hashAnnotated (Governance.AnchorData mempty))
+    }
 
 -- ---------------------------------------------------------------------------
 -- * CertAction projections

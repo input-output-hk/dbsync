@@ -231,6 +231,7 @@ test-suite dbsync-test
     , hspec
     , http-client
     , cardano-crypto-class
+    , cardano-data
     , cardano-ledger-alonzo
     , cardano-ledger-babbage
     , cardano-ledger-binary
@@ -238,6 +239,7 @@ test-suite dbsync-test
     , cardano-ledger-conway
     , cardano-ledger-core
     , cardano-ledger-mary
+    , cardano-ledger-shelley
     , cardano-prelude
     , cardano-slotting
     , cardano-strict-containers

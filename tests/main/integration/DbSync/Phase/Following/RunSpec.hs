@@ -694,9 +694,9 @@ blockWithAllInputs :: GenericBlock
 blockWithAllInputs = emptyBlock
   { blkTxs =
       [ sampleTx
-          { txInputs           = [GenericTxIn (padHash32 "spent_tx_hash_in")  0]
-          , txCollateralInputs = [GenericTxIn (padHash32 "spent_tx_hash_col") 1]
-          , txReferenceInputs  = [GenericTxIn (padHash32 "spent_tx_hash_ref") 2]
+          { txInputs           = [GenericTxIn (padHash32 "spent_tx_hash_in")  0 Nothing]
+          , txCollateralInputs = [GenericTxIn (padHash32 "spent_tx_hash_col") 1 Nothing]
+          , txReferenceInputs  = [GenericTxIn (padHash32 "spent_tx_hash_ref") 2 Nothing]
           }
       ]
   }
@@ -751,14 +751,16 @@ sampleStakeCred = "stake_cred_28b" <> BS.replicate (28 - 14) 0
 
 stakeRegCert :: GenericTxCertificate
 stakeRegCert = GenericTxCertificate
-  { txCertIndex  = 0
-  , txCertAction = CertStakeRegistration (CredHash sampleStakeCred False) Nothing
+  { txCertIndex      = 0
+  , txCertAction     = CertStakeRegistration (CredHash sampleStakeCred False) Nothing
+  , txCertRedeemerIx = Nothing
   }
 
 stakeDeregCert :: GenericTxCertificate
 stakeDeregCert = GenericTxCertificate
-  { txCertIndex  = 1
-  , txCertAction = CertStakeDeregistration (CredHash sampleStakeCred False)
+  { txCertIndex      = 1
+  , txCertAction     = CertStakeDeregistration (CredHash sampleStakeCred False)
+  , txCertRedeemerIx = Nothing
   }
 
 blockWithStakeReg :: GenericBlock
@@ -782,6 +784,7 @@ blockWithWithdrawal = emptyBlock
               [ GenericTxWithdrawal
                   { txwRewardAddress = BS.cons 0xe0 sampleStakeCred
                   , txwAmount        = 7000000
+                  , txwRedeemerIx    = Nothing
                   }
               ]
           }
@@ -812,8 +815,9 @@ prdMinimal = PoolRegistrationData
 
 poolRegCert :: GenericTxCertificate
 poolRegCert = GenericTxCertificate
-  { txCertIndex  = 0
-  , txCertAction = CertPoolRegistration prdMinimal
+  { txCertIndex      = 0
+  , txCertAction     = CertPoolRegistration prdMinimal
+  , txCertRedeemerIx = Nothing
   }
 
 blockWithPoolReg :: GenericBlock
@@ -844,8 +848,9 @@ blockWithPoolRegMeta = emptyBlock
 
 poolRetireCert :: GenericTxCertificate
 poolRetireCert = GenericTxCertificate
-  { txCertIndex  = 0
-  , txCertAction = CertPoolRetirement samplePoolKey 99
+  { txCertIndex      = 0
+  , txCertAction     = CertPoolRetirement samplePoolKey 99
+  , txCertRedeemerIx = Nothing
   }
 
 blockWithPoolRetire :: GenericBlock
@@ -858,8 +863,9 @@ blockWithPoolRetire = emptyBlock
 -- been registered separately.
 delegationCert :: GenericTxCertificate
 delegationCert = GenericTxCertificate
-  { txCertIndex  = 0
-  , txCertAction = CertDelegation (CredHash sampleStakeCred False) samplePoolKey
+  { txCertIndex      = 0
+  , txCertAction     = CertDelegation (CredHash sampleStakeCred False) samplePoolKey
+  , txCertRedeemerIx = Nothing
   }
 
 blockWithDelegation :: GenericBlock
@@ -892,22 +898,22 @@ blockWithFourRegistrations = emptyBlock
       [ sampleTx
           { txHash = BS.replicate 32 0xaa
           , txCertificates =
-              [ GenericTxCertificate 0 (CertStakeRegistration (CredHash sampleStakeCred False) Nothing) ]
+              [ GenericTxCertificate 0 (CertStakeRegistration (CredHash sampleStakeCred False) Nothing) Nothing ]
           }
       , sampleTx
           { txHash = BS.replicate 32 0xab
           , txCertificates =
-              [ GenericTxCertificate 0 (CertStakeDeregistration (CredHash sampleStakeCred False)) ]
+              [ GenericTxCertificate 0 (CertStakeDeregistration (CredHash sampleStakeCred False)) Nothing ]
           }
       , sampleTx
           { txHash = BS.replicate 32 0xac
           , txCertificates =
-              [ GenericTxCertificate 0 (CertStakeRegistration (CredHash sampleStakeCredB False) Nothing) ]
+              [ GenericTxCertificate 0 (CertStakeRegistration (CredHash sampleStakeCredB False) Nothing) Nothing ]
           }
       , sampleTx
           { txHash = BS.replicate 32 0xad
           , txCertificates =
-              [ GenericTxCertificate 0 (CertStakeDeregistration (CredHash sampleStakeCredB False)) ]
+              [ GenericTxCertificate 0 (CertStakeDeregistration (CredHash sampleStakeCredB False)) Nothing ]
           }
       ]
   }
@@ -918,9 +924,9 @@ blockWithMultiRegCerts = emptyBlock
   { blkTxs =
       [ sampleTx
           { txCertificates =
-              [ GenericTxCertificate 0 (CertStakeRegistration (CredHash sampleStakeCred False)  Nothing)
-              , GenericTxCertificate 1 (CertStakeDeregistration (CredHash sampleStakeCred False))
-              , GenericTxCertificate 2 (CertStakeRegistration (CredHash sampleStakeCredB False) Nothing)
+              [ GenericTxCertificate 0 (CertStakeRegistration (CredHash sampleStakeCred False)  Nothing) Nothing
+              , GenericTxCertificate 1 (CertStakeDeregistration (CredHash sampleStakeCred False)) Nothing
+              , GenericTxCertificate 2 (CertStakeRegistration (CredHash sampleStakeCredB False) Nothing) Nothing
               ]
           }
       ]
@@ -957,7 +963,7 @@ blockWithChainedTxs = emptyBlock
       , sampleTx
           { txHash       = BS.replicate 32 0xbb
           , txBlockIndex = 1
-          , txInputs     = [GenericTxIn (BS.replicate 32 0xaa) 0]
+          , txInputs     = [GenericTxIn (BS.replicate 32 0xaa) 0 Nothing]
           , txOutputs    = [sampleOut 0 3500000]
           }
       ]

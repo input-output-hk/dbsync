@@ -267,7 +267,7 @@ spec = do
         --   short-circuiting to 0.
         let inValues = [Just (DbLovelace 10_000_000)]
             tx = regTx
-              { G.txInputs  = [GenericTxIn (BS.replicate 32 0xaa) 0]
+              { G.txInputs  = [GenericTxIn (BS.replicate 32 0xaa) 0 Nothing]
               , G.txOutSum  = 9_000_000
               , G.txFee     = 200_000
               , G.txOutputs = [outFor 9_000_000]
@@ -555,11 +555,12 @@ oneWithdrawal :: GenericTxWithdrawal
 oneWithdrawal = GenericTxWithdrawal
   { txwRewardAddress = BS.replicate 29 0xee
   , txwAmount        = 0
+  , txwRedeemerIx    = Nothing
   }
 
 -- | Wrap a 'CertAction' in a 'GenericTxCertificate' at index 0.
 certFor :: CertAction -> GenericTxCertificate
-certFor act = GenericTxCertificate { txCertIndex = 0, txCertAction = act }
+certFor act = GenericTxCertificate { txCertIndex = 0, txCertAction = act, txCertRedeemerIx = Nothing }
 
 delegationAction :: CertAction
 delegationAction = CertDelegation (CredHash (BS.replicate 28 0xee) False) (BS.replicate 28 0xff)
@@ -600,7 +601,7 @@ phase2Tx = (mkTx 0 "phase2tx")
   , G.txFee              = 0
   , G.txOutSum           = 0
   , G.txOutputs          = []
-  , G.txCollateralInputs = [GenericTxIn (BS.replicate 32 0xbb) 0]
+  , G.txCollateralInputs = [GenericTxIn (BS.replicate 32 0xbb) 0 Nothing]
   , G.txCollateralOutput = Just (outFor 2_000_000)
   }
 

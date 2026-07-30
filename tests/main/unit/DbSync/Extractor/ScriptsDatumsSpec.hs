@@ -17,7 +17,8 @@ import qualified Data.ByteString as BS
 
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
-import Cardano.Ledger.BaseTypes (Network (..))
+import Cardano.Ledger.Alonzo.Scripts (ExUnits (..), Prices (..), txscriptfee)
+import Cardano.Ledger.BaseTypes (Network (..), boundRational)
 
 import DbSync.Parser.Types
   ( BlockEra (..)
@@ -28,15 +29,22 @@ import DbSync.Parser.Types
   , GenericTxScript (..)
   )
 import qualified DbSync.Db.Schema.ScriptsDatums as SSD
-import DbSync.Db.Types (ScriptPurpose (..), ScriptType (..))
-import DbSync.Extractor (freshExtractState)
+import DbSync.Db.Types (DbLovelace (..), ScriptPurpose (..), ScriptType (..))
+import DbSync.Extractor
+  ( BlockLedgerData (..)
+  , LedgerOutputs (..)
+  , emptyLedgerOutputs
+  , freshExtractState
+  )
 import DbSync.Extractor.Core (coreExtractor)
 import DbSync.Extractor.Pipeline (processBlock)
-import DbSync.Extractor.ScriptsDatums (scriptsDatumsExtractor)
+import DbSync.Extractor.ScriptsDatums (redeemerScriptFee, scriptsDatumsExtractor)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
+import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.Test.Lsm (withTestIngestStores)
-import DbSync.Test.PipelineEnv (mkTestPipelineEnvOn)
+import DbSync.Test.PipelineEnv (mkTestPipelineEnvOn, mkTestPipelineEnvWith)
 import DbSync.Test.Writer (TestWriterState (..), emptyTestWriterState, mkTestWriter)
+import DbSync.Util (coinToDbLovelace)
 import DbSync.Worker.TxOut.AddressBuffer (newAddressBufferRef)
 
 import Data.Time.Calendar (fromGregorian)
@@ -98,6 +106,7 @@ spec = do
           SSD.redeemerPurpose r `shouldBe` gtrPurpose sampleRedeemer
           SSD.redeemerUnitMem r `shouldBe` gtrUnitMem sampleRedeemer
           SSD.redeemerUnitSteps r `shouldBe` gtrUnitSteps sampleRedeemer
+          -- runOne is ledger-OFF: no prices, so the fee stays NULL.
           SSD.redeemerFee r `shouldBe` Nothing
         _ -> panic "expected one redeemer + one redeemer_data"
 
@@ -107,6 +116,33 @@ spec = do
       length (twRedeemerData written) `shouldBe` 1
       let dataIds = map (SSD.redeemerRedeemerDataId . snd) (twRedeemers written)
       dataIds `shouldSatisfy` allEqual
+
+  describe "redeemer fee" $ do
+
+    it "takes the ceiling of the summed price products" $
+      -- 1*(1/3) + 1*(1/3) = 2/3, so the fee is 1; a per-term
+      -- ceiling would give 2.
+      redeemerScriptFee (mkPrices (1 % 3) (1 % 3)) 1 1 `shouldBe` DbLovelace 1
+
+    it "computes known fees from known prices and units" $ do
+      -- 3*(1/2) + 2*(1/4) = 2 exactly.
+      redeemerScriptFee (mkPrices (1 % 2) (1 % 4)) 3 2 `shouldBe` DbLovelace 2
+      -- Mainnet prices: ceil(1700*0.0577 + 476468*0.0000721)
+      --               = ceil(98.09 + 34.3533428) = 133.
+      redeemerScriptFee mainnetPrices 1_700 476_468 `shouldBe` DbLovelace 133
+
+    it "agrees with txscriptfee" $
+      redeemerScriptFee mainnetPrices 1000 250_000
+        `shouldBe` coinToDbLovelace (txscriptfee mainnetPrices (ExUnits 1000 250_000))
+
+    it "populates redeemer.fee from the block's prices when ledger is ON" $ do
+      let bld = LedgerDataOn $ emptyLedgerOutputs
+            { loPrices = Just mainnetPrices }
+      written <- runOneWith bld (txWithRedeemers [sampleRedeemer])
+      case twRedeemers written of
+        -- ceil(1000*0.0577 + 250000*0.0000721) = ceil(57.7 + 18.025) = 76.
+        [(_, r)] -> SSD.redeemerFee r `shouldBe` Just (DbLovelace 76)
+        _        -> panic "expected exactly one redeemer"
 
 allEqual :: Eq a => [a] -> Bool
 allEqual []     = True
@@ -128,12 +164,35 @@ runOne tx = withTestIngestStores $ \utxoStore dedupStores -> do
   runReaderT (processBlock (blockWith tx)) env
   readIORef wrRef
 
+-- | Like 'runOne' but with a caller-supplied 'BlockLedgerData'.
+runOneWith :: BlockLedgerData -> GenericTx -> IO TestWriterState
+runOneWith bld tx = withTestIngestStores $ \utxoStore dedupStores -> do
+  stRef   <- newIORef freshExtractState
+  addrBuf <- newAddressBufferRef
+  wrRef   <- newIORef emptyTestWriterState
+  let env = mkTestPipelineEnvWith Mainnet
+              (mkIngestResolver stRef dedupStores addrBuf utxoStore Nothing)
+              (mkTestWriter wrRef)
+              [coreExtractor, scriptsDatumsExtractor]
+              (\_ -> pure bld) IngestChainHistory
+  runReaderT (processBlock (blockWith tx)) env
+  readIORef wrRef
+
 -- ---------------------------------------------------------------------------
 -- Fixtures
 -- ---------------------------------------------------------------------------
 
 sampleHash32 :: ByteString
 sampleHash32 = BS.replicate 32 0xab
+
+mkPrices :: Rational -> Rational -> Prices
+mkPrices m s = Prices
+  { prMem   = fromMaybe (panic "mkPrices: bad mem price") (boundRational m)
+  , prSteps = fromMaybe (panic "mkPrices: bad steps price") (boundRational s)
+  }
+
+mainnetPrices :: Prices
+mainnetPrices = mkPrices (577 % 10_000) (721 % 10_000_000)
 
 sampleNativeScript :: GenericTxScript
 sampleNativeScript = GenericTxScript

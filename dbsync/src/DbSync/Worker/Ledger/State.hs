@@ -686,6 +686,7 @@ applyBlock blk slotDetails suppressBoundary = do
               , badGovExpiresAfter  = getGovExpiration newCls'
               , badStakeKeyDeposit  = maybeToStrictMaybe (Generic.stakeKeyDeposit <$> mDeposits)
               , badPoolDeposit      = maybeToStrictMaybe (Generic.poolDeposit <$> mDeposits)
+              , badPrices           = getPrices newCls'
               , badCommitteeMembers = maybe Map.empty resolveBlockCommittees (getGovState finalState)
               }
           boundaryData =

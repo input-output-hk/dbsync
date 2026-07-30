@@ -13,18 +13,18 @@
 --
 -- == Known incomplete cells
 --
--- * @redeemer.fee@ is always 'Nothing'. Populating it needs the
---   per-block 'apPrices' value multiplied by the redeemer's
---   exec units; that wiring is not yet in place.
 -- * @redeemer.script_hash@ is always 'Nothing'. Resolving it means
 --   following the redeemer pointer against the tx body's inputs /
 --   certs / withdrawals / votes / proposals; that wiring is not yet
 --   in place.
 module DbSync.Extractor.ScriptsDatums
   ( scriptsDatumsExtractor
+  , redeemerScriptFee
   ) where
 
 import Cardano.Prelude
+
+import Cardano.Ledger.Alonzo.Scripts (ExUnits (..), Prices, txscriptfee)
 
 import DbSync.Db.Schema.Ids (TxId)
 import DbSync.Db.Schema.ScriptsDatums
@@ -34,6 +34,7 @@ import DbSync.Extractor
   , ExtractorDef (..)
   , ProcessBlockFn
   , TxContext (..)
+  , blockPrices
   )
 import DbSync.Extractor.SharedDedup
   ( resolveAndWriteDatum
@@ -47,6 +48,7 @@ import DbSync.Parser.Types
   , GenericTxScript (..)
   )
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
+import DbSync.Util (coinToDbLovelace)
 import DbSync.Writer (HasWriter (..), Writer (..))
 
 -- ---------------------------------------------------------------------------
@@ -74,14 +76,15 @@ scriptsDatumsExtractor = ExtractorDef
 -- tx's witnesses, so its scripts, datums, and redeemers are not
 -- on-chain data.
 processScriptsDatums :: ProcessBlockFn
-processScriptsDatums ctx =
+processScriptsDatums ctx = do
+  let mPrices = blockPrices (bcLedgerData ctx)
   forM_ (bcTxs ctx) $ \tc -> when (txValidContract (tcGenTx tc)) $ do
     let txId = tcTxId tc
         gtx  = tcGenTx tc
     forM_ (txScripts gtx)           (writeScriptEntry txId)
     forM_ (txDatums gtx)            (writeDatumEntry txId)
     forM_ (txExtraKeyWitnesses gtx) (writeExtraKey txId)
-    forM_ (txRedeemers gtx)         (writeRedeemerEntry txId)
+    forM_ (txRedeemers gtx)         (writeRedeemerEntry mPrices txId)
 
 writeScriptEntry
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
@@ -113,10 +116,12 @@ writeExtraKey txId h = do
     , extraKeyWitnessTxId = txId
     }
 
+-- | @redeemer.fee@ needs the block's Plutus execution prices;
+-- 'Nothing' (ledger off) leaves the fee cell NULL.
 writeRedeemerEntry
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
-  => TxId -> GenericTxRedeemer -> m ()
-writeRedeemerEntry txId gtr = do
+  => Maybe Prices -> TxId -> GenericTxRedeemer -> m ()
+writeRedeemerEntry mPrices txId gtr = do
   resolver <- asks getResolver
   writer   <- asks getWriter
   rdId <- resolveAndWriteRedeemerData (gtrDataHash gtr) RedeemerData
@@ -130,14 +135,16 @@ writeRedeemerEntry txId gtr = do
     { redeemerTxId            = txId
     , redeemerUnitMem         = gtrUnitMem gtr
     , redeemerUnitSteps       = gtrUnitSteps gtr
-    , redeemerFee             = pendingFee
+    , redeemerFee             =
+        (\p -> redeemerScriptFee p (gtrUnitMem gtr) (gtrUnitSteps gtr)) <$> mPrices
     , redeemerPurpose         = gtrPurpose gtr
     , redeemerIndex           = gtrIndex gtr
     , redeemerScriptHash      = gtrScriptHash gtr
     , redeemerRedeemerDataId  = rdId
     }
 
--- | Placeholder for @redeemer.fee@ until @apPrices@ flows through
--- the per-block ledger data.
-pendingFee :: Maybe DbLovelace
-pendingFee = Nothing
+-- | Script-execution fee for one redeemer: 'txscriptfee' over the
+-- block's prices and the redeemer's execution units.
+redeemerScriptFee :: Prices -> Word64 -> Word64 -> DbLovelace
+redeemerScriptFee prices mem steps =
+  coinToDbLovelace (txscriptfee prices (ExUnits (fromIntegral mem) (fromIntegral steps)))

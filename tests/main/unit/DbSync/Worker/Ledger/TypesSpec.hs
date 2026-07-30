@@ -55,9 +55,24 @@ spec =
               , badGovExpiresAfter  = Strict.Nothing
               , badStakeKeyDeposit  = Strict.Nothing
               , badPoolDeposit      = Strict.Nothing
+              , badPrices           = Strict.Nothing
               , badCommitteeMembers =
                   Map.singleton ("tx", 0)
                     [ProposedCommitteeMember (panic "unforced cold key") False 0]
+              }
+       in evaluate (force bomb) `shouldThrow` anyException
+
+    it "BlockApplyData: a thunked prices value explodes under force" $
+      let bomb =
+            BlockApplyData
+              { badDepositsMap      = emptyDepositsMap
+              , badStakeSlice       = Generic.NoSlices
+              , badPoolsRegistered  = Set.empty
+              , badGovExpiresAfter  = Strict.Nothing
+              , badStakeKeyDeposit  = Strict.Nothing
+              , badPoolDeposit      = Strict.Nothing
+              , badPrices           = Strict.Just (panic "unforced prices")
+              , badCommitteeMembers = Map.empty
               }
        in evaluate (force bomb) `shouldThrow` anyException
 

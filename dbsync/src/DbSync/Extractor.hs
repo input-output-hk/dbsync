@@ -22,6 +22,7 @@ module DbSync.Extractor
   , blockDepositsMap
   , blockStakeKeyDeposit
   , blockPoolDeposit
+  , blockPrices
   , blockStakeSlice
   , blockRegisteredPools
   , blockGovExpiresAfter
@@ -40,6 +41,7 @@ module DbSync.Extractor
 
 import Cardano.Prelude
 
+import Cardano.Ledger.Alonzo.Scripts (Prices)
 import Cardano.Ledger.BaseTypes (EpochInterval (..), Network)
 import Cardano.Ledger.Coin (Coin)
 import qualified Control.Concurrent.Class.MonadSTM.Strict as Strict
@@ -182,6 +184,9 @@ data LedgerOutputs = LedgerOutputs
       -- ^ Protocol-param stake-key deposit at this block.
   , loPoolDeposit      :: !(Maybe Coin)
       -- ^ Protocol-param pool deposit at this block.
+  , loPrices           :: !(Maybe Prices)
+      -- ^ Plutus execution prices at this block; 'Nothing' pre-Alonzo.
+      -- Drives @redeemer.fee@.
   , loStakeSlice       :: !Generic.StakeSliceRes
       -- ^ Per-block slice of the "mark" stake distribution.
   , loRegisteredPools  :: !(Set.Set ByteString)
@@ -206,6 +211,7 @@ emptyLedgerOutputs = LedgerOutputs
   { loDepositsMap      = emptyDepositsMap
   , loStakeKeyDeposit  = Nothing
   , loPoolDeposit      = Nothing
+  , loPrices           = Nothing
   , loStakeSlice       = Generic.NoSlices
   , loRegisteredPools  = Set.empty
   , loGovExpiresAfter  = Nothing
@@ -229,6 +235,12 @@ blockPoolDeposit :: BlockLedgerData -> Maybe Coin
 blockPoolDeposit = \case
   LedgerDataOff   -> Nothing
   LedgerDataOn lo -> loPoolDeposit lo
+
+-- | Plutus execution prices; 'Nothing' when ledger is off or pre-Alonzo.
+blockPrices :: BlockLedgerData -> Maybe Prices
+blockPrices = \case
+  LedgerDataOff   -> Nothing
+  LedgerDataOn lo -> loPrices lo
 
 -- | Per-block stake slice; 'Generic.NoSlices' when ledger is off
 -- and for Byron / pre-Shelley blocks.
@@ -272,6 +284,7 @@ takeBlockLedgerData = \case
       { loDepositsMap      = badDepositsMap blockData
       , loStakeKeyDeposit  = SMaybe.maybe Nothing Just (badStakeKeyDeposit blockData)
       , loPoolDeposit      = SMaybe.maybe Nothing Just (badPoolDeposit blockData)
+      , loPrices           = SMaybe.maybe Nothing Just (badPrices blockData)
       , loStakeSlice       = badStakeSlice blockData
       , loRegisteredPools  = badPoolsRegistered blockData
       , loGovExpiresAfter  =

@@ -11,7 +11,8 @@
 --     identifies the producing tx; @tx_out.consumed_by_tx_id@
 --     similarly waits for its consumer.
 --   * Three @tx@ columns (the phase-2 fee, the phase-2 deposit, and
---     the ledger-disabled valid-contract deposit) cannot be filled
+--     the ledger-disabled valid-contract deposit) plus
+--     @redeemer.script_hash@ for spend redeemers cannot be filled
 --     from the body alone. The parser leaves them as a sentinel or
 --     NULL.
 --   * Tables are UNLOGGED with no sequences attached and only the
@@ -52,16 +53,19 @@ import qualified Hasql.Session as Sess
 import DbSync.App.Env (HasConfig)
 import DbSync.Db.Pool (forPooled_, usePool, withPrepPool)
 import DbSync.Db.Run (useConn)
+import DbSync.Db.Schema.Address (addressTableDef)
 import DbSync.Db.Schema.Core (blockTableDef, txTableDef)
 import DbSync.Db.Schema.EpochView (epochFinalizedTableName)
 import DbSync.Db.Schema.Init
   ( analyzeSql
   , perTableSchemaForFollowTipSql
   )
+import DbSync.Db.Schema.ScriptsDatums (redeemerTableDef)
 import DbSync.Db.Schema.StakeDelegation (withdrawalTableDef)
 import DbSync.Db.Schema.Types (TableDef (..), TableMode (..))
 import DbSync.Db.Schema.UTxO
   ( collateralTxOutTableDef
+  , txInTableDef
   , txOutTableDef
   )
 import DbSync.Db.Statement.Indexes
@@ -123,10 +127,14 @@ run connSettings tuning tables = step PhaseStep "post-load pass" $ do
   -- magnitude. The three CTAS-rebuilt input tables are ANALYZEd
   -- inside 'Resolve.resolveForeignKeys'.
   step AnalyzeStep "backfill input tables" $
-    for_ backfillAnalyzeTables $ \td ->
+    for_ (filter (hasTable . tdName) backfillAnalyzeTables) $ \td ->
       runDdl (analyzeSql (tdName td))
 
   _ <- Backfill.backfillTxColumns
+  -- Needs both tables: the hash comes off the spent output that
+  -- @tx_in@ points at, and lands on a @redeemer@ row.
+  when (hasTable (tdName redeemerTableDef) && hasTable (tdName txInTableDef)) $
+    void Backfill.backfillSpendScriptHash
   _ <- Backfill.applyDepositPending
   step CleanupStep "truncate epoch_param_pending"
     Backfill.truncateDepositPending
@@ -160,6 +168,8 @@ run connSettings tuning tables = step PhaseStep "post-load pass" $ do
 
   step SequenceStep "reset id sequences to MAX(id) + 1" $
     Sequences.resetSequences tables
+  where
+    hasTable name = any ((== name) . tdName) tables
 
 -- | UNLOGGED tables, biggest heap first: the flip is one rewrite
 -- per table on a bounded pool, so the largest rewrites must start
@@ -172,7 +182,9 @@ flipOrder =
 -- | Tables the backfill UPDATEs read or write, minus the three
 -- CTAS-rebuilt input tables (ANALYZEd right after their rebuild).
 -- Listed once here so the ANALYZE pass and the backfill writers
--- agree on which tables need fresh statistics.
+-- agree on which tables need fresh statistics. Filtered against the
+-- enabled set at the call site — a disabled extractor's tables were
+-- never created.
 backfillAnalyzeTables :: [TableDef]
 backfillAnalyzeTables =
   [ blockTableDef
@@ -180,6 +192,8 @@ backfillAnalyzeTables =
   , txOutTableDef
   , collateralTxOutTableDef
   , withdrawalTableDef
+  , addressTableDef
+  , redeemerTableDef
   ]
 
 runDdl

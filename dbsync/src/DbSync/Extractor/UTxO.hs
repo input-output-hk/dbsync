@@ -27,11 +27,11 @@ import DbSync.Parser.Types (CredHash (..), GenericTx (..), GenericTxDatum (..), 
 import qualified DbSync.Parser.Types as G
 import DbSync.Phase.Type (SyncPhase, isFollowPath)
 import DbSync.Db.Schema.Address (addressFromRaw, addressTableDef, extractPaymentCred, rawHasScript)
-import DbSync.Db.Schema.Ids (AddressId, DatumId, ScriptId, StakeAddressId, TxId (..))
+import DbSync.Db.Schema.Ids (AddressId, DatumId, RedeemerId, ScriptId, StakeAddressId, TxId (..))
 import DbSync.Db.Schema.ScriptsDatums (Datum (..))
 import DbSync.Db.Schema.UTxO
 import DbSync.Db.Types (DbLovelace (..))
-import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..))
+import DbSync.Extractor (ExtractorDef (..), ProcessBlockFn, BlockContext (..), TxContext (..), redeemerIdAt)
 import DbSync.Extractor.SharedDedup (resolveAndWriteDatum, resolveAndWriteTxScript, resolveStakeCred)
 import DbSync.Resolver (HasResolver (..), IdResolver (..))
 import DbSync.Writer (HasWriter (..), Writer (..))
@@ -94,7 +94,8 @@ processUTxO ctx = do
       mProducer <- liftIO $ resolveInputUtxo resolver
         (txInHash gin) (txInIndex gin)
       liftIO $ writeTxIn writer
-        (mkTxIn txId gin (producerTxIdFrom mProducer))
+        (mkTxIn txId gin (producerTxIdFrom mProducer)
+          (redeemerIdAt tc (txInRedeemerIx gin)))
       for_ mProducer $ \(_, producerOutId, _) -> do
         liftIO $ recordConsumed resolver producerOutId txId
         liftIO $ deleteCachedUtxo resolver (txInHash gin) (txInIndex gin)
@@ -206,13 +207,13 @@ mkDatum txId gtd = Datum
 -- | Build a @tx_in@ row. The @tx_out_id@ argument is 'Just' when the
 -- cache resolved the producer and 'Nothing' otherwise — the post-load
 -- resolve fills the residual NULLs.
-mkTxIn :: TxId -> GenericTxIn -> Maybe TxId -> TxIn
-mkTxIn txId gin mTxOutId = TxIn
+mkTxIn :: TxId -> GenericTxIn -> Maybe TxId -> Maybe RedeemerId -> TxIn
+mkTxIn txId gin mTxOutId mRedeemerId = TxIn
   { txInTxInId     = txId
   , txInTxOutId    = mTxOutId
   , txInTxOutIndex = fromIntegral (txInIndex gin)
   , txInTxOutHash  = txInHash gin
-  , txInRedeemerId = Nothing  -- resolved by ScriptsDatums extractor
+  , txInRedeemerId = mRedeemerId
   }
 
 mkCollateralTxIn :: TxId -> GenericTxIn -> Maybe TxId -> CollateralTxIn

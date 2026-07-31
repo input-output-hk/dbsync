@@ -672,7 +672,7 @@ block2SpendsBlock1 =
     (BS.replicate 32 0)
     2 120
     [ (sampleTx 0xbb 900_000)
-        { txInputs = [GenericTxIn (BS.replicate 32 0xaa) 0] }
+        { txInputs = [GenericTxIn (BS.replicate 32 0xaa) 0 Nothing] }
     ]
 
 block3SpendsBlock2 :: GenericBlock
@@ -682,7 +682,7 @@ block3SpendsBlock2 =
     (BS.replicate 32 1)
     3 140
     [ (sampleTx 0xcc 800_000)
-        { txInputs = [GenericTxIn (BS.replicate 32 0xbb) 0] }
+        { txInputs = [GenericTxIn (BS.replicate 32 0xbb) 0 Nothing] }
     ]
 
 -- | Rollback target at block2 — used by the consumed-by test to keep

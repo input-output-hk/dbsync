@@ -155,8 +155,9 @@ fromByronTx _parentBlk blockIndex txAux =
 fromByronTxIn :: Byron.TxIn -> GenericTxIn
 fromByronTxIn (Byron.TxInUtxo txId idx) =
   GenericTxIn
-    { txInHash  = Crypto.abstractHashToBytes txId
-    , txInIndex = idx
+    { txInHash       = Crypto.abstractHashToBytes txId
+    , txInIndex      = idx
+    , txInRedeemerIx = Nothing
     }
 
 fromByronTxOut :: Word16 -> Byron.TxOut -> GenericTxOut

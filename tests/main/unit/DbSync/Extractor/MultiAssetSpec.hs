@@ -111,8 +111,8 @@ validTxWithAssetOutput = baseTx
 invalidTxWithAssetCollReturn :: GenericTx
 invalidTxWithAssetCollReturn = baseTx
   { txValidContract    = False
-  , txInputs           = [GenericTxIn (BS.replicate 32 0xcc) 0]
-  , txCollateralInputs = [GenericTxIn (BS.replicate 32 0xcc) 0]
+  , txInputs           = [GenericTxIn (BS.replicate 32 0xcc) 0 Nothing]
+  , txCollateralInputs = [GenericTxIn (BS.replicate 32 0xcc) 0 Nothing]
   , txOutputs          = [ (mkOutput 1) { txOutMultiAssets = [(policyId, assetName, 4321)] } ]
   }
 
@@ -121,8 +121,8 @@ invalidTxWithAssetCollReturn = baseTx
 invalidTxNoOutputs :: GenericTx
 invalidTxNoOutputs = baseTx
   { txValidContract    = False
-  , txInputs           = [GenericTxIn (BS.replicate 32 0xcc) 0]
-  , txCollateralInputs = [GenericTxIn (BS.replicate 32 0xcc) 0]
+  , txInputs           = [GenericTxIn (BS.replicate 32 0xcc) 0 Nothing]
+  , txCollateralInputs = [GenericTxIn (BS.replicate 32 0xcc) 0 Nothing]
   , txOutputs          = []
   }
 
@@ -134,8 +134,8 @@ validTxWithMint = baseTx { txMint = [(policyId, assetName, 1000)] }
 invalidTxWithMint :: GenericTx
 invalidTxWithMint = baseTx
   { txValidContract    = False
-  , txInputs           = [GenericTxIn (BS.replicate 32 0xcc) 0]
-  , txCollateralInputs = [GenericTxIn (BS.replicate 32 0xcc) 0]
+  , txInputs           = [GenericTxIn (BS.replicate 32 0xcc) 0 Nothing]
+  , txCollateralInputs = [GenericTxIn (BS.replicate 32 0xcc) 0 Nothing]
   , txMint             = [(policyId, assetName, 1000)]
   }
 

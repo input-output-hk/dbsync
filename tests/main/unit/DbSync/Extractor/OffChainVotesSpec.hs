@@ -204,6 +204,7 @@ sampleVote mAnchor = GenericVotingProcedure
   , gvpGovActionId = GovActionRef (BS.replicate 32 0xee) 0
   , gvpVote        = VoteYes
   , gvpAnchor      = mAnchor
+  , gvpRedeemerIx  = Nothing
   }
 
 emptyTx :: GenericTx
@@ -285,7 +286,7 @@ blockWithCert action = (shelleyEmptyBlock 5)
   { blkTxs =
       [ emptyTx
           { txCertificates =
-              [GenericTxCertificate { txCertIndex = 0, txCertAction = action }]
+              [GenericTxCertificate { txCertIndex = 0, txCertAction = action, txCertRedeemerIx = Nothing }]
           }
       ]
   }

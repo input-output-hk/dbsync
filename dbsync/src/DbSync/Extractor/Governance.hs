@@ -111,6 +111,7 @@ import DbSync.Extractor
   , TxContext (..)
   , blockCommitteeMembers
   , blockGovExpiresAfter
+  , redeemerIdAt
   )
 import DbSync.Worker.Ledger.EpochUpdate (NewEpoch (..))
 import DbSync.Extractor.SharedDedup
@@ -273,9 +274,9 @@ processCerts ctx tc =
 
       -- Combined vote-delegation certs.
       CertConwayDelegVote credHash drepIdent _mDeposit ->
-        writeDelegationVoteRow tc certIdx credHash drepIdent
+        writeDelegationVoteRow tc cert credHash drepIdent
       CertConwayDelegStakeVote credHash _poolKeyHash drepIdent _mDeposit ->
-        writeDelegationVoteRow tc certIdx credHash drepIdent
+        writeDelegationVoteRow tc cert credHash drepIdent
 
       _ -> pure ()
 
@@ -287,17 +288,17 @@ writeDelegationVoteRow
      , MonadReader env m
      , MonadIO m
      )
-  => TxContext -> Word16 -> CredHash -> DRepIdent -> m ()
-writeDelegationVoteRow tc certIdx cred drepIdent = do
+  => TxContext -> GenericTxCertificate -> CredHash -> DRepIdent -> m ()
+writeDelegationVoteRow tc cert cred drepIdent = do
   writer <- asks getWriter
   saId   <- resolveStakeCred cred
   drepId <- resolveDRep drepIdent
   liftIO $ writeDelegationVote writer DelegationVote
     { delegationVoteAddrId     = saId
-    , delegationVoteCertIndex  = certIdx
+    , delegationVoteCertIndex  = txCertIndex cert
     , delegationVoteDrepHashId = drepId
     , delegationVoteTxId       = tcTxId tc
-    , delegationVoteRedeemerId = Nothing
+    , delegationVoteRedeemerId = redeemerIdAt tc (txCertRedeemerIx cert)
     }
 
 -- | Project a 'DRepIdent' into a @drep_hash@ id, materialising the

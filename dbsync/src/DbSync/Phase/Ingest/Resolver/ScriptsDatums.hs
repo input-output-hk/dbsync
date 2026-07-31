@@ -4,6 +4,7 @@ module DbSync.Phase.Ingest.Resolver.ScriptsDatums
   , resolveScriptIngest
   , resolveRedeemerDataIngest
   , assignRedeemerIdIngest
+  , fillSpendScriptHashesIngest
   ) where
 
 import Cardano.Prelude
@@ -45,3 +46,9 @@ assignRedeemerIdIngest :: IORef ExtractState -> IO RedeemerId
 assignRedeemerIdIngest extractStateRef =
   allocateNextId extractStateRef icRedeemerId
     (\cs c -> cs { icRedeemerId = c }) RedeemerId
+
+-- | No-op: the spend hash needs @tx_in.tx_out_id@, which stays NULL
+-- until the Prep resolve. 'DbSync.Phase.Preparing.Backfill' fills the
+-- whole ingested range in one pass afterwards.
+fillSpendScriptHashesIngest :: [RedeemerId] -> IO ()
+fillSpendScriptHashesIngest _ = pure ()

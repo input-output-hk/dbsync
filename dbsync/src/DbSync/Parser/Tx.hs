@@ -10,8 +10,6 @@
 -- Each @from*Tx@ function converts an era-specific ledger transaction
 -- into our era-independent 'GenericTx'. Helpers are shared across eras
 -- where possible; later eras add capabilities progressively.
---
--- __First pass:__ Redeemers, scripts, and governance fields are empty.
 module DbSync.Parser.Tx
   ( -- * Era-specific converters
     fromShelleyTx
@@ -194,8 +192,9 @@ mkTxIn txBody = map fromTxIn $ toList $ txBody ^. Core.inputsTxBodyL
 fromTxIn :: Ledger.TxIn -> GenericTxIn
 fromTxIn (Ledger.TxIn (Ledger.TxId txid) (TxIx ix)) =
   GenericTxIn
-    { txInHash  = Crypto.hashToBytes (extractHash txid)
-    , txInIndex = ix
+    { txInHash       = Crypto.hashToBytes (extractHash txid)
+    , txInIndex      = ix
+    , txInRedeemerIx = Nothing
     }
 
 -- | Extract outputs from a Shelley/Allegra body (Coin-only, no multi-assets).
@@ -271,6 +270,7 @@ mkTxWithdrawals bd =
       GenericTxWithdrawal
         { txwRewardAddress = Ledger.serialiseAccountAddress ra
         , txwAmount        = fromIntegral c
+        , txwRedeemerIx    = Nothing
         }
 
 -- | Extract certificates from a Shelley-Babbage era tx body.
@@ -281,8 +281,9 @@ mkTxCertificatesShelleyEra convert bd =
   where
     toCert idx cert =
       GenericTxCertificate
-        { txCertIndex = idx
-        , txCertAction = convert cert
+        { txCertIndex      = idx
+        , txCertAction     = convert cert
+        , txCertRedeemerIx = Nothing
         }
 
 -- | Convert a ShelleyTxCert (any Shelley-Babbage era) to CertAction.
@@ -856,20 +857,27 @@ witnessDatums tx =
 -- | Extract Plutus redeemer witnesses (Alonzo+).
 --
 -- The per-era purpose projection returns @(tag, index)@ so the
--- enum and the index come from the same constructor match.
+-- enum and the index come from the same constructor match. The
+-- item projection recovers the witnessed script hash from the
+-- pointer resolved against the tx body; a dangling pointer (the
+-- ledger validates redeemer sets only for phase-2-valid txs)
+-- leaves the hash 'Nothing'.
 witnessRedeemers
   :: forall era l.
      ( Alonzo.AlonzoEraTxWits era
      , Core.EraTx era
+     , AlonzoEraTxBody era
      , Core.TxWits era ~ Alonzo.AlonzoTxWits era
      )
   => (Alonzo.PlutusPurpose Alonzo.AsIx era -> (ScriptPurpose, Word32))
+  -> (Alonzo.PlutusPurpose Alonzo.AsIxItem era -> Maybe ByteString)
   -> Core.Tx l era
   -> [GenericTxRedeemer]
-witnessRedeemers project tx =
+witnessRedeemers project itemScriptHash tx =
   map mkRedeemer . Map.toList . Alonzo.unRedeemers $
     tx ^. (Core.witsTxL . Alonzo.rdmrsTxWitsL)
   where
+    txBody = tx ^. Core.bodyTxL
     mkRedeemer (purpose, (d, exUnits)) =
       let (tag, idx) = project purpose
       in GenericTxRedeemer
@@ -877,7 +885,8 @@ witnessRedeemers project tx =
         , gtrUnitSteps  = fromIntegral (Plutus.exUnitsSteps exUnits)
         , gtrPurpose    = tag
         , gtrIndex      = fromIntegral idx
-        , gtrScriptHash = Nothing
+        , gtrScriptHash =
+            itemScriptHash =<< strictMaybeToMaybe (redeemerPointerInverse txBody purpose)
         , gtrDataHash   = dataHashBytes (Alonzo.hashData d)
         , gtrDataBytes  = Core.originalBytes d
         , gtrDataValue  = Just (ScriptData.plutusDataToJson d)
@@ -908,6 +917,124 @@ dijkstraPurpose = \case
   DijkstraVoting idx      -> (Vote,    Alonzo.unAsIx idx)
   DijkstraProposing idx   -> (Propose, Alonzo.unAsIx idx)
   DijkstraGuarding idx    -> (Propose, Alonzo.unAsIx idx)
+
+-- | Script hash named by a resolved redeemer pointer. A 'Spend'
+-- pointer resolves to a 'Ledger.TxIn' whose payment credential lives
+-- on the spent output, which the parser cannot see; those stay
+-- 'Nothing' until input resolution fills them from the database.
+alonzoItemScriptHash
+  :: EraTxCert era
+  => Alonzo.AlonzoPlutusPurpose Alonzo.AsIxItem era -> Maybe ByteString
+alonzoItemScriptHash = \case
+  Alonzo.AlonzoSpending {} -> Nothing
+  Alonzo.AlonzoMinting (Alonzo.AsIxItem _ (PolicyID sh)) -> Just (scriptHashBytes sh)
+  Alonzo.AlonzoCertifying (Alonzo.AsIxItem _ cert) ->
+    scriptHashBytes <$> getScriptWitnessTxCert cert
+  Alonzo.AlonzoRewarding (Alonzo.AsIxItem _ acct) -> accountScriptHash acct
+
+conwayItemScriptHash
+  :: EraTxCert era
+  => ConwayPlutusPurpose Alonzo.AsIxItem era -> Maybe ByteString
+conwayItemScriptHash = \case
+  ConwaySpending {} -> Nothing
+  ConwayMinting (Alonzo.AsIxItem _ (PolicyID sh)) -> Just (scriptHashBytes sh)
+  ConwayCertifying (Alonzo.AsIxItem _ cert) ->
+    scriptHashBytes <$> getScriptWitnessTxCert cert
+  ConwayRewarding (Alonzo.AsIxItem _ acct) -> accountScriptHash acct
+  ConwayVoting (Alonzo.AsIxItem _ voter) -> voterScriptHash voter
+  ConwayProposing (Alonzo.AsIxItem _ prop) -> proposalGuardrailScriptHash prop
+
+dijkstraItemScriptHash
+  :: EraTxCert era
+  => DijkstraPlutusPurpose Alonzo.AsIxItem era -> Maybe ByteString
+dijkstraItemScriptHash = \case
+  DijkstraSpending {} -> Nothing
+  DijkstraMinting (Alonzo.AsIxItem _ (PolicyID sh)) -> Just (scriptHashBytes sh)
+  DijkstraCertifying (Alonzo.AsIxItem _ cert) ->
+    scriptHashBytes <$> getScriptWitnessTxCert cert
+  DijkstraRewarding (Alonzo.AsIxItem _ acct) -> accountScriptHash acct
+  DijkstraVoting (Alonzo.AsIxItem _ voter) -> voterScriptHash voter
+  DijkstraProposing (Alonzo.AsIxItem _ prop) -> proposalGuardrailScriptHash prop
+  DijkstraGuarding (Alonzo.AsIxItem _ sh) -> Just (scriptHashBytes sh)
+
+-- | The credential's script hash, or 'Nothing' for a key credential.
+scriptCredHash :: Ledger.Credential kr -> Maybe ByteString
+scriptCredHash = \case
+  Ledger.ScriptHashObj sh -> Just (scriptHashBytes sh)
+  Ledger.KeyHashObj {}    -> Nothing
+
+accountScriptHash :: Ledger.AccountAddress -> Maybe ByteString
+accountScriptHash (Ledger.AccountAddress _ (Ledger.AccountId cred)) =
+  scriptCredHash cred
+
+voterScriptHash :: Voter -> Maybe ByteString
+voterScriptHash = \case
+  CommitteeVoter cred -> scriptCredHash cred
+  DRepVoter cred      -> scriptCredHash cred
+  StakePoolVoter {}   -> Nothing
+
+-- | Guardrail script demanded by the proposal's action, where the
+-- action carries one.
+proposalGuardrailScriptHash :: ProposalProcedure era -> Maybe ByteString
+proposalGuardrailScriptHash prop = case pProcGovAction prop of
+  ParameterChange _ _ sh    -> scriptHashBytes <$> strictMaybeToMaybe sh
+  TreasuryWithdrawals _ sh  -> scriptHashBytes <$> strictMaybeToMaybe sh
+  _                         -> Nothing
+
+-- | Positions (in 'txRedeemers' order) of the redeemers pointing at
+-- each body element, keyed by within-purpose body index. Drives the
+-- @redeemer_id@ back-references on inputs, certificates,
+-- withdrawals, and votes. Mint and propose redeemers point at
+-- elements with no back-reference column and are not tracked.
+data RedeemerIndexes = RedeemerIndexes
+  { riSpend :: !(Map Word32 Word64)
+  , riCert  :: !(Map Word32 Word64)
+  , riRewrd :: !(Map Word32 Word64)
+  , riVote  :: !(Map Word32 Word64)
+  }
+
+-- | Walk the redeemer map in the same order as 'witnessRedeemers'
+-- so positions line up with the emitted redeemer list.
+redeemerIndexes
+  :: forall era l.
+     ( Alonzo.AlonzoEraTxWits era
+     , Core.EraTx era
+     , Core.TxWits era ~ Alonzo.AlonzoTxWits era
+     )
+  => (Alonzo.PlutusPurpose Alonzo.AsIx era -> (ScriptPurpose, Word32))
+  -> Core.Tx l era
+  -> RedeemerIndexes
+redeemerIndexes project tx =
+  foldl' step (RedeemerIndexes Map.empty Map.empty Map.empty Map.empty) $
+    zip [0 ..] (Map.keys (Alonzo.unRedeemers (tx ^. (Core.witsTxL . Alonzo.rdmrsTxWitsL))))
+  where
+    step :: RedeemerIndexes -> (Word64, Alonzo.PlutusPurpose Alonzo.AsIx era) -> RedeemerIndexes
+    step ri (pos, purpose) = case project purpose of
+      (Spend, ix) -> ri { riSpend = Map.insert ix pos (riSpend ri) }
+      (Cert,  ix) -> ri { riCert  = Map.insert ix pos (riCert ri) }
+      (Rewrd, ix) -> ri { riRewrd = Map.insert ix pos (riRewrd ri) }
+      (Vote,  ix) -> ri { riVote  = Map.insert ix pos (riVote ri) }
+      _           -> ri
+
+-- Annotation by list position works because each body element list
+-- is built in the same order the ledger's pointer indexes count:
+-- inputs from the sorted input set, certificates and withdrawals in
+-- body order.
+
+annotateInputRedeemers :: RedeemerIndexes -> [GenericTxIn] -> [GenericTxIn]
+annotateInputRedeemers ri = zipWith ann [0 ..]
+  where
+    ann ix txIn = txIn { txInRedeemerIx = Map.lookup ix (riSpend ri) }
+
+annotateCertRedeemers :: RedeemerIndexes -> [GenericTxCertificate] -> [GenericTxCertificate]
+annotateCertRedeemers ri = zipWith ann [0 ..]
+  where
+    ann ix cert = cert { txCertRedeemerIx = Map.lookup ix (riCert ri) }
+
+annotateWithdrawalRedeemers :: RedeemerIndexes -> [GenericTxWithdrawal] -> [GenericTxWithdrawal]
+annotateWithdrawalRedeemers ri = zipWith ann [0 ..]
+  where
+    ann ix w = w { txwRedeemerIx = Map.lookup ix (riRewrd ri) }
 
 -- | Required-signer key hashes from the tx body. The ledger
 -- constrains 'reqSignerHashesTxBodyL' to Alonzo..Conway; Dijkstra
@@ -1061,6 +1188,7 @@ fromAlonzoTx (blkIndex, tx) =
       fee = txBody ^. Core.feeTxBodyL
       (invBefore, invAfter) = getInterval txBody
       collIns = mkCollTxIn txBody
+      rIdxs = redeemerIndexes alonzoPurpose tx
   in GenericTx
     { txHash             = txHashId tx
     , txBlockIndex       = blkIndex
@@ -1078,13 +1206,13 @@ fromAlonzoTx (blkIndex, tx) =
       -- Failed phase-2 txs consume collateral, not the declared inputs, so
       -- tx_in carries the collateral set (matching Babbage+); Alonzo has no
       -- collateral-return field, so there are no on-chain outputs.
-    , txInputs           = if isValid then mkTxIn txBody else collIns
+    , txInputs           = if isValid then annotateInputRedeemers rIdxs (mkTxIn txBody) else collIns
     , txOutputs          = if isValid then outputs else []
     , txCollateralInputs = collIns
     , txReferenceInputs  = []
     , txCollateralOutput = Nothing
-    , txCertificates     = mkTxCertificatesShelleyEra shelleyCertToAction txBody
-    , txWithdrawals      = mkTxWithdrawals txBody
+    , txCertificates     = annotateCertRedeemers rIdxs (mkTxCertificatesShelleyEra shelleyCertToAction txBody)
+    , txWithdrawals      = annotateWithdrawalRedeemers rIdxs (mkTxWithdrawals txBody)
     , txMetadata         = Metadata.getMetadata <$> getTxAuxData tx
     , txMint             = getMint txBody
     , txCborRaw          = Just (getTxCborBytes tx)
@@ -1092,7 +1220,7 @@ fromAlonzoTx (blkIndex, tx) =
       -- required-signer set from the tx body.
     , txScripts           = alonzoEraScripts alonzoPlutusType tx
     , txDatums            = witnessDatums tx
-    , txRedeemers         = witnessRedeemers alonzoPurpose tx
+    , txRedeemers         = witnessRedeemers alonzoPurpose alonzoItemScriptHash tx
     , txExtraKeyWitnesses = extraKeyHashes txBody
     , txParamProposal     = mkParamProposalsUpdate PP.alonzoParamProposal txBody
     , txProposals         = []  -- pre-Conway
@@ -1115,6 +1243,7 @@ fromBabbageTx (blkIndex, tx) =
       collIns = mkCollTxIn txBody
       refIns = mkRefTxIn txBody
       collOut = getCollateralOutput refScript txBody
+      rIdxs = redeemerIndexes alonzoPurpose tx
   in GenericTx
     { txHash             = txHashId tx
     , txBlockIndex       = blkIndex
@@ -1126,13 +1255,13 @@ fromBabbageTx (blkIndex, tx) =
     , txTreasuryDonation = 0
     , txInvalidBefore    = invBefore
     , txInvalidHereafter = invAfter
-    , txInputs           = if isValid then mkTxIn txBody else collIns
+    , txInputs           = if isValid then annotateInputRedeemers rIdxs (mkTxIn txBody) else collIns
     , txOutputs          = if isValid then outputs else maybeToList collOut
     , txCollateralInputs = collIns
     , txReferenceInputs  = refIns
     , txCollateralOutput = if isValid then collOut else Nothing
-    , txCertificates     = mkTxCertificatesShelleyEra shelleyCertToAction txBody
-    , txWithdrawals      = mkTxWithdrawals txBody
+    , txCertificates     = annotateCertRedeemers rIdxs (mkTxCertificatesShelleyEra shelleyCertToAction txBody)
+    , txWithdrawals      = annotateWithdrawalRedeemers rIdxs (mkTxWithdrawals txBody)
     , txMetadata         = Metadata.getMetadata <$> getTxAuxData tx
     , txMint             = getMint txBody
     , txCborRaw          = Just (getTxCborBytes tx)
@@ -1140,7 +1269,7 @@ fromBabbageTx (blkIndex, tx) =
       -- four (spend, mint, cert, reward).
     , txScripts           = alonzoEraScripts babbagePlutusType tx
     , txDatums            = witnessDatums tx
-    , txRedeemers         = witnessRedeemers alonzoPurpose tx
+    , txRedeemers         = witnessRedeemers alonzoPurpose alonzoItemScriptHash tx
     , txExtraKeyWitnesses = extraKeyHashes txBody
     , txParamProposal     = mkParamProposalsUpdate PP.babbageParamProposal txBody
     , txProposals         = []  -- pre-Conway
@@ -1164,6 +1293,10 @@ fromConwayTx (blkIndex, tx) =
       refIns = mkRefTxIn txBody
       collOut = getCollateralOutput refScript txBody
       Coin donation = ctbTreasuryDonation txBody
+      rIdxs = redeemerIndexes conwayPurpose tx
+      certs = annotateCertRedeemers rIdxs (mkTxCertificatesShelleyEra conwayCertToAction txBody)
+      props = conwayProposals txBody
+      votes = conwayVotingProcedures txBody (riVote rIdxs)
   in GenericTx
     { txHash             = txHashId tx
     , txBlockIndex       = blkIndex
@@ -1175,13 +1308,13 @@ fromConwayTx (blkIndex, tx) =
     , txTreasuryDonation = fromIntegral donation
     , txInvalidBefore    = invBefore
     , txInvalidHereafter = invAfter
-    , txInputs           = if isValid then mkTxIn txBody else collIns
+    , txInputs           = if isValid then annotateInputRedeemers rIdxs (mkTxIn txBody) else collIns
     , txOutputs          = if isValid then outputs else maybeToList collOut
     , txCollateralInputs = collIns
     , txReferenceInputs  = refIns
     , txCollateralOutput = if isValid then collOut else Nothing
-    , txCertificates     = mkTxCertificatesShelleyEra conwayCertToAction txBody
-    , txWithdrawals      = mkTxWithdrawals txBody
+    , txCertificates     = certs
+    , txWithdrawals      = annotateWithdrawalRedeemers rIdxs (mkTxWithdrawals txBody)
     , txMetadata         = Metadata.getMetadata <$> getTxAuxData tx
     , txMint             = getMint txBody
     , txCborRaw          = Just (getTxCborBytes tx)
@@ -1189,17 +1322,14 @@ fromConwayTx (blkIndex, tx) =
       -- 'Vote' and 'Propose'.
     , txScripts           = alonzoEraScripts conwayPlutusType tx
     , txDatums            = witnessDatums tx
-    , txRedeemers         = witnessRedeemers conwayPurpose tx
+    , txRedeemers         = witnessRedeemers conwayPurpose conwayItemScriptHash tx
     , txExtraKeyWitnesses = extraKeyHashes txBody
       -- Conway abandoned genesis-key parameter updates; parameter
       -- changes ride 'GovParameterChange' inside 'txProposals'.
     , txParamProposal     = []
-    , txProposals         = conwayProposals txBody
-    , txVotingProcedures  = conwayVotingProcedures txBody
-    , txVotingAnchors     = collectVotingAnchors
-                              (mkTxCertificatesShelleyEra conwayCertToAction txBody)
-                              (conwayProposals txBody)
-                              (conwayVotingProcedures txBody)
+    , txProposals         = props
+    , txVotingProcedures  = votes
+    , txVotingAnchors     = collectVotingAnchors certs props votes
     }
 -- ---------------------------------------------------------------------------
 -- * Dijkstra era (Conway extension)
@@ -1217,6 +1347,7 @@ fromDijkstraTx (blkIndex, tx) =
       refIns = mkRefTxIn txBody
       collOut = getCollateralOutput refScript txBody
       Coin donation = dtbTreasuryDonation txBody
+      rIdxs = redeemerIndexes dijkstraPurpose tx
   in GenericTx
     { txHash             = txHashId tx
     , txBlockIndex       = blkIndex
@@ -1228,13 +1359,13 @@ fromDijkstraTx (blkIndex, tx) =
     , txTreasuryDonation = fromIntegral donation
     , txInvalidBefore    = invBefore
     , txInvalidHereafter = invAfter
-    , txInputs           = if isValid then mkTxIn txBody else collIns
+    , txInputs           = if isValid then annotateInputRedeemers rIdxs (mkTxIn txBody) else collIns
     , txOutputs          = if isValid then outputs else maybeToList collOut
     , txCollateralInputs = collIns
     , txReferenceInputs  = refIns
     , txCollateralOutput = if isValid then collOut else Nothing
-    , txCertificates     = mkTxCertificatesShelleyEra dijkstraCertToAction txBody
-    , txWithdrawals      = mkTxWithdrawals txBody
+    , txCertificates     = annotateCertRedeemers rIdxs (mkTxCertificatesShelleyEra dijkstraCertToAction txBody)
+    , txWithdrawals      = annotateWithdrawalRedeemers rIdxs (mkTxWithdrawals txBody)
     , txMetadata         = Metadata.getMetadata <$> getTxAuxData tx
     , txMint             = getMint txBody
     , txCborRaw          = Just (getTxCborBytes tx)
@@ -1243,7 +1374,7 @@ fromDijkstraTx (blkIndex, tx) =
       -- placeholder pending the Dijkstra body wiring.
     , txScripts           = dijkstraEraScripts dijkstraPlutusType tx
     , txDatums            = witnessDatums tx
-    , txRedeemers         = witnessRedeemers dijkstraPurpose tx
+    , txRedeemers         = witnessRedeemers dijkstraPurpose dijkstraItemScriptHash tx
     , txExtraKeyWitnesses = []  -- TODO(Dijkstra)
     , txParamProposal     = []
     , txProposals         = []  -- TODO(Dijkstra): dtbProposalProcedures lens not yet wired
@@ -1362,16 +1493,20 @@ govActionRef (GovActionId (Ledger.TxId txid) (GovActionIx ix)) =
 -- | Extract the votes from a Conway-era tx body. The voter-by-voter
 -- map is flattened into one 'GenericVotingProcedure' per
 -- @(voter, gov-action)@ pair, with 'gvpTxIndex' counting from zero
--- within each voter's slice.
+-- within each voter's slice. Vote redeemers point at voters, so the
+-- position from the vote-redeemer map lands on every row of the
+-- voter's slice.
 --
 -- Dijkstra mirrors this shape once the @DijkstraTxBody@ voting lens
 -- lands; for now 'fromDijkstraTx' emits @[]@ directly.
 conwayVotingProcedures
   :: Core.TxBody Core.TopTx ConwayEra
+  -> Map Word32 Word64
   -> [GenericVotingProcedure]
-conwayVotingProcedures txBody =
-  [ mkVote idx voter gaId vp
-  | (voter, actions) <- Map.toList (unVotingProcedures (ctbVotingProcedures txBody))
+conwayVotingProcedures txBody voteRedeemers =
+  [ mkVote idx voter gaId vp (Map.lookup voterIx voteRedeemers)
+  | (voterIx, (voter, actions)) <-
+      zip [0 ..] (Map.toList (unVotingProcedures (ctbVotingProcedures txBody)))
   , (idx, (gaId, vp)) <- zip [0 ..] (Map.toList actions)
   ]
   where
@@ -1380,14 +1515,16 @@ conwayVotingProcedures txBody =
       -> Voter
       -> GovActionId
       -> VotingProcedure ConwayEra
+      -> Maybe Word64
       -> GenericVotingProcedure
-    mkVote idx voter gaId vp =
+    mkVote idx voter gaId vp redeemerIx =
       GenericVotingProcedure
         { gvpTxIndex     = idx
         , gvpVoter       = convertVoter voter
         , gvpGovActionId = govActionRef gaId
         , gvpVote        = convertVote (vProcVote vp)
         , gvpAnchor      = anchorData <$> strictMaybeToMaybe (vProcAnchor vp)
+        , gvpRedeemerIx  = redeemerIx
         }
 
 -- | Project a ledger 'Voter' into our 'GenericVoter' ADT. The

@@ -233,6 +233,10 @@ data GenericTxDatum = GenericTxDatum
 -- @redeemer@ rows to it. 'gtrDataBytes' and 'gtrDataValue' are lazy
 -- for the same reason as their 'GenericTxDatum' counterparts: a
 -- @redeemer_data@ hash hit drops the row without forcing them.
+--
+-- 'gtrScriptHash' stays 'Nothing' for a spend redeemer: its script is
+-- the payment credential of the output being unlocked, which this
+-- transaction does not carry.
 data GenericTxRedeemer = GenericTxRedeemer
   { gtrUnitMem    :: !Word64
   , gtrUnitSteps  :: !Word64
@@ -247,8 +251,11 @@ data GenericTxRedeemer = GenericTxRedeemer
 
 -- | A transaction input reference.
 data GenericTxIn = GenericTxIn
-  { txInHash  :: !ByteString  -- ^ Hash of the transaction being spent
-  , txInIndex :: !Word16      -- ^ Output index being spent
+  { txInHash       :: !ByteString  -- ^ Hash of the transaction being spent
+  , txInIndex      :: !Word16      -- ^ Output index being spent
+  , txInRedeemerIx :: !(Maybe Word64)
+      -- ^ Position in 'txRedeemers' of the spend redeemer witnessing
+      -- this input; 'Nothing' when not script-witnessed.
   }
   deriving stock (Eq, Show)
 
@@ -295,8 +302,11 @@ rewardAddrCredHash bs = case BS.uncons bs of
 -- Carries structured certificate data so extractors can dispatch on
 -- the certificate kind without re-deserializing CBOR.
 data GenericTxCertificate = GenericTxCertificate
-  { txCertIndex  :: !Word16
-  , txCertAction :: !CertAction
+  { txCertIndex      :: !Word16
+  , txCertAction     :: !CertAction
+  , txCertRedeemerIx :: !(Maybe Word64)
+      -- ^ Position in 'txRedeemers' of the cert redeemer witnessing
+      -- this certificate; 'Nothing' when not script-witnessed.
   }
   deriving stock (Show)
 
@@ -477,6 +487,11 @@ data GenericVotingProcedure = GenericVotingProcedure
   , gvpGovActionId :: !GovActionRef
   , gvpVote        :: !Vote
   , gvpAnchor      :: !(Maybe AnchorData)
+  , gvpRedeemerIx  :: !(Maybe Word64)
+      -- ^ Position in 'txRedeemers' of the vote redeemer witnessing
+      -- this voter; a redeemer points at the voter, so all votes cast
+      -- by the voter in one tx share it. 'Nothing' when not
+      -- script-witnessed.
   }
   deriving stock (Show)
 
@@ -514,5 +529,8 @@ data PoolRelayData
 data GenericTxWithdrawal = GenericTxWithdrawal
   { txwRewardAddress :: !ByteString  -- ^ Serialised reward account (29 bytes)
   , txwAmount        :: !Word64      -- ^ Amount in Lovelace
+  , txwRedeemerIx    :: !(Maybe Word64)
+      -- ^ Position in 'txRedeemers' of the reward redeemer witnessing
+      -- this withdrawal; 'Nothing' when not script-witnessed.
   }
   deriving stock (Show)

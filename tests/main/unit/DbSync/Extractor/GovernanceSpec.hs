@@ -107,7 +107,7 @@ spec = do
     it "delegation vote writes a delegation_vote row" $ do
       written <- runGovernance
         [txWithCerts
-          [ GenericTxCertificate 0 (CertConwayDelegVote (CredHash stakeCredA False) (DRepCred (CredHash drepCredA False)) Nothing)
+          [ GenericTxCertificate 0 (CertConwayDelegVote (CredHash stakeCredA False) (DRepCred (CredHash drepCredA False)) Nothing) Nothing
           ]
         ]
       length (twDelegationVotes written) `shouldBe` 1
@@ -118,7 +118,7 @@ spec = do
     it "cold->hot pair writes 2 committee_hash + 1 committee_registration" $ do
       written <- runGovernance
         [txWithCerts
-          [ GenericTxCertificate 0 (CertCommitteeAuth (CredHash coldKey False) (CredHash hotKey False))
+          [ GenericTxCertificate 0 (CertCommitteeAuth (CredHash coldKey False) (CredHash hotKey False)) Nothing
           ]
         ]
       length (twCommitteeHashes written) `shouldBe` 2
@@ -313,11 +313,11 @@ dummySlotDetails = SlotDetails
 
 drepRegCert :: ByteString -> Word64 -> Maybe AnchorData -> GenericTxCertificate
 drepRegCert cred deposit mAnchor =
-  GenericTxCertificate 0 (CertDRepRegistration (CredHash cred False) deposit mAnchor)
+  GenericTxCertificate 0 (CertDRepRegistration (CredHash cred False) deposit mAnchor) Nothing
 
 drepDeregCert :: ByteString -> Word64 -> GenericTxCertificate
 drepDeregCert cred refund =
-  GenericTxCertificate 1 (CertDRepDeregistration (CredHash cred False) refund)
+  GenericTxCertificate 1 (CertDRepDeregistration (CredHash cred False) refund) Nothing
 
 emptyTx :: () -> GenericTx
 emptyTx () = GenericTx
@@ -377,6 +377,7 @@ drepVote cred ref = GenericVotingProcedure
   , gvpGovActionId = ref
   , gvpVote        = VoteYes
   , gvpAnchor      = Nothing
+  , gvpRedeemerIx  = Nothing
   }
 
 conwayBlock :: Word64 -> [GenericTx] -> GenericBlock

@@ -498,15 +498,18 @@ data BlockApplyData = BlockApplyData
   , badGovExpiresAfter  :: !(Strict.Maybe Ledger.EpochInterval)
   , badStakeKeyDeposit  :: !(Strict.Maybe Coin)
   , badPoolDeposit      :: !(Strict.Maybe Coin)
+  , badPrices           :: !(Strict.Maybe Prices)
+      -- ^ Plutus execution prices from this block's protocol params;
+      -- 'Strict.Nothing' pre-Alonzo. Drives @redeemer.fee@.
   , badCommitteeMembers :: !(Map.Map (ByteString, Word64) [ProposedCommitteeMember])
       -- ^ Full resolved committee per committee-updating proposal in
       -- this block, keyed by @(proposal tx hash, proposal index)@.
   }
 
 instance NFData BlockApplyData where
-  rnf (BlockApplyData depositsMap stakeSlice poolsRegistered govExpiresAfter stakeKeyDeposit poolDeposit committeeMembers) =
+  rnf (BlockApplyData depositsMap stakeSlice poolsRegistered govExpiresAfter stakeKeyDeposit poolDeposit prices committeeMembers) =
     rnf ( (depositsMap, stakeSlice, poolsRegistered)
-        , (govExpiresAfter, stakeKeyDeposit, poolDeposit, committeeMembers)
+        , (govExpiresAfter, stakeKeyDeposit, poolDeposit, prices, committeeMembers)
         )
 
 -- | Per-boundary projection the epoch-boundary consumer needs, carved

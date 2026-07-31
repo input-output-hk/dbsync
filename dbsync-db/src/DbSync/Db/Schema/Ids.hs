@@ -486,7 +486,8 @@ newtype DatumId = DatumId { getDatumId :: Int64 }
 newtype ScriptId = ScriptId { getScriptId :: Int64 }
   deriving stock (Eq, Ord, Show)
 
--- | Primary key for the @redeemer@ table.
--- Referenced by @tx_in.redeemer_id@.
+-- | Primary key for the @redeemer@ table. Referenced by the
+-- @redeemer_id@ column of @tx_in@, @delegation@,
+-- @stake_deregistration@, @withdrawal@ and @delegation_vote@.
 newtype RedeemerId = RedeemerId { getRedeemerId :: Int64 }
   deriving stock (Eq, Ord, Show)

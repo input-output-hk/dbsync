@@ -151,7 +151,7 @@ runBuffered :: [GenericBlock] -> IO ()
 runBuffered blocks =
   withTestConnection $ \conn ->
     for_ blocks $ \blk -> do
-      let counts = countAssignableIds blk
+      let counts = countAssignableIds extractors blk
       preAllocated <- allocateAllIds conn counts
       buf          <- newWriteBuffer
       resolver     <- mkBufferedFollowResolver conn preAllocated buf TrackConsumedBy

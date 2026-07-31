@@ -109,11 +109,11 @@ data TxOut = TxOut
   { txOutTxId              :: !TxId             -- ^ FK to tx
   , txOutIndex             :: !Word64           -- ^ Output index within the transaction
   , txOutAddressId         :: !(Maybe AddressId) -- ^ FK to address (NULL during ingest)
-  , txOutStakeAddressId    :: !(Maybe StakeAddressId) -- ^ FK to stake_address (NULL for now)
+  , txOutStakeAddressId    :: !(Maybe StakeAddressId) -- ^ FK to stake_address (NULL when the address has no stake part)
   , txOutValue             :: !DbLovelace       -- ^ Lovelace value
   , txOutDataHash          :: !(Maybe ByteString) -- ^ Datum hash (Alonzo+)
-  , txOutInlineDatumId     :: !(Maybe DatumId)  -- ^ FK to datum (NULL for now)
-  , txOutReferenceScriptId :: !(Maybe ScriptId) -- ^ FK to script (NULL for now)
+  , txOutInlineDatumId     :: !(Maybe DatumId)  -- ^ FK to datum (NULL without an inline datum)
+  , txOutReferenceScriptId :: !(Maybe ScriptId) -- ^ FK to script (NULL without a reference script)
   , txOutConsumedByTxId    :: !(Maybe TxId)     -- ^ FK to consuming tx (NULL during ingest)
   }
   deriving stock (Eq, Show)
@@ -126,7 +126,7 @@ data TxIn = TxIn
   , txInTxOutId     :: !(Maybe TxId)     -- ^ The tx that created the output (NULL during ingest)
   , txInTxOutIndex  :: !Word64           -- ^ Output index being spent
   , txInTxOutHash   :: !ByteString       -- ^ Hash of the tx being spent (for deferred resolution)
-  , txInRedeemerId  :: !(Maybe RedeemerId) -- ^ FK to redeemer (NULL for now)
+  , txInRedeemerId  :: !(Maybe RedeemerId) -- ^ FK to redeemer (NULL unless a script witnesses the input)
   }
   deriving stock (Eq, Show)
 

@@ -663,9 +663,10 @@ applyBlock blk slotDetails suppressBoundary = do
       poolsRegistered <-
         liftIO $ getRegisteredPools (leRegisteredPoolsCache env) oldCls
       let mDeposits = Generic.getDeposits finalState
+          prices = getPrices newCls'
           appResult =
             ApplyResult
-              { apPrices          = getPrices newCls'
+              { apPrices          = prices
               , apGovExpiresAfter = getGovExpiration newCls'
               , apNewEpoch        = maybeToStrictMaybe newEpoch
               , apDeposits        = maybeToStrictMaybe mDeposits
@@ -686,6 +687,7 @@ applyBlock blk slotDetails suppressBoundary = do
               , badGovExpiresAfter  = getGovExpiration newCls'
               , badStakeKeyDeposit  = maybeToStrictMaybe (Generic.stakeKeyDeposit <$> mDeposits)
               , badPoolDeposit      = maybeToStrictMaybe (Generic.poolDeposit <$> mDeposits)
+              , badPrices           = prices
               , badCommitteeMembers = maybe Map.empty resolveBlockCommittees (getGovState finalState)
               }
           boundaryData =

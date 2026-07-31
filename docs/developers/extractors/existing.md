@@ -201,10 +201,19 @@ Plutus and native-script witness data. Depends on `core`.
 Deduping `script`, `datum`, and `redeemer_data` on their hash means a
 payload referenced by many transactions yields a single row.
 
-Two `redeemer` columns are declared but currently always NULL:
-`redeemer.fee` (needs the per-block execution-unit prices) and
-`redeemer.script_hash` (needs the redeemer pointer resolved against
-the tx body's inputs, certs, withdrawals, votes, and proposals).
+`redeemer.fee` is the script-execution fee charged for the redeemer's
+execution units, priced with the block's protocol parameters, so it
+needs ledger on.
+
+`redeemer.script_hash` is resolved from the tx body for mint, cert,
+reward, vote, and propose redeemers. A spend redeemer's script lives on
+the output being unlocked, so it is filled once the `tx_in` rows land:
+per block in Follow, and in one pass over the ingested range during
+`PreparingForVolatileTail`.
+
+Each witnessed row points back at its redeemer through the
+`redeemer_id` column on `tx_in`, `delegation`, `stake_deregistration`,
+`withdrawal`, and `delegation_vote`.
 
 ## `governance`
 

@@ -110,6 +110,7 @@ mkFollowResolver conn consumedTracking = do
     , resolveScript           = ScriptsDatums.resolveScriptConn        conn
     , resolveRedeemerData     = ScriptsDatums.resolveRedeemerDataConn  conn
     , assignRedeemerId        = ScriptsDatums.assignRedeemerIdConn     conn
+    , fillSpendScriptHashes   = ScriptsDatums.fillSpendScriptHashesConn conn
 
       -- Governance
     , resolveDrepHash             = Governance.resolveDrepHashConn        conn
@@ -208,6 +209,7 @@ mkBufferedFollowResolver conn preAlloc buf consumedTracking = do
     , resolveScript           = ScriptsDatums.resolveScriptBuf        conn cache
     , resolveRedeemerData     = ScriptsDatums.resolveRedeemerDataBuf  conn cache
     , assignRedeemerId        = ScriptsDatums.assignRedeemerIdBuf     preAlloc
+    , fillSpendScriptHashes   = ScriptsDatums.fillSpendScriptHashesBuf buf
 
       -- Governance
     , resolveDrepHash             = Governance.resolveDrepHashBuf      conn cache

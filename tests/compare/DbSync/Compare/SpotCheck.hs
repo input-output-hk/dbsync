@@ -468,6 +468,8 @@ redeemerSpec =
     [plain "purpose", plain "index"]
     [ plain "unit_mem"
     , plain "unit_steps"
+    , numeric "fee"
+    , hexed "script_hash"
     , both "redeemer_data" (bytea "(SELECT rd.hash FROM redeemer_data rd WHERE rd.id = t.redeemer_data_id)")
     ]
 

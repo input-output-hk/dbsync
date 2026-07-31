@@ -8,15 +8,9 @@
 -- their hash so the same payload referenced by multiple
 -- transactions yields one row.
 --
--- Failed Plutus scripts still have their witness sets recorded;
--- the @txValidContract@ gate is therefore not applied here.
---
--- == Known incomplete cells
---
--- * @redeemer.script_hash@ is always 'Nothing'. Resolving it means
---   following the redeemer pointer against the tx body's inputs /
---   certs / withdrawals / votes / proposals; that wiring is not yet
---   in place.
+-- A spend redeemer's @script_hash@ is left for the pipeline's
+-- 'DbSync.Resolver.fillSpendScriptHashes' hook: it lives on the
+-- output being unlocked, not in this transaction.
 module DbSync.Extractor.ScriptsDatums
   ( scriptsDatumsExtractor
   , redeemerScriptFee

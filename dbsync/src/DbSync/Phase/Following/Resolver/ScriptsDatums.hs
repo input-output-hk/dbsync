@@ -9,17 +9,20 @@ module DbSync.Phase.Following.Resolver.ScriptsDatums
   , resolveScriptConn
   , resolveRedeemerDataConn
   , assignRedeemerIdConn
+  , fillSpendScriptHashesConn
 
     -- * Buffered flavour
   , resolveDatumBuf
   , resolveScriptBuf
   , resolveRedeemerDataBuf
   , assignRedeemerIdBuf
+  , fillSpendScriptHashesBuf
   ) where
 
 import Cardano.Prelude
 
 import qualified Hasql.Connection as Conn
+import qualified Hasql.Pipeline as Pipeline
 
 import DbSync.Db.Schema.Ids
   ( DatumId
@@ -35,12 +38,14 @@ import DbSync.Db.Statement.ScriptsDatums
   , queryRedeemerDataIdStmt
   )
 import DbSync.Db.Statement.ScriptsDatums (nextScriptIdStmt, queryScriptIdStmt)
+import DbSync.Db.Statement.Worker.RedeemerScriptHash (fillSpendScriptHashesStmt)
 import DbSync.Phase.Following.IdAllocator (PreAllocatedIds (..), popHead)
 import DbSync.Phase.Following.Resolver.Internal
   ( BlockDedupCache (..)
   , resolveDedupSimple
   , runStmt
   )
+import DbSync.Phase.Following.WriteBuffer (WriteBuffer, append)
 
 -- ---------------------------------------------------------------------------
 -- * Direct flavour
@@ -76,6 +81,9 @@ resolveRedeemerDataConn conn hash _row = do
 
 assignRedeemerIdConn :: Conn.Connection -> IO RedeemerId
 assignRedeemerIdConn conn = runStmt conn () nextRedeemerIdStmt
+
+fillSpendScriptHashesConn :: Conn.Connection -> [RedeemerId] -> IO ()
+fillSpendScriptHashesConn conn ids = runStmt conn ids fillSpendScriptHashesStmt
 
 -- ---------------------------------------------------------------------------
 -- * Buffered flavour
@@ -117,3 +125,9 @@ resolveRedeemerDataBuf conn cache hash _row =
 
 assignRedeemerIdBuf :: PreAllocatedIds -> IO RedeemerId
 assignRedeemerIdBuf preAlloc = popHead "assignRedeemerId" (paiRedeemerIds preAlloc)
+
+-- | Queued last in the block's pipeline, so it sees the @tx_in@,
+-- @tx_out@ and @address@ INSERTs of a same-block script spend.
+fillSpendScriptHashesBuf :: WriteBuffer -> [RedeemerId] -> IO ()
+fillSpendScriptHashesBuf buf ids =
+  append buf (Pipeline.statement ids fillSpendScriptHashesStmt)

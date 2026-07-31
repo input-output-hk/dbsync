@@ -99,6 +99,7 @@ library
     DbSync.Db.Statement.Worker.EpochParamPending
     DbSync.Db.Statement.Worker.OffChainPool
     DbSync.Db.Statement.Worker.OffChainVote
+    DbSync.Db.Statement.Worker.RedeemerScriptHash
     DbSync.Db.Statement.Worker.Resolve
     DbSync.Db.Statement.Worker.Resume
     DbSync.Db.Statement.Worker.Rollback

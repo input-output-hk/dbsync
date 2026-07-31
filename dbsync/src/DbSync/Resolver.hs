@@ -181,6 +181,15 @@ data IdResolver m = IdResolver
     -- | Assign the next redeemer ID.
   , assignRedeemerId :: !(m RedeemerId)
 
+    -- | Fill @redeemer.script_hash@ for the spend redeemers among the
+    -- given ids, reading the payment credential off the spent output's
+    -- address. Called once per block after every extractor has run, so
+    -- the @tx_in@ and @redeemer@ rows it joins are already queued.
+    -- No-op in Ingest: @tx_in.tx_out_id@ is unresolved there and
+    -- 'DbSync.Phase.Preparing.Backfill' covers the whole range in one
+    -- pass instead.
+  , fillSpendScriptHashes :: !([RedeemerId] -> m ())
+
     -- ---------------------------------------------------------------
     -- Governance extractor IDs
     -- ---------------------------------------------------------------

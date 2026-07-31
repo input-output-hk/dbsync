@@ -11,7 +11,7 @@ import Cardano.Prelude
 
 import Cardano.Slotting.Block (BlockNo (..))
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
-import Data.IORef (newIORef, readIORef)
+import Data.IORef (modifyIORef', newIORef, readIORef)
 
 import qualified Data.ByteString as BS
 
@@ -35,6 +35,7 @@ import DbSync.Parser.Types
   , GenericTxWithdrawal (..)
   )
 import qualified DbSync.Db.Schema.Governance as SG
+import DbSync.Db.Schema.Ids (RedeemerId (..))
 import qualified DbSync.Db.Schema.ScriptsDatums as SSD
 import qualified DbSync.Db.Schema.StakeDelegation as SSt
 import qualified DbSync.Db.Schema.UTxO as SU
@@ -54,6 +55,7 @@ import DbSync.Extractor.StakeDelegation (stakeDelegationExtractor)
 import DbSync.Extractor.UTxO (utxoExtractor)
 import DbSync.Phase.Ingest.Resolver (mkIngestResolver)
 import DbSync.Phase.Type (SyncPhase (..))
+import DbSync.Resolver (IdResolver (..))
 import DbSync.Test.Lsm (withTestIngestStores)
 import DbSync.Test.PipelineEnv (mkTestPipelineEnvOn, mkTestPipelineEnvWith)
 import DbSync.Test.Writer (TestWriterState (..), emptyTestWriterState, mkTestWriter)
@@ -192,6 +194,29 @@ spec = do
       length (twRedeemers written) `shouldBe` 0
       map SU.txInRedeemerId (twTxIns written) `shouldBe` [Nothing, Nothing]
 
+  describe "spend script-hash fill" $ do
+
+    it "hands the block's redeemer ids to the fill hook once" $ do
+      calls <- captureSpendFill fkExtractors fkTx
+      calls `shouldBe` [map RedeemerId [1, 2, 3]]
+
+    it "skips the fill when scripts_datums is disabled" $ do
+      -- No redeemer rows exist, and the table may not either.
+      calls <- captureSpendFill (without "scripts_datums" fkExtractors) fkTx
+      calls `shouldBe` []
+
+    it "skips the fill when utxo is disabled" $ do
+      -- The statement joins through tx_in, which utxo owns.
+      calls <- captureSpendFill (without "utxo" fkExtractors) fkTx
+      calls `shouldBe` []
+
+    it "skips the fill for a block with no redeemers" $ do
+      calls <- captureSpendFill fkExtractors baseTx
+      calls `shouldBe` []
+
+without :: Text -> [ExtractorDef] -> [ExtractorDef]
+without name = filter ((/= name) . pdName)
+
 allEqual :: Eq a => [a] -> Bool
 allEqual []     = True
 allEqual (x:xs) = all (== x) xs
@@ -215,6 +240,20 @@ runExtractors exs tx = withTestIngestStores $ \utxoStore dedupStores -> do
               exs
   runReaderT (processBlock (blockWith tx)) env
   readIORef wrRef
+
+-- | Run the extractors with 'fillSpendScriptHashes' stubbed out,
+-- returning one entry per call.
+captureSpendFill :: [ExtractorDef] -> GenericTx -> IO [[RedeemerId]]
+captureSpendFill exs tx = withTestIngestStores $ \utxoStore dedupStores -> do
+  stRef    <- newIORef freshExtractState
+  addrBuf  <- newAddressBufferRef
+  wrRef    <- newIORef emptyTestWriterState
+  callsRef <- newIORef []
+  let resolver = (mkIngestResolver stRef dedupStores addrBuf utxoStore Nothing)
+        { fillSpendScriptHashes = \ids -> modifyIORef' callsRef (<> [ids]) }
+      env = mkTestPipelineEnvOn Mainnet resolver (mkTestWriter wrRef) exs
+  runReaderT (processBlock (blockWith tx)) env
+  readIORef callsRef
 
 -- | Like 'runOne' but with a caller-supplied 'BlockLedgerData'.
 runOneWith :: BlockLedgerData -> GenericTx -> IO TestWriterState

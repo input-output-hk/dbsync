@@ -5,6 +5,7 @@
 -- 'DbSync.Db.Statement.Worker.EpochParamPending'.
 module DbSync.Phase.Preparing.Backfill
   ( backfillTxColumns
+  , backfillSpendScriptHash
   , applyDepositPending
   , truncateDepositPending
   , backfillEpochFinalized
@@ -24,6 +25,7 @@ import DbSync.Db.Statement.Worker.Backfill
   , backfillValidContractDepositStmt
   )
 import DbSync.Db.Statement.EpochView (backfillEpochFinalizedStmt)
+import DbSync.Db.Statement.Worker.RedeemerScriptHash (backfillSpendScriptHashStmt)
 import DbSync.Db.Statement.Worker.EpochParamPending
   ( applyPoolUpdateDepositStmt
   , applyStakeRegistrationDepositStmt
@@ -50,6 +52,17 @@ backfillTxColumns = do
   n4 <- stepRows BackfillStep "tx.deposit (valid-contract txs)" $
           runRowsAffected backfillValidContractDepositStmt
   pure (n1 + n2 + n3 + n4)
+
+-- | Fill @redeemer.script_hash@ for spend redeemers from the payment
+-- credential of the output each one unlocks. Must run after
+-- 'DbSync.Phase.Preparing.Resolve.resolveForeignKeys' so
+-- @tx_in.tx_out_id@ identifies the spent output.
+backfillSpendScriptHash
+  :: (HasTracer env, HasHasqlConnection env, MonadReader env m, MonadUnliftIO m)
+  => m Int64
+backfillSpendScriptHash =
+  stepRows BackfillStep "redeemer.script_hash (spend redeemers)" $
+    runRowsAffected backfillSpendScriptHashStmt
 
 -- | Fill the two ledger-derived deposit columns from
 -- @epoch_param_pending@. Both UPDATEs filter on @deposit IS NULL@

@@ -26,6 +26,7 @@ import DbSync.Extractor
   , HasLedgerData (..)
   , TxContext (..)
   , scriptsDatumsEnabled
+  , utxoEnabled
   )
 import DbSync.Extractor.Core (mkSlotLeader)
 import DbSync.Extractor.SharedDedup (resolveStakeCred)
@@ -127,6 +128,14 @@ processBlock block = do
         }
 
   forM_ extractors $ \ext -> pdProcess ext ctx
+
+  -- A spend redeemer's script hash is the payment credential of the
+  -- output it unlocks, so the parser leaves it empty. Filling it needs
+  -- both the @redeemer@ rows and the @tx_in@ rows pointing at them,
+  -- hence the position after every extractor has run.
+  let blockRedeemerIds = concatMap tcRedeemerIds txCtxs
+  when (redeemersOn && utxoEnabled extractors && not (null blockRedeemerIds)) $
+    liftIO $ fillSpendScriptHashes resolver blockRedeemerIds
 
 -- | Resolve the slot leader's pool hash for Shelley+ blocks.
 --

@@ -10,6 +10,7 @@ module DbSync.Extractor
   , ProcessBlockFn
   , cborCaptureEnabled
   , scriptsDatumsEnabled
+  , utxoEnabled
 
     -- * Block context (pre-assigned shared IDs)
   , BlockContext (..)
@@ -104,6 +105,11 @@ cborCaptureEnabled = any ((== "cbor") . pdName)
 -- (the table's sequence may not even exist), so no ids may be drawn.
 scriptsDatumsEnabled :: [ExtractorDef] -> Bool
 scriptsDatumsEnabled = any ((== "scripts_datums") . pdName)
+
+-- | Whether the @utxo@ extractor is active, and with it the @tx_in@
+-- table that carries the redeemer back-references.
+utxoEnabled :: [ExtractorDef] -> Bool
+utxoEnabled = any ((== "utxo") . pdName)
 
 -- | Process a single block through this extractor.
 --

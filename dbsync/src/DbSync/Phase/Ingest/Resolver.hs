@@ -105,6 +105,7 @@ mkIngestResolver extractStateRef dedupStores addrBufRef utxoStore mConsumedByBuf
   , resolveScript           = ScriptsDatums.resolveScriptIngest           dedupStores
   , resolveRedeemerData     = ScriptsDatums.resolveRedeemerDataIngest     dedupStores
   , assignRedeemerId        = ScriptsDatums.assignRedeemerIdIngest        extractStateRef
+  , fillSpendScriptHashes   = ScriptsDatums.fillSpendScriptHashesIngest
 
     -- Governance
   , resolveDrepHash             = Governance.resolveDrepHashIngest             dedupStores

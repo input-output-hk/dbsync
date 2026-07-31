@@ -165,6 +165,11 @@ spec = describe "Follow scripts/datums writes" $ do
             )
           nullFees `shouldBe` "0"
 
+          -- A spend redeemer's hash is the payment credential of the
+          -- output it unlocks, reached through tx_in.redeemer_id.
+          spendHash <- latestSpendScriptHash
+          spendHash `shouldBe` scriptHashHex Scripts.alwaysSucceedsScriptHash
+
   it "lands one redeemer when lock and unlock share a block" $
     withScriptsDatumsSession "dbsync-test-scripts-same-block" $ \mn -> do
       baselineBlocks    <- countRows (tdName blockTableDef)
@@ -188,6 +193,12 @@ spec = describe "Follow scripts/datums writes" $ do
       followDatums    <- countRows (tdName datumTableDef)
       (followRedeemers - baselineRedeemers) `shouldBe` 1
       (followDatums    - baselineDatums)    `shouldBe` 1
+
+      -- The spent output's tx_out and address rows are still buffered
+      -- when the redeemer lands, so the hash fill has to run last in
+      -- the block's pipeline to see them.
+      spendHash <- latestSpendScriptHash
+      spendHash `shouldBe` scriptHashHex Scripts.alwaysSucceedsScriptHash
 
   it "records a phase-2 failure with valid_contract=false, folding the collateral return into tx_out" $
     withScriptsDatumsSession "dbsync-test-scripts-failed" $ \mn -> do
@@ -382,6 +393,34 @@ spec = describe "Follow scripts/datums writes" $ do
       (followRefTxIn   - baselineRefTxIn)   `shouldBe` 1
       (followRedeemers - baselineRedeemers) `shouldBe` 1
 
+  it "backfills the spend redeemer's script hash over the ingested range" $
+    withMockNode conwayConfigDir $ \mn ->
+      withTempDir "dbsync-test-scripts-prep-backfill" $ \ledgerDir -> do
+        tracer <- quietTracer
+
+        -- Lock and unlock before the app starts, so both blocks arrive
+        -- in Ingest: the hash is filled by Prep's one-shot backfill
+        -- rather than the per-block Follow statement.
+        lockTxs <- buildLockTxs mn
+        _ <- forgeAndPush mn lockTxs
+        unlockTxs <- buildUnlockTxs mn
+        _ <- forgeAndPush mn unlockTxs
+        _ <- forgeAndPushBlocks mn 250
+
+        withAppSession tracer scriptsDatumsTestProfile mn ledgerDir $ \_ -> do
+          waitForSyncComplete 120
+
+          spendHash <- latestSpendScriptHash
+          spendHash `shouldBe` scriptHashHex Scripts.alwaysSucceedsScriptHash
+
+          -- Ingest resolves no spend hash at COPY time, so a row left
+          -- behind here means the backfill missed it.
+          unfilled <- T.strip <$> queryTestDb
+            ( "SELECT COUNT(*)::text FROM " <> tdName redeemerTableDef
+                <> " WHERE purpose = 'spend' AND script_hash IS NULL"
+            )
+          unfilled `shouldBe` "0"
+
   it "leaves tx_in.redeemer_id NULL and draws no redeemer ids when scripts_datums is disabled" $
     withMockNode conwayConfigDir $ \mn ->
       withTempDir "dbsync-test-scripts-disabled" $ \ledgerDir -> do
@@ -494,6 +533,17 @@ withScriptsDatumsSession tag body =
       withAppSession tracer scriptsDatumsTestProfile mn ledgerDir $ \_ -> do
         waitForSyncComplete 120
         body mn
+
+-- | Hex of the most recently written spend redeemer's script hash.
+latestSpendScriptHash :: IO Text
+latestSpendScriptHash =
+  T.strip <$> queryTestDb
+    ( "SELECT encode(script_hash, 'hex') FROM " <> tdName redeemerTableDef
+        <> " WHERE purpose = 'spend' ORDER BY id DESC LIMIT 1"
+    )
+
+scriptHashHex :: Core.ScriptHash -> Text
+scriptHashHex = decodeLatin1 . Base16.encode . scriptHashBytes
 
 -- | Count @tx_out@ rows whose given nullable FK column is populated.
 txOutNonNullCount :: Text -> IO Int

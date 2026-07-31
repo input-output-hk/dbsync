@@ -233,6 +233,10 @@ data GenericTxDatum = GenericTxDatum
 -- @redeemer@ rows to it. 'gtrDataBytes' and 'gtrDataValue' are lazy
 -- for the same reason as their 'GenericTxDatum' counterparts: a
 -- @redeemer_data@ hash hit drops the row without forcing them.
+--
+-- 'gtrScriptHash' stays 'Nothing' for a spend redeemer: its script is
+-- the payment credential of the output being unlocked, which this
+-- transaction does not carry.
 data GenericTxRedeemer = GenericTxRedeemer
   { gtrUnitMem    :: !Word64
   , gtrUnitSteps  :: !Word64

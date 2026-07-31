@@ -102,9 +102,9 @@ epoch). Requires `ledger.enabled = true`.
 
 Plutus and native-script witness data. Adds `script`, `datum`,
 `redeemer`, `redeemer_data`, and `extra_key_witness`; the `script`,
-`datum`, and `redeemer_data` rows are deduped on their hash. The
-`redeemer.fee` and `redeemer.script_hash` columns are declared but not
-yet populated. No dependencies beyond `core`.
+`datum`, and `redeemer_data` rows are deduped on their hash.
+`redeemer.fee` needs `ledger.enabled = true` — the fee is priced from
+the block's protocol parameters. No dependencies beyond `core`.
 
 ### `governance`
 

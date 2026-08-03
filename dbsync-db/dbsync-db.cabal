@@ -74,6 +74,7 @@ library
     DbSync.Db.Sql.Refs
     DbSync.Db.Statement.CBOR
     DbSync.Db.Statement.Common
+    DbSync.Db.Statement.Constraints
     DbSync.Db.Statement.Core
     DbSync.Db.Statement.EpochBoundary
     DbSync.Db.Statement.EpochSyncStats

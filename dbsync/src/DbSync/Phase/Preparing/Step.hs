@@ -49,6 +49,7 @@ data StepKind
   | BackfillStep  -- ^ Backfill UPDATEs / INSERT…SELECT fills.
   | CleanupStep   -- ^ Post-backfill truncates.
   | FlipStep      -- ^ @ALTER TABLE … SET LOGGED@ heap rewrites.
+  | ConstraintStep -- ^ @ADD@ / @VALIDATE CONSTRAINT@ for ownership edges.
   | SequenceStep  -- ^ Sequence attach / reset.
 
 kindLabel :: StepKind -> Text
@@ -61,6 +62,7 @@ kindLabel k = Text.justifyLeft 8 ' ' $ case k of
   BackfillStep -> "backfill"
   CleanupStep  -> "cleanup"
   FlipStep     -> "flip"
+  ConstraintStep -> "fkey"
   SequenceStep -> "sequence"
 
 -- | Run an action bracketed by @Starting@ / @Completed@ lines; a

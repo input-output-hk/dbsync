@@ -120,6 +120,7 @@ test-suite dbsync-test
     DbSync.App.Config.GenesisSpec
     DbSync.Db.Statement.BackfillSpec
     DbSync.Db.Statement.BlockSpec
+    DbSync.Db.Statement.ConstraintsSpec
     DbSync.Db.Statement.IndexesSpec
     DbSync.Db.Statement.RoundTripSpec
     DbSync.Db.Statement.SlotLeaderSpec
@@ -144,8 +145,8 @@ test-suite dbsync-test
     DbSync.Schema.Migration.RenderSpec
     DbSync.Schema.Migration.RunnerSpec
     DbSync.Schema.OffChainPoolSpec
-    DbSync.Schema.OffChainVoteSpec
     DbSync.Schema.ParentRefsSpec
+    DbSync.Schema.OffChainVoteSpec
     DbSync.Schema.RewardSpec
     DbSync.Schema.ScriptsDatumsSpec
     DbSync.Schema.SyncStateSpec

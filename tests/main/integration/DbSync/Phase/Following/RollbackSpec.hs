@@ -113,7 +113,8 @@ import DbSync.App (cardanoSecurityParam)
 import DbSync.App.Boot (mkCardanoPoint)
 import DbSync.Phase.Following.Resolver (ConsumedTracking (..), mkFollowResolver)
 import DbSync.Test.Database
-  ( queryTestDb
+  ( addFollowTipConstraints
+  , queryTestDb
   , setupFollowTipSchema
   , teardownSchema
   , truncateAllTables
@@ -251,7 +252,7 @@ schemaWalkSpec = describe "Rollback.childrenOf" $ do
 
 cascadeSpec :: Spec
 cascadeSpec = describe "Rollback.rollbackToPoint" $
-  beforeAll_ (setupFollowTipSchema tables) $
+  beforeAll_ (setupFollowTipSchema tables >> addFollowTipConstraints tables) $
   afterAll_  (teardownSchema tables) $
   before_    (truncateAllTables tableNames) $ do
 
@@ -324,7 +325,7 @@ cascadeSpec = describe "Rollback.rollbackToPoint" $
 
 kSafetyGuardSpec :: Spec
 kSafetyGuardSpec = describe "Rollback.rollbackToPoint k-safety guard" $
-  beforeAll_ (setupFollowTipSchema tables) $
+  beforeAll_ (setupFollowTipSchema tables >> addFollowTipConstraints tables) $
   afterAll_  (teardownSchema tables) $
   before_    (truncateAllTables tableNames) $ do
 
@@ -354,7 +355,7 @@ kSafetyGuardSpec = describe "Rollback.rollbackToPoint k-safety guard" $
 
 rollbackToSlotSpec :: Spec
 rollbackToSlotSpec = describe "Rollback.rollbackToSlot" $
-  beforeAll_ (setupFollowTipSchema tables) $
+  beforeAll_ (setupFollowTipSchema tables >> addFollowTipConstraints tables) $
   afterAll_  (teardownSchema tables) $
   before_    (truncateAllTables tableNames) $ do
 
@@ -421,7 +422,7 @@ expectedSurvivors anchor = case anchor of
 
 epochKeyedSpec :: Spec
 epochKeyedSpec = describe "Rollback.rollbackToPoint epoch-keyed cleanup" $
-  beforeAll_ (setupFollowTipSchema tablesWithEpoch) $
+  beforeAll_ (setupFollowTipSchema tablesWithEpoch >> addFollowTipConstraints tablesWithEpoch) $
   afterAll_  (teardownSchema tablesWithEpoch) $
   before_    (truncateAllTables (map tdName tablesWithEpoch)) $
 
@@ -461,6 +462,10 @@ seedEpochRow c epoch = do
       value cd
         | cdName cd == epochCol  = show epochVal
         | cdName cd == "id"      = show epoch
+        -- epoch_param and ada_pots own a real block. The oldest
+        -- fixture block is at or below the rollback target, so the
+        -- block-keyed pass leaves these rows to their epoch anchor.
+        | cdName cd == "block_id" = "(SELECT MIN(id) FROM " <> tdName blockTableDef <> ")"
         | otherwise              = dummySqlValue (cdType cd)
   void $ queryTestDb $
     "INSERT INTO " <> tdName td
@@ -495,7 +500,7 @@ survivingEpochs c = do
 
 consumedByNullOutSpec :: Spec
 consumedByNullOutSpec = describe "Rollback.rollbackToPoint consumed_by cleanup" $
-  beforeAll_ (setupFollowTipSchema tables) $
+  beforeAll_ (setupFollowTipSchema tables >> addFollowTipConstraints tables) $
   afterAll_  (teardownSchema tables) $
   before_    (truncateAllTables tableNames) $
 

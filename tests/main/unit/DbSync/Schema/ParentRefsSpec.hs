@@ -25,9 +25,10 @@ spec = describe "Ownership edges are declared" $
 -- points at.
 ownerColumns :: [(Text, Text)]
 ownerColumns =
-  [ ("block_id",  "block")
-  , ("tx_id",     "tx")
-  , ("tx_out_id", "tx_out")
+  [ ("block_id",               "block")
+  , ("tx_id",                  "tx")
+  , ("tx_out_id",              "tx_out")
+  , ("gov_action_proposal_id", "gov_action_proposal")
   ]
 
 -- | @(table, column)@ pairs whose column matches 'ownerColumns' by
@@ -37,9 +38,12 @@ exempt =
   -- These point backwards at the output being consumed, which belongs
   -- to an earlier tx. Their owner is the consuming tx, reached through
   -- tx_in_id.
-  [ ("tx_in",            "tx_out_id")
+  [ ("tx_in",             "tx_out_id")
   , ("collateral_tx_in",  "tx_out_id")
   , ("reference_tx_in",   "tx_out_id")
+    -- A vote references the proposal it is cast on; the vote itself
+    -- belongs to the tx that carried it.
+  , ("voting_procedure",  "gov_action_proposal_id")
   ]
 
 undeclaredOwners :: TableDef -> [Text]

@@ -23,6 +23,10 @@ module DbSync.Db.Statement.Worker.Rollback
   , deleteWhereGtStmt
   , deleteBlockAfterIdStmt
   , nullConsumedByFromTxStmt
+
+    -- * Governance-proposal cascade
+  , deleteByProposalTxStmt
+  , deleteCommitteeMembersByProposalTxStmt
   ) where
 
 import Cardano.Prelude
@@ -35,6 +39,11 @@ import qualified Hasql.Statement as Stmt
 
 import qualified DbSync.Db.Schema.Core as Core
 import DbSync.Db.Schema.Core (BlockCols (..), TxCols (..))
+import qualified DbSync.Db.Schema.Governance as Gov
+import DbSync.Db.Schema.Governance
+  ( CommitteeMemberCols (..)
+  , GovActionProposalCols (..)
+  )
 import DbSync.Db.Schema.Ids
   ( BlockId (..)
   , PoolUpdateId (..)
@@ -50,7 +59,7 @@ import DbSync.Db.Schema.Types (TableColumn (..), TableDef (..))
 import qualified DbSync.Db.Schema.UTxO as UTxO
 import DbSync.Db.Schema.UTxO (TxOutCols (..))
 import DbSync.Db.Sql (quoteIdent)
-import DbSync.Db.Sql.Refs (col, table)
+import DbSync.Db.Sql.Refs (col, qcol, table)
 
 -- ---------------------------------------------------------------------------
 -- * Resolving the rollback point
@@ -221,4 +230,46 @@ nullConsumedByFromTxStmt =
       [ "UPDATE ", table UTxO.txOutTableDef
       , " SET ", col UTxO.txOutCols.tocConsumedByTxId, " = NULL"
       , " WHERE ", col UTxO.txOutCols.tocConsumedByTxId, " >= $1"
+      ]
+
+-- ---------------------------------------------------------------------------
+-- * Governance-proposal cascade
+-- ---------------------------------------------------------------------------
+
+-- | Delete rows owned by a proposal whose tx is being rolled back.
+-- The join is what carries the ownership: a NULL
+-- @gov_action_proposal_id@ never matches it, which is how the
+-- genesis-seeded @committee@ / @constitution@ rows survive.
+deleteByProposalTxStmt :: Text -> Text -> Stmt.Statement TxId Int64
+deleteByProposalTxStmt tableName columnName =
+  Stmt.unpreparable sql (idEncoder getTxId) D.rowsAffected
+  where
+    child = quoteIdent tableName
+    gap   = table Gov.govActionProposalTableDef
+    sql = T.concat
+      [ "DELETE FROM ", child
+      , " USING ", gap
+      , " WHERE ", child, ".", quoteIdent columnName
+      , " = ", qcol gap Gov.govActionProposalCols.gapcId
+      , " AND ", qcol gap Gov.govActionProposalCols.gapcTxId, " >= $1"
+      ]
+
+-- | One hop deeper than 'deleteByProposalTxStmt': @committee_member@
+-- reaches the proposal through its @committee@, so it has to go before
+-- the committee rows do.
+deleteCommitteeMembersByProposalTxStmt :: Stmt.Statement TxId Int64
+deleteCommitteeMembersByProposalTxStmt =
+  Stmt.unpreparable sql (idEncoder getTxId) D.rowsAffected
+  where
+    member = table Gov.committeeMemberTableDef
+    cmte   = table Gov.committeeTableDef
+    gap    = table Gov.govActionProposalTableDef
+    sql = T.concat
+      [ "DELETE FROM ", member
+      , " USING ", cmte, ", ", gap
+      , " WHERE ", qcol member Gov.committeeMemberCols.cmemcCommitteeId
+      , " = ", qcol cmte Gov.committeeCols.cmtcId
+      , " AND ", qcol cmte Gov.committeeCols.cmtcGovActionProposalId
+      , " = ", qcol gap Gov.govActionProposalCols.gapcId
+      , " AND ", qcol gap Gov.govActionProposalCols.gapcTxId, " >= $1"
       ]

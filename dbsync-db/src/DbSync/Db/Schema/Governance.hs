@@ -609,7 +609,11 @@ constitutionTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdParentRefs = []
+    -- NULL on the genesis-seeded row, which belongs to no proposal and
+    -- so outlives every rollback.
+  , tdParentRefs =
+      [ ParentRef "gov_action_proposal_id" "gov_action_proposal" "id"
+      ]
   }
 
 committeeTableDef :: TableDef
@@ -628,7 +632,11 @@ committeeTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdParentRefs = []
+    -- NULL on the genesis-seeded row, which belongs to no proposal and
+    -- so outlives every rollback.
+  , tdParentRefs =
+      [ ParentRef "gov_action_proposal_id" "gov_action_proposal" "id"
+      ]
   }
 
 committeeHashTableDef :: TableDef
@@ -804,7 +812,9 @@ treasuryWithdrawalTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdParentRefs = []
+  , tdParentRefs =
+      [ ParentRef "gov_action_proposal_id" "gov_action_proposal" "id"
+      ]
   }
 
 eventInfoTableDef :: TableDef

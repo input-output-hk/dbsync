@@ -47,6 +47,7 @@ import Cardano.Slotting.Slot (SlotNo (..))
 
 import DbSync.Parser.Types (CardanoPoint)
 import qualified DbSync.Db.Schema.Core as Core
+import qualified DbSync.Db.Schema.Governance as Gov
 import DbSync.Db.Schema.Ids (getBlockId, getPoolUpdateId, getTxId, getTxOutId)
 import qualified DbSync.Db.Schema.Pool as Pool
 import DbSync.Db.Schema.Types (TableColumn (..), TableDef (..), childrenOf)
@@ -54,6 +55,8 @@ import qualified DbSync.Db.Schema.UTxO as UTxO
 import DbSync.Db.Statement.Worker.EpochAnchor (deleteEpochRowsStmt, epochKeyedColumns)
 import DbSync.Db.Statement.Worker.Rollback
   ( deleteBlockAfterIdStmt
+  , deleteByProposalTxStmt
+  , deleteCommitteeMembersByProposalTxStmt
   , deleteWhereGtStmt
   , deleteWhereGteStmt
   , nullConsumedByFromTxStmt
@@ -153,6 +156,7 @@ rollbackToPoint tableDefs point = case point of
     let txKeyed         = childrenOf tableDefs (tdName Core.txTableDef)
         txOutKeyed      = childrenOf tableDefs (tdName UTxO.txOutTableDef)
         poolUpdateKeyed = childrenOf tableDefs (tdName Pool.poolUpdateTableDef)
+        proposalKeyed   = childrenOf tableDefs (tdName Gov.govActionProposalTableDef)
         -- tx declares block_id too, but is deleted by id below.
         blockKeyed      = filter ((/= tdName Core.txTableDef) . fst)
                             (childrenOf tableDefs (tdName Core.blockTableDef))
@@ -176,6 +180,17 @@ rollbackToPoint tableDefs point = case point of
             (i, deleteWhereGteStmt tbl col)
         void $ runSess ("delete " <> poolTbl)
           (i, deleteWhereGteStmt poolTbl "id")
+
+      -- gov_action_proposal is tx-keyed too, so the rows it owns go
+      -- first. committee_member reaches the proposal through its
+      -- committee, so it precedes the one-hop tables.
+      for_ mMinTxId $ \minTxId -> do
+        when (hasTable Gov.committeeMemberTableDef) $
+          void $ runSess ("delete " <> tdName Gov.committeeMemberTableDef)
+            (minTxId, deleteCommitteeMembersByProposalTxStmt)
+        for_ proposalKeyed $ \(tbl, col) ->
+          void $ runSess ("delete " <> tbl)
+            (minTxId, deleteByProposalTxStmt tbl col)
 
       -- Tx-keyed cascade, including tx_out and pool_update themselves.
       for_ mMinTxId $ \minTxId -> do

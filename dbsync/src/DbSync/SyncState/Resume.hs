@@ -136,10 +136,12 @@ deleteRowsPastSlot mode tableDefs row =
                                      , Just (HasEpochAnchor c a) <- [csSlotBlock sh] ]
           byIdCounter = [ (td, ctr) | (td, sh) <- classified
                                     , Just ctr <- [csIdCounter sh] ]
-          -- No anchor pass reaches these; a counter-tracked parent is
-          -- their only route to the cutoff.
+          -- Neither an anchor pass nor a counter of their own reaches
+          -- these; a counter-tracked parent is their only route to the
+          -- cutoff.
           unanchored  = [ td        | (td, sh) <- classified
-                                    , Nothing <- [csSlotBlock sh] ]
+                                    , Nothing <- [csSlotBlock sh]
+                                    , Nothing <- [csIdCounter sh] ]
 
       emit tracer $ "starting (cutoff slot > " <> show slotNo <> ")"
       startWall <- liftIO getCurrentTime

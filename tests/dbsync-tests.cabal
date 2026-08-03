@@ -48,6 +48,7 @@ library dbsync-testlib
     DbSync.Test.Copy
     DbSync.Test.Database
     DbSync.Test.E2E
+    DbSync.Test.EpochRegression
     DbSync.Test.Fixtures
     DbSync.Test.Hasql
     DbSync.Test.Helpers

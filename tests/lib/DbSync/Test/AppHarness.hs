@@ -17,6 +17,7 @@ module DbSync.Test.AppHarness
 
     -- * Config introspection
   , configTableNames
+  , configTableDefs
   , configExpectedIndexes
 
     -- * AppArgs builders
@@ -157,8 +158,14 @@ configWithProfile opts = SyncConfig
 -- would refuse to run via 'runApp', so test calls that drove a real
 -- sync first don't hit this case.
 configTableNames :: SyncConfig -> [Text]
-configTableNames cfg = case buildExtractors (scDbProfile cfg) of
-  Right exts -> map tdName (concatMap pdTables exts)
+configTableNames = map tdName . configTableDefs
+
+-- | The 'TableDef's behind 'configTableNames'. Tests that need to drop
+-- or re-create the schema for a profile need the definitions, not just
+-- the names.
+configTableDefs :: SyncConfig -> [TableDef]
+configTableDefs cfg = case buildExtractors (scDbProfile cfg) of
+  Right exts -> concatMap pdTables exts
   Left _err  -> []
 
 -- | Names of every index that 'PreparingForVolatileTail' should have

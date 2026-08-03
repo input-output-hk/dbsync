@@ -10,7 +10,7 @@ import Test.Hspec (Spec, describe, it, shouldBe)
 import DbSync.Db.Schema.Migration.Diff (SchemaChange (..), schemaDiff)
 import DbSync.Db.Schema.Types
   ( ColumnDef (..)
-  , ForeignKey (..)
+  , ParentRef (..)
   , PgType (..)
   , TableDef (..)
   , TableMode (..)
@@ -86,12 +86,12 @@ spec = describe "schemaDiff" $ do
     schemaDiff [table "t" [idCol]] [new]
       `shouldBe` [AddUniqueConstraint "t" ("a" :| ["b"])]
 
-  it "reports a new foreign key as AddForeignKey" $ do
+  it "reports a new parent ref as AddForeignKey" $ do
     let cols = [idCol, ColumnDef "block_id" PgBigInt False]
-        fk = ForeignKey "block_id" "block" "id"
-        new = (table "t" cols) { tdForeignKeys = [fk] }
+        pr = ParentRef "block_id" "block" "id"
+        new = (table "t" cols) { tdParentRefs = [pr] }
     schemaDiff [table "t" cols] [new]
-      `shouldBe` [AddForeignKey "t" fk]
+      `shouldBe` [AddForeignKey "t" pr]
 
   it "ignores LOGGED/UNLOGGED mode differences" $
     schemaDiff [table "t" [idCol]] [(table "t" [idCol]) { tdMode = TableLogged }]
@@ -112,7 +112,7 @@ table name cols = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns  = []
   , tdIdentityColumns   = []
-  , tdForeignKeys       = []
+  , tdParentRefs        = []
   }
 
 tableFoo, tableBar :: TableDef

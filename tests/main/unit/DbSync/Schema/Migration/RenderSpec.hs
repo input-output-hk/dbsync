@@ -13,7 +13,7 @@ import DbSync.Db.Schema.Migration.Diff (SchemaChange (..))
 import DbSync.Db.Schema.Migration.Render (renderChange)
 import DbSync.Db.Schema.Types
   ( ColumnDef (..)
-  , ForeignKey (..)
+  , ParentRef (..)
   , PgType (..)
   , TableDef (..)
   , TableMode (..)
@@ -52,7 +52,7 @@ spec = describe "renderChange" $ do
       `shouldBe` "ALTER TABLE \"t\" ADD UNIQUE (\"a\", \"b\");"
 
   it "renders AddForeignKey" $
-    renderChange (AddForeignKey "t" (ForeignKey "block_id" "block" "id"))
+    renderChange (AddForeignKey "t" (ParentRef "block_id" "block" "id"))
       `shouldBe`
         "ALTER TABLE \"t\" ADD FOREIGN KEY (\"block_id\") REFERENCES \"block\" (\"id\");"
 
@@ -75,5 +75,5 @@ simpleTable = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns  = []
   , tdIdentityColumns   = []
-  , tdForeignKeys       = []
+  , tdParentRefs        = []
   }

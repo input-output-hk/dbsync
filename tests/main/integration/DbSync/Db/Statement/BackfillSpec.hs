@@ -199,7 +199,7 @@ setUp = do
   withTestConnection $ \conn -> do
     let prepEnv = TracerWithConn mkNullTracer conn defaultTestConfig
     runAppM prepEnv PreResolveIndexes.createPreResolveIndexes
-    runAppM prepEnv Resolve.resolveForeignKeys
+    runAppM prepEnv Resolve.resolveInputTxOutIds
     runAppM prepEnv PreResolveIndexes.createPostResolveIndexes
 
   -- Run ANALYZE the same way 'Phase.Preparing.Run.run'

@@ -6,7 +6,7 @@ module DbSync.Compare.FkGraph
 
 import Cardano.Prelude
 import Data.List (lookup)
-import DbSync.Db.Schema.Types (ColumnDef (..), ForeignKey (..), TableDef (..))
+import DbSync.Db.Schema.Types (ColumnDef (..), ParentRef (..), TableDef (..))
 import DbSync.Extractor.Registry (allDeclaredTables)
 
 -- ---------------------------------------------------------------------------
@@ -116,9 +116,9 @@ edgesOf name = realEdges <> syntheticEdges
   where
     cols = columnsOf name
     realEdges =
-      [ (fkColumn fk, fkParentTable fk)
+      [ (prColumn fk, prParentTable fk)
       | Just td <- [lookup name tableDefs]
-      , fk <- tdForeignKeys td
+      , fk <- tdParentRefs td
       ]
     realCols = map fst realEdges
     syntheticEdges =

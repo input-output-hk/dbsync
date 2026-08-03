@@ -9,10 +9,13 @@ module DbSync.Db.Schema.Types
   ( -- * Types
     TableDef (..)
   , ColumnDef (..)
-  , ForeignKey (..)
+  , ParentRef (..)
   , PgType (..)
   , TableMode (..)
   , TableColumn (..)
+
+    -- * Ownership-graph queries
+  , childrenOf
   ) where
 
 import Cardano.Prelude
@@ -55,19 +58,22 @@ data ColumnDef = ColumnDef
   }
   deriving stock (Eq, Show)
 
--- | An outgoing foreign-key reference from one table to another.
+-- | An ownership edge: rows of this table belong to a row of
+-- 'prParentTable' and must die with it. Drives the resume trim, the
+-- rollback cascade, and the @FOREIGN KEY@ constraints created in
+-- 'PreparingForVolatileTail'.
 --
--- Declared per 'TableDef' so the rollback cascade can derive its
--- per-FK-family delete lists from the schema rather than maintaining
--- parallel hand-coded tables. No PG-level @REFERENCES@ constraint is
--- emitted from this — it's purely metadata for code that walks the
--- schema. Column names stay strings; that mirrors 'ColumnDef' and
--- avoids dragging in a typed-column abstraction we don't have
--- anywhere else.
-data ForeignKey = ForeignKey
-  { fkColumn       :: !Text  -- ^ This table's FK column.
-  , fkParentTable  :: !Text  -- ^ Parent table's name.
-  , fkParentColumn :: !Text  -- ^ Parent table's column (usually @"id"@).
+-- Only ownership is declared. A reference to a deduplicated row —
+-- @tx_out.inline_datum_id@, @tx_in.redeemer_id@, @ma_tx_out.ident@ — is
+-- shared between transactions rather than owned by one, so it is
+-- deliberately neither cascaded nor constrained.
+--
+-- Column names stay strings; that mirrors 'ColumnDef' and avoids
+-- dragging in a typed-column abstraction we don't have anywhere else.
+data ParentRef = ParentRef
+  { prColumn       :: !Text  -- ^ This table's referencing column.
+  , prParentTable  :: !Text
+  , prParentColumn :: !Text  -- ^ Parent table's column (usually @"id"@).
   }
   deriving stock (Eq, Show)
 
@@ -124,11 +130,10 @@ data TableDef = TableDef
       -- the resolver just to satisfy NOT NULL. Listed columns are
       -- excluded from the COPY column list the same way generated
       -- columns are.
-  , tdForeignKeys       :: ![ForeignKey]
-      -- ^ Outgoing FK references. Consumed by the
-      -- 'FollowingChainTip' rollback cascade to compute per-FK-family
-      -- delete lists. Empty for tables with no incoming references to
-      -- the rollback's parent tables (block, tx, tx_out, pool_update).
+  , tdParentRefs        :: ![ParentRef]
+      -- ^ Rows this table's rows belong to. Drives both the resume
+      -- trim and the rollback cascade; empty only when no column
+      -- points at @block@, @tx@, @tx_out@ or @pool_update@.
   }
   deriving stock (Eq, Show)
 
@@ -142,3 +147,17 @@ data TableColumn = TableColumn
   , tcName  :: !Text
   }
   deriving stock (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- * Ownership-graph queries
+-- ---------------------------------------------------------------------------
+
+-- | Tables declaring an ownership edge to @parentTable@, each paired
+-- with its referencing column.
+childrenOf :: [TableDef] -> Text -> [(Text, Text)]
+childrenOf tables parentTable =
+  [ (tdName td, prColumn pr)
+  | td <- tables
+  , pr <- tdParentRefs td
+  , prParentTable pr == parentTable
+  ]

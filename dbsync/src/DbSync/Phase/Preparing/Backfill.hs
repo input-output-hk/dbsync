@@ -36,7 +36,7 @@ import DbSync.Phase.Preparing.Step (StepKind (..), step, stepRows)
 import DbSync.Trace (HasTracer (..))
 
 -- | Execute the four backfill UPDATEs. Must run after
--- 'DbSync.Phase.Preparing.Resolve.resolveForeignKeys' so
+-- 'DbSync.Phase.Preparing.Resolve.resolveInputTxOutIds' so
 -- that @tx_in.tx_out_id@ / @collateral_tx_in.tx_out_id@ are
 -- populated.
 backfillTxColumns
@@ -55,7 +55,7 @@ backfillTxColumns = do
 
 -- | Fill @redeemer.script_hash@ for spend redeemers from the payment
 -- credential of the output each one unlocks. Must run after
--- 'DbSync.Phase.Preparing.Resolve.resolveForeignKeys' so
+-- 'DbSync.Phase.Preparing.Resolve.resolveInputTxOutIds' so
 -- @tx_in.tx_out_id@ identifies the spent output.
 backfillSpendScriptHash
   :: (HasTracer env, HasHasqlConnection env, MonadReader env m, MonadUnliftIO m)

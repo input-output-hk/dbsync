@@ -96,6 +96,7 @@ library
     DbSync.Db.Statement.UTxO
     DbSync.Db.Statement.Worker.Backfill
     DbSync.Db.Statement.Worker.ConsumedBy
+    DbSync.Db.Statement.Worker.EpochAnchor
     DbSync.Db.Statement.Worker.EpochParamPending
     DbSync.Db.Statement.Worker.OffChainPool
     DbSync.Db.Statement.Worker.OffChainVote

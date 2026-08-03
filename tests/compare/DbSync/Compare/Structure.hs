@@ -23,7 +23,7 @@ import qualified Data.Text as T
 import DbSync.Compare.Check (Check (..), CheckItem (..), CheckOutcome (..))
 import DbSync.Compare.Connect (DbConn, queryTextList)
 import DbSync.Compare.Schema (renamedNewName, renamedOldName)
-import DbSync.Db.Schema.Types (ForeignKey (..), TableDef (..))
+import DbSync.Db.Schema.Types (ParentRef (..), TableDef (..))
 import DbSync.Extractor.Registry (allDeclaredTables)
 
 -- ---------------------------------------------------------------------------
@@ -189,9 +189,9 @@ fetchFks conn = do
 declaredFks :: Set (Text, Text, Text)
 declaredFks =
   Set.fromList
-    [ (tdName td, fkColumn fk, fkParentTable fk)
+    [ (tdName td, prColumn fk, prParentTable fk)
     | td <- allDeclaredTables
-    , fk <- tdForeignKeys td
+    , fk <- tdParentRefs td
     ]
 
 -- Translate an old-side FK edge into new-schema naming.

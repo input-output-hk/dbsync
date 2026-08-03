@@ -84,8 +84,8 @@ txMetadataTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys =
-      [ ForeignKey "tx_id" "tx" "id"
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
       ]
   }
 

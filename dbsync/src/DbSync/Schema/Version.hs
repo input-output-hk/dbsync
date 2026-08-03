@@ -22,7 +22,7 @@ import qualified Data.Text.Encoding as TE
 
 import DbSync.Db.Schema.Types
   ( ColumnDef (..)
-  , ForeignKey (..)
+  , ParentRef (..)
   , PgType (..)
   , TableDef (..)
   , TableMode (..)
@@ -46,7 +46,7 @@ currentSchemaVersion = 1
 -- still in development may be refreshed.
 releasedSchemaFingerprints :: [(Int, Fingerprint)]
 releasedSchemaFingerprints =
-  [ (1, Fingerprint "18b096cb82678eaee550fa8a7e173ffcbe92345edc758773fc5ecd9cdac0ca99")
+  [ (1, Fingerprint "ef01635c138b43a873d9bbf8ee7f3973cd00118797b0d27647d600333be3f5c7")
   ]
 
 -- ---------------------------------------------------------------------------
@@ -78,7 +78,7 @@ renderTable td =
            , "uniques=" <> T.intercalate ";" (map (T.intercalate "," . NE.toList) (tdUniqueConstraints td))
            , "generated_columns=" <> renderPairs (tdGeneratedColumns td)
            , "identity_columns=" <> T.intercalate "," (tdIdentityColumns td)
-           , "foreign_keys=" <> T.intercalate ";" (map renderForeignKey (tdForeignKeys td))
+           , "parent_refs=" <> T.intercalate ";" (map renderParentRef (tdParentRefs td))
            ]
 
 renderColumn :: ColumnDef -> Text
@@ -109,6 +109,6 @@ renderMode = \case
 renderPairs :: [(Text, Text)] -> Text
 renderPairs = T.intercalate ";" . map (\(k, v) -> k <> "=" <> v)
 
-renderForeignKey :: ForeignKey -> Text
-renderForeignKey fk =
-  fkColumn fk <> "->" <> fkParentTable fk <> "." <> fkParentColumn fk
+renderParentRef :: ParentRef -> Text
+renderParentRef pr =
+  prColumn pr <> "->" <> prParentTable pr <> "." <> prParentColumn pr

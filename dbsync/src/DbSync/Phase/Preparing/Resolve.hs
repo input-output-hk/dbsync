@@ -1,9 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Run the post-load FK resolution against an open hasql connection.
+-- | Fill the input tables' @tx_out_id@ pointers after the bulk load.
 -- SQL lives in 'DbSync.Db.Statement.Worker.Resolve'.
 module DbSync.Phase.Preparing.Resolve
-  ( resolveForeignKeys
+  ( resolveInputTxOutIds
   ) where
 
 import Cardano.Prelude
@@ -31,18 +31,19 @@ import DbSync.Db.Transaction (HasHasqlConnection (..))
 import DbSync.Phase.Preparing.Step (StepKind (..), step, stepRows)
 import DbSync.Trace (HasTracer (..))
 
--- | Rebuild the three input tables with resolved @tx_out_id@, then
--- fill the consumed-by residual when 'uoConsumedByTxId' is on (the
--- per-epoch worker handles the bulk during Ingest; this catches
--- cache-misses).
+-- | Rebuild the three input tables with resolved @tx_out_id@ values,
+-- then fill the consumed-by residual when 'uoConsumedByTxId' is on
+-- (the per-epoch worker handles the bulk during Ingest; this catches
+-- cache-misses). This resolves column *values*; it creates no
+-- constraints.
 --
 -- The rebuilt tables are ANALYZEd before the residual UPDATE plans
 -- against them: a freshly created table has no statistics at all,
 -- and the UPDATE's join order degrades badly on default estimates.
-resolveForeignKeys
+resolveInputTxOutIds
   :: (HasTracer env, HasHasqlConnection env, HasConfig env, MonadReader env m, MonadUnliftIO m)
   => m ()
-resolveForeignKeys = do
+resolveInputTxOutIds = do
   utxoOpts <- asks (pcUtxo . scDbProfile . getConfig)
   step ResolveStep "tx_in.tx_out_id (table rebuild)" $
     runScript resolveTxInScript

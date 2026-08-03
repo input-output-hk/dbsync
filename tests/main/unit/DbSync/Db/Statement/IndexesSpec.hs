@@ -49,7 +49,7 @@ plainTable = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns  = []
   , tdIdentityColumns = []
-  , tdForeignKeys       = []
+  , tdParentRefs       = []
   }
 
 -- | Table with a primary key only.

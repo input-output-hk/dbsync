@@ -144,6 +144,7 @@ test-suite dbsync-test
     DbSync.Schema.Migration.RunnerSpec
     DbSync.Schema.OffChainPoolSpec
     DbSync.Schema.OffChainVoteSpec
+    DbSync.Schema.ParentRefsSpec
     DbSync.Schema.RewardSpec
     DbSync.Schema.ScriptsDatumsSpec
     DbSync.Schema.SyncStateSpec

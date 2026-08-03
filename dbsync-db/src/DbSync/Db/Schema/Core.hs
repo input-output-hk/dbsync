@@ -1,16 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 
--- | Schema types for the @core@ extractor, which owns seven tables:
+-- | Schema types for the @core@ extractor, which owns five tables:
 --
 --   * @block@, @tx@, @slot_leader@ — block extraction (always-on).
 --   * @stake_address@, @pool_hash@ — shared dedup tables, written
 --     unconditionally by the block pipeline so they exist regardless
 --     of which optional extractors are enabled.
---   * @meta@ — chain metadata (network name, version, start time),
---     written once at startup.
---   * @reverse_index@ — per-block min-FK watermarks, required by every
---     other extractor for rollback safety.
 module DbSync.Db.Schema.Core
   ( -- * Schema types
     Block (..)
@@ -18,8 +14,6 @@ module DbSync.Db.Schema.Core
   , SlotLeader (..)
   , StakeAddress (..)
   , PoolHash (..)
-  , Meta (..)
-  , ReverseIndex (..)
 
     -- * Table definitions (for DDL generation)
   , blockTableDef
@@ -27,8 +21,6 @@ module DbSync.Db.Schema.Core
   , slotLeaderTableDef
   , stakeAddressTableDef
   , poolHashTableDef
-  , metaTableDef
-  , reverseIndexTableDef
 
     -- * Column records (compile-time-safe column references)
   , BlockCols (..)
@@ -46,12 +38,6 @@ module DbSync.Db.Schema.Core
   , PoolHashCols (..)
   , poolHashCols
   , poolHashColsList
-  , MetaCols (..)
-  , metaCols
-  , metaColsList
-  , ReverseIndexCols (..)
-  , reverseIndexCols
-  , reverseIndexColsList
 
     -- * Per-module column-record registry
   , coreColumnRecords
@@ -62,8 +48,6 @@ module DbSync.Db.Schema.Core
   , encodeSlotLeaderCopy
   , encodeStakeAddressCopy
   , encodePoolHashCopy
-  , encodeMetaCopy
-  , encodeReverseIndexCopy
 
     -- * Hasql encoders \/ decoders
   , blockEncoder
@@ -81,12 +65,6 @@ module DbSync.Db.Schema.Core
   , poolHashEncoder
   , poolHashDecoder
   , entityPoolHashDecoder
-  , metaEncoder
-  , metaDecoder
-  , entityMetaDecoder
-  , reverseIndexEncoder
-  , reverseIndexDecoder
-  , entityReverseIndexDecoder
 
     -- * Internal encoding helpers (exported for testing)
   , encodeInt64
@@ -96,7 +74,7 @@ module DbSync.Db.Schema.Core
   , encodeUTCTime
   ) where
 
-import Cardano.Prelude hiding (Meta)
+import Cardano.Prelude
 
 import Data.Functor.Contravariant ((>$<))
 import Data.Time.Clock (UTCTime)
@@ -110,9 +88,7 @@ import qualified Hasql.Encoders as E
 import DbSync.Db.Schema.Entity (Key)
 import DbSync.Db.Schema.Ids
   ( BlockId (..)
-  , MetaId (..)
   , PoolHashId (..)
-  , ReverseIndexId (..)
   , SlotLeaderId (..)
   , StakeAddressId (..)
   , TxId (..)
@@ -123,7 +99,7 @@ import DbSync.Db.Schema.Ids
   )
 import DbSync.Db.Schema.Types
   ( ColumnDef (..)
-  , ForeignKey (..)
+  , ParentRef (..)
   , PgType (..)
   , TableColumn (..)
   , TableDef (..)
@@ -153,8 +129,6 @@ type instance Key Tx = TxId
 type instance Key SlotLeader = SlotLeaderId
 type instance Key StakeAddress = StakeAddressId
 type instance Key PoolHash = PoolHashId
-type instance Key Meta = MetaId
-type instance Key ReverseIndex = ReverseIndexId
 
 -- ---------------------------------------------------------------------------
 -- * Schema types
@@ -225,24 +199,6 @@ data PoolHash = PoolHash
   }
   deriving stock (Eq, Show)
 
--- | The @meta@ table.
--- One row, written once at startup. Unique on @start_time@.
-data Meta = Meta
-  { metaStartTime   :: !UTCTime
-  , metaNetworkName :: !Text
-  , metaVersion     :: !Text
-  }
-  deriving stock (Eq, Show)
-
--- | The @reverse_index@ table.
--- Min-FK-id watermarks per block, used by rollback to bound DELETE
--- ranges. Written by every block-extracting extractor.
-data ReverseIndex = ReverseIndex
-  { reverseIndexBlockId :: !BlockId
-  , reverseIndexMinIds  :: !Text
-  }
-  deriving stock (Eq, Show)
-
 -- ---------------------------------------------------------------------------
 -- * Table definitions
 -- ---------------------------------------------------------------------------
@@ -276,7 +232,7 @@ blockTableDef = TableDef
   , tdUniqueConstraints = [pure "hash"]
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys = []
+  , tdParentRefs = []
   }
 
 txTableDef :: TableDef
@@ -307,8 +263,8 @@ txTableDef = TableDef
   , tdUniqueConstraints = [pure "hash"]
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys =
-      [ ForeignKey "block_id" "block" "id"
+  , tdParentRefs =
+      [ ParentRef "block_id" "block" "id"
       ]
   }
 
@@ -328,7 +284,7 @@ slotLeaderTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys = []
+  , tdParentRefs = []
   }
 
 stakeAddressTableDef :: TableDef
@@ -351,7 +307,7 @@ stakeAddressTableDef = TableDef
   , tdUniqueConstraints = [pure "hash_raw"]
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys = []
+  , tdParentRefs = []
   }
 
 poolHashTableDef :: TableDef
@@ -369,45 +325,7 @@ poolHashTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys = []
-  }
-
--- | Unique on @start_time@.
-metaTableDef :: TableDef
-metaTableDef = TableDef
-  { tdName    = "meta"
-  , tdColumns =
-      [ ColumnDef "id"           PgBigInt    False
-      , ColumnDef "start_time"   PgTimestamp False
-      , ColumnDef "network_name" PgText      False
-      , ColumnDef "version"      PgText      False
-      ]
-  , tdMode    = TableUnlogged
-  , tdPrimaryKey     = Nothing
-  , tdChecks         = []
-  , tdColumnDefaults = []
-  , tdUniqueConstraints = [pure "start_time"]
-  , tdGeneratedColumns = []
-  , tdIdentityColumns = []
-  , tdForeignKeys = []
-  }
-
-reverseIndexTableDef :: TableDef
-reverseIndexTableDef = TableDef
-  { tdName    = "reverse_index"
-  , tdColumns =
-      [ ColumnDef "id"       PgBigInt False
-      , ColumnDef "block_id" PgBigInt False
-      , ColumnDef "min_ids"  PgText   False
-      ]
-  , tdMode    = TableUnlogged
-  , tdPrimaryKey     = Nothing
-  , tdChecks         = []
-  , tdColumnDefaults = []
-  , tdUniqueConstraints = []
-  , tdGeneratedColumns = []
-  , tdIdentityColumns = []
-  , tdForeignKeys = []
+  , tdParentRefs = []
   }
 
 -- ---------------------------------------------------------------------------
@@ -599,53 +517,6 @@ poolHashColsList =
   , poolHashCols.phcView
   ]
 
-data MetaCols = MetaCols
-  { mcId          :: !TableColumn
-  , mcStartTime   :: !TableColumn
-  , mcNetworkName :: !TableColumn
-  , mcVersion     :: !TableColumn
-  }
-
-metaCols :: MetaCols
-metaCols =
-  let c = TableColumn metaTableDef
-  in MetaCols
-       { mcId          = c "id"
-       , mcStartTime   = c "start_time"
-       , mcNetworkName = c "network_name"
-       , mcVersion     = c "version"
-       }
-
-metaColsList :: [TableColumn]
-metaColsList =
-  [ metaCols.mcId
-  , metaCols.mcStartTime
-  , metaCols.mcNetworkName
-  , metaCols.mcVersion
-  ]
-
-data ReverseIndexCols = ReverseIndexCols
-  { ricId      :: !TableColumn
-  , ricBlockId :: !TableColumn
-  , ricMinIds  :: !TableColumn
-  }
-
-reverseIndexCols :: ReverseIndexCols
-reverseIndexCols =
-  let c = TableColumn reverseIndexTableDef
-  in ReverseIndexCols
-       { ricId      = c "id"
-       , ricBlockId = c "block_id"
-       , ricMinIds  = c "min_ids"
-       }
-
-reverseIndexColsList :: [TableColumn]
-reverseIndexColsList =
-  [ reverseIndexCols.ricId
-  , reverseIndexCols.ricBlockId
-  , reverseIndexCols.ricMinIds
-  ]
-
 -- ---------------------------------------------------------------------------
 -- * Per-module column-record registry
 -- ---------------------------------------------------------------------------
@@ -657,8 +528,6 @@ coreColumnRecords =
   , (slotLeaderTableDef,   slotLeaderColsList)
   , (stakeAddressTableDef, stakeAddressColsList)
   , (poolHashTableDef,     poolHashColsList)
-  , (metaTableDef,         metaColsList)
-  , (reverseIndexTableDef, reverseIndexColsList)
   ]
 
 -- ---------------------------------------------------------------------------
@@ -728,23 +597,6 @@ encodePoolHashCopy (PoolHashId pid) ph =
     [ Just $ bInt64 pid
     , Just $ bHex (poolHashHashRaw ph)
     , Just $ bText (poolHashView ph)
-    ]
-
-encodeMetaCopy :: MetaId -> Meta -> ByteString
-encodeMetaCopy (MetaId mid) m =
-  buildCopyRow
-    [ Just $ bInt64 mid
-    , Just $ bUTCTime (metaStartTime m)
-    , Just $ bText (metaNetworkName m)
-    , Just $ bText (metaVersion m)
-    ]
-
-encodeReverseIndexCopy :: ReverseIndexId -> ReverseIndex -> ByteString
-encodeReverseIndexCopy (ReverseIndexId rid) ri =
-  buildCopyRow
-    [ Just $ bInt64 rid
-    , Just $ bInt64 (getBlockId $ reverseIndexBlockId ri)
-    , Just $ bText (reverseIndexMinIds ri)
     ]
 
 -- ---------------------------------------------------------------------------
@@ -952,43 +804,3 @@ entityPoolHashDecoder :: D.Row (PoolHashId, PoolHash)
 entityPoolHashDecoder = (,)
   <$> idDecoder PoolHashId
   <*> poolHashDecoder
-
--- | Encoder for a 'Meta' row, excluding the auto-generated @id@.
-metaEncoder :: E.Params Meta
-metaEncoder = mconcat
-  [ metaStartTime   >$< E.param (E.nonNullable utcTimeAsTimestampEncoder)
-  , metaNetworkName >$< E.param (E.nonNullable E.text)
-  , metaVersion     >$< E.param (E.nonNullable E.text)
-  ]
-
--- | Decoder for the data columns of a 'Meta' row (excluding @id@).
-metaDecoder :: D.Row Meta
-metaDecoder = Meta
-  <$> D.column (D.nonNullable utcTimeAsTimestampDecoder)
-  <*> D.column (D.nonNullable D.text)
-  <*> D.column (D.nonNullable D.text)
-
--- | Decoder for a full @meta@ row, including @id@.
-entityMetaDecoder :: D.Row (MetaId, Meta)
-entityMetaDecoder = (,)
-  <$> idDecoder MetaId
-  <*> metaDecoder
-
--- | Encoder for a 'ReverseIndex' row, excluding the auto-generated @id@.
-reverseIndexEncoder :: E.Params ReverseIndex
-reverseIndexEncoder = mconcat
-  [ reverseIndexBlockId >$< idEncoder getBlockId
-  , reverseIndexMinIds  >$< E.param (E.nonNullable E.text)
-  ]
-
--- | Decoder for the data columns of a 'ReverseIndex' (excluding @id@).
-reverseIndexDecoder :: D.Row ReverseIndex
-reverseIndexDecoder = ReverseIndex
-  <$> idDecoder BlockId
-  <*> D.column (D.nonNullable D.text)
-
--- | Decoder for a full @reverse_index@ row, including @id@.
-entityReverseIndexDecoder :: D.Row (ReverseIndexId, ReverseIndex)
-entityReverseIndexDecoder = (,)
-  <$> idDecoder ReverseIndexId
-  <*> reverseIndexDecoder

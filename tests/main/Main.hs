@@ -85,6 +85,7 @@ import qualified DbSync.Schema.Migration.RenderSpec as SchemaMigrationRenderSpec
 import qualified DbSync.Schema.Migration.RunnerSpec as SchemaMigrationRunnerSpec
 import qualified DbSync.Schema.OffChainPoolSpec as SchemaOffChainPoolSpec
 import qualified DbSync.Schema.OffChainVoteSpec as SchemaOffChainVoteSpec
+import qualified DbSync.Schema.ParentRefsSpec as SchemaParentRefsSpec
 import qualified DbSync.Schema.RewardSpec as SchemaRewardSpec
 import qualified DbSync.Schema.ScriptsDatumsSpec as SchemaScriptsDatumsSpec
 import qualified DbSync.Schema.SyncStateSpec as SchemaSyncStateSpec
@@ -230,6 +231,7 @@ main = hspec $ do
     SchemaMigrationRunnerSpec.spec
     SchemaOffChainPoolSpec.spec
     SchemaOffChainVoteSpec.spec
+    SchemaParentRefsSpec.spec
     SchemaRewardSpec.spec
     SchemaScriptsDatumsSpec.spec
     SchemaSyncStateSpec.spec

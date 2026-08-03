@@ -230,8 +230,8 @@ poolUpdateTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys =
-      [ ForeignKey "registered_tx_id" "tx" "id"
+  , tdParentRefs =
+      [ ParentRef "registered_tx_id" "tx" "id"
       ]
   }
 
@@ -252,8 +252,8 @@ poolMetadataRefTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys =
-      [ ForeignKey "registered_tx_id" "tx" "id"
+  , tdParentRefs =
+      [ ParentRef "registered_tx_id" "tx" "id"
       ]
   }
 
@@ -272,8 +272,8 @@ poolOwnerTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys =
-      [ ForeignKey "pool_update_id" "pool_update" "id"
+  , tdParentRefs =
+      [ ParentRef "pool_update_id" "pool_update" "id"
       ]
   }
 
@@ -294,8 +294,8 @@ poolRetireTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys =
-      [ ForeignKey "announced_tx_id" "tx" "id"
+  , tdParentRefs =
+      [ ParentRef "announced_tx_id" "tx" "id"
       ]
   }
 
@@ -318,8 +318,8 @@ poolRelayTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys =
-      [ ForeignKey "update_id" "pool_update" "id"
+  , tdParentRefs =
+      [ ParentRef "update_id" "pool_update" "id"
       ]
   }
 
@@ -343,7 +343,7 @@ poolStatTableDef = TableDef
   , tdUniqueConstraints = ["pool_hash_id" :| ["epoch_no"]]
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys = []
+  , tdParentRefs = []
   }
 
 delistedPoolTableDef :: TableDef
@@ -360,7 +360,7 @@ delistedPoolTableDef = TableDef
   , tdUniqueConstraints = [pure "hash_raw"]
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys = []
+  , tdParentRefs = []
   }
 
 reservedPoolTickerTableDef :: TableDef
@@ -378,7 +378,7 @@ reservedPoolTickerTableDef = TableDef
   , tdUniqueConstraints = [pure "name"]
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys = []
+  , tdParentRefs = []
   }
 
 -- ---------------------------------------------------------------------------

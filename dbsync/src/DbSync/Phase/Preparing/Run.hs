@@ -116,7 +116,7 @@ run connSettings tuning tables = step PhaseStep "post-load pass" $ do
   -- ('createPostResolveIndexes').
   PreResolveIndexes.createPreResolveIndexes
 
-  Resolve.resolveForeignKeys
+  Resolve.resolveInputTxOutIds
 
   PreResolveIndexes.createPostResolveIndexes
 
@@ -125,7 +125,7 @@ run connSettings tuning tables = step PhaseStep "post-load pass" $ do
   -- taken mid-ingest; without this pass the planner picks Nested
   -- Loop plans whose outer-side estimate is off by orders of
   -- magnitude. The three CTAS-rebuilt input tables are ANALYZEd
-  -- inside 'Resolve.resolveForeignKeys'.
+  -- inside 'Resolve.resolveInputTxOutIds'.
   step AnalyzeStep "backfill input tables" $
     for_ (filter (hasTable . tdName) backfillAnalyzeTables) $ \td ->
       runDdl (analyzeSql (tdName td))

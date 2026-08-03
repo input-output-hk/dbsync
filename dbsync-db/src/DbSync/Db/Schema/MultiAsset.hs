@@ -121,7 +121,7 @@ multiAssetTableDef = TableDef
   , tdUniqueConstraints = ["policy" :| ["name"]]
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys = []
+  , tdParentRefs = []
   }
 
 maTxMintTableDef :: TableDef
@@ -140,8 +140,8 @@ maTxMintTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys =
-      [ ForeignKey "tx_id" "tx" "id"
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
       ]
   }
 
@@ -161,8 +161,8 @@ maTxOutTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys =
-      [ ForeignKey "tx_out_id" "tx_out" "id"
+  , tdParentRefs =
+      [ ParentRef "tx_out_id" "tx_out" "id"
       ]
   }
 

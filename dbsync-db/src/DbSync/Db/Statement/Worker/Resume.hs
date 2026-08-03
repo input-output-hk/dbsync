@@ -9,13 +9,14 @@
 -- from 'tdName' on static 'TableDef's, so identifier interpolation
 -- is safe — no user-controlled input flows into the SQL.
 module DbSync.Db.Statement.Worker.Resume
-  ( -- * Cleanup deletes
+  ( -- * Resume cleanup
     deleteBySlotStmt
   , deleteByBlockSlotStmt
   , deleteByTxFkSlotStmt
   , deleteByTxOutFkSlotStmt
-  , deleteByEpochSlotStmt
   , deleteByIdCounterStmt
+  , deleteByParentCounterStmt
+  , selectEpochNoAtSlotStmt
 
     -- * Dedup-map rebuild selects
   , selectDedupSingleStmt
@@ -50,10 +51,12 @@ import qualified Hasql.Decoders as D
 import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
+import qualified DbSync.Db.Schema.Core as Core
+import DbSync.Db.Schema.Core (BlockCols (..))
 import DbSync.Db.Schema.MultiAsset (MultiAssetCols (..), multiAssetCols, multiAssetTableDef)
 import DbSync.Db.Schema.Types (TableColumn (..))
 import DbSync.Db.Sql (quoteIdent)
-import DbSync.Db.Sql.Refs (table)
+import DbSync.Db.Sql.Refs (col, table)
 import DbSync.Db.Types (AnchorType, anchorTypeDecoder)
 
 -- | @DELETE FROM <table> WHERE slot_no > $1@.
@@ -120,26 +123,6 @@ deleteByTxOutFkSlotStmt tableName fkCol =
       ]
     encoder = fromIntegral >$< E.param (E.nonNullable E.int8)
 
--- | Trim a ledger-derived, epoch-keyed table (@epoch_stake@,
--- @reward@, @pool_stat@, …) that carries no @slot_no@, @block_id@,
--- tx FK, or id counter. The cutoff slot is mapped to its epoch via
--- @block@, and every row from that epoch onward is deleted: Follow
--- re-emits those epochs from scratch on replay past the resume point.
-deleteByEpochSlotStmt
-  :: Text  -- ^ Table to delete from.
-  -> Text  -- ^ Epoch column (@epoch_no@ or @spendable_epoch@).
-  -> Stmt.Statement Word64 Int64
-deleteByEpochSlotStmt tableName epochCol =
-  Stmt.unpreparable sql encoder D.rowsAffected
-  where
-    sql = T.concat
-      [ "DELETE FROM ", quoteIdent tableName
-      , " WHERE ", quoteIdent epochCol, " >= COALESCE("
-      , "(SELECT epoch_no FROM \"block\""
-      , " WHERE slot_no <= $1 ORDER BY slot_no DESC LIMIT 1), 0)"
-      ]
-    encoder = fromIntegral >$< E.param (E.nonNullable E.int8)
-
 -- | @DELETE FROM <table> WHERE id >= $1@. The @$1@ is the table's
 -- @*_id_counter@ in @dbsync_sync_state@ (\"next id to assign\"), so
 -- this prunes rows the previous run wrote past the last-recorded
@@ -154,6 +137,43 @@ deleteByIdCounterStmt tableName =
       , " WHERE id >= $1"
       ]
     encoder = E.param (E.nonNullable E.int8)
+
+-- | @DELETE FROM <table> WHERE <column> >= $1@ against the /parent's/
+-- id counter. Reaches the children of a counter-tracked table whose own
+-- rows carry no slot, block or @tx@ reference to be trimmed by — the
+-- @pool_update@ and @committee@ families.
+deleteByParentCounterStmt
+  :: Text  -- ^ Table to delete from.
+  -> Text  -- ^ Column on that table referencing the parent's @id@.
+  -> Stmt.Statement Int64 Int64
+deleteByParentCounterStmt tableName fkCol =
+  Stmt.unpreparable sql encoder D.rowsAffected
+  where
+    sql = T.concat
+      [ "DELETE FROM ", quoteIdent tableName
+      , " WHERE ", quoteIdent fkCol, " >= $1"
+      ]
+    encoder = E.param (E.nonNullable E.int8)
+
+-- | Epoch of the newest block at or below the cutoff slot — the
+-- anchor the epoch-keyed boundary tables are trimmed against.
+-- 'Nothing' when no such block carries an epoch, which leaves those
+-- tables alone.
+selectEpochNoAtSlotStmt :: Stmt.Statement Word64 (Maybe Word64)
+selectEpochNoAtSlotStmt =
+  Stmt.preparable sql encoder decoder
+  where
+    epochNo = Core.blockCols.bcEpochNo
+    slotNo  = Core.blockCols.bcSlotNo
+    sql = T.concat
+      [ "SELECT ", col epochNo
+      , " FROM ", table Core.blockTableDef
+      , " WHERE ", col slotNo, " <= $1"
+      , " AND ", col epochNo, " IS NOT NULL"
+      , " ORDER BY ", col slotNo, " DESC LIMIT 1"
+      ]
+    encoder = fromIntegral >$< E.param (E.nonNullable E.int8)
+    decoder = D.rowMaybe (D.column (D.nonNullable (fromIntegral <$> D.int8)))
 
 -- | @SELECT id, <keyCol> FROM <table>@ for dedup tables whose
 -- natural key is a single column (@slot_leader.hash@,

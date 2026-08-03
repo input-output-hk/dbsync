@@ -12,19 +12,24 @@
 -- advance inside one PG transaction. Mirrors upstream
 -- cardano-db-sync's @deleteBlocksBlockId@; slow path only.
 --
--- The cascade tables come from each 'TableDef'\'s 'tdForeignKeys' so
+-- The cascade tables come from each 'TableDef'\'s 'tdParentRefs' so
 -- the rollback automatically picks up new dependent tables when they
--- declare the right FK; no hand-maintained list to drift. The
--- epoch-keyed boundary tables carry no FKs and are scoped by
--- 'epochKeyedDeletes' instead.
+-- declare the right parent; no hand-maintained list to drift. Rows
+-- keyed by epoch rather than by a chain position are scoped by
+-- 'epochKeyedColumns' instead. A table can appear in both — the two
+-- DELETEs agree on which rows go, so the second is a no-op.
+--
+-- Passes run deepest-first: a table is deleted before the table it
+-- declares a 'ParentRef' to, which is what the PG constraints created
+-- in 'PreparingForVolatileTail' require.
 module DbSync.Phase.Following.Rollback
   ( rollbackToPoint
   , rollbackToSlot
 
-    -- * Schema-walk helpers (exported for tests)
+    -- * Schema walk
+    -- | Re-exported so a test can pin the cascade's per-parent child
+    -- lists against the live schema.
   , childrenOf
-  , EpochAnchor (..)
-  , epochKeyedDeletes
   ) where
 
 import Cardano.Prelude
@@ -41,36 +46,15 @@ import Ouroboros.Network.Block (data BlockPoint, data GenesisPoint)
 import Cardano.Slotting.Slot (SlotNo (..))
 
 import DbSync.Parser.Types (CardanoPoint)
-import DbSync.Db.Schema.AdaPots (AdaPotsCols (..), adaPotsCols)
 import qualified DbSync.Db.Schema.Core as Core
-import DbSync.Db.Schema.EpochBoundary
-  ( EpochParamCols (..)
-  , EpochStateCols (..)
-  , epochParamCols
-  , epochStateCols
-  )
-import DbSync.Db.Schema.EpochSyncStats (EpochSyncStatsCols (..), epochSyncStatsCols)
-import DbSync.Db.Schema.EpochView (EpochFinalizedCols (..), epochFinalizedCols)
-import DbSync.Db.Schema.Governance (DrepDistrCols (..), drepDistrCols)
-import DbSync.Db.Schema.Ids (getPoolUpdateId, getTxId, getTxOutId)
+import DbSync.Db.Schema.Ids (getBlockId, getPoolUpdateId, getTxId, getTxOutId)
 import qualified DbSync.Db.Schema.Pool as Pool
-import DbSync.Db.Schema.Pool (PoolStatCols (..))
-import DbSync.Db.Schema.StakeDelegation
-  ( EpochStakeCols (..)
-  , EpochStakeProgressCols (..)
-  , PotRewardCols (..)
-  , RewardCols (..)
-  , epochStakeCols
-  , epochStakeProgressCols
-  , potRewardCols
-  , rewardCols
-  )
-import DbSync.Db.Schema.Types (ForeignKey (..), TableColumn (..), TableDef (..))
+import DbSync.Db.Schema.Types (TableColumn (..), TableDef (..), childrenOf)
 import qualified DbSync.Db.Schema.UTxO as UTxO
+import DbSync.Db.Statement.Worker.EpochAnchor (deleteEpochRowsStmt, epochKeyedColumns)
 import DbSync.Db.Statement.Worker.Rollback
   ( deleteBlockAfterIdStmt
-  , deleteWhereEpochGtStmt
-  , deleteWhereEpochGteStmt
+  , deleteWhereGtStmt
   , deleteWhereGteStmt
   , nullConsumedByFromTxStmt
   , queryBlockAtOrAfterSlotStmt
@@ -89,11 +73,11 @@ import DbSync.App.Env (HasSecurityParam (..))
 -- @dbsync_sync_state.last_committed_*@ to match.
 --
 -- The supplied 'TableDef' list scopes the cascade: only declared
--- tables are considered, and a table's outgoing FKs (the parent
--- table referenced by 'fkParentTable') decide which family it
--- belongs to. Tables that don't reference @tx@ / @tx_out@ /
--- @pool_update@ are skipped by the FK cascade; the epoch-keyed
--- boundary tables among them are cleaned via 'epochKeyedDeletes'.
+-- tables are considered, and a table's 'tdParentRefs' (the parent
+-- table referenced by 'prParentTable') decide which family it
+-- belongs to. Tables that reference none of @block@ / @tx@ /
+-- @tx_out@ / @pool_update@ are skipped by that cascade; the
+-- epoch-keyed tables are cleaned via 'epochKeyedColumns'.
 --
 -- The k-safety horizon comes from 'getSecurityParam' on the env. A
 -- target more than @k@ blocks behind the current PG tip is rejected
@@ -140,19 +124,28 @@ rollbackToPoint tableDefs point = case point of
             <> ". Use --resync-from-genesis for rollbacks past the"
             <> " k-safety horizon."
 
+    -- Whether a table exists in PG. Sound because the boot extractor
+    -- gate rejects any profile whose table set differs from the one
+    -- the database was built with, so the set can't change mid-run.
+    let hasTable td = any ((== tdName td) . tdName) tableDefs
+
     -- Single-threaded Follow loop guarantees no concurrent inserts
     -- shift these thresholds between the reads and the deletes, so
-    -- caching them outside the transaction is safe.
+    -- caching them outside the transaction is safe. Both min-id
+    -- queries read their own family's parent table, so they only run
+    -- when that table is part of the profile.
     mMinTxId <- runSess "queryMinTxIdAfterBlockStmt"
       (targetBlockId, queryMinTxIdAfterBlockStmt)
     mMinTxOutId <- case mMinTxId of
-      Nothing      -> pure Nothing
-      Just minTxId -> runSess "queryMinTxOutIdAfterBlockStmt"
-        (minTxId, queryMinTxOutIdAfterBlockStmt)
+      Just minTxId | hasTable UTxO.txOutTableDef ->
+        runSess "queryMinTxOutIdAfterBlockStmt"
+          (minTxId, queryMinTxOutIdAfterBlockStmt)
+      _ -> pure Nothing
     mMinPoolUpdateId <- case mMinTxId of
-      Nothing      -> pure Nothing
-      Just minTxId -> runSess "queryMinPoolUpdateIdAfterTxStmt"
-        (minTxId, queryMinPoolUpdateIdAfterTxStmt)
+      Just minTxId | hasTable Pool.poolUpdateTableDef ->
+        runSess "queryMinPoolUpdateIdAfterTxStmt"
+          (minTxId, queryMinPoolUpdateIdAfterTxStmt)
+      _ -> pure Nothing
 
     -- Pre-compute per-family delete lists from the schema. Each entry
     -- is @(this-table, this-table's FK column to the parent)@. The
@@ -160,25 +153,21 @@ rollbackToPoint tableDefs point = case point of
     let txKeyed         = childrenOf tableDefs (tdName Core.txTableDef)
         txOutKeyed      = childrenOf tableDefs (tdName UTxO.txOutTableDef)
         poolUpdateKeyed = childrenOf tableDefs (tdName Pool.poolUpdateTableDef)
+        -- tx declares block_id too, but is deleted by id below.
+        blockKeyed      = filter ((/= tdName Core.txTableDef) . fst)
+                            (childrenOf tableDefs (tdName Core.blockTableDef))
 
     withTransaction $ do
-      -- Tx-keyed cascade.
-      for_ mMinTxId $ \minTxId -> do
-        let !i = getTxId minTxId
-        for_ txKeyed $ \(tbl, col) ->
-          void $ runSess ("delete " <> tbl)
-            (i, deleteWhereGteStmt tbl col)
-
-      -- TxOut-keyed cascade.
+      -- tx_out and pool_update are themselves tx-keyed, so their
+      -- families have to be cleared before the tx pass reaches them.
       for_ mMinTxOutId $ \minTxOutId -> do
         let !i = getTxOutId minTxOutId
         for_ txOutKeyed $ \(tbl, col) ->
           void $ runSess ("delete " <> tbl)
             (i, deleteWhereGteStmt tbl col)
 
-      -- PoolUpdate-keyed cascade. The pool_update parent itself is
-      -- also deleted here; removing the children first keeps the
-      -- parent delete safe against FK constraints.
+      -- pool_update goes here rather than being left to the tx pass, so
+      -- it lands after its own children; that pass then no-ops on it.
       for_ mMinPoolUpdateId $ \minPoolUpdateId -> do
         let !i      = getPoolUpdateId minPoolUpdateId
             poolTbl = tdName Pool.poolUpdateTableDef
@@ -188,14 +177,27 @@ rollbackToPoint tableDefs point = case point of
         void $ runSess ("delete " <> poolTbl)
           (i, deleteWhereGteStmt poolTbl "id")
 
+      -- Tx-keyed cascade, including tx_out and pool_update themselves.
+      for_ mMinTxId $ \minTxId -> do
+        let !i = getTxId minTxId
+        for_ txKeyed $ \(tbl, col) ->
+          void $ runSess ("delete " <> tbl)
+            (i, deleteWhereGteStmt tbl col)
+
       -- Surviving producer rows must drop their consumed-by marks
       -- pointing at the txs deleted above, or the re-applied fork
       -- can never re-consume them.
       for_ mMinTxId $ \minTxId ->
-        when (any ((== tdName UTxO.txOutTableDef) . tdName) tableDefs) $ do
+        when (hasTable UTxO.txOutTableDef) $ do
           let c = UTxO.tocConsumedByTxId UTxO.txOutCols
           void $ runSess ("null " <> tdName (tcTable c) <> "." <> tcName c)
             (minTxId, nullConsumedByFromTxStmt)
+
+      -- Block-keyed cascade. No min-id hop needed: the target block
+      -- is the new tip, so anything above it goes.
+      for_ blockKeyed $ \(tbl, c) ->
+        void $ runSess ("delete " <> tbl)
+          (getBlockId targetBlockId, deleteWhereGtStmt tbl c)
 
       -- Finally tx and block themselves.
       let txTbl = tdName Core.txTableDef
@@ -205,18 +207,15 @@ rollbackToPoint tableDefs point = case point of
       void $ runSess ("delete " <> tdName Core.blockTableDef)
         (targetBlockId, deleteBlockAfterIdStmt)
 
-      -- Epoch-keyed boundary tables (no FKs, so the cascade above
-      -- never touches them). Tables whose extractor is disabled are
+      -- Epoch-keyed boundary tables, whose rows carry no chain
+      -- position of their own. Tables whose extractor is disabled are
       -- absent from tableDefs and skipped; a target without an
       -- epoch_no (Byron EBB) skips the lot.
       for_ mTargetEpoch $ \targetEpoch ->
-        for_ epochKeyedDeletes $ \(c, anchor) ->
-          when (any ((== tdName (tcTable c)) . tdName) tableDefs) $ do
-            let (param, delStmt) = case anchor of
-                  EnteredEpoch      -> (targetEpoch, deleteWhereEpochGtStmt c)
-                  NextEpochSnapshot -> (targetEpoch + 1, deleteWhereEpochGtStmt c)
-                  CompletedEpoch    -> (targetEpoch, deleteWhereEpochGteStmt c)
-            void $ runSess ("delete " <> tdName (tcTable c)) (param, delStmt)
+        for_ epochKeyedColumns $ \(c, anchor) ->
+          when (hasTable (tcTable c)) $
+            void $ runSess ("delete " <> tdName (tcTable c))
+              (targetEpoch, deleteEpochRowsStmt anchor c)
 
       -- Sync-state advance. The target block is the new chain tip.
       void $ runSess "writeSyncStateSlotStmt"
@@ -248,48 +247,6 @@ rollbackToSlot tableDefs targetSlot = do
           point = BlockPoint (SlotNo resolvedSlot) hash
       rollbackToPoint tableDefs point
       pure (Just resolvedBlockNo)
-
--- | How rows of an epoch-keyed boundary table anchor to the rollback
--- target's epoch.
---
---   * 'EnteredEpoch' — written entering the epoch they carry; the
---     target epoch's own rows stay valid, so delete @> target@.
---   * 'NextEpochSnapshot' — stake slices of the /next/ epoch's mark
---     snapshot, emitted across the preceding epoch. The snapshot for
---     @target+1@ froze before the target block, so delete
---     @> target+1@ and let the replay re-emit identical slices.
---   * 'CompletedEpoch' — describe a finished epoch; rolling back
---     into an epoch un-finishes it, so delete @>= target@.
-data EpochAnchor = EnteredEpoch | NextEpochSnapshot | CompletedEpoch
-  deriving stock (Eq, Show)
-
-epochKeyedDeletes :: [(TableColumn, EpochAnchor)]
-epochKeyedDeletes =
-  [ (epochStateCols.esccEpochNo,         EnteredEpoch)
-  , (epochParamCols.epcEpochNo,          EnteredEpoch)
-  , (adaPotsCols.apcEpochNo,             EnteredEpoch)
-  , (Pool.poolStatCols.pstcEpochNo,      EnteredEpoch)
-  , (drepDistrCols.ddcEpochNo,           EnteredEpoch)
-    -- reward rows land entering their spendable epoch; pot_reward
-    -- rows land entering their earned epoch (spendable is one later).
-  , (rewardCols.rcSpendableEpoch,        EnteredEpoch)
-  , (potRewardCols.prcEarnedEpoch,       EnteredEpoch)
-  , (epochStakeCols.escEpochNo,          NextEpochSnapshot)
-  , (epochStakeProgressCols.espcEpochNo, NextEpochSnapshot)
-  , (epochSyncStatsCols.esscEpochNo,     CompletedEpoch)
-  , (epochFinalizedCols.efcNo,           CompletedEpoch)
-  ]
-
--- | All tables that declare an outgoing FK to @parentTable@, paired
--- with the FK column name. Walks every supplied 'TableDef' and pulls
--- out the matching entries from 'tdForeignKeys'.
-childrenOf :: [TableDef] -> Text -> [(Text, Text)]
-childrenOf tableDefs parentTable =
-  [ (tdName td, fkColumn fk)
-  | td <- tableDefs
-  , fk <- tdForeignKeys td
-  , fkParentTable fk == parentTable
-  ]
 
 -- | Run a single 'Stmt.Statement' against the env's connection.
 -- Failures surface as 'AppDatabaseError' tagged with the caller-

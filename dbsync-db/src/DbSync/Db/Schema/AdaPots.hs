@@ -88,8 +88,8 @@ data AdaPots = AdaPots
 -- ---------------------------------------------------------------------------
 
 -- | UNLOGGED during 'IngestChainHistory' (matches the rest of the
--- extractor tables). The PK and FK to @block@ are added later in
--- 'PreparingForVolatileTail' alongside indexes.
+-- extractor tables); the PK is added in 'PreparingForVolatileTail'
+-- alongside indexes.
 adaPotsTableDef :: TableDef
 adaPotsTableDef = TableDef
   { tdName    = "ada_pots"
@@ -115,7 +115,9 @@ adaPotsTableDef = TableDef
   , tdUniqueConstraints = [pure "epoch_no"]
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys = []
+  , tdParentRefs =
+      [ ParentRef "block_id" "block" "id"
+      ]
   }
 
 -- ---------------------------------------------------------------------------

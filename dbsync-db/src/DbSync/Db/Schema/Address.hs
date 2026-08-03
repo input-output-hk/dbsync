@@ -156,7 +156,7 @@ addressTableDef = TableDef
   , tdUniqueConstraints = [pure "raw_hash"]
   , tdGeneratedColumns  = [("raw_hash", "decode(md5(raw), 'hex')")]
   , tdIdentityColumns = []
-  , tdForeignKeys = []
+  , tdParentRefs = []
   }
 
 -- ---------------------------------------------------------------------------

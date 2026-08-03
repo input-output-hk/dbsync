@@ -4,7 +4,8 @@
 -- cascade: resolve the rollback point to a @block.id@, find the
 -- smallest dependent id past that block in each FK family (tx,
 -- tx_out, pool_update), then issue range deletes against the
--- dependent tables.
+-- dependent tables. Block-keyed children need no min-id query — they
+-- are deleted directly against the target @block.id@.
 module DbSync.Db.Statement.Worker.Rollback
   ( -- * Resolving the rollback point
     queryBlockAtPointStmt
@@ -19,8 +20,7 @@ module DbSync.Db.Statement.Worker.Rollback
 
     -- * Per-table deletes
   , deleteWhereGteStmt
-  , deleteWhereEpochGtStmt
-  , deleteWhereEpochGteStmt
+  , deleteWhereGtStmt
   , deleteBlockAfterIdStmt
   , nullConsumedByFromTxStmt
   ) where
@@ -186,25 +186,18 @@ deleteWhereGteStmt tableName columnName =
       ]
     encoder = E.param (E.nonNullable E.int8)
 
--- | @DELETE FROM <owning table> WHERE <column> > $1@ against an
--- epoch-number column; the target epoch's own rows survive.
-deleteWhereEpochGtStmt :: TableColumn -> Stmt.Statement Word64 Int64
-deleteWhereEpochGtStmt = deleteWhereEpochStmt ">"
-
--- | @>=@ variant for rows that describe a completed epoch: rolling
--- back into an epoch un-completes it.
-deleteWhereEpochGteStmt :: TableColumn -> Stmt.Statement Word64 Int64
-deleteWhereEpochGteStmt = deleteWhereEpochStmt ">="
-
-deleteWhereEpochStmt :: Text -> TableColumn -> Stmt.Statement Word64 Int64
-deleteWhereEpochStmt op c =
+-- | @DELETE FROM <table> WHERE <column> > $1@. For families anchored
+-- on the rollback target itself rather than on the first id past it,
+-- so the caller states the target and not @target + 1@.
+deleteWhereGtStmt :: Text -> Text -> Stmt.Statement Int64 Int64
+deleteWhereGtStmt tableName columnName =
   Stmt.unpreparable sql encoder D.rowsAffected
   where
     sql = T.concat
-      [ "DELETE FROM ", table (tcTable c)
-      , " WHERE ", col c, " ", op, " $1"
+      [ "DELETE FROM ", quoteIdent tableName
+      , " WHERE ", quoteIdent columnName, " > $1"
       ]
-    encoder = (fromIntegral :: Word64 -> Int64) >$< E.param (E.nonNullable E.int8)
+    encoder = E.param (E.nonNullable E.int8)
 
 -- | Strictly @>@ because the rollback target itself is the new tip;
 -- only blocks above it are deleted.

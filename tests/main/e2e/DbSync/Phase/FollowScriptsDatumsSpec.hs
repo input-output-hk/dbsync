@@ -421,6 +421,16 @@ spec = describe "Follow scripts/datums writes" $ do
             )
           unfilled `shouldBe` "0"
 
+          -- Prep rebuilds the table through a LEFT JOIN; a join that
+          -- matched an id twice would duplicate the row rather than
+          -- fail, so the ids have to be checked for uniqueness.
+          duplicated <- T.strip <$> queryTestDb
+            ( "SELECT COUNT(*)::text FROM (SELECT id FROM "
+                <> tdName redeemerTableDef
+                <> " GROUP BY id HAVING COUNT(*) > 1) dup"
+            )
+          duplicated `shouldBe` "0"
+
   it "leaves tx_in.redeemer_id NULL and draws no redeemer ids when scripts_datums is disabled" $
     withMockNode conwayConfigDir $ \mn ->
       withTempDir "dbsync-test-scripts-disabled" $ \ledgerDir -> do

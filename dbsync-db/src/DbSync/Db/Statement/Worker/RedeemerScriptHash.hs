@@ -7,20 +7,23 @@
 -- payment credential of the /spent/ output — reachable only through
 -- @tx_in.tx_out_id@, which Ingest leaves unresolved.
 --
--- Both variants share one UPDATE body. Prep runs the unscoped form
--- once over the ingested range; Follow appends the id-scoped form to
--- each block's pipeline, after the block's @tx_in@ and @redeemer@
--- INSERTs are queued.
+-- The two paths differ in scale, so they differ in mechanism. Follow
+-- appends the id-scoped UPDATE to each block's pipeline. Prep has a
+-- hash for nearly every spend redeemer in the database, and an UPDATE
+-- at that fraction leaves a dead tuple per row, writes in join order
+-- rather than heap order, and cannot go parallel — PostgreSQL refuses
+-- to parallelise any plan that modifies rows — so it rebuilds instead.
+--
+-- The rebuild's subquery yields at most one row per @redeemer_id@:
+-- @tx_out@'s @(tx_id, index)@ is unique and @address.id@ is a primary
+-- key, so neither join fans out, and the parser points each
+-- @tx_in.redeemer_id@ at its own redeemer.
 module DbSync.Db.Statement.Worker.RedeemerScriptHash
-  ( -- * Prepared 'Stmt.Statement' values
-    backfillSpendScriptHashStmt
-  , fillSpendScriptHashesStmt
+  ( -- * Prep rebuild
+    rebuildSpendScriptHashScript
 
-    -- * Raw SQL strings
-    --
-    -- Exported so tests can feed them to @EXPLAIN@ and assert on the
-    -- plan shape.
-  , backfillSpendScriptHashSql
+    -- * Follow statement
+  , fillSpendScriptHashesStmt
   , fillSpendScriptHashesSql
   ) where
 
@@ -39,6 +42,7 @@ import DbSync.Db.Schema.ScriptsDatums
   , redeemerCols
   , redeemerTableDef
   )
+import DbSync.Db.Schema.Types (TableColumn (..))
 import DbSync.Db.Schema.UTxO
   ( TxInCols (..)
   , TxOutCols (..)
@@ -48,37 +52,71 @@ import DbSync.Db.Schema.UTxO
   , txOutTableDef
   )
 import DbSync.Db.Sql.Refs (col, qcol, table)
-import DbSync.Db.Statement.Common (arrayParam)
+import DbSync.Db.Statement.Common (arrayParam, rebuildTableScript)
 
--- | Every spend redeemer in the database whose hash is still NULL.
--- Requires @tx_in.tx_out_id@ (the CTAS resolve) and
+-- ---------------------------------------------------------------------------
+-- * Prep rebuild
+-- ---------------------------------------------------------------------------
+
+-- | Rebuild @redeemer@ with every spend hash the ingested range can
+-- resolve. Requires @tx_in.tx_out_id@ (the CTAS resolve) and
 -- @tx_out.address_id@ (the per-epoch address worker) to be populated.
-backfillSpendScriptHashStmt :: Stmt.Statement () Int64
-backfillSpendScriptHashStmt =
-  Stmt.preparable backfillSpendScriptHashSql E.noParams D.rowsAffected
+rebuildSpendScriptHashScript :: Text
+rebuildSpendScriptHashScript =
+  rebuildTableScript
+    redeemerTableDef
+    [(redeemerCols.rdcScriptHash.tcName, resolvedHash)]
+    fromSql
+  where
+    -- A hash already on the row wins; the purpose guard keeps a
+    -- non-spend redeemer untouched even if an input pointed at it.
+    resolvedHash = T.unwords
+      [ "COALESCE(", qcol "src" redeemerCols.rdcScriptHash, ","
+      , "CASE WHEN", qcol "src" redeemerCols.rdcPurpose, "= 'spend'"
+      , "THEN", qcol "spend" redeemerCols.rdcScriptHash, "END )"
+      ]
 
-backfillSpendScriptHashSql :: Text
-backfillSpendScriptHashSql = spendScriptHashSql ""
+    fromSql = T.unwords
+      [ table redeemerTableDef, "src"
+      , "LEFT JOIN (", spendHashSubquery, ") spend"
+      , "ON", qcol "spend" txInCols.ticRedeemerId, "=", qcol "src" redeemerCols.rdcId
+      ]
 
--- | The block-scoped form: the redeemer ids the pipeline assigned for
--- one block. Driving off the @redeemer@ primary key keeps the plan an
--- index lookup per id rather than a scan of the whole table.
+-- | @(redeemer_id, script_hash)@ for every input that unlocks a
+-- script-locked output.
+spendHashSubquery :: Text
+spendHashSubquery = T.unwords
+  [ "SELECT", qcol "ti" txInCols.ticRedeemerId
+  ,     "AS", col txInCols.ticRedeemerId, ","
+  ,          qcol "a" addressCols.acPaymentCred
+  ,     "AS", col redeemerCols.rdcScriptHash
+  , "FROM", table txInTableDef, "ti"
+  , "JOIN", table txOutTableDef, "o"
+  , "  ON", qcol "o" txOutCols.tocTxId, "=", qcol "ti" txInCols.ticTxOutId
+  , " AND", qcol "o" txOutCols.tocIndex, "=", qcol "ti" txInCols.ticTxOutIndex
+  , "JOIN", table addressTableDef, "a"
+  , "  ON", qcol "a" addressCols.acId, "=", qcol "o" txOutCols.tocAddressId
+  , "WHERE", qcol "ti" txInCols.ticRedeemerId, "IS NOT NULL"
+  , "  AND", qcol "a" addressCols.acHasScript
+  ]
+
+-- ---------------------------------------------------------------------------
+-- * Follow statement
+-- ---------------------------------------------------------------------------
+
+-- | The redeemer ids the pipeline assigned for one block. Driving off
+-- the @redeemer@ primary key keeps the plan an index lookup per id
+-- rather than a scan of the whole table.
 fillSpendScriptHashesStmt :: Stmt.Statement [RedeemerId] ()
 fillSpendScriptHashesStmt =
   Stmt.preparable fillSpendScriptHashesSql encoder D.noResult
   where
     encoder = map getRedeemerId >$< arrayParam E.int8
 
+-- | Exported so tests can feed it to @EXPLAIN@ and assert on the plan
+-- shape.
 fillSpendScriptHashesSql :: Text
-fillSpendScriptHashesSql =
-  spendScriptHashSql $
-    T.unwords ["AND", qcol (table redeemerTableDef) redeemerCols.rdcId, "= ANY($1)"]
-
--- | @address.payment_cred@ of the spent output, guarded on
--- @has_script@: a key-locked output never carries a redeemer, so a
--- match there would mean a malformed input row.
-spendScriptHashSql :: Text -> Text
-spendScriptHashSql scopeClause = T.unwords
+fillSpendScriptHashesSql = T.unwords
   [ "UPDATE", table redeemerTableDef
   , "SET", col redeemerCols.rdcScriptHash, "=", qcol "a" addressCols.acPaymentCred
   , "FROM", table txInTableDef, "ti"
@@ -92,5 +130,5 @@ spendScriptHashSql scopeClause = T.unwords
   , "  AND", qcol (table redeemerTableDef) redeemerCols.rdcPurpose, "= 'spend'"
   , "  AND", qcol (table redeemerTableDef) redeemerCols.rdcScriptHash, "IS NULL"
   , "  AND", qcol "a" addressCols.acHasScript
-  , scopeClause
+  , "  AND", qcol (table redeemerTableDef) redeemerCols.rdcId, "= ANY($1)"
   ]

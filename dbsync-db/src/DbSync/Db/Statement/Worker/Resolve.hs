@@ -2,28 +2,20 @@
 
 -- | Post-load FK resolution for the three input tables.
 --
--- During Ingest the 'UtxoStore' resolves most inputs at COPY time;
+-- During Ingest the 'UtxoStore' resolves inputs at COPY time;
 -- cache-misses land with @tx_out_id = NULL@. This module rebuilds
--- those tables via @CREATE TABLE … AS SELECT LEFT JOIN@ + @DROP@ +
--- @RENAME@ to fill the NULLs in one pass.
+-- those tables via CTAS to fill the NULLs in one pass.
 --
--- CTAS is preferred over UPDATE because:
+-- CTAS rather than UPDATE because UPDATE rewrites the heap MVCC-style
+-- and PostgreSQL refuses to parallelise a plan that modifies rows; a
+-- CTAS @SELECT@ is parallel-eligible and writes one sequential heap.
+-- The price is that CTAS carries no constraints — 'rebuildTableScript'
+-- re-attaches them from the 'TableDef'.
 --
---   * UPDATE rewrites the heap MVCC-style and churns every pre-built
---     B-tree index; CTAS writes a fresh heap and the schema-wide
---     index pass builds them once at the end.
---   * Sequential writes hit a multiple of the random-write rate.
---   * @LEFT JOIN@ preserves orphan inputs (no matching @tx.hash@) as
---     @tx_out_id = NULL@.
---
--- True CTAS rather than @CREATE … LIKE@ + @INSERT … SELECT@ because
--- PostgreSQL never parallelises a query that writes through
--- @INSERT@, while a CTAS @SELECT@ is eligible for a parallel plan
--- (per server parallel-worker settings). The price is that CTAS
--- carries no constraints: NOT NULL, defaults, checks, and identity
--- are re-attached from the 'TableDef' after the rename — one
--- combined validation scan, no rewrite — and the recreated identity
--- sequence is repositioned by Prep's final sequence-reset step.
+-- The @tx.hash@ lookup sits in the second arm of a @COALESCE@ rather
+-- than a @LEFT JOIN@, so it is evaluated only for the rows the
+-- 'UtxoStore' missed instead of once per input row. An input with no
+-- matching @tx.hash@ at all stays NULL either way.
 --
 -- @tx_out.consumed_by_tx_id@ stays on an UPDATE: it touches a much
 -- smaller residual (only what 'ConsumedByWorker' didn't write live)
@@ -45,7 +37,8 @@ import qualified Hasql.Decoders as D
 import qualified Hasql.Encoders as E
 import qualified Hasql.Statement as Stmt
 
-import DbSync.Db.Schema.Types (ColumnDef (..), TableColumn (..), TableDef (..))
+import DbSync.Db.Schema.Core (TxCols (..), txCols, txTableDef)
+import DbSync.Db.Schema.Types (TableColumn (..), TableDef (..))
 import DbSync.Db.Schema.UTxO
   ( CollateralTxInCols (..)
   , ReferenceTxInCols (..)
@@ -61,36 +54,25 @@ import DbSync.Db.Schema.UTxO
   , txOutTableDef
   )
 import DbSync.Db.Sql.Refs (col, qcol, table)
+import DbSync.Db.Statement.Common (rebuildTableScript)
 
 resolveTxInScript :: Text
 resolveTxInScript =
-  ctasScript txInTableDef
-    [ txInCols.ticId.tcName
-    , txInCols.ticTxInId.tcName
-    , txInCols.ticTxOutIndex.tcName
-    , txInCols.ticTxOutHash.tcName
-    , txInCols.ticRedeemerId.tcName
-    ]
+  resolveScript txInTableDef txInCols.ticTxOutId txInCols.ticTxOutHash
 
--- | Same shape as 'resolveTxInScript' minus @redeemer_id@.
 resolveCollateralTxInScript :: Text
 resolveCollateralTxInScript =
-  ctasScript collateralTxInTableDef
-    [ collateralTxInCols.cticId.tcName
-    , collateralTxInCols.cticTxInId.tcName
-    , collateralTxInCols.cticTxOutIndex.tcName
-    , collateralTxInCols.cticTxOutHash.tcName
-    ]
+  resolveScript
+    collateralTxInTableDef
+    collateralTxInCols.cticTxOutId
+    collateralTxInCols.cticTxOutHash
 
--- | Same shape as 'resolveCollateralTxInScript'.
 resolveReferenceTxInScript :: Text
 resolveReferenceTxInScript =
-  ctasScript referenceTxInTableDef
-    [ referenceTxInCols.rticId.tcName
-    , referenceTxInCols.rticTxInId.tcName
-    , referenceTxInCols.rticTxOutIndex.tcName
-    , referenceTxInCols.rticTxOutHash.tcName
-    ]
+  resolveScript
+    referenceTxInTableDef
+    referenceTxInCols.rticTxOutId
+    referenceTxInCols.rticTxOutHash
 
 -- | Walk all resolved inputs and stamp the producing
 -- @tx_out.consumed_by_tx_id@ with the consuming tx id. Run after the
@@ -118,53 +100,14 @@ resolveConsumedByTxIdStmt =
 -- * Internals
 -- ---------------------------------------------------------------------------
 
--- | @passthrough@ is every column except @tx_out_id@. @tx_out_id@ is
--- resolved via @COALESCE(orig.tx_out_id, tx.id)@: cache hits keep
--- their pre-populated value, misses get the join result, orphans
--- stay NULL. The SELECT keeps the original column order, so the
--- rebuilt table is column-identical to its 'TableDef'.
-ctasScript :: TableDef -> [Text] -> Text
-ctasScript td passthrough = T.unlines $
-  [ "CREATE UNLOGGED TABLE " <> newName <> " AS"
-  , "SELECT " <> T.intercalate ", " selExprs
-  , "  FROM " <> tbl <> " src"
-  , "  LEFT JOIN tx ON tx.hash = src.tx_out_hash;"
-  , "DROP TABLE " <> tbl <> ";"
-  , "ALTER TABLE " <> newName <> " RENAME TO " <> tbl <> ";"
-  ]
-  <> notNullDdl <> defaultDdl <> checkDdl <> identityDdl
+resolveScript :: TableDef -> TableColumn -> TableColumn -> Text
+resolveScript td txOutIdCol txOutHashCol =
+  rebuildTableScript td [(tcName txOutIdCol, resolved)] (table td <> " src")
   where
-    tbl     = tdName td
-    newName = tbl <> "_new"
-    insertIdx = 2  -- "id", "tx_in_id", THEN tx_out_id
-    (before, after) = splitAt insertIdx passthrough
-    selExprs =
-      map (\c -> "src." <> c) before
-        ++ ["COALESCE(src.tx_out_id, tx.id) AS tx_out_id"]
-        ++ map (\c -> "src." <> c) after
-
-    -- Constraint re-attachment, derived from the TableDef so the
-    -- rebuilt table cannot drift from the declared schema.
-    notNullCols = [cdName c | c <- tdColumns td, not (cdNullable c)]
-    notNullDdl
-      | null notNullCols = []
-      | otherwise =
-          [ "ALTER TABLE " <> tbl <> " "
-              <> T.intercalate ", "
-                   ["ALTER COLUMN " <> c <> " SET NOT NULL" | c <- notNullCols]
-              <> ";"
-          ]
-    defaultDdl =
-      [ "ALTER TABLE " <> tbl <> " ALTER COLUMN " <> c
-          <> " SET DEFAULT " <> expr <> ";"
-      | (c, expr) <- tdColumnDefaults td
-      ]
-    checkDdl =
-      [ "ALTER TABLE " <> tbl <> " ADD CHECK (" <> expr <> ");"
-      | expr <- tdChecks td
-      ]
-    identityDdl =
-      [ "ALTER TABLE " <> tbl <> " ALTER COLUMN " <> c
-          <> " ADD GENERATED BY DEFAULT AS IDENTITY;"
-      | c <- tdIdentityColumns td
+    resolved = T.unwords
+      [ "COALESCE(", qcol "src" txOutIdCol, ","
+      , "(SELECT", qcol (table txTableDef) txCols.tcId
+      , "FROM", table txTableDef
+      , "WHERE", qcol (table txTableDef) txCols.tcHash
+      ,      "=", qcol "src" txOutHashCol, "))"
       ]

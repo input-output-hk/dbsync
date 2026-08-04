@@ -41,6 +41,7 @@ import qualified DbSync.App.Config.ValidationSpec as ConfigValidationSpec
 import qualified DbSync.ChainSync.ConnectionSpec as ChainSyncConnectionSpec
 import qualified DbSync.Db.Statement.ConstraintsSpec as DbStatementConstraintsSpec
 import qualified DbSync.Db.Statement.IndexesSpec as DbStatementIndexesSpec
+import qualified DbSync.Db.Statement.RebuildSpec as DbStatementRebuildSpec
 import qualified DbSync.Db.TypesSpec as DbTypesSpec
 import qualified DbSync.Error.RenderSpec as ErrorRenderSpec
 import qualified DbSync.Extractor.CoreSpec as ExtractorCoreSpec
@@ -189,6 +190,7 @@ main = hspec $ do
     ChainSyncConnectionSpec.spec
     DbStatementConstraintsSpec.spec
     DbStatementIndexesSpec.spec
+    DbStatementRebuildSpec.spec
     DbTypesSpec.spec
     ErrorRenderSpec.spec
     ExtractorCoreSpec.spec

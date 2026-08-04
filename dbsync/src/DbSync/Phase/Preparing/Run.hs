@@ -137,8 +137,8 @@ run connSettings tuning tables = step PhaseStep "post-load pass" $ do
   _ <- Backfill.backfillTxColumns
   -- Needs both tables: the hash comes off the spent output that
   -- @tx_in@ points at, and lands on a @redeemer@ row.
-  when (hasTable (tdName redeemerTableDef) && hasTable (tdName txInTableDef)) $
-    void Backfill.backfillSpendScriptHash
+  when (hasTable (tdName redeemerTableDef) && hasTable (tdName txInTableDef))
+    Backfill.rebuildSpendScriptHash
   _ <- Backfill.applyDepositPending
   step CleanupStep "truncate epoch_param_pending"
     Backfill.truncateDepositPending

@@ -1,11 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Post-load tx-column backfill UPDATEs and deposit-pending flush.
--- SQL lives in 'DbSync.Db.Statement.Worker.Backfill' /
+-- | Post-load column fills: the tx-column UPDATEs, the @redeemer@
+-- rebuild, and the deposit-pending flush. SQL lives in
+-- 'DbSync.Db.Statement.Worker.Backfill' /
+-- 'DbSync.Db.Statement.Worker.RedeemerScriptHash' /
 -- 'DbSync.Db.Statement.Worker.EpochParamPending'.
 module DbSync.Phase.Preparing.Backfill
   ( backfillTxColumns
-  , backfillSpendScriptHash
+  , rebuildSpendScriptHash
   , applyDepositPending
   , truncateDepositPending
   , backfillEpochFinalized
@@ -25,7 +27,7 @@ import DbSync.Db.Statement.Worker.Backfill
   , backfillValidContractDepositStmt
   )
 import DbSync.Db.Statement.EpochView (backfillEpochFinalizedStmt)
-import DbSync.Db.Statement.Worker.RedeemerScriptHash (backfillSpendScriptHashStmt)
+import DbSync.Db.Statement.Worker.RedeemerScriptHash (rebuildSpendScriptHashScript)
 import DbSync.Db.Statement.Worker.EpochParamPending
   ( applyPoolUpdateDepositStmt
   , applyStakeRegistrationDepositStmt
@@ -53,16 +55,19 @@ backfillTxColumns = do
           runRowsAffected backfillValidContractDepositStmt
   pure (n1 + n2 + n3 + n4)
 
--- | Fill @redeemer.script_hash@ for spend redeemers from the payment
--- credential of the output each one unlocks. Must run after
--- 'DbSync.Phase.Preparing.Resolve.resolveInputTxOutIds' so
--- @tx_in.tx_out_id@ identifies the spent output.
-backfillSpendScriptHash
+-- | Rebuild @redeemer@ with @script_hash@ filled for spend redeemers
+-- from the payment credential of the output each one unlocks. Must run
+-- after 'DbSync.Phase.Preparing.Resolve.resolveInputTxOutIds' so
+-- @tx_in.tx_out_id@ identifies the spent output, and before the flip,
+-- which attaches the id sequence the rebuild drops.
+rebuildSpendScriptHash
   :: (HasTracer env, HasHasqlConnection env, MonadReader env m, MonadUnliftIO m)
-  => m Int64
-backfillSpendScriptHash =
-  stepRows BackfillStep "redeemer.script_hash (spend redeemers)" $
-    runRowsAffected backfillSpendScriptHashStmt
+  => m ()
+rebuildSpendScriptHash =
+  step ResolveStep "redeemer.script_hash (table rebuild)" $ do
+    conn <- asks getHasqlConnection
+    useConn "Phase.Preparing.Backfill.rebuildSpendScriptHash" conn
+      (Sess.script rebuildSpendScriptHashScript)
 
 -- | Fill the two ledger-derived deposit columns from
 -- @epoch_param_pending@. Both UPDATEs filter on @deposit IS NULL@

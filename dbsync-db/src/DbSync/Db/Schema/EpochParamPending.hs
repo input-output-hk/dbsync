@@ -79,7 +79,7 @@ epochParamPendingTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys = []
+  , tdParentRefs = []
   }
 
 -- ---------------------------------------------------------------------------

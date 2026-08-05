@@ -89,8 +89,6 @@ tablesWithoutCopyEncoder =
 encodersOutsideDeclaredSchema :: [Text]
 encodersOutsideDeclaredSchema =
   [ "epoch_sync_time"
-  , "meta"
-  , "reverse_index"
   ]
 
 -- ---------------------------------------------------------------------------
@@ -105,8 +103,6 @@ copyShapeCases =
   , (Core.slotLeaderTableDef,   Core.encodeSlotLeaderCopy (SlotLeaderId 1) sampleSlotLeader)
   , (Core.stakeAddressTableDef, Core.encodeStakeAddressCopy (StakeAddressId 1) sampleStakeAddress)
   , (Core.poolHashTableDef,     Core.encodePoolHashCopy (PoolHashId 1) samplePoolHash)
-  , (Core.metaTableDef,         Core.encodeMetaCopy (MetaId 1) sampleMeta)
-  , (Core.reverseIndexTableDef, Core.encodeReverseIndexCopy (ReverseIndexId 1) sampleReverseIndex)
 
     -- Address
   , (Address.addressTableDef, Address.encodeAddressCopy (AddressId 1) sampleAddress)
@@ -265,19 +261,6 @@ samplePoolHash :: Core.PoolHash
 samplePoolHash = Core.PoolHash
   { Core.poolHashHashRaw = "\5"
   , Core.poolHashView    = "pool1"
-  }
-
-sampleMeta :: Core.Meta
-sampleMeta = Core.Meta
-  { Core.metaStartTime   = t0
-  , Core.metaNetworkName = "testnet"
-  , Core.metaVersion     = "1"
-  }
-
-sampleReverseIndex :: Core.ReverseIndex
-sampleReverseIndex = Core.ReverseIndex
-  { Core.reverseIndexBlockId = BlockId 1
-  , Core.reverseIndexMinIds  = "1,1,1"
   }
 
 sampleAddress :: Address.Address

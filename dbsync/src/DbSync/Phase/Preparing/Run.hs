@@ -34,6 +34,9 @@
 --   * The production index build runs after the flip, building each
 --     Follow-facing index exactly once, fanned out per index across
 --     the pool.
+--   * The ownership foreign keys go on after that build and the final
+--     ANALYZE, so each validation scan can probe the parent's PK index
+--     and plan against current statistics.
 --   * Sequence reset runs last: it needs the flip to have attached
 --     the sequences and the PK indexes for the @MAX(id)@ lookups.
 --
@@ -74,6 +77,7 @@ import DbSync.Db.Statement.Indexes
   )
 import DbSync.Db.Transaction (HasHasqlConnection (..))
 import qualified DbSync.Phase.Preparing.Backfill as Backfill
+import qualified DbSync.Phase.Preparing.Constraints as Constraints
 import qualified DbSync.Phase.Preparing.Indexes as Indexes
 import qualified DbSync.Phase.Preparing.PreResolveIndexes as PreResolveIndexes
 import qualified DbSync.Phase.Preparing.Resolve as Resolve
@@ -116,7 +120,7 @@ run connSettings tuning tables = step PhaseStep "post-load pass" $ do
   -- ('createPostResolveIndexes').
   PreResolveIndexes.createPreResolveIndexes
 
-  Resolve.resolveForeignKeys
+  Resolve.resolveInputTxOutIds
 
   PreResolveIndexes.createPostResolveIndexes
 
@@ -125,7 +129,7 @@ run connSettings tuning tables = step PhaseStep "post-load pass" $ do
   -- taken mid-ingest; without this pass the planner picks Nested
   -- Loop plans whose outer-side estimate is off by orders of
   -- magnitude. The three CTAS-rebuilt input tables are ANALYZEd
-  -- inside 'Resolve.resolveForeignKeys'.
+  -- inside 'Resolve.resolveInputTxOutIds'.
   step AnalyzeStep "backfill input tables" $
     for_ (filter (hasTable . tdName) backfillAnalyzeTables) $ \td ->
       runDdl (analyzeSql (tdName td))
@@ -133,8 +137,8 @@ run connSettings tuning tables = step PhaseStep "post-load pass" $ do
   _ <- Backfill.backfillTxColumns
   -- Needs both tables: the hash comes off the spent output that
   -- @tx_in@ points at, and lands on a @redeemer@ row.
-  when (hasTable (tdName redeemerTableDef) && hasTable (tdName txInTableDef)) $
-    void Backfill.backfillSpendScriptHash
+  when (hasTable (tdName redeemerTableDef) && hasTable (tdName txInTableDef))
+    Backfill.rebuildSpendScriptHash
   _ <- Backfill.applyDepositPending
   step CleanupStep "truncate epoch_param_pending"
     Backfill.truncateDepositPending
@@ -165,6 +169,12 @@ run connSettings tuning tables = step PhaseStep "post-load pass" $ do
 
   step AnalyzeStep "all tables" $
     for_ tables $ \td -> runDdl (analyzeSql (tdName td))
+
+  step ConstraintStep "add ownership foreign keys" $
+    Constraints.addConstraints tables
+  step ConstraintStep "validate ownership foreign keys" $
+    withPrepPool connSettings tuning (ptPoolSize tuning) $
+      Constraints.validateConstraints (ptPoolSize tuning) tables
 
   step SequenceStep "reset id sequences to MAX(id) + 1" $
     Sequences.resetSequences tables

@@ -2,7 +2,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- | Restart a sync that's already in 'FollowingChainTip' and verify
--- the second run picks up cleanly across three configurations:
+-- the second run picks up cleanly across four configurations:
 --
 --   * Ledger off — the dedup-counter cleanup must not wipe
 --     legitimately-committed rows on a Follow restart
@@ -14,6 +14,9 @@
 --     the gap through the ledger worker via the receiver fan-out;
 --     Follow\'s consumer skips its PG-write path for the replayed
 --     range so committed rows are preserved.
+--   * Ledger on, epoch-keyed tables — the epoch pass still runs on
+--     this path, and must not trim an epoch that only
+--     already-committed blocks produced.
 module DbSync.Phase.FollowRestartSpec (spec) where
 
 import Cardano.Prelude
@@ -24,7 +27,7 @@ import Data.IORef (IORef, newIORef, readIORef)
 
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
-import DbSync.App.Config.Types (SyncConfig)
+import DbSync.App.Config.Types (DbProfile (..), OptionFlag (..), SyncConfig (..))
 import DbSync.Db.Schema.Address (addressTableDef)
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
 import DbSync.Db.Schema.Core (poolHashTableDef, stakeAddressTableDef)
@@ -43,14 +46,25 @@ import DbSync.Test.AppHarness
 import DbSync.Test.Database (queryTestDb)
 import DbSync.Test.E2E
   ( conwayConfigDir
+  , conwayRewardsConfigDir
   , forgeAndWaitForBlocks
   , listLedgerSnapshots
   , syncCompleteTrue
   , withAppSession
   , withAppSessionResume
   )
+import DbSync.Test.EpochRegression
+  ( completedStakeEpochs
+  , epochRegressions
+  , snapshotEpochKeyedCounts
+  )
 import DbSync.Test.Helpers (waitFor)
-import DbSync.Test.MockNode (MockNode, forgeAndPushBlocks, withMockNode)
+import DbSync.Test.MockNode
+  ( MockNode
+  , forgeAndPushBlocks
+  , forgeAndPushUntilNextEpoch
+  , withMockNode
+  )
 import DbSync.Test.PgAssertions (countRows, tableColumn)
 
 spec :: Spec
@@ -68,6 +82,9 @@ spec = describe "FollowingChainTip restart" $ do
 
   it "replays the natural mid-epoch gap without rolling PG back (ledger on)" $
     runMidEpochReplayScenario
+
+  it "keeps the epoch-keyed rows already-committed blocks produced" $
+    runEpochRegressionScenario
 
 -- | Tables whose row counts must survive the restart. They get IDs
 -- from PG sequences during Follow and live with the "stale counter"
@@ -212,6 +229,64 @@ runMidEpochReplayScenario =
       -- No PG rollback line: confirms we don't delete committed rows.
       secondMessages `shouldSatisfy`
         not . any (T.isInfixOf "Rolling back PG from slot")
+
+-- ---------------------------------------------------------------------------
+-- * Epoch-keyed regression scenario
+-- ---------------------------------------------------------------------------
+
+-- | 'CleanupMode.FollowRestart' skips the counter pass but still runs
+-- the epoch pass, so an over-eager epoch trim shows up here as well as
+-- on the Ingest path.
+--
+-- Follow's per-block transaction is atomic and the replay window
+-- suppresses PG writes, so nothing legitimately re-writes an
+-- epoch-keyed row after the restart. The counts are therefore asserted
+-- immediately, with no re-sync to mask a deletion.
+runEpochRegressionScenario :: IO ()
+runEpochRegressionScenario =
+  withMockNode conwayRewardsConfigDir $ \mn ->
+    withTempDir "dbsync-test-restart-epoch" $ \ledgerDir -> do
+      tracer <- quietTracer
+      _ <- forgeAndPushBlocks mn 250
+
+      (preCounts, preCompleted) <-
+        withAppSession tracer stakeLedgerConfig mn ledgerDir $ \_ -> do
+          waitForSyncComplete 120
+          baselineBlocks <- countRows (tdName blockTableDef)
+
+          -- Two Follow boundaries: the first drains the snapshot Ingest
+          -- left behind, the second completes an epoch wholly inside
+          -- Follow.
+          followBlocks1 <- forgeAndPushUntilNextEpoch mn
+          followBlocks2 <- forgeAndPushUntilNextEpoch mn
+          let expected = baselineBlocks + length followBlocks1 + length followBlocks2
+          waitFor
+            (tdName blockTableDef <> " count reaches " <> show expected)
+            (do n <- countRows (tdName blockTableDef); pure (n >= expected))
+            120
+
+          (,) <$> snapshotEpochKeyedCounts <*> completedStakeEpochs
+
+      -- A vacuous snapshot would make the comparison meaningless.
+      preCompleted `shouldSatisfy` (not . null)
+
+      withAppSessionResume tracer stakeLedgerConfig mn ledgerDir $ \_ -> do
+        waitFor "sync_complete remains true on restart" syncCompleteTrue 60
+
+        postCounts <- snapshotEpochKeyedCounts
+        epochRegressions preCounts postCounts `shouldBe` []
+
+        postCompleted <- completedStakeEpochs
+        filter (`notElem` postCompleted) preCompleted `shouldBe` []
+
+-- | Ledger on so the boundary handler runs, @stake_delegation_ledger@
+-- on so it writes @epoch_stake@ / @reward@ / @pot_reward@.
+stakeLedgerConfig :: SyncConfig
+stakeLedgerConfig = ledgerEnabledTestConfig
+  { scDbProfile = (scDbProfile ledgerEnabledTestConfig)
+      { pcStakeDelegationLedger = OptionFlag True
+      }
+  }
 
 -- | Read @dbsync_sync_state.last_committed_slot@ as a 'Word64'.
 readLastCommittedSlot :: IO Word64

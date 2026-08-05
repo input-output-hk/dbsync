@@ -171,7 +171,8 @@ spec = describe "DbSync.Db.Schema.Init" $ do
         result <- checkExtractorPresence ["core", "utxo"] testConnStr
         result `shouldBe` SchemaMismatched (MissingExtractor "utxo" NE.:| [])
 
-      it "returns SchemaMatches when the DB has extra extractors not enabled" $ do
-        -- DB recorded "core"; the running profile enables nothing — fine.
+      it "returns SchemaMismatched UnexpectedExtractor when the DB has extras" $ do
+        -- DB recorded "core"; the running profile enables nothing, so
+        -- core's tables exist but no pass would ever scope them.
         result <- checkExtractorPresence [] testConnStr
-        result `shouldBe` SchemaMatches
+        result `shouldBe` SchemaMismatched (UnexpectedExtractor "core" NE.:| [])

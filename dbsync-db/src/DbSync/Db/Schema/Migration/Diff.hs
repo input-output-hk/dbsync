@@ -21,7 +21,7 @@ import qualified Data.Text as T
 import DbSync.Db.Schema.Generate (pgTypeToSql)
 import DbSync.Db.Schema.Types
   ( ColumnDef (..)
-  , ForeignKey
+  , ParentRef
   , TableDef (..)
   )
 
@@ -41,8 +41,8 @@ data SchemaChange
       -- ^ Table name, @CHECK@ expression.
   | AddUniqueConstraint Text (NonEmpty Text)
       -- ^ Table name, column list.
-  | AddForeignKey Text ForeignKey
-      -- ^ Table name, outgoing FK.
+  | AddForeignKey Text ParentRef
+      -- ^ Table name, the ownership edge to enforce.
   | AmbiguousChange Text
       -- ^ Description of a change the differ refuses to guess.
   deriving stock (Eq, Show)
@@ -74,7 +74,7 @@ schemaDiff oldTables newTables =
 -- | Column and constraint changes between two tables of the same name.
 matchedTableChanges :: TableDef -> TableDef -> [SchemaChange]
 matchedTableChanges old new =
-  columnChanges ++ checkChanges ++ uniqueChanges ++ fkChanges ++ generatedChanges
+  columnChanges ++ checkChanges ++ uniqueChanges ++ parentRefChanges ++ generatedChanges
   where
     tn = tdName new
     oldCols = tdColumns old
@@ -142,8 +142,8 @@ matchedTableChanges old new =
     uniqueChanges =
       [ AddUniqueConstraint tn cols
       | cols <- tdUniqueConstraints new, cols `notElem` tdUniqueConstraints old ]
-    fkChanges =
-      [ AddForeignKey tn fk | fk <- tdForeignKeys new, fk `notElem` tdForeignKeys old ]
+    parentRefChanges =
+      [ AddForeignKey tn pr | pr <- tdParentRefs new, pr `notElem` tdParentRefs old ]
     generatedChanges =
       [ AmbiguousChange (tn <> "." <> col <> ": generated column added; review expression")
       | (col, _) <- tdGeneratedColumns new

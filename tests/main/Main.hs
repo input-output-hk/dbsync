@@ -39,7 +39,9 @@ import qualified DbSync.App.Config.NodeSpec as ConfigNodeSpec
 import qualified DbSync.App.Config.TypesSpec as ConfigTypesSpec
 import qualified DbSync.App.Config.ValidationSpec as ConfigValidationSpec
 import qualified DbSync.ChainSync.ConnectionSpec as ChainSyncConnectionSpec
+import qualified DbSync.Db.Statement.ConstraintsSpec as DbStatementConstraintsSpec
 import qualified DbSync.Db.Statement.IndexesSpec as DbStatementIndexesSpec
+import qualified DbSync.Db.Statement.RebuildSpec as DbStatementRebuildSpec
 import qualified DbSync.Db.TypesSpec as DbTypesSpec
 import qualified DbSync.Error.RenderSpec as ErrorRenderSpec
 import qualified DbSync.Extractor.CoreSpec as ExtractorCoreSpec
@@ -84,6 +86,7 @@ import qualified DbSync.Schema.Migration.DiffSpec as SchemaMigrationDiffSpec
 import qualified DbSync.Schema.Migration.RenderSpec as SchemaMigrationRenderSpec
 import qualified DbSync.Schema.Migration.RunnerSpec as SchemaMigrationRunnerSpec
 import qualified DbSync.Schema.OffChainPoolSpec as SchemaOffChainPoolSpec
+import qualified DbSync.Schema.ParentRefsSpec as SchemaParentRefsSpec
 import qualified DbSync.Schema.OffChainVoteSpec as SchemaOffChainVoteSpec
 import qualified DbSync.Schema.RewardSpec as SchemaRewardSpec
 import qualified DbSync.Schema.ScriptsDatumsSpec as SchemaScriptsDatumsSpec
@@ -185,7 +188,9 @@ main = hspec $ do
     ConfigTypesSpec.spec
     ConfigValidationSpec.spec
     ChainSyncConnectionSpec.spec
+    DbStatementConstraintsSpec.spec
     DbStatementIndexesSpec.spec
+    DbStatementRebuildSpec.spec
     DbTypesSpec.spec
     ErrorRenderSpec.spec
     ExtractorCoreSpec.spec
@@ -230,6 +235,7 @@ main = hspec $ do
     SchemaMigrationRunnerSpec.spec
     SchemaOffChainPoolSpec.spec
     SchemaOffChainVoteSpec.spec
+    SchemaParentRefsSpec.spec
     SchemaRewardSpec.spec
     SchemaScriptsDatumsSpec.spec
     SchemaSyncStateSpec.spec

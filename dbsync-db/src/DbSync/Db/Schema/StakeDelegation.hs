@@ -242,8 +242,8 @@ stakeRegistrationTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys =
-      [ ForeignKey "tx_id" "tx" "id"
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
       ]
   }
 
@@ -265,8 +265,8 @@ stakeDeregistrationTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys =
-      [ ForeignKey "tx_id" "tx" "id"
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
       ]
   }
 
@@ -290,8 +290,8 @@ delegationTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys =
-      [ ForeignKey "tx_id" "tx" "id"
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
       ]
   }
 
@@ -312,8 +312,8 @@ withdrawalTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys =
-      [ ForeignKey "tx_id" "tx" "id"
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
       ]
   }
 
@@ -350,7 +350,7 @@ rewardTableDef = TableDef
         )
       ]
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys = []
+  , tdParentRefs = []
   }
 
 -- | @pot_reward.earned_epoch@ is one epoch behind
@@ -380,7 +380,7 @@ potRewardTableDef = TableDef
         )
       ]
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys = []
+  , tdParentRefs = []
   }
 
 -- | The @epoch_stake@ table. The triple (addr_id, pool_id,
@@ -405,7 +405,7 @@ epochStakeTableDef = TableDef
   , tdUniqueConstraints = ["addr_id" :| ["pool_id", "epoch_no"]]
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys = []
+  , tdParentRefs = []
   }
 
 -- | The @epoch_stake_progress@ table. Unique on @epoch_no@.
@@ -426,7 +426,7 @@ epochStakeProgressTableDef = TableDef
   , tdUniqueConstraints = [pure "epoch_no"]
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys = []
+  , tdParentRefs = []
   }
 
 -- ---------------------------------------------------------------------------

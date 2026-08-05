@@ -18,7 +18,7 @@ import qualified Data.Text as T
 
 import DbSync.Db.Schema.Generate (formatColumnDdl, generateCreateTable)
 import DbSync.Db.Schema.Migration.Diff (SchemaChange (..))
-import DbSync.Db.Schema.Types (ForeignKey (..))
+import DbSync.Db.Schema.Types (ParentRef (..))
 import DbSync.Db.Sql (quoteIdent)
 
 renderChange :: SchemaChange -> Text
@@ -35,10 +35,10 @@ renderChange = \case
   AddUniqueConstraint table cols ->
     "ALTER TABLE " <> quoteIdent table <> " ADD UNIQUE ("
       <> T.intercalate ", " (map quoteIdent (NE.toList cols)) <> ");"
-  AddForeignKey table fk ->
+  AddForeignKey table pr ->
     "ALTER TABLE " <> quoteIdent table <> " ADD FOREIGN KEY ("
-      <> quoteIdent (fkColumn fk) <> ") REFERENCES "
-      <> quoteIdent (fkParentTable fk) <> " ("
-      <> quoteIdent (fkParentColumn fk) <> ");"
+      <> quoteIdent (prColumn pr) <> ") REFERENCES "
+      <> quoteIdent (prParentTable pr) <> " ("
+      <> quoteIdent (prParentColumn pr) <> ");"
   AmbiguousChange msg ->
     "-- TODO (manual): " <> msg

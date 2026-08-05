@@ -209,7 +209,7 @@ offChainVoteDataTableDef = TableDef
   , tdUniqueConstraints = ["hash" :| ["voting_anchor_id"]]
   , tdGeneratedColumns  = []
   , tdIdentityColumns   = ["id"]
-  , tdForeignKeys       = []
+  , tdParentRefs       = []
   }
 
 offChainVoteGovActionDataTableDef :: TableDef
@@ -230,7 +230,7 @@ offChainVoteGovActionDataTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns  = []
   , tdIdentityColumns   = ["id"]
-  , tdForeignKeys       = []
+  , tdParentRefs       = []
   }
 
 offChainVoteDrepDataTableDef :: TableDef
@@ -254,7 +254,7 @@ offChainVoteDrepDataTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns  = []
   , tdIdentityColumns   = ["id"]
-  , tdForeignKeys       = []
+  , tdParentRefs       = []
   }
 
 offChainVoteAuthorTableDef :: TableDef
@@ -276,7 +276,7 @@ offChainVoteAuthorTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns  = []
   , tdIdentityColumns   = ["id"]
-  , tdForeignKeys       = []
+  , tdParentRefs       = []
   }
 
 offChainVoteReferenceTableDef :: TableDef
@@ -297,7 +297,7 @@ offChainVoteReferenceTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns  = []
   , tdIdentityColumns   = ["id"]
-  , tdForeignKeys       = []
+  , tdParentRefs       = []
   }
 
 offChainVoteExternalUpdateTableDef :: TableDef
@@ -316,7 +316,7 @@ offChainVoteExternalUpdateTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns  = []
   , tdIdentityColumns   = ["id"]
-  , tdForeignKeys       = []
+  , tdParentRefs       = []
   }
 
 offChainVoteFetchErrorTableDef :: TableDef
@@ -336,7 +336,7 @@ offChainVoteFetchErrorTableDef = TableDef
   , tdUniqueConstraints = ["voting_anchor_id" :| ["retry_count"]]
   , tdGeneratedColumns  = []
   , tdIdentityColumns   = ["id"]
-  , tdForeignKeys       = []
+  , tdParentRefs       = []
   }
 
 -- ---------------------------------------------------------------------------

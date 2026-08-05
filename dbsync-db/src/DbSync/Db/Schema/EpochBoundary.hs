@@ -316,8 +316,8 @@ epochParamTableDef = TableDef
   , tdUniqueConstraints = [pure "epoch_no"]
   , tdGeneratedColumns  = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys =
-      [ ForeignKey "block_id" "block" "id"
+  , tdParentRefs =
+      [ ParentRef "block_id" "block" "id"
       ]
   }
 
@@ -341,7 +341,7 @@ epochStateTableDef = TableDef
   , tdUniqueConstraints = [pure "epoch_no"]
   , tdGeneratedColumns  = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys       = []
+  , tdParentRefs       = []
   }
 
 -- | 3-column @cost_model@. @costs@ is JSONB; PostgreSQL parses it
@@ -361,7 +361,7 @@ costModelTableDef = TableDef
   , tdUniqueConstraints = [pure "hash"]
   , tdGeneratedColumns  = []
   , tdIdentityColumns = []
-  , tdForeignKeys       = []
+  , tdParentRefs       = []
   }
 
 -- | 5-column @pot_transfer@. UNIQUE on @(tx_id, cert_index)@.
@@ -382,8 +382,8 @@ potTransferTableDef = TableDef
   , tdUniqueConstraints = ["tx_id" :| ["cert_index"]]
   , tdGeneratedColumns  = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys =
-      [ ForeignKey "tx_id" "tx" "id"
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
       ]
   }
 
@@ -405,8 +405,8 @@ treasuryTableDef = TableDef
   , tdUniqueConstraints = ["addr_id" :| ["tx_id"]]
   , tdGeneratedColumns  = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys =
-      [ ForeignKey "tx_id" "tx" "id"
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
       ]
   }
 
@@ -428,8 +428,8 @@ reserveTableDef = TableDef
   , tdUniqueConstraints = ["addr_id" :| ["tx_id"]]
   , tdGeneratedColumns  = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys =
-      [ ForeignKey "tx_id" "tx" "id"
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
       ]
   }
 

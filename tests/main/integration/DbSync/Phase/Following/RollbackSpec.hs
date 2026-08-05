@@ -4,13 +4,13 @@
 --
 -- Test groups:
 --
---   * /Schema-walk/ — pure assertions that 'tdForeignKeys' declares
+--   * /Schema-walk/ — pure assertions that 'tdParentRefs' declares
 --     the right children for the three rollback parents (tx, tx_out,
 --     pool_update). Catches FK-metadata drift compile-time-fast.
 --   * /Cascade integration/ — populate a real DB, call
 --     'Rollback.rollbackToPoint', assert per-table row counts.
 --   * /Epoch-keyed cleanup/ — seed the boundary tables around the
---     target epoch, assert each 'Rollback.EpochAnchor' deletes the
+--     target epoch, assert each 'EpochAnchor' deletes the
 --     right slice.
 --   * /Consumed-by cleanup/ — marks pointing at deleted spenders are
 --     nulled; marks from surviving spenders are kept.
@@ -104,12 +104,17 @@ import DbSync.Extractor.UTxO (utxoExtractor)
 import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.AppM (runAppM)
+import DbSync.Db.Statement.Worker.EpochAnchor
+  ( EpochAnchor (..)
+  , epochKeyedColumns
+  )
 import qualified DbSync.Phase.Following.Rollback as Rollback
 import DbSync.App (cardanoSecurityParam)
 import DbSync.App.Boot (mkCardanoPoint)
 import DbSync.Phase.Following.Resolver (ConsumedTracking (..), mkFollowResolver)
 import DbSync.Test.Database
-  ( queryTestDb
+  ( addFollowTipConstraints
+  , queryTestDb
   , setupFollowTipSchema
   , teardownSchema
   , truncateAllTables
@@ -192,7 +197,7 @@ spec = do
   consumedByNullOutSpec
 
 -- ---------------------------------------------------------------------------
--- Schema-walk: assert tdForeignKeys declarations
+-- Schema-walk: assert tdParentRefs declarations
 -- ---------------------------------------------------------------------------
 
 -- | Pure tests. Verify that 'childrenOf' picks up exactly the tables
@@ -247,7 +252,7 @@ schemaWalkSpec = describe "Rollback.childrenOf" $ do
 
 cascadeSpec :: Spec
 cascadeSpec = describe "Rollback.rollbackToPoint" $
-  beforeAll_ (setupFollowTipSchema tables) $
+  beforeAll_ (setupFollowTipSchema tables >> addFollowTipConstraints tables) $
   afterAll_  (teardownSchema tables) $
   before_    (truncateAllTables tableNames) $ do
 
@@ -320,7 +325,7 @@ cascadeSpec = describe "Rollback.rollbackToPoint" $
 
 kSafetyGuardSpec :: Spec
 kSafetyGuardSpec = describe "Rollback.rollbackToPoint k-safety guard" $
-  beforeAll_ (setupFollowTipSchema tables) $
+  beforeAll_ (setupFollowTipSchema tables >> addFollowTipConstraints tables) $
   afterAll_  (teardownSchema tables) $
   before_    (truncateAllTables tableNames) $ do
 
@@ -350,7 +355,7 @@ kSafetyGuardSpec = describe "Rollback.rollbackToPoint k-safety guard" $
 
 rollbackToSlotSpec :: Spec
 rollbackToSlotSpec = describe "Rollback.rollbackToSlot" $
-  beforeAll_ (setupFollowTipSchema tables) $
+  beforeAll_ (setupFollowTipSchema tables >> addFollowTipConstraints tables) $
   afterAll_  (teardownSchema tables) $
   before_    (truncateAllTables tableNames) $ do
 
@@ -391,13 +396,13 @@ rollbackToSlotSpec = describe "Rollback.rollbackToSlot" $
 -- per-anchor survivors
 -- ---------------------------------------------------------------------------
 
--- | Every table 'Rollback.epochKeyedDeletes' touches, derived from
+-- | Every table 'epochKeyedColumns' touches, derived from
 -- the entries themselves so a new anchor automatically joins the
 -- schema setup, the seeding, and the assertions.
 epochTables :: [TableDef]
 epochTables =
   Map.elems $ Map.fromList
-    [ (tdName td, td) | (c, _) <- Rollback.epochKeyedDeletes, let td = tcTable c ]
+    [ (tdName td, td) | (c, _) <- epochKeyedColumns, let td = tcTable c ]
 
 tablesWithEpoch :: [TableDef]
 tablesWithEpoch = tables <> epochTables
@@ -409,28 +414,28 @@ seedEpochs = [4, 5, 6, 7]
 
 -- | Which of 'seedEpochs' each anchor leaves behind for target
 -- epoch 5.
-expectedSurvivors :: Rollback.EpochAnchor -> [Word64]
+expectedSurvivors :: EpochAnchor -> [Word64]
 expectedSurvivors anchor = case anchor of
-  Rollback.EnteredEpoch      -> [4, 5]     -- delete > 5
-  Rollback.NextEpochSnapshot -> [4, 5, 6]  -- delete > 6
-  Rollback.CompletedEpoch    -> [4]        -- delete >= 5
+  EnteredEpoch      -> [4, 5]     -- delete > 5
+  NextEpochSnapshot -> [4, 5, 6]  -- delete > 6
+  CompletedEpoch    -> [4]        -- delete >= 5
 
 epochKeyedSpec :: Spec
 epochKeyedSpec = describe "Rollback.rollbackToPoint epoch-keyed cleanup" $
-  beforeAll_ (setupFollowTipSchema tablesWithEpoch) $
+  beforeAll_ (setupFollowTipSchema tablesWithEpoch >> addFollowTipConstraints tablesWithEpoch) $
   afterAll_  (teardownSchema tablesWithEpoch) $
   before_    (truncateAllTables (map tdName tablesWithEpoch)) $
 
     it "applies each table's anchor against the target epoch" $ do
       runFollow [block1WithTx, block2WithTxMeta, block3WithTx]
-      for_ Rollback.epochKeyedDeletes $ \(c, _) ->
+      for_ epochKeyedColumns $ \(c, _) ->
         for_ seedEpochs (seedEpochRow c)
 
       withTestConnection $ \conn ->
         runAppM (RollbackTestEnv conn cardanoSecurityParam)
           (Rollback.rollbackToPoint tablesWithEpoch target)
 
-      for_ Rollback.epochKeyedDeletes $ \(c, anchor) -> do
+      for_ epochKeyedColumns $ \(c, anchor) -> do
         survivors <- survivingEpochs c
         (tdName (tcTable c), survivors)
           `shouldBe` (tdName (tcTable c), expectedSurvivors anchor)
@@ -455,9 +460,13 @@ seedEpochRow c epoch = do
              , cdName cd `notElem` generatedCols
         ]
       value cd
-        | cdName cd == epochCol = show epochVal
-        | cdName cd == "id"     = show epoch
-        | otherwise             = dummySqlValue (cdType cd)
+        | cdName cd == epochCol  = show epochVal
+        | cdName cd == "id"      = show epoch
+        -- epoch_param and ada_pots own a real block. The oldest
+        -- fixture block is at or below the rollback target, so the
+        -- block-keyed pass leaves these rows to their epoch anchor.
+        | cdName cd == "block_id" = "(SELECT MIN(id) FROM " <> tdName blockTableDef <> ")"
+        | otherwise              = dummySqlValue (cdType cd)
   void $ queryTestDb $
     "INSERT INTO " <> tdName td
       <> " (" <> T.intercalate ", " (map cdName insertable) <> ")"
@@ -491,7 +500,7 @@ survivingEpochs c = do
 
 consumedByNullOutSpec :: Spec
 consumedByNullOutSpec = describe "Rollback.rollbackToPoint consumed_by cleanup" $
-  beforeAll_ (setupFollowTipSchema tables) $
+  beforeAll_ (setupFollowTipSchema tables >> addFollowTipConstraints tables) $
   afterAll_  (teardownSchema tables) $
   before_    (truncateAllTables tableNames) $
 

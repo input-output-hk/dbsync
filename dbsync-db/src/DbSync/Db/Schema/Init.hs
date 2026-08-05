@@ -79,12 +79,11 @@ import DbSync.Db.Sql (quoteIdent, quoteLiteral)
 --   * 'SchemaUnseeded' — the table exists but carries no @id = 1@ row; a
 --     crash landed between schema creation and the seed write. The boot
 --     flow skips 'initSchema' and 'decideBoot' aborts with a resync hint.
---   * 'SchemaMatches' — every enabled extractor is recorded; the boot flow
---     should skip 'initSchema' and resume.
---   * 'SchemaMismatched' — at least one enabled extractor is missing from
---     the database; the boot flow should abort and surface the
---     discrepancies to the operator (unless @--resync-from-genesis@
---     overrides).
+--   * 'SchemaMatches' — the enabled set and the recorded set are equal; the
+--     boot flow should skip 'initSchema' and resume.
+--   * 'SchemaMismatched' — the two sets differ in either direction; the boot
+--     flow should abort and surface the discrepancies to the operator
+--     (unless @--resync-from-genesis@ overrides).
 data SchemaState
   = SchemaFresh
   | SchemaUnseeded
@@ -92,9 +91,11 @@ data SchemaState
   | SchemaMismatched !(NonEmpty SchemaMismatch)
   deriving stock (Eq, Show)
 
--- | An extractor the profile enables but the database was not built with.
 data SchemaMismatch
   = MissingExtractor !Text
+    -- ^ Enabled in the profile, absent from the database.
+  | UnexpectedExtractor !Text
+    -- ^ Recorded in the database, absent from the profile.
   deriving stock (Eq, Show)
 
 -- | The action the boot flow should take, given the observed schema state and
@@ -303,18 +304,22 @@ checkExtractorPresence expectedNames connStr = do
 -- recorded (a fresh DB). @Just names@ means a seeded @dbsync_sync_state@
 -- row was found and @names@ are its recorded extractors.
 --
--- Extra extractors in @names@ that are not in the expected list are
--- silently ignored — operators are allowed to remove an extractor from
--- their profile without re-syncing the rest.
+-- The comparison is symmetric: only tables belonging to enabled extractors
+-- are ever created, so a recorded extractor the profile no longer enables
+-- means the cleanup and rollback passes would skip tables that do exist,
+-- leaving rows behind. Both directions are reported, missing first.
 analyzeExtractorState
   :: [Text]         -- ^ Extractor names the profile enables
   -> Maybe [Text]   -- ^ Recorded extractor set; 'Nothing' = none recorded
   -> SchemaState
 analyzeExtractorState _ Nothing = SchemaFresh
 analyzeExtractorState expected (Just present) =
-  case filter (`notElem` present) expected of
+  case missing <> unexpected of
     []       -> SchemaMatches
-    (m : ms) -> SchemaMismatched (MissingExtractor m NE.:| map MissingExtractor ms)
+    (m : ms) -> SchemaMismatched (m NE.:| ms)
+  where
+    missing    = map MissingExtractor    (filter (`notElem` present) expected)
+    unexpected = map UnexpectedExtractor (filter (`notElem` expected) present)
 
 -- | Decide what the boot flow should do, given the observed schema state and
 -- the operator-supplied @--resync-from-genesis@ flag.
@@ -335,6 +340,9 @@ renderSchemaMismatch = \case
   MissingExtractor name ->
     "Extractor '" <> name
       <> "' is enabled in the profile but missing from the database."
+  UnexpectedExtractor name ->
+    "Extractor '" <> name
+      <> "' is recorded in the database but not enabled in the profile."
 
 -- ---------------------------------------------------------------------------
 -- * psql helpers

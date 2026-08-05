@@ -57,11 +57,11 @@ spec = describe "DbSync.Db.Schema.Init (pure)" $ do
         (Just ["core", "utxo"])
         `shouldBe` SchemaMatches
 
-    it "extra extractors in DB are silently ignored" $
+    it "extra extractor in DB → UnexpectedExtractor" $
       analyzeExtractorState
         ["core"]
         (Just ["core", "removed_feature"])
-        `shouldBe` SchemaMatches
+        `shouldBe` SchemaMismatched (UnexpectedExtractor "removed_feature" NE.:| [])
 
     it "expected extractor missing from DB → MissingExtractor" $
       analyzeExtractorState
@@ -76,5 +76,13 @@ spec = describe "DbSync.Db.Schema.Init (pure)" $ do
         `shouldBe` SchemaMismatched
           (MissingExtractor "utxo" NE.:| [MissingExtractor "metadata"])
 
-    it "empty expected extractors with present table → SchemaMatches" $
-      analyzeExtractorState [] (Just ["core"]) `shouldBe` SchemaMatches
+    it "mismatches in both directions report missing first" $
+      analyzeExtractorState
+        ["core", "utxo"]
+        (Just ["core", "removed_feature"])
+        `shouldBe` SchemaMismatched
+          (MissingExtractor "utxo" NE.:| [UnexpectedExtractor "removed_feature"])
+
+    it "empty expected extractors with present table → UnexpectedExtractor" $
+      analyzeExtractorState [] (Just ["core"])
+        `shouldBe` SchemaMismatched (UnexpectedExtractor "core" NE.:| [])

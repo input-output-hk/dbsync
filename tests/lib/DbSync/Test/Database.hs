@@ -20,6 +20,7 @@ module DbSync.Test.Database
 
     -- * Spec setup helpers
   , setupFollowTipSchema
+  , addFollowTipConstraints
   , teardownSchema
   ) where
 
@@ -33,7 +34,13 @@ import System.IO.Error (userError)
 import System.Process (readProcessWithExitCode)
 
 import DbSync.Db.Schema.Init (dropSchema, initSchema, prepareSchemaForFollowTip)
-import DbSync.Db.Schema.Types (TableDef)
+import DbSync.Db.Schema.Types (ParentRef (..), TableDef (..))
+import DbSync.Db.Statement.Constraints (ConstraintStatement (..), parentRefConstraints)
+import DbSync.Db.Statement.Indexes
+  ( Concurrency (..)
+  , IndexStatement (..)
+  , tableIndexStatements
+  )
 
 -- ---------------------------------------------------------------------------
 -- * Configuration
@@ -108,6 +115,33 @@ setupFollowTipSchema tables = do
   dropSchema tables testConnStr
   initSchema tables testConnStr
   prepareSchemaForFollowTip tables testConnStr
+
+-- | Add the ownership-edge foreign keys that 'PreparingForVolatileTail'
+-- creates, so a Spec driving the rollback cascade fails on a wrong
+-- delete order instead of silently orphaning rows.
+--
+-- Kept out of 'setupFollowTipSchema' on purpose: Specs that insert one
+-- isolated row per table have no parent rows to point at.
+addFollowTipConstraints :: [TableDef] -> IO ()
+addFollowTipConstraints tables =
+  unless (null constraints) $
+    execTestDb (T.intercalate "; " (indexSql <> constraintSql))
+  where
+    constraints = parentRefConstraints tables
+
+    -- A foreign key needs a unique index on the parent's key column.
+    -- Production gets one from the Prep index build, which runs before
+    -- the constraint step; this path skips indexes entirely.
+    parentNames = concatMap (map prParentTable . tdParentRefs) tables
+    indexSql =
+      [ isSql is
+      | td <- tables
+      , tdName td `elem` parentNames
+      , is <- tableIndexStatements NonConcurrent td
+      ]
+
+    constraintSql =
+      concatMap (\cs -> [csAddSql cs, csValidateSql cs]) constraints
 
 -- | Drop everything for use in @afterAll_@.
 teardownSchema :: [TableDef] -> IO ()

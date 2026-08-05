@@ -106,7 +106,7 @@ offChainPoolDataTableDef = TableDef
   , tdUniqueConstraints = ["pool_id" :| ["pmr_id"]]
   , tdGeneratedColumns  = []
   , tdIdentityColumns   = ["id"]
-  , tdForeignKeys       = []
+  , tdParentRefs       = []
   }
 
 offChainPoolFetchErrorTableDef :: TableDef
@@ -127,7 +127,7 @@ offChainPoolFetchErrorTableDef = TableDef
   , tdUniqueConstraints = ["pool_id" :| ["fetch_time", "retry_count"]]
   , tdGeneratedColumns  = []
   , tdIdentityColumns   = ["id"]
-  , tdForeignKeys       = []
+  , tdParentRefs       = []
   }
 
 -- ---------------------------------------------------------------------------

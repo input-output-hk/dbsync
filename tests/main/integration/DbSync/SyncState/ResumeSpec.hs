@@ -214,8 +214,8 @@ populateTxMetadata bs n =
 
 -- | Push @epoch_stake@ rows for each @(epoch, addrId)@ pair. The
 -- table is an identity leaf with no @slot_no@ / @block_id@ / tx FK,
--- so its only resume anchor is @epoch_no@ mapped back to the cutoff
--- slot through the block table.
+-- so its only resume anchor is @epoch_no@ against the cutoff slot's
+-- epoch.
 populateEpochStake :: LoaderStream -> [(Word64, Int64)] -> IO ()
 populateEpochStake bs rows =
   forM_ rows $ \(epochNo, addrId) ->
@@ -490,32 +490,30 @@ followRestartSpec = describe "FollowRestart" $ do
 
         countRows txMetadataTableDef >>= (`shouldBe` 3)
 
-    it "trims epoch_stake rows for the cutoff epoch and beyond" $ do
+    it "keeps the epoch_stake rows already-committed blocks produced" $ do
       -- @epoch_stake@ is an identity leaf with no @slot_no@,
-      -- @block_id@ or tx FK, so neither the slot/block passes nor the
-      -- FK pass reaches it. Its rows are written per-block in slices
-      -- across an epoch, so a resume into a partially-written epoch
-      -- re-emits the same (addr_id, pool_id, epoch_no) and collides on
-      -- @epoch_stake_unique_1_idx@. Cleanup must prune every row whose
-      -- epoch is at or beyond the cutoff slot's epoch.
+      -- @block_id@ or tx FK, so only the epoch pass reaches it, and
+      -- its 'NextEpochSnapshot' anchor decides how far back to trim.
+      -- Rows for epoch @E@ are emitted across epoch @E-1@'s blocks,
+      -- and blocks at or below the cutoff replay with PG writes
+      -- suppressed — so epochs up to @cutoff + 1@ have to survive or
+      -- they are lost for good.
       withControlConnection $ \ctrl -> do
         runAppM ctrl (seedSyncState 1 testFp False [] 42 "magic-42")
         bs <- mkLoaderStream testConnBs coreTables
         populateChain bs 6  -- blocks 1..3 -> epoch 5, 4..6 -> epoch 6
-        -- Epoch 5 (in progress at the cutoff) and epoch 6 each have a
-        -- committed stake row; both must go because replay re-emits
-        -- them from the first normal block onward.
-        populateEpochStake bs [(5, 100), (6, 101)]
+        populateEpochStake bs [(5, 100), (6, 101), (7, 102), (8, 103)]
         lsCommit bs
         closeLoaderStream bs
 
         -- Cutoff mid-epoch-5 (block 2 at slot 200 is the last
-        -- committed block; block 3 at slot 300 is still in epoch 5).
+        -- committed block; block 3 at slot 300 is still in epoch 5),
+        -- so epochs 5 and 6 stay and 7 onward are re-emitted.
         let row = rowAtBoundary 200 1
         runAppM ctrl (writeSyncState row)
         _ <- runAppM (TracerWithControl mkNullTracer ctrl) (deleteRowsPastSlot FollowRestart coreTables row)
 
-        countRows epochStakeTableDef >>= (`shouldBe` 0)
+        countRows epochStakeTableDef >>= (`shouldBe` 2)
 
     it "is a no-op when last_committed_slot is Nothing" $ do
       withControlConnection $ \ctrl -> do

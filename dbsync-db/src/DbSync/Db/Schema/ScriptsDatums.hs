@@ -176,7 +176,9 @@ datumTableDef = TableDef
   , tdUniqueConstraints = [pure "hash"]
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys = []
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
+      ]
   }
 
 scriptTableDef :: TableDef
@@ -198,7 +200,9 @@ scriptTableDef = TableDef
   , tdUniqueConstraints = [pure "hash"]
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys = []
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
+      ]
   }
 
 redeemerTableDef :: TableDef
@@ -222,7 +226,9 @@ redeemerTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys = []
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
+      ]
   }
 
 redeemerDataTableDef :: TableDef
@@ -242,7 +248,9 @@ redeemerDataTableDef = TableDef
   , tdUniqueConstraints = [pure "hash"]
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys = []
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
+      ]
   }
 
 -- | Leaf table — no other table FKs into it, so the @id@ column
@@ -263,7 +271,9 @@ extraKeyWitnessTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys = []
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
+      ]
   }
 
 -- ---------------------------------------------------------------------------

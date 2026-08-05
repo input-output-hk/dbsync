@@ -16,9 +16,7 @@ module DbSync.Db.Schema.Ids
   , BlockId (..)
   , TxId (..)
   , SlotLeaderId (..)
-  , MetaId (..)
   , EpochSyncTimeId (..)
-  , ReverseIndexId (..)
 
     -- * UTxO table IDs
   , TxOutId (..)
@@ -157,16 +155,8 @@ newtype TxId = TxId { getTxId :: Int64 }
 newtype SlotLeaderId = SlotLeaderId { getSlotLeaderId :: Int64 }
   deriving stock (Eq, Ord, Show)
 
--- | Primary key for the @meta@ table.
-newtype MetaId = MetaId { getMetaId :: Int64 }
-  deriving stock (Eq, Ord, Show)
-
 -- | Primary key for the @epoch_sync_time@ table.
 newtype EpochSyncTimeId = EpochSyncTimeId { getEpochSyncTimeId :: Int64 }
-  deriving stock (Eq, Ord, Show)
-
--- | Primary key for the @reverse_index@ table.
-newtype ReverseIndexId = ReverseIndexId { getReverseIndexId :: Int64 }
   deriving stock (Eq, Ord, Show)
 
 -- ---------------------------------------------------------------------------

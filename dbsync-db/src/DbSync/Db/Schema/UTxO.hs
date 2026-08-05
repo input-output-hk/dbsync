@@ -198,8 +198,8 @@ txOutTableDef = TableDef
   , tdUniqueConstraints = ["tx_id" :| ["index"]]
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys =
-      [ ForeignKey "tx_id" "tx" "id"
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
       ]
   }
 
@@ -221,8 +221,8 @@ txInTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys =
-      [ ForeignKey "tx_in_id" "tx" "id"
+  , tdParentRefs =
+      [ ParentRef "tx_in_id" "tx" "id"
       ]
   }
 
@@ -243,8 +243,8 @@ collateralTxInTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys =
-      [ ForeignKey "tx_in_id" "tx" "id"
+  , tdParentRefs =
+      [ ParentRef "tx_in_id" "tx" "id"
       ]
   }
 
@@ -265,8 +265,8 @@ referenceTxInTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys =
-      [ ForeignKey "tx_in_id" "tx" "id"
+  , tdParentRefs =
+      [ ParentRef "tx_in_id" "tx" "id"
       ]
   }
 
@@ -297,8 +297,8 @@ collateralTxOutTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys =
-      [ ForeignKey "tx_id" "tx" "id"
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
       ]
   }
 

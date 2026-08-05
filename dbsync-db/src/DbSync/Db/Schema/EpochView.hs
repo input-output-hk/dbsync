@@ -122,7 +122,7 @@ epochFinalizedTableDef = TableDef
   , tdUniqueConstraints = [pure "no"]
   , tdGeneratedColumns  = []
   , tdIdentityColumns = []
-  , tdForeignKeys       = []
+  , tdParentRefs       = []
   }
 
 -- ---------------------------------------------------------------------------

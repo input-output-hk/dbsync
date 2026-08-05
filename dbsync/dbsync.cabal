@@ -175,6 +175,7 @@ library
 
     -- Phase: Preparing
     DbSync.Phase.Preparing.Backfill
+    DbSync.Phase.Preparing.Constraints
     DbSync.Phase.Preparing.Indexes
     DbSync.Phase.Preparing.PreResolveIndexes
     DbSync.Phase.Preparing.Resolve

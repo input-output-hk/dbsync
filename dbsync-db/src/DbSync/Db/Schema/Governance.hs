@@ -440,7 +440,7 @@ drepHashTableDef = TableDef
   , tdUniqueConstraints = ["raw" :| ["has_script"]]
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys = []
+  , tdParentRefs = []
   }
 
 drepRegistrationTableDef :: TableDef
@@ -461,7 +461,9 @@ drepRegistrationTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys = []
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
+      ]
   }
 
 drepDistrTableDef :: TableDef
@@ -481,7 +483,7 @@ drepDistrTableDef = TableDef
   , tdUniqueConstraints = ["hash_id" :| ["epoch_no"]]
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys = []
+  , tdParentRefs = []
   }
 
 delegationVoteTableDef :: TableDef
@@ -502,7 +504,9 @@ delegationVoteTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys = []
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
+      ]
   }
 
 govActionProposalTableDef :: TableDef
@@ -532,7 +536,9 @@ govActionProposalTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys = []
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
+      ]
   }
 
 votingProcedureTableDef :: TableDef
@@ -558,7 +564,9 @@ votingProcedureTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys = []
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
+      ]
   }
 
 votingAnchorTableDef :: TableDef
@@ -578,7 +586,9 @@ votingAnchorTableDef = TableDef
   , tdUniqueConstraints = ["data_hash" :| ["url", "type"]]
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys = []
+  , tdParentRefs =
+      [ ParentRef "block_id" "block" "id"
+      ]
   }
 
 -- | FK-referenced by @epoch_state.constitution_id@, so 'constitution.id'
@@ -599,7 +609,11 @@ constitutionTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys = []
+    -- NULL on the genesis-seeded row, which belongs to no proposal and
+    -- so outlives every rollback.
+  , tdParentRefs =
+      [ ParentRef "gov_action_proposal_id" "gov_action_proposal" "id"
+      ]
   }
 
 committeeTableDef :: TableDef
@@ -618,7 +632,11 @@ committeeTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys = []
+    -- NULL on the genesis-seeded row, which belongs to no proposal and
+    -- so outlives every rollback.
+  , tdParentRefs =
+      [ ParentRef "gov_action_proposal_id" "gov_action_proposal" "id"
+      ]
   }
 
 committeeHashTableDef :: TableDef
@@ -636,7 +654,7 @@ committeeHashTableDef = TableDef
   , tdUniqueConstraints = ["raw" :| ["has_script"]]
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys = []
+  , tdParentRefs = []
   }
 
 committeeMemberTableDef :: TableDef
@@ -655,7 +673,7 @@ committeeMemberTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys = [ForeignKey "committee_id" "committee" "id"]
+  , tdParentRefs = [ParentRef "committee_id" "committee" "id"]
   }
 
 committeeRegistrationTableDef :: TableDef
@@ -675,7 +693,9 @@ committeeRegistrationTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys = []
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
+      ]
   }
 
 committeeDeRegistrationTableDef :: TableDef
@@ -695,7 +715,9 @@ committeeDeRegistrationTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys = []
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
+      ]
   }
 
 -- | 53-column @param_proposal@. Rational parameters ride @numeric@
@@ -769,7 +791,9 @@ paramProposalTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys = []
+  , tdParentRefs =
+      [ ParentRef "registered_tx_id" "tx" "id"
+      ]
   }
 
 treasuryWithdrawalTableDef :: TableDef
@@ -788,7 +812,9 @@ treasuryWithdrawalTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = ["id"]
-  , tdForeignKeys = []
+  , tdParentRefs =
+      [ ParentRef "gov_action_proposal_id" "gov_action_proposal" "id"
+      ]
   }
 
 eventInfoTableDef :: TableDef
@@ -808,7 +834,11 @@ eventInfoTableDef = TableDef
   , tdUniqueConstraints = []
   , tdGeneratedColumns = []
   , tdIdentityColumns = []
-  , tdForeignKeys = []
+    -- Epoch-boundary events carry a NULL @tx_id@ and so survive the
+    -- tx-keyed cascades; those rows are id-counter tracked instead.
+  , tdParentRefs =
+      [ ParentRef "tx_id" "tx" "id"
+      ]
   }
 
 -- ---------------------------------------------------------------------------

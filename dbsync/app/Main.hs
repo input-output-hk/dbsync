@@ -11,6 +11,7 @@ import Control.Tracer (traceWith)
 import System.FilePath (takeDirectory)
 
 import DbSync.App.Args (AppArgs (..))
+import DbSync.App.Banner (printBanner)
 import DbSync.App.Run (runApp)
 import DbSync.App.Cli (CliArgs (..), parseCliArgs)
 import DbSync.App.Config.Database (DatabaseConfig, parseDatabaseConfig)
@@ -41,9 +42,11 @@ main = realMain
 
 realMain :: IO ()
 realMain = do
+  args <- parseCliArgs
+  printBanner
+
   -- Bootstrap tracer so config-parse errors get logged before the
   -- configured tracer exists.
-  args       <- parseCliArgs
   bootTracer <- mkStdErrTracer Info
   let bootLogError msg = traceWith bootTracer $ LogMsg Error "App" msg
 

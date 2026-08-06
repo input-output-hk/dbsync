@@ -73,7 +73,7 @@ layout {
         }
         pane name="cardano-db-sync" {
             command "bash"
-            args "-c" "cd $PROJECT_DIR/ && echo 'Starting DbSync...' && ${GHC_DEBUG_SOCKET:+GHC_DEBUG_SOCKET=$GHC_DEBUG_SOCKET }$dbsync --config $CONFIG --pg-config $PG_CONFIG --node-config $TESTNET_DIR/config.json --socket-path $TESTNET_DIR/db/node.socket --ledger-state-dir $TESTNET_DIR "
+            args "-c" "cd $PROJECT_DIR/ &&  ${GHC_DEBUG_SOCKET:+GHC_DEBUG_SOCKET=$GHC_DEBUG_SOCKET }$dbsync --config $CONFIG --pg-config $PG_CONFIG --node-config $TESTNET_DIR/config.json --socket-path $TESTNET_DIR/db/node.socket --ledger-state-dir $TESTNET_DIR "
       }
     }
 }

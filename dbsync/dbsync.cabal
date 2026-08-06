@@ -59,6 +59,7 @@ library
 
     -- Boot / wiring
     DbSync.App.Args
+    DbSync.App.Banner
     DbSync.App.Boot
     DbSync.App.Cli
     DbSync.App.Config.Database

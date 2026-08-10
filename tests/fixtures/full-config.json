@@ -5,7 +5,7 @@
   "ledger": {
     "enabled": true
   },
-  "db_profile": {
+  "extractors": {
     "utxo": {
       "enabled": true
     },

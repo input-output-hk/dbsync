@@ -55,7 +55,7 @@ import qualified Cardano.Mock.Forging.Types as Mock
 import DbSync.App.Config.Types
   ( SyncConfig (..)
   , OptionFlag (..)
-  , DbProfile (..)
+  , Extractors (..)
   )
 import DbSync.Db.Schema.Core (blockTableDef)
 import DbSync.Db.Schema.EpochBoundary (epochParamTableDef)
@@ -520,15 +520,15 @@ spec = describe "Follow governance writes" $ do
           (followComm  - baselineComm)  `shouldBe` 0
 
 -- ---------------------------------------------------------------------------
--- * Profile
+-- * Config
 -- ---------------------------------------------------------------------------
 
--- | 'ledgerEnabledTestConfig' with @pcGovernance@ flipped on.
+-- | 'ledgerEnabledTestConfig' with @exGovernance@ flipped on.
 governanceTestProfile :: SyncConfig
 governanceTestProfile =
   ledgerEnabledTestConfig
-    { scDbProfile = (scDbProfile ledgerEnabledTestConfig)
-        { pcGovernance = OptionFlag True
+    { scExtractors = (scExtractors ledgerEnabledTestConfig)
+        { exGovernance = OptionFlag True
         }
     }
 

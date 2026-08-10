@@ -7,12 +7,12 @@
 --
 -- All 'AppArgs' point at the @dbsync_test@ database. Tests that
 -- need different behaviour settings build their own 'SyncConfig'
--- via 'configWithProfile'.
+-- via 'configWithExtractors'.
 module DbSync.Test.AppHarness
   ( -- * Config builders
     defaultTestConfig
   , ledgerEnabledTestConfig
-  , configWithProfile
+  , configWithExtractors
   , allImplementedExtractors
 
     -- * Config introspection
@@ -62,7 +62,7 @@ import DbSync.App.Config.Types
   , MetricsConfig (..)
   , SyncConfig (..)
   , OptionFlag (..)
-  , DbProfile (..)
+  , Extractors (..)
   , SyncMode (..)
   , SyncSettings (..)
   , UtxoOption (..)
@@ -80,11 +80,11 @@ import DbSync.Test.PgAssertions (tableColumn)
 -- * Config builders
 -- ---------------------------------------------------------------------------
 
--- | The standard test profile: every currently-implemented
+-- | The standard test config: every currently-implemented
 -- extractor enabled. Matches what an "everything" production
--- profile would do for the extractors the codebase has landed.
+-- config would do for the extractors the codebase has landed.
 defaultTestConfig :: SyncConfig
-defaultTestConfig = configWithProfile allImplementedExtractors
+defaultTestConfig = configWithExtractors allImplementedExtractors
 
 -- | Same as 'defaultTestConfig' but with the ledger feature on.
 -- Tests that exercise the LedgerWorker / snapshot writer / Follow
@@ -106,29 +106,29 @@ ledgerEnabledTestConfig =
 -- | All extractors with a real (non-stub) implementation today —
 -- see 'DbSync.App.resolveExtractor'. Skipped: @scripts_datums@,
 -- @governance@, @current_state@ (stubs).
-allImplementedExtractors :: DbProfile
-allImplementedExtractors = DbProfile
-  { pcUtxo                  = defaultUtxoOption { uoEnabled = True }
-  , pcMultiAsset            = OptionFlag True
-  , pcMetadata              = OptionFlag True
-  , pcStakeDelegation       = OptionFlag True
-  , pcStakeDelegationLedger = OptionFlag False
-  , pcPool                  = OptionFlag True
-  , pcScriptsDatums         = OptionFlag False
-  , pcGovernance            = OptionFlag False
-  , pcCbor                  = OptionFlag True
-  , pcEpochSyncStats        = OptionFlag True
-  , pcEpochBoundary         = OptionFlag True
-  , pcPoolStats             = OptionFlag False
-  , pcEpoch                 = OptionFlag True
-  , pcCurrentState          = OptionFlag False
-  , pcOffChainPools         = OptionFlag False
-  , pcOffChainVotes         = OptionFlag False
+allImplementedExtractors :: Extractors
+allImplementedExtractors = Extractors
+  { exUtxo                  = defaultUtxoOption { uoEnabled = True }
+  , exMultiAsset            = OptionFlag True
+  , exMetadata              = OptionFlag True
+  , exStakeDelegation       = OptionFlag True
+  , exStakeDelegationLedger = OptionFlag False
+  , exPool                  = OptionFlag True
+  , exScriptsDatums         = OptionFlag False
+  , exGovernance            = OptionFlag False
+  , exCbor                  = OptionFlag True
+  , exEpochSyncStats        = OptionFlag True
+  , exEpochBoundary         = OptionFlag True
+  , exPoolStats             = OptionFlag False
+  , exEpoch                 = OptionFlag True
+  , exCurrentState          = OptionFlag False
+  , exOffChainPools         = OptionFlag False
+  , exOffChainVotes         = OptionFlag False
   }
 
--- | A ledger-off config with a caller-supplied 'DbProfile'.
-configWithProfile :: DbProfile -> SyncConfig
-configWithProfile opts = SyncConfig
+-- | A ledger-off config with a caller-supplied 'Extractors'.
+configWithExtractors :: Extractors -> SyncConfig
+configWithExtractors opts = SyncConfig
   { scSync = SyncSettings
       { ssMode = SyncModeAuto
       }
@@ -137,7 +137,7 @@ configWithProfile opts = SyncConfig
       , lcBackend              = defaultLedgerBackend
       , lcSnapshotNearTipEpoch = defaultSnapshotNearTipEpoch
       }
-  , scDbProfile = opts
+  , scExtractors = opts
   , scMetrics = MetricsConfig { mcPrometheusPort = 9999 }
   , scLogging = LoggingConfig
       { lgLevel  = "info"
@@ -149,11 +149,11 @@ configWithProfile opts = SyncConfig
 -- * Config introspection
 -- ---------------------------------------------------------------------------
 
--- | Names of every table the enabled extractors on this profile own.
+-- | Names of every table the enabled extractors in this config own.
 -- Tests use this to iterate the schema-flip / index / sequence
 -- assertions instead of hard-coding a stale list.
 --
--- Returns the empty list if the profile is malformed (e.g. an
+-- Returns the empty list if the config is malformed (e.g. an
 -- extractor depends on something disabled). The same configuration
 -- would refuse to run via 'runApp', so test calls that drove a real
 -- sync first don't hit this case.
@@ -161,10 +161,10 @@ configTableNames :: SyncConfig -> [Text]
 configTableNames = map tdName . configTableDefs
 
 -- | The 'TableDef's behind 'configTableNames'. Tests that need to drop
--- or re-create the schema for a profile need the definitions, not just
+-- or re-create the schema for a config need the definitions, not just
 -- the names.
 configTableDefs :: SyncConfig -> [TableDef]
-configTableDefs cfg = case buildExtractors (scDbProfile cfg) of
+configTableDefs cfg = case buildExtractors (scExtractors cfg) of
   Right exts -> concatMap pdTables exts
   Left _err  -> []
 
@@ -182,7 +182,7 @@ configTableDefs cfg = case buildExtractors (scDbProfile cfg) of
 -- drops it before the UNLOGGED → LOGGED flip (see
 -- 'DbSync.Db.Statement.Indexes.resolveScaffoldingIndexNames').
 configExpectedIndexes :: SyncConfig -> [Text]
-configExpectedIndexes cfg = case buildExtractors (scDbProfile cfg) of
+configExpectedIndexes cfg = case buildExtractors (scExtractors cfg) of
   Left _err  -> []
   Right exts ->
     List.nub (concatMap tableIndexNames (concatMap pdTables exts))

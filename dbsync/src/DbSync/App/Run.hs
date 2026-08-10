@@ -75,7 +75,7 @@ import DbSync.App.Config.Database (DatabaseConfig (..))
 import DbSync.App.Config.Types
     ( LedgerConfig(..),
       SyncConfig(..),
-      DbProfile(..),
+      Extractors(..),
       UtxoOption(..) )
 import DbSync.Db.Loader (LoaderStream (..), closeLoaderStream, mkLoaderStream)
 import DbSync.Db.Schema.Types (TableDef)
@@ -530,7 +530,7 @@ setupLedgerEnv tracer hasqlSettings coreEnv ledgerCfg
           (ceCurrentPhase coreEnv)
       else do
         logInfoIO tracer "App"
-          "Ledger feature disabled (set ledger.enabled = true in profile to opt in); skipping LSM session"
+          "Ledger feature disabled (set ledger.enabled = true in the config to opt in); skipping LSM session"
         LedgerDisabled <$> mkNoLedgerEnv tracer pinfo systemStart network
   when (lcEnabled ledgerCfg && fpCheck == FingerprintFresh) $
     writeFingerprint ledgerStateDir expectedFp
@@ -606,11 +606,11 @@ runIngestThenFollow
     addrBuffer       <- newAddressBufferRef
     txOutWorker      <- mkTxOutWorker tracer hasqlSettings initialAddressId
     mPoolWorker      <-
-      setupOffChainPoolWorker tracer hasqlSettings (scDbProfile validConfig)
+      setupOffChainPoolWorker tracer hasqlSettings (scExtractors validConfig)
     mVoteWorker      <-
-      setupOffChainVoteWorker tracer hasqlSettings (scDbProfile validConfig)
+      setupOffChainVoteWorker tracer hasqlSettings (scExtractors validConfig)
     utxoStore        <- openUtxoStore lsmSession
-    let consumedByOn = uoConsumedByTxId (pcUtxo (scDbProfile validConfig))
+    let consumedByOn = uoConsumedByTxId (exUtxo (scExtractors validConfig))
     mConsumedByBuf <-
       if consumedByOn then Just <$> newConsumedByBufferRef else pure Nothing
     latestPointRef   <- newTVarIO Nothing
@@ -852,7 +852,7 @@ handoffToFollow
     -- 'runFollowSession' opens a fresh one starting at the
     -- post-Ingest commit point.
     let consumedTracking =
-          if uoConsumedByTxId (pcUtxo (scDbProfile (ceConfig (ieCore ie))))
+          if uoConsumedByTxId (exUtxo (scExtractors (ceConfig (ieCore ie))))
             then TrackConsumedBy
             else SkipConsumedBy
     runFollowSession tracer "App" iomgr hasqlSettings topLevelCfg

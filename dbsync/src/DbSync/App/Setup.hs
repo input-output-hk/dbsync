@@ -35,7 +35,7 @@ import DbSync.App.Config.Types
   ( LoggingConfig (..)
   , NodeConfig
   , OptionFlag (..)
-  , DbProfile (..)
+  , Extractors (..)
   , SyncConfig (..)
   , UtxoOption (..)
   )
@@ -76,7 +76,7 @@ import DbSync.Worker.OffChain.Vote
 -- first subsystem log onwards.
 buildCoreEnv :: AppTracer -> SyncConfig -> NodeConfig -> Network -> IO CoreEnv
 buildCoreEnv tracer syncCfg nodeCfg network = do
-  extractors <- case buildExtractors (scDbProfile syncCfg) of
+  extractors <- case buildExtractors (scExtractors syncCfg) of
     Left err  -> throwInternal err
     Right xs  -> pure xs
   curPhase <- newCurrentPhase IngestChainHistory
@@ -97,13 +97,13 @@ buildCoreEnv tracer syncCfg nodeCfg network = do
 --
 -- 'coreExtractor' is unconditional — every other extractor's tables
 -- reference its block / tx / slot_leader rows — and so leads the list.
--- Optional extractors come from @db_profile@ and are resolved against
+-- Optional extractors come from @extractors@ and are resolved against
 -- 'allKnownExtractors'; a name with no implementation yet (e.g.
 -- @current_state@) gets a no-op stub so its enablement is still
 -- recorded and the schema reflects it once the work lands.
 --
 -- Returns 'Either' for call-site symmetry, though construction cannot fail.
-buildExtractors :: DbProfile -> Either Text [ExtractorDef]
+buildExtractors :: Extractors -> Either Text [ExtractorDef]
 buildExtractors pc =
   Right (coreExtractor : mapMaybe mkProj optionalExtractors)
   where
@@ -125,22 +125,22 @@ buildExtractors pc =
     -- 'UtxoOption'; the rest read the flat 'OptionFlag' bool.
     optionalExtractors :: [(Text, Bool)]
     optionalExtractors =
-      [ ("utxo",                    uoEnabled (pcUtxo pc))
-      , ("multi_asset",             prEnabled (pcMultiAsset pc))
-      , ("metadata",                prEnabled (pcMetadata pc))
-      , ("stake_delegation",        prEnabled (pcStakeDelegation pc))
-      , ("stake_delegation_ledger", prEnabled (pcStakeDelegationLedger pc))
-      , ("pool",                    prEnabled (pcPool pc))
-      , ("scripts_datums",          prEnabled (pcScriptsDatums pc))
-      , ("governance",              prEnabled (pcGovernance pc))
-      , ("cbor",                    prEnabled (pcCbor pc))
-      , ("epoch_sync_stats",        prEnabled (pcEpochSyncStats pc))
-      , ("epoch_boundary",          prEnabled (pcEpochBoundary pc))
-      , ("pool_stats",              prEnabled (pcPoolStats pc))
-      , ("epoch",                   prEnabled (pcEpoch pc))
-      , ("current_state",           prEnabled (pcCurrentState pc))
-      , ("off_chain_pools",         prEnabled (pcOffChainPools pc))
-      , ("off_chain_votes",         prEnabled (pcOffChainVotes pc))
+      [ ("utxo",                    uoEnabled (exUtxo pc))
+      , ("multi_asset",             prEnabled (exMultiAsset pc))
+      , ("metadata",                prEnabled (exMetadata pc))
+      , ("stake_delegation",        prEnabled (exStakeDelegation pc))
+      , ("stake_delegation_ledger", prEnabled (exStakeDelegationLedger pc))
+      , ("pool",                    prEnabled (exPool pc))
+      , ("scripts_datums",          prEnabled (exScriptsDatums pc))
+      , ("governance",              prEnabled (exGovernance pc))
+      , ("cbor",                    prEnabled (exCbor pc))
+      , ("epoch_sync_stats",        prEnabled (exEpochSyncStats pc))
+      , ("epoch_boundary",          prEnabled (exEpochBoundary pc))
+      , ("pool_stats",              prEnabled (exPoolStats pc))
+      , ("epoch",                   prEnabled (exEpoch pc))
+      , ("current_state",           prEnabled (exCurrentState pc))
+      , ("off_chain_pools",         prEnabled (exOffChainPools pc))
+      , ("off_chain_votes",         prEnabled (exOffChainVotes pc))
       ]
 
 -- | Placeholder extractor — name only, no real extraction logic yet.
@@ -207,10 +207,10 @@ showExtractorList = mconcat . intersperse ", "
 setupOffChainPoolWorker
   :: AppTracer
   -> HasqlSettings.Settings
-  -> DbProfile
+  -> Extractors
   -> IO (Maybe OffChainPoolWorker)
 setupOffChainPoolWorker tracer hasqlSettings opts
-  | prEnabled (pcOffChainPools opts) = do
+  | prEnabled (exOffChainPools opts) = do
       manager <- newRestrictedManager
       Just <$>
         mkOffChainPoolWorker
@@ -224,10 +224,10 @@ setupOffChainPoolWorker tracer hasqlSettings opts
 setupOffChainVoteWorker
   :: AppTracer
   -> HasqlSettings.Settings
-  -> DbProfile
+  -> Extractors
   -> IO (Maybe OffChainVoteWorker)
 setupOffChainVoteWorker tracer hasqlSettings opts
-  | prEnabled (pcOffChainVotes opts) = do
+  | prEnabled (exOffChainVotes opts) = do
       manager <- newRestrictedManager
       let cfg = defaultOffChainVoteConfig
       Just <$>

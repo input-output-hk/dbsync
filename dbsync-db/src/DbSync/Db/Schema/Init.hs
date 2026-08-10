@@ -70,7 +70,7 @@ import DbSync.Db.Sql (quoteIdent, quoteLiteral)
 -- ---------------------------------------------------------------------------
 
 -- | Observed state of the database schema, relative to the extractors the
--- running profile enables.
+-- config enables.
 --
 -- Distinguishes the boot-time scenarios:
 --
@@ -93,9 +93,9 @@ data SchemaState
 
 data SchemaMismatch
   = MissingExtractor !Text
-    -- ^ Enabled in the profile, absent from the database.
+    -- ^ Enabled in the config, absent from the database.
   | UnexpectedExtractor !Text
-    -- ^ Recorded in the database, absent from the profile.
+    -- ^ Recorded in the database, absent from the config.
   deriving stock (Eq, Show)
 
 -- | The action the boot flow should take, given the observed schema state and
@@ -265,7 +265,7 @@ analyzeSql tableName =
 -- ---------------------------------------------------------------------------
 
 -- | Inspect the database and classify the schema state against the
--- extractors the running profile enables.
+-- extractors the config enables.
 --
 -- Three-way probe over the @dbsync_sync_state@ singleton:
 --
@@ -305,11 +305,11 @@ checkExtractorPresence expectedNames connStr = do
 -- row was found and @names@ are its recorded extractors.
 --
 -- The comparison is symmetric: only tables belonging to enabled extractors
--- are ever created, so a recorded extractor the profile no longer enables
+-- are ever created, so a recorded extractor the config no longer enables
 -- means the cleanup and rollback passes would skip tables that do exist,
 -- leaving rows behind. Both directions are reported, missing first.
 analyzeExtractorState
-  :: [Text]         -- ^ Extractor names the profile enables
+  :: [Text]         -- ^ Extractor names the config enables
   -> Maybe [Text]   -- ^ Recorded extractor set; 'Nothing' = none recorded
   -> SchemaState
 analyzeExtractorState _ Nothing = SchemaFresh
@@ -339,10 +339,10 @@ renderSchemaMismatch :: SchemaMismatch -> Text
 renderSchemaMismatch = \case
   MissingExtractor name ->
     "Extractor '" <> name
-      <> "' is enabled in the profile but missing from the database."
+      <> "' is enabled in the config but missing from the database."
   UnexpectedExtractor name ->
     "Extractor '" <> name
-      <> "' is recorded in the database but not enabled in the profile."
+      <> "' is recorded in the database but not enabled in the config."
 
 -- ---------------------------------------------------------------------------
 -- * psql helpers

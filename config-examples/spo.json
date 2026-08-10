@@ -5,7 +5,7 @@
   "ledger": {
     "enabled": false
   },
-  "db_profile": {
+  "extractors": {
     "utxo": true,
     "metadata": true,
     "stake_delegation": true,

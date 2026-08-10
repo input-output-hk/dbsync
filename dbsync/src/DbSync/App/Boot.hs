@@ -135,7 +135,7 @@ import DbSync.Worker.OffChain.Pool (closeOffChainPoolWorker)
 import DbSync.Worker.OffChain.Vote (closeOffChainVoteWorker)
 import DbSync.App.Setup (setupOffChainPoolWorker, setupOffChainVoteWorker)
 import DbSync.App.Config.Types
-  ( DbProfile (..)
+  ( Extractors (..)
   , SyncConfig (..)
   , UtxoOption (..)
   )
@@ -930,10 +930,10 @@ runBootFollowRestart
       -- epochs are already represented in PG / on disk.
       withLedgerThreads hasLedgerEnv mReplayBoot stateQueryVar $
         bracket
-          (setupOffChainPoolWorker tracer hasqlSettings (scDbProfile (ceConfig coreEnv)))
+          (setupOffChainPoolWorker tracer hasqlSettings (scExtractors (ceConfig coreEnv)))
           (mapM_ closeOffChainPoolWorker) $ \mPoolWorker ->
         bracket
-          (setupOffChainVoteWorker tracer hasqlSettings (scDbProfile (ceConfig coreEnv)))
+          (setupOffChainVoteWorker tracer hasqlSettings (scExtractors (ceConfig coreEnv)))
           (mapM_ closeOffChainVoteWorker) $ \mVoteWorker -> do
           -- A fresh receiver-side state. Ingest has been bypassed on this
           -- restart path, so none of it is inherited from an upstream env.
@@ -969,7 +969,7 @@ runBootFollowRestart
           let mLastBlock = ssrLastCommittedBlockNo (frcSyncState frc)
               kBlocks    = ceSecurityParam coreEnv
               consumedTracking =
-                if uoConsumedByTxId (pcUtxo (scDbProfile (ceConfig coreEnv)))
+                if uoConsumedByTxId (exUtxo (scExtractors (ceConfig coreEnv)))
                   then TrackConsumedBy
                   else SkipConsumedBy
           withAsync (checkResumeGap tracer kBlocks mLastBlock rollbackBoundary) $ \gapThread -> do

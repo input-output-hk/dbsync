@@ -2,7 +2,7 @@
   "ledger": {
     "enabled": false
   },
-  "db_profile": {
+  "extractors": {
     "epoch_boundary": true,
     "multi_asset": true
   }

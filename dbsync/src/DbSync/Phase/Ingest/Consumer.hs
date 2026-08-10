@@ -93,7 +93,7 @@ import DbSync.App.Config.Types
   ( LedgerConfig (..)
   , SyncConfig (..)
   , OptionFlag (..)
-  , DbProfile (..)
+  , Extractors (..)
   )
 import DbSync.App.Env (HasConfig (..))
 import DbSync.Worker.Ledger.Types (HasLedgerEnv (..))
@@ -420,9 +420,9 @@ runBoundaryExtractor hasLedger extractStRef = case hasLedger of
   LedgerEnabled lenv -> do
     applyResult  <- liftIO $ readBoundaryApplyResult lenv
     mLastBlockId <- liftIO $ esLastBlockId <$> readIORef extractStRef
-    governanceOn <- asks (prEnabled . pcGovernance . scDbProfile . getConfig)
-    poolStatsOn  <- asks (prEnabled . pcPoolStats  . scDbProfile . getConfig)
-    sdlOn        <- asks (prEnabled . pcStakeDelegationLedger . scDbProfile . getConfig)
+    governanceOn <- asks (prEnabled . exGovernance . scExtractors . getConfig)
+    poolStatsOn  <- asks (prEnabled . exPoolStats  . scExtractors . getConfig)
+    sdlOn        <- asks (prEnabled . exStakeDelegationLedger . scExtractors . getConfig)
     for_ mLastBlockId $ \lastBid -> do
       -- Governance runs first when enabled: it refreshes the
       -- enacted-state ids and apGovExpiresAfter on ExtractState that

@@ -7,8 +7,8 @@ sidebar_position: 2
 # Architecture
 
 dbsync follows a running Cardano node over a node-to-client (n2c) Unix socket
-and projects on-chain data into a PostgreSQL schema you control table by table
-via **profiles**.
+and writes on-chain data into a PostgreSQL schema you control table by table
+through the config's `extractors` block.
 
 This page covers the end-to-end data flow. For the lifecycle around it — when
 the pipeline catches up, when it switches modes, how it restarts — see
@@ -49,15 +49,20 @@ Each stage in brief:
 
 | Stage | Module | Output |
 |---|---|---|
-| **Receiver** | `DbSync.ChainSync.Connection` | `ChainSyncMsg` (forward block or rollback marker). Also bumps a watchdog, publishes the latest tip, and observes `nodeTip − k`. |
+| **Receiver** | `DbSync.ChainSync.Connection` | `ChainSyncMsg` (forward block or rollback marker). Also publishes the latest tip and observes `nodeTip − k`. |
 | **Parser** | `DbSync.Parser.Dispatch` | Era-independent `GenericBlock` from ledger types. Per-era converters under `DbSync.Parser.*`. |
 | **Extractors** | `DbSync.Extractor.*` | Typed rows for the tables each extractor owns. Driven by `processBlock`, which pre-assigns shared IDs before any extractor runs. |
 | **Writer** | `DbSync.Phase.{Ingest,Following}.Writer` | Rows reach PostgreSQL. Implementation swaps by phase; deep dives in [Ingest fan-out](#ingest-write-fan-out) and [Follow batching](#follow-write-batching). |
 
-The parser and the extractors run on the **consumer thread** — they're not
-separate stages with their own queues. The only inter-thread hops on the hot
-path are receiver → consumer (the block queue) and, in Ingest, consumer →
-COPY workers (the per-table queues).
+The parser and the extractors run on the **consumer thread**. They are not
+separate stages with their own queues. The inter-thread hops on the hot path
+are:
+
+1. Receiver → consumer, over the block queue.
+2. Consumer → COPY workers, over the per-table queues. Ingest only.
+3. Ledger worker → consumer, when `ledger.enabled = true`. This one
+   **blocks**: `takeBlockLedgerData` waits on the worker's per-block result
+   before the extractors run.
 
 ## Generic block representation
 
@@ -95,8 +100,10 @@ The polymorphism over `env` is what lets the *same* extractor body run in
 **both** Ingest and Follow. The phase decides which `Resolver` and `Writer`
 the env carries; the extractor doesn't need to know which.
 
-The wired extractors live under `DbSync.Extractor.*` and are registered in
-`DbSync.App.Setup.buildExtractors`. For the contract in full, see
+The wired extractors live under `DbSync.Extractor.*`. The single source of
+truth for which exist is `DbSync.Extractor.Registry.allKnownExtractors`;
+`DbSync.App.Setup.buildExtractors` only resolves config keys against it. For
+the contract in full, see
 [Extractor anatomy](extractors/anatomy); for what each one writes, see
 [Existing extractors](extractors/existing).
 
@@ -105,13 +112,13 @@ The wired extractors live under `DbSync.Extractor.*` and are registered in
 Two interfaces let one extractor body work in both phases:
 
 - **`IdResolver`** ([`DbSync.Resolver`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/Resolver.hs)) —
-  ~30 functions for ID assignment, lookup-or-insert, and UTxO operations.
+  40 fields for ID assignment, lookup-or-insert, and UTxO operations.
   Two implementations: the Ingest one is backed by an in-process counter
   plus LSM-tree dedup stores; the Follow one is backed by PostgreSQL
   sequences plus `SELECT … WHERE hash = ?`.
 - **`Writer`** ([`DbSync.Writer`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/Writer.hs)) —
   one `write*` function per table plus `commit`. The Ingest implementation
-  encodes rows to COPY binary and pushes them into `LoaderStream`; the
+  encodes rows to **COPY text** and pushes them into `LoaderStream`; the
   Follow implementation buffers writes per block and drains as a single
   hasql `Pipeline` inside `BEGIN`/`COMMIT`.
 
@@ -123,8 +130,12 @@ and with it the strategy for obtaining row IDs.
 | Phase | Writer | ID strategy | Commit cadence |
 |---|---|---|---|
 | `IngestChainHistory` | `LoaderStream` (one COPY thread per table) into UNLOGGED tables | Pre-assigned via DedupStore + Counter | Per epoch boundary |
-| `PreparingForVolatileTail` | One hasql connection, parallel pool for heavy work | n/a (DDL only) | One big transaction |
-| `FollowingVolatileTail` / `FollowingChainTip` | One hasql connection, buffered writes flushed as a `Pipeline` per block | `INSERT … RETURNING` for new rows; `SELECT` for existing parents | Per block |
+| `PreparingForVolatileTail` | One hasql connection, parallel pool for heavy work | n/a (DDL only) | Per step, via each statement's implicit transaction |
+| `FollowingVolatileTail` / `FollowingChainTip` | One hasql connection, buffered writes flushed as a `Pipeline` per block | Batch `nextval` over `generate_series`; `SELECT` for existing parents | Per block |
+
+Prep has **no** enclosing transaction. Each step runs in its own implicit
+one, so a crash resumes at the step boundary rather than rolling the whole
+pass back.
 
 `PreparingForVolatileTail` is the one-time bridge between the two write
 paths: it builds indexes, flips tables UNLOGGED → LOGGED, backfills FK
@@ -146,33 +157,38 @@ Three pieces sit on LSM:
 
 | Store | Module root | Used by |
 |---|---|---|
-| **Ingest dedup stores** | `DbSync.Phase.Ingest.DedupStore` | Natural-key → assigned-ID maps for stake addresses, multi-assets, pool hashes, slot leaders, cost models. Lets the Ingest COPY path produce stable IDs without round-tripping PG. |
+| **Ingest dedup stores** | `DbSync.Phase.Ingest.DedupStore` | Ten natural-key → assigned-ID maps: pool hash, stake address, slot leader, multi-asset, script hash, datum, redeemer data, DRep hash, committee hash, voting anchor. Lets the Ingest COPY path produce stable IDs without round-tripping PG. Cost models are **not** here — they use a separate PG-backed cache on `ExtractState`. |
 | **Ingest UTxO scratch** | `DbSync.Phase.Ingest.UtxoStore` | `tx-hash → (TxId, outputs)` for inline input resolution during COPY. Tracks the live UTxO set, not chain history — consumed outputs are deleted. |
 | **Cardano LedgerDB** | `ouroboros-consensus:lsm` | The V2 LedgerDB the ledger worker drives. Keeps the on-disk UTxO set with in-memory caches and persists snapshots. |
 
-The Ingest dedup + UTxO stores share a single `LsmSession`
-([`DbSync.Phase.Ingest.LsmSession`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/Phase/Ingest/LsmSession.hs))
-so they compact together at every epoch boundary. The session lives under
-`<state-dir>/dbsync-ledger/ingest-lsm/` and is wiped at the Ingest →
-Prep handoff — Follow doesn't consult it.
+The Ingest dedup and UTxO stores share a single `LsmSession`
+([`DbSync.Phase.Ingest.LsmSession`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/Phase/Ingest/LsmSession.hs)).
+Every epoch boundary persists a cheap snapshot. A **full compaction —
+snapshot plus reopen — runs every 20th boundary**, not every one.
+
+The session lives under `<state-dir>/dbsync-ledger/ingest-lsm/`. Its
+tables close at the Ingest → Prep handoff, but the session itself is
+deleted only **after Prep completes**: Prep needs it as the restart
+anchor. Follow never consults it.
 
 The Cardano LedgerDB lives under `<state-dir>/dbsync-ledger/` proper and
 survives across all phases (and across restarts) when ledger is enabled.
 
 :::info Why LSM
-LSM is the right fit for all three: each is a write-dominated
-key-value store with bursty, append-mostly traffic on the hot path
-and periodic compaction at epoch boundaries. A B-tree (RocksDB,
-LMDB) optimises for read-mostly workloads we don't have on these
-paths.
+LSM suits all three: each is a write-dominated key-value store with
+bursty, append-mostly traffic on the hot path, and each tolerates
+compaction being deferred to a periodic pass. A B-tree such as RocksDB
+or LMDB optimises for read-mostly workloads that these paths do not
+have.
 :::
 
 ## Ingest write fan-out
 
 `LoaderStream` opens **one libpq connection per table** and spawns a worker
-thread for each. The writer encodes a row and pushes it onto that table's
-queue; the worker thread blocks on `getCopyData`-style I/O to its dedicated
-connection without contending with the others.
+thread for each. The writer encodes rows, accumulates them into chunks of
+roughly 64 KB, and pushes each chunk onto that table's queue. The worker
+thread blocks in `PQ.putCopyData` on its dedicated connection without
+contending with the others.
 
 ```mermaid
 flowchart LR
@@ -210,22 +226,29 @@ a time:
 
 ```mermaid
 flowchart TB
-    subgraph block["Per block"]
+    subgraph outside["Outside the transaction"]
+      direction TB
+      Alloc["allocateAllIds<br/>(batch nextval)"]
+      Extract["processBlock<br/>(extractors call buffered writer)"]
+      Drain["drain WriteBuffer<br/>(build the statement list)"]
+    end
+    subgraph txn["One transaction"]
       direction TB
       Begin["BEGIN"]
-      Extract["processBlock<br/>(extractors call buffered writer)"]
-      Drain["drain WriteBuffer<br/>(one hasql Pipeline)"]
-      Advance["UPDATE dbsync_sync_state<br/>SET last_committed_slot = …"]
+      Pipe["one hasql Pipeline:<br/>row writes + epoch_finalized<br/>+ UPDATE dbsync_sync_state"]
       Commit["COMMIT"]
     end
-    Begin --> Extract --> Drain --> Advance --> Commit
+    Alloc --> Extract --> Drain --> Begin --> Pipe --> Commit
 ```
 
-The buffered writer (`DbSync.Phase.Following.WriteBuffer`) accumulates
-`INSERT`s issued by every extractor during the block; `drain` flushes them
-as one hasql `Pipeline` round-trip. A crash anywhere in the block's
-transaction rolls back to `last_committed_slot` cleanly — there's no
-partial-block state in PG.
+ID allocation, extraction, and buffer drain all run **outside** the
+transaction. Only the write pipeline is inside it.
+
+The buffered writer (`DbSync.Phase.Following.WriteBuffer`) accumulates the
+`INSERT`s every extractor issues during the block. The transaction then
+sends the row writes and the `last_committed_slot` advance as one atomic
+`Pipeline`. A crash anywhere leaves the database at the previous
+`last_committed_slot`, with no partial-block state.
 
 ## Side channels
 
@@ -235,14 +258,18 @@ nothing on the consumer thread.
 
 | Channel | Module root | Role |
 |---|---|---|
-| **Ledger Worker** | `DbSync.Worker.Ledger.*` | Optional. When `ledger.enabled = true`, applies blocks to an in-RAM `LedgerDB` to produce per-block ledger output (deposits, rewards, protocol params, ada_pots). Persists snapshots to disk for restart. Survives across Ingest → Prep → Follow. |
+| **Ledger Worker** | `DbSync.Worker.Ledger.*` | Optional. When `ledger.enabled = true`, replays blocks through the on-disk LSM-backed `LedgerDB` to produce per-block ledger output: deposits, rewards, protocol params, ada_pots. Persists snapshots for restart. Survives across Ingest → Prep → Follow. |
 | **OffChain Fetcher** | `DbSync.Worker.OffChain.*` | Background HTTP fetcher for pool and Conway vote metadata. Misses don't block ingest. |
 | **TxOut Worker** | `DbSync.Worker.TxOut.*` | Drains per-epoch **address buffer** and **consumed-by buffer** at each Ingest epoch boundary. Owns its own PG connection. |
 
-The ledger worker is the most independent — it consumes its own dedicated
-copy of the block stream (the receiver fans `MsgForward` to a second queue
-when ledger is on) and writes nothing to PG directly. Its output reaches
-extractors via `BlockLedgerData` on the `BlockContext`.
+The ledger worker consumes its own copy of the block stream: the receiver
+fans `MsgForward` to a second queue when the ledger is on. Its per-block
+output reaches extractors as `BlockLedgerData` on the `BlockContext`.
+
+It is not fully decoupled, on two counts. The consumer **blocks** waiting
+for each block's result, and the worker does write to PG on its own control
+connection — `markSnapshotComplete` after each snapshot, and
+`writePendingRollbackSlot` on a deep rollback.
 
 See [Workers](workers) for the per-worker breakdown.
 
@@ -271,7 +298,9 @@ without manual `runAppM` ceremony.
 state — the `dbsync_sync_state` row plus the list of on-disk ledger
 snapshots — into one of:
 
-- **`BootFresh`** — empty DB; start `IngestChainHistory` from genesis.
+- **`BootFresh`** — a sync-state row with no committed progress; start
+  `IngestChainHistory` from genesis. An *empty* database never reaches
+  here: schema init creates the schema and seeds the row first.
 - **`BootResume`** — partial Ingest; restart at the last committed epoch.
 - **`BootFollowRestart`** — `sync_complete = true`; start directly in
   `FollowingVolatileTail`.
@@ -294,12 +323,13 @@ Across the run, the relevant threads are:
   Follow loop.
 - **ChainSync receiver** — one thread, decoded blocks → block queue.
 - **Consumer / Follow loop** — one thread, drains the block queue.
-- **COPY workers** — one thread per table during Ingest; idle in Follow.
+- **COPY workers** — one thread per table during Ingest. Cancelled at the
+  Ingest → Prep boundary; they do not exist in Follow.
 - **Ledger worker + snapshot writer** — one each when ledger is enabled.
 - **TxOut worker** — one thread during Ingest; flushes at epoch
   boundaries.
 - **OffChain fetcher** — one thread, HTTP polling.
-- **Watchdog + pulse samplers** — periodic diagnostics at Debug level.
+- **Gauge sampler** — periodic diagnostics at Debug level, every 5s.
 
 All threads spawn via `withAsync` and `link` to a parent, so a crash in any
 of them propagates cleanly. The orchestrator's shutdown bracket releases

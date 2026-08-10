@@ -1,5 +1,5 @@
 {
-  "db_profile": {
+  "extractors": {
     "multi_asset": true
   }
 }

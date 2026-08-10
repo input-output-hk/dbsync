@@ -5,9 +5,9 @@
 -- the PostgreSQL connection in the @--pg-config@ file, so the same
 -- config travels across mainnet, preprod, etc.
 --
--- @db_profile@ is opt-in: every extractor defaults to disabled and
+-- @extractors@ is opt-in: every extractor defaults to disabled and
 -- must be enabled explicitly. The @core@ extractor is unconditional
--- and not represented in 'DbProfile'.
+-- and not represented in 'Extractors'.
 module DbSync.App.Config.Types
   ( -- * Top-level config
     SyncConfig (..)
@@ -19,8 +19,8 @@ module DbSync.App.Config.Types
   , LoggingConfig (..)
   , LogFormat (..)
 
-    -- * DB profile
-  , DbProfile (..)
+    -- * Extractors
+  , Extractors (..)
   , OptionFlag (..)
   , UtxoOption (..)
   , UtxoStrategy (..)
@@ -34,7 +34,7 @@ module DbSync.App.Config.Types
   , defaultSnapshotNearTipEpoch
   , defaultMetricsConfig
   , defaultLoggingConfig
-  , defaultDbProfile
+  , defaultExtractors
   , defaultUtxoOption
 
     -- * Node config (from config.json)
@@ -65,7 +65,7 @@ import qualified Data.Yaml as Yaml
 data SyncConfig = SyncConfig
   { scSync      :: !SyncSettings
   , scLedger    :: !LedgerConfig
-  , scDbProfile :: !DbProfile
+  , scExtractors :: !Extractors
   , scMetrics   :: !MetricsConfig
   , scLogging   :: !LoggingConfig
   }
@@ -76,7 +76,7 @@ instance FromJSON SyncConfig where
     SyncConfig
       <$> o .:? "sync"       .!= defaultSyncSettings
       <*> o .:? "ledger"     .!= defaultLedgerConfig
-      <*> o .:? "db_profile" .!= defaultDbProfile
+      <*> o .:? "extractors" .!= defaultExtractors
       <*> o .:? "metrics"    .!= defaultMetricsConfig
       <*> o .:? "logging"    .!= defaultLoggingConfig
 
@@ -220,37 +220,37 @@ instance FromJSON LogFormat where
       _      -> Aeson.typeMismatch "LogFormat (text|json)" (Aeson.String t)
 
 -- ---------------------------------------------------------------------------
--- * DB profile
+-- * Extractors
 -- ---------------------------------------------------------------------------
 
 -- | Per-extractor configuration: which tables get populated. Omit a
 -- key to disable; set @"key": true@ to enable.
 --
--- 'pcUtxo' has its own record because the UTxO extractor needs
+-- 'exUtxo' has its own record because the UTxO extractor needs
 -- multiple knobs; the rest are flat bools.
-data DbProfile = DbProfile
-  { pcUtxo                  :: !UtxoOption
-  , pcMultiAsset            :: !OptionFlag
-  , pcMetadata              :: !OptionFlag
-  , pcStakeDelegation       :: !OptionFlag
-  , pcStakeDelegationLedger :: !OptionFlag
-  , pcPool                  :: !OptionFlag
-  , pcScriptsDatums         :: !OptionFlag
-  , pcGovernance            :: !OptionFlag
-  , pcCbor                  :: !OptionFlag
-  , pcEpochSyncStats        :: !OptionFlag
-  , pcEpochBoundary         :: !OptionFlag
-  , pcPoolStats             :: !OptionFlag
-  , pcEpoch                 :: !OptionFlag
-  , pcCurrentState          :: !OptionFlag
-  , pcOffChainPools         :: !OptionFlag
-  , pcOffChainVotes         :: !OptionFlag
+data Extractors = Extractors
+  { exUtxo                  :: !UtxoOption
+  , exMultiAsset            :: !OptionFlag
+  , exMetadata              :: !OptionFlag
+  , exStakeDelegation       :: !OptionFlag
+  , exStakeDelegationLedger :: !OptionFlag
+  , exPool                  :: !OptionFlag
+  , exScriptsDatums         :: !OptionFlag
+  , exGovernance            :: !OptionFlag
+  , exCbor                  :: !OptionFlag
+  , exEpochSyncStats        :: !OptionFlag
+  , exEpochBoundary         :: !OptionFlag
+  , exPoolStats             :: !OptionFlag
+  , exEpoch                 :: !OptionFlag
+  , exCurrentState          :: !OptionFlag
+  , exOffChainPools         :: !OptionFlag
+  , exOffChainVotes         :: !OptionFlag
   }
   deriving stock (Eq, Show)
 
-instance FromJSON DbProfile where
-  parseJSON = Aeson.withObject "DbProfile" $ \o ->
-    DbProfile
+instance FromJSON Extractors where
+  parseJSON = Aeson.withObject "Extractors" $ \o ->
+    Extractors
       <$> o .:? "utxo"                    .!= defaultUtxoOption
       <*> o .:? "multi_asset"             .!= disabled
       <*> o .:? "metadata"                .!= disabled
@@ -271,34 +271,34 @@ instance FromJSON DbProfile where
       disabled     = OptionFlag False
       epochDefault = OptionFlag True
 
--- | Default profile used when @"db_profile"@ is omitted: every
--- optional extractor off /except/ 'pcEpoch', so the @epoch@ view
--- machinery is available without an explicit opt-in.
-defaultDbProfile :: DbProfile
-defaultDbProfile = DbProfile
-  { pcUtxo                  = defaultUtxoOption
-  , pcMultiAsset            = OptionFlag False
-  , pcMetadata              = OptionFlag False
-  , pcStakeDelegation       = OptionFlag False
-  , pcStakeDelegationLedger = OptionFlag False
-  , pcPool                  = OptionFlag False
-  , pcScriptsDatums         = OptionFlag False
-  , pcGovernance            = OptionFlag False
-  , pcCbor                  = OptionFlag False
-  , pcEpochSyncStats        = OptionFlag False
-  , pcEpochBoundary         = OptionFlag False
-  , pcPoolStats             = OptionFlag False
-  , pcEpoch                 = OptionFlag True
-  , pcCurrentState          = OptionFlag False
-  , pcOffChainPools         = OptionFlag False
-  , pcOffChainVotes         = OptionFlag False
+-- | Default used when @"extractors"@ is omitted: every optional
+-- extractor off /except/ 'exEpoch', so the @epoch@ view machinery is
+-- available without an explicit opt-in.
+defaultExtractors :: Extractors
+defaultExtractors = Extractors
+  { exUtxo                  = defaultUtxoOption
+  , exMultiAsset            = OptionFlag False
+  , exMetadata              = OptionFlag False
+  , exStakeDelegation       = OptionFlag False
+  , exStakeDelegationLedger = OptionFlag False
+  , exPool                  = OptionFlag False
+  , exScriptsDatums         = OptionFlag False
+  , exGovernance            = OptionFlag False
+  , exCbor                  = OptionFlag False
+  , exEpochSyncStats        = OptionFlag False
+  , exEpochBoundary         = OptionFlag False
+  , exPoolStats             = OptionFlag False
+  , exEpoch                 = OptionFlag True
+  , exCurrentState          = OptionFlag False
+  , exOffChainPools         = OptionFlag False
+  , exOffChainVotes         = OptionFlag False
   }
 
 -- | Configuration for a single option.
 --
 -- Wraps a 'Bool' explicitly so options that grow variants (e.g.
 -- multi-asset policy allowlists, metadata key filters) can extend
--- without touching the @DbProfile@ record.
+-- without touching the @Extractors@ record.
 data OptionFlag = OptionFlag
   { prEnabled :: !Bool
   }

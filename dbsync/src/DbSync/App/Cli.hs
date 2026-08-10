@@ -35,7 +35,7 @@ import Options.Applicative
 
 -- | Parsed CLI arguments.
 data CliArgs = CliArgs
-  { caConfig          :: !FilePath  -- ^ Path to the dbsync config file (sync mode, ledger, db_profile, logging)
+  { caConfig          :: !FilePath  -- ^ Path to the dbsync config file (sync mode, ledger, extractors, logging)
   , caPgConfig        :: !FilePath  -- ^ Path to the PostgreSQL connection file (host, port, name, user, password_file)
   , caNodeConfig      :: !FilePath  -- ^ Path to the cardano-node config.json (genesis files resolve relative to it)
   , caSocketPath      :: !FilePath  -- ^ Path to the cardano-node Unix socket
@@ -70,7 +70,7 @@ cliArgsP =
     <$> strOption
       ( long "config"
           <> metavar "FILEPATH"
-          <> help "Path to the dbsync config file (sync mode, ledger, db_profile, logging)"
+          <> help "Path to the dbsync config file (sync mode, ledger, extractors, logging)"
       )
     <*> strOption
       ( long "pg-config"

@@ -64,17 +64,17 @@ per-block `SlotDetails` (wall-clock time from a slot number).
 ## dbsync concepts
 
 **Config** — The JSON file you pass via `--config`. Decides which
-projections run and how dbsync behaves. Contains no connection
+extractors run and how dbsync behaves. Contains no connection
 details — those live in the pg-config file (`--pg-config`). See
-[The config file](profiles/overview).
+[The config file](config/overview).
 
-**Profile** — The `db_profile` section of the config: the set of
-enabled projections. The presets shipped in `config-examples/` are
-named after their profile.
+**`extractors`** — The section of the config that lists which
+extractors are enabled. It is fixed for the life of a database.
 
-**Projection** / **Extractor** — A pure mapping from a parsed block
-to a set of database rows. Each owns a set of tables and is enabled
-independently. `core` is unconditional; everything else is opt-in.
+**Extractor** — A mapping from a parsed block to a set of database
+rows. Each extractor owns a set of tables. You enable each one
+independently in `extractors`. `core` always runs; everything else is
+opt-in.
 
 **Phase** — One of four lifecycle stages dbsync moves through:
 `IngestChainHistory` (bulk-load), `PreparingForVolatileTail`
@@ -87,10 +87,10 @@ steady-state phases respectively. They differ in writer
 implementation (COPY vs hasql) and ID strategy (counter+dedup vs
 sequence-allocator) but share the same extractor bodies.
 
-**Rollback boundary** — `nodeTip − k`. The slot below which the
-chain is immune to rollback. The Ingest phase exits when the
-consumer crosses this boundary, because beyond it dbsync needs the
-per-block transactional path Follow provides.
+**Rollback boundary** — `nodeTip − k`, expressed as a **block
+number**. Below this block, the chain cannot roll back. Ingest exits
+when the consumer crosses the boundary, because above it dbsync needs
+the per-block transactional path that Follow provides.
 
 **`k`** — The protocol security parameter, 2160 on mainnet. The
 maximum rollback depth. Rollbacks deeper than `k` violate
@@ -123,14 +123,18 @@ store backing the Ingest dedup stores, the UTxO scratch state, and
 workloads with bursty traffic and periodic compaction.
 
 **LedgerDB** — The V2 ledger state from `ouroboros-consensus`. An
-LSM-tree-backed on-disk UTxO set with in-memory caches. Optional —
-controlled by the profile's `ledger.enabled` flag.
+LSM-tree-backed on-disk UTxO set with in-memory caches. Optional,
+controlled by `ledger.enabled` in the config.
 
 ## ID assignment
 
-**DedupStore** — An LSM-tree mapping a natural key (hash) to the
-assigned database ID. Used during Ingest for `stake_address`,
-`multi_asset`, `pool_hash`, `slot_leader`, `cost_model`.
+**DedupStore** — An LSM-tree mapping a natural key (a hash) to the
+assigned database id. Ingest keeps ten of them: `pool_hash`,
+`stake_address`, `slot_leader`, `multi_asset`, `script_hash`, `datum`,
+`redeemer_data`, `drep_hash`, `committee_hash`, and `voting_anchor`.
+
+Cost models are **not** one of them. They use a separate in-memory
+cache backed by PostgreSQL.
 
 **Counter** — A per-table in-process monotonic counter that hands
 out the next ID. Used during Ingest because COPY has no return
@@ -142,9 +146,10 @@ ID allocator.
 
 ## Side channels
 
-**Ledger worker** — The optional in-RAM ledger-state worker. When
-on, applies blocks to the LedgerDB and produces per-block deposit
-maps and per-epoch reward / stake / protocol-param data.
+**Ledger worker** — The optional ledger-state worker. When enabled,
+it replays blocks through the on-disk LedgerDB and produces per-block
+deposit maps plus per-epoch reward, stake, and protocol-parameter
+data.
 
 **TxOut worker** — A per-epoch worker active during Ingest that
 back-fills `tx_out.address_id` and `tx_out.consumed_by_tx_id`.
@@ -159,7 +164,9 @@ governance-vote metadata over HTTP, off the hot path. Enabled by the
 snapshots when ledger is enabled. Survives across restarts.
 
 **`<state-dir>/dbsync-ledger/ingest-lsm/`** — The Ingest LSM session:
-DedupStore tables + UtxoStore. Wiped at the Ingest → Prep handoff.
+the DedupStore tables and the UtxoStore. dbsync deletes it **after
+Prep completes**, not at the Ingest → Prep handoff. Prep needs it as
+the restart anchor.
 
 **`dbsync_sync_state`** — The singleton PG table that records sync
 progress. The truth source for resume: `last_committed_slot` is

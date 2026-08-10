@@ -134,7 +134,7 @@ run connSettings tuning tables = step PhaseStep "post-load pass" $ do
     for_ (filter (hasTable . tdName) backfillAnalyzeTables) $ \td ->
       runDdl (analyzeSql (tdName td))
 
-  _ <- Backfill.backfillTxColumns
+  _ <- Backfill.backfillTxColumns tables
   -- Needs both tables: the hash comes off the spent output that
   -- @tx_in@ points at, and lands on a @redeemer@ row.
   when (hasTable (tdName redeemerTableDef) && hasTable (tdName txInTableDef))

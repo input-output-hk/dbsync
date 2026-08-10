@@ -6,7 +6,7 @@ sidebar_position: 2
 
 # Writing a new extractor
 
-End-to-end walkthrough. Adding a new projection means landing changes
+End-to-end walkthrough. Adding a new extractor means landing changes
 in three packages — schema in `dbsync-db`, processing in `dbsync`,
 tests in `tests` — but the seam between them is narrow.
 
@@ -17,7 +17,7 @@ Read [Extractor anatomy](anatomy) first if you haven't.
 ```mermaid
 flowchart LR
     Schema["dbsync-db<br/>row types + TableDef<br/>+ COPY encoder<br/>+ hasql statements"]
-    Extractor["dbsync<br/>Extractor.X<br/>(pure projection)"]
+    Extractor["dbsync<br/>Extractor.X<br/>(pure function)"]
     Wire["dbsync<br/>App/Setup.hs<br/>(register)"]
     Tests["tests/<br/>unit + e2e"]
 
@@ -28,7 +28,7 @@ flowchart LR
 
 Schema first, then the extractor body, then registration, then tests.
 Nothing in the phase code, the resolver, or the writer needs to
-change for a new projection: the `Writer` and `IdResolver` typeclasses
+change for a new extractor: the `Writer` and `IdResolver` typeclasses
 gain `write*` / `assign*` methods, and the existing Ingest and Follow
 implementations grow to cover them.
 
@@ -88,8 +88,9 @@ insertClaimRowStmt = ...
 ```
 
 The Follow writer batches inserts through a hasql `Pipeline`, so the
-statement just needs to be preparable; no per-call connection
-gymnastics. See [`DbSync.Db.Statement.Block`](https://github.com/input-output-hk/dbsync/blob/main/dbsync-db/src/DbSync/Db/Statement/Block.hs)
+statement only needs to be preparable. No per-call connection gymnastics.
+`Statement/` groups by domain, not by table — see
+[`DbSync.Db.Statement.Core`](https://github.com/input-output-hk/dbsync/blob/main/dbsync-db/src/DbSync/Db/Statement/Core.hs)
 for a representative shape.
 
 If the extractor needs ID allocation in Follow (most do), add
@@ -162,7 +163,7 @@ processClaim ctx = do
 
 Keep the body small. Anything more complex than a few `forM_`s is
 usually a sign that the pure
-`GenericBlock → [Claim]` projection function should live in its own
+`GenericBlock → [Claim]` function should live in its own
 helper and be tested separately.
 
 ## 6. Register the extractor
@@ -173,7 +174,7 @@ That registry is the single source of truth for which names resolve to
 a real extractor — anything not in it falls back to a no-op stub — and
 it also feeds the schema fingerprint.
 
-Then add the profile key to `optionalExtractors` in
+Then add the `extractors` key to `optionalExtractors` in
 [`DbSync.App.Setup.buildExtractors`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/App/Setup.hs):
 
 ```haskell
@@ -183,12 +184,12 @@ optionalExtractors =
   ]
 ```
 
-Finally add `pcClaim :: !OptionFlag` to `DbProfile` in
+Finally add `pcClaim :: !OptionFlag` to `Extractors` in
 [`DbSync.App.Config.Types`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/App/Config/Types.hs)
 with a disabled default, and — if the extractor depends on another —
 a rule in
 [`DbSync.App.Config.Validation`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/App/Config/Validation.hs).
-Configs opt in by setting `"claim": true` in `db_profile`.
+Configs opt in by setting `"claim": true` in `extractors`.
 
 If your extractor warrants structured config (like `utxo` does with
 its `consumed_by_tx_id` / `strategy` knobs), use the `UtxoOption`
@@ -197,7 +198,7 @@ default.
 
 ## 7. Tests
 
-A unit test for the pure projection is usually enough:
+A unit test for the pure function is usually enough:
 
 ```haskell
 -- tests/main/unit/DbSync/Extractor/ClaimSpec.hs
@@ -205,13 +206,17 @@ spec :: Spec
 spec = describe "Extractor.Claim" $ do
   it "extracts claims from a withdrawal-bearing tx" $ do
     let block = mkBlockWithWithdrawals [...]
-    runExtractor claimExtractor block `shouldBe` ...
+    written <- runPureExtract claimExtractor block
+    written `shouldBe` ...
 ```
 
-The [`tests/lib/DbSync/Test/PipelineEnv.hs`](https://github.com/input-output-hk/dbsync/blob/main/tests/lib/DbSync/Test/PipelineEnv.hs)
-helper builds an in-memory env (in-process `IdResolver` and a
-collecting `Writer`) so unit tests can exercise the extractor body
-without PG or a mock chain.
+`runPureExtract` and `runPureExtractMany` come from
+[`DbSync.Test.Property.Invariants`](https://github.com/input-output-hk/dbsync/blob/main/tests/lib/DbSync/Test/Property/Invariants.hs).
+They wrap
+[`mkTestPipelineEnv`](https://github.com/input-output-hk/dbsync/blob/main/tests/lib/DbSync/Test/PipelineEnv.hs),
+which builds an in-memory env — an in-process `IdResolver` plus a
+collecting `Writer` — so the test exercises the extractor body with no PG
+and no mock chain.
 
 For end-to-end coverage, add the new extractor to an existing e2e
 spec or create one in `tests/main/e2e/DbSync/Phase/`. The
@@ -232,5 +237,5 @@ See [Testing](../testing) for the per-tier conventions.
   extractor-agnostic.
 
 The same applies if you're disabling an extractor: drop it from the
-profile and the table disappears from `initSchema`'s output. No code
+config and the table disappears from `initSchema`'s output. No code
 changes required.

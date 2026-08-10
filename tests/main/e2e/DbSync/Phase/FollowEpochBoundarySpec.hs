@@ -29,7 +29,7 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe, shouldSatisfy)
 import DbSync.App.Config.Types
   ( SyncConfig (..)
   , OptionFlag (..)
-  , DbProfile (..)
+  , Extractors (..)
   )
 import DbSync.Db.Schema.AdaPots (adaPotsTableDef)
 import DbSync.Db.Schema.Core (blockTableDef)
@@ -216,14 +216,14 @@ spec = describe "Follow boundary writes" $ do
       "SELECT COALESCE(max(epoch_no), 0) FROM " <> tdName poolStatTableDef
 
 -- ---------------------------------------------------------------------------
--- * Profile
+-- * Config
 -- ---------------------------------------------------------------------------
 
 -- | 'ledgerEnabledTestConfig' with @pool_stats@ on so the boundary
 -- crossing also exercises the pool_stat writer.
 boundaryProfile :: SyncConfig
 boundaryProfile = ledgerEnabledTestConfig
-  { scDbProfile = (scDbProfile ledgerEnabledTestConfig)
-      { pcPoolStats = OptionFlag True
+  { scExtractors = (scExtractors ledgerEnabledTestConfig)
+      { exPoolStats = OptionFlag True
       }
   }

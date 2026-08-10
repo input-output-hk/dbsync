@@ -26,11 +26,13 @@ sudo apt install \
 ```
 
 :::info Why liburing
-`liburing-dev` is the asynchronous-I/O backend used by the LSM-based
-dedup stores and the on-disk LedgerDB. It's available on every
-kernel ≥ 5.1, which is every Debian/Ubuntu release currently in
-support. The build falls back to `+serialblockio` if it's missing,
-but the LedgerDB is noticeably slower without it.
+`liburing-dev` is the asynchronous-I/O backend for the LSM dedup
+stores and the on-disk LedgerDB. Every kernel from 5.1 onward has it,
+which covers every supported Debian and Ubuntu release.
+
+**The build does not fall back automatically on Linux.** If
+`liburing` is missing, the build fails. Set the `+serialblockio` flag
+yourself — see [Old kernels](building#common-build-issues).
 :::
 
 PostgreSQL isn't in the list above because most distributions don't
@@ -80,8 +82,8 @@ GHC installs side by side.
 
 ## PostgreSQL setup
 
-Create a database role and a database for dbsync to use. The profile
-JSON's `database` block will reference them:
+Create a role and a database for dbsync. **dbsync does not create the
+database itself.** Your `--pg-config` file names both:
 
 ```bash
 sudo -u postgres createuser --createdb --pwprompt dbsync

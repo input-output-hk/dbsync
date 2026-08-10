@@ -18,10 +18,10 @@ import DbSync.App.Config.Node (parseNodeConfig)
 import DbSync.App.Config.Types
   ( NodeConfig
   , SyncConfig (..)
-  , DbProfile (..)
+  , Extractors (..)
   , OptionFlag (..)
   , UtxoOption (..)
-  , defaultDbProfile
+  , defaultExtractors
   , defaultUtxoOption
   )
 import DbSync.App.Config.Validation (validateConfig)
@@ -38,25 +38,25 @@ loadTestConfigs = do
   Right nodeCfg <- parseNodeConfig "fixtures/node-config.json"
   pure (validCfg, nodeCfg)
 
--- | Build DbProfile with selected extractors enabled.
-profileWith :: [Text] -> DbProfile
-profileWith enabled = DbProfile
-  { pcUtxo                  = defaultUtxoOption { uoEnabled = "utxo" `elem` enabled }
-  , pcMultiAsset            = mk "multi_asset"
-  , pcMetadata              = mk "metadata"
-  , pcStakeDelegation       = mk "stake_delegation"
-  , pcStakeDelegationLedger = mk "stake_delegation_ledger"
-  , pcPool                  = mk "pool"
-  , pcScriptsDatums         = mk "scripts_datums"
-  , pcGovernance            = mk "governance"
-  , pcCbor                  = mk "cbor"
-  , pcEpochSyncStats        = mk "epoch_sync_stats"
-  , pcEpochBoundary         = mk "epoch_boundary"
-  , pcPoolStats             = mk "pool_stats"
-  , pcEpoch                 = mk "epoch"
-  , pcCurrentState          = mk "current_state"
-  , pcOffChainPools         = mk "off_chain_pools"
-  , pcOffChainVotes         = mk "off_chain_votes"
+-- | Build Extractors with selected extractors enabled.
+profileWith :: [Text] -> Extractors
+profileWith enabled = Extractors
+  { exUtxo                  = defaultUtxoOption { uoEnabled = "utxo" `elem` enabled }
+  , exMultiAsset            = mk "multi_asset"
+  , exMetadata              = mk "metadata"
+  , exStakeDelegation       = mk "stake_delegation"
+  , exStakeDelegationLedger = mk "stake_delegation_ledger"
+  , exPool                  = mk "pool"
+  , exScriptsDatums         = mk "scripts_datums"
+  , exGovernance            = mk "governance"
+  , exCbor                  = mk "cbor"
+  , exEpochSyncStats        = mk "epoch_sync_stats"
+  , exEpochBoundary         = mk "epoch_boundary"
+  , exPoolStats             = mk "pool_stats"
+  , exEpoch                 = mk "epoch"
+  , exCurrentState          = mk "current_state"
+  , exOffChainPools         = mk "off_chain_pools"
+  , exOffChainVotes         = mk "off_chain_votes"
   }
   where
     mk name = OptionFlag (name `elem` enabled)
@@ -102,6 +102,6 @@ spec = describe "DbSync.App" $ do
           map pdName xs `shouldBe` ["core", "utxo", "multi_asset", "stake_delegation"]
 
     it "default options yield core + epoch (epoch defaults to true)" $ do
-      case buildExtractors defaultDbProfile of
+      case buildExtractors defaultExtractors of
         Left err -> panic ("unexpected failure: " <> err)
         Right xs -> map pdName xs `shouldBe` ["core", "epoch"]

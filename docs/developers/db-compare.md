@@ -1,7 +1,7 @@
 ---
 id: db-compare
 title: Comparing databases
-sidebar_position: 11
+sidebar_position: 12
 ---
 
 # Comparing databases
@@ -35,13 +35,16 @@ default to the same trust-auth setup the sync uses.
 | `--new-db` | `dbsync` | New-implementation database name |
 | `--host` / `--port` | local socket | PostgreSQL host / port |
 | `--user` / `--password` | trust auth | PostgreSQL credentials |
-| `--max-epoch` | auto | Override the comparison ceiling |
-| `--seed` | `42` | Seed for the block sampler (reproducible) |
-| `--samples` | `10` | Random blocks sampled per era |
+| `--max-epoch` | auto | Override the epoch ceiling used by the spot check |
+| `--max-block` | auto | Override the `block_no` ceiling used by the row counts |
+| `--seed` | `42` | Seed for the block sampler. The same seed picks the same blocks. |
+| `--samples` | `10` | Width of the block window sampled per era |
 | `--eras` | all | Restrict to a comma list, e.g. `byron,babbage` |
 | `--row-counts` | off | Also run the slow epoch-bounded row counts |
 | `--no-spot-check` | on | Disable the per-era content check |
 | `--no-structure` | on | Disable the schema structure comparison |
+| `--statement-timeout` | `120` | Per-statement timeout in seconds. A slow query fails instead of hanging. |
+| `--verbose` | off | Echo every SQL statement to stderr before running it |
 
 ## What it checks
 
@@ -65,9 +68,11 @@ Compares the physical shape of every table present on both sides:
   `address_id`, and protocol-parameter ratios stored as exact `numeric`
   where the old schema uses `double precision`.
 - **Foreign keys** — the old database's FK constraints against the new
-  schema's *declared* `ForeignKey` metadata plus any physical constraints
-  (the new schema never emits `REFERENCES` constraints). An old FK edge
-  with no new counterpart fails.
+  schema's declared `tdParentRefs` metadata plus any physical constraints.
+  The new schema does emit `REFERENCES` constraints, added and validated
+  during `PreparingForVolatileTail`, so a comparison against a fully
+  prepared database sees both. An old FK edge with no new counterpart
+  fails.
 - **Unique constraints** — the old database's unique indexes/constraints
   against the new schema's declared unique constraints plus physical
   unique indexes (built late, in `PreparingForVolatileTail`).
@@ -76,19 +81,24 @@ Disable with `--no-structure`.
 
 ### Spot check (default)
 
-Samples `--samples` random blocks per era below the ceiling, looks each one up
-**by `block.hash` in both databases**, then walks `block → tx → child tables`
-and compares only the stored fields. Surrogate ids are ignored; foreign keys are
-translated to the parent's natural key (e.g. `tx_out.address_id` → the address
-text, `stake_address_id` → `hash_raw`); every value is cast to text so column
-type widening does not register as a difference. Any field or row mismatch is a
-hard failure.
+`--samples` is a **width budget**, not a block count. `resolveWindows`
+splits it into weighted contiguous `block_no` clusters at seeded offsets
+within each era, then merges any that overlap. The check walks
+`block → tx → child tables` across those windows and compares only the
+stored fields.
 
-Matching on the block hash is what makes the check robust: the two databases sit
-at different chain tips and assign different surrogate ids, but a block's hash
-and its stored contents are stable. The **ceiling** is `min(old, new)` max epoch
-− 1, and only blocks at or below it are sampled, so a mid-sync new database (or
-one that is still behind) never causes spurious misses.
+Surrogate ids are ignored. Foreign keys are translated to the parent's
+natural key — `tx_out.address_id` becomes the address text,
+`stake_address_id` becomes `hash_raw`. Every value is cast to text, so
+column-type widening does not register as a difference. Any field or row
+mismatch is a hard failure.
+
+`block.hash` is the natural key used to line rows up for field
+comparison. That is what makes the check robust: the two databases sit at
+different chain tips and assign different surrogate ids, but a block's
+hash and its contents are stable. The **ceiling** is `min(old, new)` max
+epoch − 1, so a new database that is still behind never causes spurious
+misses.
 
 :::note Index-independent scoping
 The new database builds most secondary indexes late in the sync, so every scope
@@ -110,21 +120,25 @@ by default because it is slow on the largest tables (100M+ rows).
 comparable: 59   skipped: 14
 
 == Spot check - per-era content ==
-skipped (no index on new): redeemer, datum, script, ...
-OK    byron     sampled 10, matched 10
-DIFF  babbage   sampled 10, matched 10
+ok    byron    blocks 0-4200 (3 clusters): (old=812 new=812)
+--    alonzo   blocks 5100-5400 (2 clusters): empty (old=0 new=0)
+DIFF  babbage  blocks 6000-6300 (2 clusters): 121 diffs (old=940 new=940)
     tx_out index/0 data_hash: old=a1b2... new=NULL
-content mismatches: 121
 ```
 
-A `DIFF` line is followed by up to 20 offending rows per table, each naming the
-natural key, the field, and the two values.
+Each line carries both row counts, so an empty window is shown rather
+than inferred. An empty window on both sides reports as a dim `--`, not a
+pass: a green `ok` always means at least one row was compared and
+matched.
+
+A `DIFF` line is followed by up to **10** offending rows per table, each
+naming the natural key, the field, and the two values.
 
 ## Known differences
 
 A clean run is the goal, but some differences are understood and tracked rather
 than fixed in the tool. They are catalogued with file/line evidence in
-[`Plan/DB-COMPARE-FINDINGS.md`](https://github.com/input-output-hk/dbsync/blob/main/Plan/DB-COMPARE-FINDINGS.md):
+[`Plan/landed/DB-COMPARE-FINDINGS.md`](https://github.com/input-output-hk/dbsync/blob/main/Plan/landed/DB-COMPARE-FINDINGS.md):
 
 | Difference | Status |
 |---|---|

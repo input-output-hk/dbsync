@@ -1,5 +1,5 @@
 {
-  "db_profile": {
+  "extractors": {
     "metadata": true,
     "stake_delegation": true
   }

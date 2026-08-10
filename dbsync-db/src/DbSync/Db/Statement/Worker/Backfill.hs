@@ -28,6 +28,8 @@ module DbSync.Db.Statement.Worker.Backfill
   , backfillPhaseTwoDepositStmt
   , backfillValidContractDepositStmt
   , backfillByronFeeStmt
+    -- * Deposit-affecting source tables
+  , depositSourceTxIds
     -- * Raw SQL strings
     --
     -- Exported so tests can feed them to @EXPLAIN@ and assert on the
@@ -56,25 +58,28 @@ import DbSync.Db.Schema.Core
   , txCols
   , txTableDef
   )
+import DbSync.Db.Schema.Governance
+  ( DrepRegistrationCols (..)
+  , GovActionProposalCols (..)
+  , drepRegistrationCols
+  , govActionProposalCols
+  )
 import DbSync.Db.Schema.Pool
   ( PoolRetireCols (..)
   , PoolUpdateCols (..)
   , poolRetireCols
-  , poolRetireTableDef
   , poolUpdateCols
-  , poolUpdateTableDef
   )
 import DbSync.Db.Schema.StakeDelegation
   ( StakeDeregistrationCols (..)
   , StakeRegistrationCols (..)
   , WithdrawalCols (..)
   , stakeDeregistrationCols
-  , stakeDeregistrationTableDef
   , stakeRegistrationCols
-  , stakeRegistrationTableDef
   , withdrawalCols
   , withdrawalTableDef
   )
+import DbSync.Db.Schema.Types (TableColumn (..))
 import DbSync.Db.Schema.UTxO
   ( TxInCols (..)
   , TxOutCols (..)
@@ -134,28 +139,36 @@ backfillPhaseTwoDepositSql = T.unwords
   , "  AND",  col txCols.tcDeposit, "IS NULL"
   ]
 
+-- | Every table whose presence on a tx implies a deposit-affecting
+-- certificate or proposal, paired with its @tx_id@ column. Callers
+-- filter this to the tables the enabled extractors actually created
+-- before handing it to 'backfillValidContractDepositStmt'.
+depositSourceTxIds :: [TableColumn]
+depositSourceTxIds =
+  [ stakeRegistrationCols.srcTxId
+  , stakeDeregistrationCols.sdcTxId
+  , poolUpdateCols.pucRegisteredTxId
+  , poolRetireCols.prcAnnouncedTxId
+  , govActionProposalCols.gapcTxId
+  , drepRegistrationCols.drcTxId
+  ]
+
 -- | Compute @deposit = inputs + withdrawals - outputs - fee -
 -- treasury_donation@ for valid-contract activity txs whose @deposit@
 -- is still NULL. Requires 'resolveTxInStmt' to have populated
 -- @tx_in.tx_out_id@.
-backfillValidContractDepositStmt :: Stmt.Statement () Int64
-backfillValidContractDepositStmt =
-  Stmt.preparable backfillValidContractDepositSql E.noParams D.rowsAffected
+backfillValidContractDepositStmt :: [TableColumn] -> Stmt.Statement () Int64
+backfillValidContractDepositStmt sources =
+  Stmt.preparable (backfillValidContractDepositSql sources) E.noParams D.rowsAffected
 
--- | @affected_txs@ sources tx ids from every table whose presence
--- implies a deposit-affecting certificate. Extend the UNION when a
--- new such table lands (drep / committee registrations).
-backfillValidContractDepositSql :: Text
-backfillValidContractDepositSql = T.unwords
+-- | @affected_txs@ unions the given @tx_id@ columns — normally
+-- 'depositSourceTxIds' minus the tables absent from the schema.
+-- An empty list renders invalid SQL, so callers skip the statement
+-- instead of passing one.
+backfillValidContractDepositSql :: [TableColumn] -> Text
+backfillValidContractDepositSql sources = T.unwords
   [ "WITH affected_txs AS ("
-  , "  SELECT", col stakeRegistrationCols.srcTxId
-  , "  FROM",   table stakeRegistrationTableDef
-  , "  UNION ALL SELECT", col stakeDeregistrationCols.sdcTxId
-  , "  FROM",   table stakeDeregistrationTableDef
-  , "  UNION ALL SELECT", col poolUpdateCols.pucRegisteredTxId
-  , "  FROM",   table poolUpdateTableDef
-  , "  UNION ALL SELECT", col poolRetireCols.prcAnnouncedTxId
-  , "  FROM",   table poolRetireTableDef
+  , T.intercalate " UNION ALL " (map sourceSelect sources)
   , "), targets AS ("
   , "  SELECT DISTINCT a.tx_id"
   , "  FROM affected_txs a"
@@ -192,6 +205,11 @@ backfillValidContractDepositSql = T.unwords
   , "LEFT JOIN withdraw_sum w ON w.tx_id = i.tx_id"
   , "WHERE tx.", col txCols.tcId, "= i.tx_id"
   ]
+  where
+    -- Alias every branch so the union's output name holds whichever
+    -- source table comes first.
+    sourceSelect c = T.unwords
+      ["SELECT", col c, "AS tx_id FROM", table c.tcTable]
 
 -- | @fee = inputs - outputs@ for Byron-era txs whose @fee@ is still
 -- the @0@ sentinel. Byron blocks are identified via @block.vrf_key IS

@@ -1,9 +1,10 @@
 ---
 id: memory-and-strictness
-title: Memory & Strictness
+title: Memory and strictness
+sidebar_position: 9
 ---
 
-# Memory & Strictness
+# Memory and strictness
 
 How laziness interacts with the long-lived structures in this codebase,
 what a laziness leak looks like from the outside, and the discipline that

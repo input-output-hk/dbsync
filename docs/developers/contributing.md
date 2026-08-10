@@ -1,7 +1,7 @@
 ---
 id: contributing
 title: Contributing
-sidebar_position: 10
+sidebar_position: 14
 ---
 
 # Contributing
@@ -34,12 +34,16 @@ a function or module does. They're not:
 
 ## Formatting and linting
 
-The repo doesn't enforce a specific formatter via CI — running
-`fourmolu` or `hlint` is a developer-side convenience, not a
-requirement. Match the surrounding file's style; the per-module
-defaults (`NoImplicitPrelude`, `OverloadedStrings`,
-`DerivingStrategies`, `GeneralizedNewtypeDeriving`, `LambdaCase`)
-are declared once in each cabal file's `common defaults`.
+There is no formatter or linter config in the repository, and CI runs
+neither. **Match the surrounding file's style by hand.**
+
+Do not run `fourmolu` across a file: with no `fourmolu.yaml` it
+reformats to upstream defaults, not to house style, and the diff will
+bury your actual change.
+
+The per-module defaults — `NoImplicitPrelude`, `OverloadedStrings`,
+`DerivingStrategies`, `GeneralizedNewtypeDeriving`, `LambdaCase` — are
+declared once in each cabal file's `common defaults`.
 
 :::warning `-Werror` is on
 The GHC warnings listed in the `common warnings` block of each
@@ -103,12 +107,18 @@ Before opening a PR:
 
 ```bash
 cabal build all
-cabal test all
+cabal test all -j1
 ```
 
-PG-touching tests need `PostgreSQL ≥ 16` running locally with the
-current user holding `CREATEDB`. See [Testing](testing) for tier
-selection.
+:::caution Use `-j1`
+Integration and e2e specs share the single `dbsync_test` database, and
+the migration-ladder spec issues `DROP SCHEMA public CASCADE`. A plain
+`cabal test all` is a known flake source. CI runs `-j1` for this reason.
+:::
+
+PG-touching tests need a running PostgreSQL and a `dbsync_test` database
+that **already exists** — the tests do not create it. See
+[Testing](testing) for tier selection.
 
 ## Releases
 

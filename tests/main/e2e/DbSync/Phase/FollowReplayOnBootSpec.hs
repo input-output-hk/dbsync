@@ -82,7 +82,7 @@ spec = describe "FollowingChainTip restart replay on boot" $
         -- never writes a snapshot — 'shouldSnapshotAtEpoch' restricts
         -- the Ingest cadence to epochs divisible by 10. Snapshots
         -- here therefore have to come from Follow, which writes one
-        -- per epoch boundary at this profile's near-tip threshold
+        -- per epoch boundary at this config's near-tip threshold
         -- of 2.
         _ <- forgeAndPushBlocks mn 400
 

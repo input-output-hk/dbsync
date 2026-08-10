@@ -29,7 +29,7 @@ flowchart TD
     Loop["for each block:<br/>parseBlock → processBlock"]
     Epoch{"epoch<br/>changed?"}
     Boundary["handleEpochBoundary<br/>(see below)"]
-    Boundary2{"crossed<br/>nodeTip − k?"}
+    Boundary2{"batch done:<br/>crossed nodeTip − k?"}
     Exit["exit; hand off to<br/>PreparingForVolatileTail"]
 
     Queue --> Drain --> Loop
@@ -41,10 +41,14 @@ flowchart TD
 ```
 
 :::note `MsgRollback` is unreachable here
-The receiver only enqueues rollback markers above `nodeTip − k`, and
-the Ingest consumer exits before reaching that point. If one slips
-through, the consumer panics rather than silently corrupting the
-bulk-loaded data.
+The consumer exits at `nodeTip − k`, and the chain cannot roll back
+below that boundary, so no rollback marker can arrive while Ingest is
+running.
+
+The receiver does **not** filter them. `deliverRollback` enqueues every
+non-confirming marker regardless of depth; the guarantee comes from the
+consumer's own exit, not from receiver-side gating. If one does arrive,
+the consumer panics rather than silently corrupting bulk-loaded data.
 :::
 
 ## ID strategy
@@ -74,15 +78,19 @@ library the Cardano LedgerDB uses for its on-disk UTxO. The choice is
 deliberate: both are write-dominated key-value stores with bursty hot-path
 traffic and periodic compaction at epoch boundaries.
 
-The session is laid out under `<state-dir>/dbsync-ledger/ingest-lsm/` and
-is wiped at the Ingest → Prep handoff — Follow doesn't consult it.
+The session lives under `<state-dir>/dbsync-ledger/ingest-lsm/`. Its
+tables close at the Ingest → Prep handoff, but the session directory is
+deleted only after Prep completes — Prep uses it as the restart anchor.
+Follow never consults it.
+
+Every epoch boundary persists a snapshot. A **full compaction — snapshot
+plus reopen — runs every 20th boundary**, not every one.
 
 :::info Why rebuild dedup from PG, not LSM
-A restart in Ingest re-opens the existing session, but the dedup
-tables are rebuilt from PG on `BootResume` rather than from the
-LSM tables. The LSM data may be ahead of `last_committed_slot` (the
-LSM session compacts at every epoch boundary, but writes happen
-continuously); PG is the truth source.
+A restart in Ingest reopens the existing session, but `BootResume`
+rebuilds the dedup tables from PG rather than from the LSM tables. Writes
+land in LSM continuously while the persist happens only at boundaries, so
+LSM can be ahead of `last_committed_slot`. PG is the truth source.
 :::
 
 See [Architecture › Storage backends](../architecture#storage-backends)
@@ -111,20 +119,30 @@ The consumer detects an epoch transition by comparing `sdEpochNo` between
 adjacent blocks. On a cross, control passes to `handleEpochBoundary`, which
 runs a **pipelined cascade**:
 
-1. Flush the loader stream — commit every per-table COPY in flight
-   (the commits fan out concurrently, one round-trip per connection).
-2. Snapshot the per-epoch buffers (address buffer, consumed-by buffer) and
-   hand them to the tx-out worker as a job.
-3. Await the tx-out worker (it's draining the *previous* epoch's job — see
-   below).
-4. Advance `dbsync_sync_state` for the previous pending epoch.
-5. Enqueue the just-finished epoch as the new pending one.
-6. Reopen the loader stream for the next epoch.
-7. Await the LSM persist/compaction (dedup + UTxO) — spawned before
-   step 1, it overlaps the PG-bound steps above and must settle before
-   the boundary block's extractors resolve against the stores.
-8. Emit the per-epoch summary log line, then a major GC gated on live-heap
-   growth since the last boundary collection.
+1. Flush the loader stream — commit every per-table COPY in flight. The
+   commits fan out concurrently, one round-trip per connection.
+2. Snapshot the per-epoch buffers: the address buffer and the consumed-by
+   buffer.
+3. **Await the tx-out worker**, which is draining the *previous* epoch's
+   job.
+4. Flush the pending deposits.
+5. Advance `dbsync_sync_state` for the previous pending epoch.
+6. **Enqueue the just-finished epoch** as the tx-out worker's next job.
+7. Stash this epoch's snapshot for the next boundary to advance.
+8. Reopen the loader stream for the next epoch.
+9. Await the LSM persist or compaction. It was spawned before step 1, so
+   it overlaps the PG-bound steps, and it must settle before the boundary
+   block's extractors resolve against the stores.
+10. Write the `epoch_sync_stats` row, then run a major GC, then emit the
+    per-epoch summary line.
+
+The await in step 3 comes **before** the enqueue in step 6. That ordering
+is what produces the one-epoch lag described below; swapping them would
+collapse it.
+
+The GC has two gates. It runs only when the epoch took more than 10
+seconds **and** the live heap has outgrown the last boundary
+collection's baseline (`2 * live >= 3 * base`).
 
 The **one-epoch lag** is deliberate. `dbsync_sync_state` always reflects the last
 epoch the tx-out worker has fully resolved, so a crash mid-epoch can be
@@ -136,15 +154,18 @@ the worker has almost always finished.
 ## Exit: the rollback boundary
 
 Cardano's protocol security parameter `k` (2160 on mainnet) is the maximum
-rollback depth. Below `nodeTip − k` the chain is immune to rollback;
-above it any block could be reverted. The Ingest consumer exits cleanly
-when it observes a block whose slot crosses that boundary, because
-above the boundary we need the per-block transactional path that
+rollback depth. Below `nodeTip − k` the chain cannot roll back; above it
+any block could be reverted. The Ingest consumer exits when the last
+applied block reaches that boundary, because above it dbsync needs the
+per-block transactional path that
 [`FollowingVolatileTail`](following-volatile-tail) provides.
 
-The receiver publishes the rollback boundary as a `TVar (Maybe BlockNo)`
-that it updates on every observed tip. The consumer's per-block exit
-check is one `readTVarIO` and a comparison — cheap on the hot path.
+The receiver publishes the boundary as a `TVar (Maybe BlockNo)`, updated
+on every observed tip. The comparison is `lastBlock >= boundary` on
+**block numbers**; the slot plays no part.
+
+The check runs once per drained **batch**, after `processBatch` returns —
+not once per block. It costs one `readTVarIO` and a comparison.
 
 Once the consumer exits, the orchestrator cancels the receiver, releases
 the loader stream + tx-out worker + dedup stores + UTxO store, and runs

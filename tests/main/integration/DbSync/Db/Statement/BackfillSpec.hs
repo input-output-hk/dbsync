@@ -45,6 +45,7 @@ import DbSync.Db.Loader (LoaderStream (..), closeLoaderStream, mkLoaderStream)
 import DbSync.Db.Schema.Address (addressTableDef)
 import DbSync.Db.Schema.CBOR (txCborTableDef)
 import DbSync.Db.Schema.Core (blockTableDef, poolHashTableDef, slotLeaderTableDef, stakeAddressTableDef, txTableDef)
+import DbSync.Db.Schema.Governance (drepRegistrationTableDef, govActionProposalTableDef)
 import DbSync.Db.Schema.Init (analyzeSql, dropSchema, initSchema)
 import DbSync.Db.Schema.Metadata (txMetadataTableDef)
 import DbSync.Db.Schema.MultiAsset
@@ -65,7 +66,7 @@ import DbSync.Db.Schema.StakeDelegation
   , stakeRegistrationTableDef
   , withdrawalTableDef
   )
-import DbSync.Db.Schema.Types (TableDef (..))
+import DbSync.Db.Schema.Types (TableColumn (..), TableDef (..))
 import DbSync.Db.Schema.UTxO
   ( collateralTxInTableDef
   , collateralTxOutTableDef
@@ -78,6 +79,7 @@ import DbSync.Db.Statement.Worker.Backfill
   , backfillPhaseTwoDepositSql
   , backfillPhaseTwoFeeSql
   , backfillValidContractDepositSql
+  , depositSourceTxIds
   )
 import DbSync.Extractor (ExtractorDef, freshExtractState)
 import DbSync.Extractor.Cbor (cborExtractor)
@@ -146,6 +148,13 @@ tables =
   , poolRelayTableDef
   , txCborTableDef
   ]
+
+-- | 'depositSourceTxIds' narrowed to 'tables' the same way
+-- 'Phase.Preparing.Backfill.backfillTxColumns' narrows it. This
+-- fixture runs without the governance extractor, so the gov tables
+-- must drop out.
+presentDepositSources :: [TableColumn]
+presentDepositSources = filter ((`elem` tables) . tcTable) depositSourceTxIds
 
 extractors :: [ExtractorDef]
 extractors =
@@ -291,6 +300,17 @@ spec = describe "DbSync.Db.Statement.Worker.Backfill" $
         plan `shouldMention` "tx_in_tx_in_id_idx"
 
     describe "backfillValidContractDepositStmt plan" $ do
+      it "unions every deposit-affecting table the schema has" $ do
+        -- Governance and DRep proposals lock a deposit too, so their
+        -- tables must appear once they exist — and must not be named
+        -- when the extractor that creates them is off, or the
+        -- statement fails on a missing relation.
+        let full = backfillValidContractDepositSql depositSourceTxIds
+        full `shouldMention` tdName govActionProposalTableDef
+        full `shouldMention` tdName drepRegistrationTableDef
+        backfillValidContractDepositSql presentDepositSources
+          `shouldNotMention` tdName govActionProposalTableDef
+
       it "still aggregates inputs and withdrawals once (bulk shape)" $ do
         -- The valid-contract deposit fallback is the one place the
         -- aggregate-then-join shape stays — in ledger-disabled mode
@@ -300,7 +320,7 @@ spec = describe "DbSync.Db.Statement.Worker.Backfill" $
         -- ordering and version; either qualifies. What we want to
         -- catch is a regression into per-row Subquery Scans, which
         -- is what caused the hang on the phase-2 path.
-        plan <- explainOf backfillValidContractDepositSql
+        plan <- explainOf (backfillValidContractDepositSql presentDepositSources)
         plan `shouldSatisfy` \p ->
           "HashAggregate" `T.isInfixOf` p
             || "GroupAggregate" `T.isInfixOf` p
@@ -310,10 +330,9 @@ spec = describe "DbSync.Db.Statement.Worker.Backfill" $
         plan `shouldNotMention` "SubPlan"
 
       it "sources affected_txs from the deposit-affecting tables" $ do
-        -- 'affected_txs' must scan exactly the four tables whose
-        -- presence on a tx implies a deposit-affecting cert.
-        -- Extend this list when a new such table lands.
-        plan <- explainOf backfillValidContractDepositSql
+        -- 'affected_txs' must scan every deposit-affecting table this
+        -- fixture created; the governance pair is covered above.
+        plan <- explainOf (backfillValidContractDepositSql presentDepositSources)
         plan `shouldMention` tdName stakeRegistrationTableDef
         plan `shouldMention` tdName stakeDeregistrationTableDef
         plan `shouldMention` tdName poolUpdateTableDef

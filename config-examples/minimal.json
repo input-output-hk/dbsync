@@ -5,7 +5,7 @@
   "ledger": {
     "enabled": false
   },
-  "db_profile": {
+  "extractors": {
     "epoch_sync_stats": true
   },
   "metrics": {

@@ -6,70 +6,56 @@ sidebar_position: 1
 
 # Metrics
 
-:::warning Not yet implemented
-The Prometheus endpoint is reserved but not wired up. The
-`metrics.prometheus_port` field in the profile is honoured by the
-config parser, but no server listens on the port today.
+:::warning Not implemented
+dbsync exposes no metrics endpoint. The config parser accepts
+`metrics.prometheus_port`, but no server listens on that port, and
+dbsync does not collect the underlying counters.
 
-This page describes the planned design so operators know what to
-expect. If you need observability today, parse the structured
-(`logging.format = "json"`) logs — they contain the same data the
-endpoint will expose.
+Monitor a running sync through the logs and the two tables below.
 :::
 
-## Planned design
+## Where the sync is now
 
-When wired up, dbsync will expose a Prometheus-format endpoint on
-the port set by `metrics.prometheus_port` (default `8080`). One
-process, one endpoint at `GET /metrics`.
+`dbsync_sync_state` holds one row describing the current position.
 
-The metric definitions live in
-[`DbSync.Metrics`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/Metrics.hs);
-the underlying values are already tracked through the sync, only the
-HTTP server hasn't been wired.
+```sql
+SELECT last_committed_slot, last_committed_block_no, sync_complete
+FROM dbsync_sync_state;
+```
 
-## Planned metrics
+The same row also holds the per-table id counters, the recorded
+network magic, the schema fingerprint, and the extractor list.
 
-| Metric | Type | Meaning |
-|---|---|---|
-| `dbsync_blocks_processed_total` | counter | Blocks the consumer has finished writing. |
-| `dbsync_current_epoch` | gauge | Epoch number of the most recently committed block. |
-| `dbsync_current_block` | gauge | Block number of the most recently committed block. |
-| `dbsync_current_slot` | gauge | Slot of the most recently committed block. |
-| `dbsync_blocks_per_sec` | gauge | Recent throughput. Resets across phase transitions. |
-| `dbsync_copy_rows_written_total` | counter | Rows written by the Ingest COPY path. |
-| `dbsync_phase` | gauge | 0 = `IngestChainHistory`, 1 = `PreparingForVolatileTail`, 2 = `FollowingVolatileTail` / `FollowingChainTip`. |
-| `dbsync_dedup_store_size` | gauge | Combined size of the Ingest LSM dedup stores. |
-| `dbsync_queue_depth` | gauge | Depth of the receiver → consumer block queue. |
+## How fast each epoch was
 
-Plus the standard GHC runtime metrics (heap size, GC time, capability
-utilisation) exposed via `-T` in the executable's baked-in RTS opts.
+The `epoch_sync_stats` table records one row per finalised epoch.
+Every preset enables it.
 
-## Until the endpoint lands
+| Column | Meaning |
+|---|---|
+| `epoch_no` | The epoch this row describes. |
+| `blocks_processed` | Blocks written for the epoch. |
+| `blocks_per_sec` | Throughput over the epoch. |
+| `elapsed_sec` | Wall-clock time for the epoch. |
+| `phase` | The phase that wrote the row. |
+| `synced_at` | When dbsync finalised the epoch. |
 
-The same data is available three other ways:
+Use it to find where a slow sync lost time:
 
-- **Logs.** With `logging.level = "info"` you get per-epoch summary
-  lines during Ingest and per-block progress during Follow. With
-  `logging.format = "json"` they're parseable directly.
-- **`epoch_sync_stats` table.** Always-on (enabled by every preset),
-  one row per finalised epoch with timing, block count, and tx count.
-  Useful for retrospective analysis.
-- **PostgreSQL.** The `dbsync_sync_state` row tracks
-  `last_committed_slot`, `last_committed_block_no`, and the per-table
-  id counters. `SELECT * FROM dbsync_sync_state` shows where the
-  sync is up to.
+```sql
+SELECT epoch_no, blocks_per_sec, elapsed_sec
+FROM epoch_sync_stats
+ORDER BY elapsed_sec DESC
+LIMIT 10;
+```
 
-## What to alert on (eventually)
+## Logs
 
-Once the endpoint is live, the alerting cases that matter most:
+At `logging.level = "info"` dbsync logs each phase transition, each
+Prep step with its duration, and one summary line per epoch during
+Ingest. In `FollowingChainTip` it logs a `"still at tip"` heartbeat
+every 30 seconds while no new block arrives.
 
-- **`dbsync_phase` stays at `0` indefinitely.** Ingest isn't
-  finishing. Either the node is behind or dbsync isn't making
-  progress.
-- **`dbsync_blocks_per_sec` drops to near zero in Follow.** The node
-  socket has stalled or PG is unreachable.
-- **`dbsync_queue_depth` saturates.** The consumer can't keep up with
-  the receiver — usually a PG-side bottleneck.
-- **Process death** (via Prometheus's `up` metric on this target).
-  The sync stopped; check logs for the cause.
+If that heartbeat stops and no block lines appear, dbsync is no longer
+following the chain. See
+[Troubleshooting](troubleshooting).

@@ -108,5 +108,5 @@ cardano-cli query tip --mainnet --socket-path ~/cardano/mainnet/db/node.socket
 
 ## Next
 
-[The config file](profiles/overview) — pick which tables you want
+[The config file](config/overview) — pick which tables you want
 populated.

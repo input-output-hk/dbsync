@@ -135,14 +135,14 @@ Two gates run at boot, in order.
 ### Extractor-presence gate
 
 The first gate is **presence-based**: it compares the extractor set the
-profile enables against the set recorded on `dbsync_sync_state`.
+config enables against the set recorded on `dbsync_sync_state`.
 
 ```
 checkExtractorPresence enabledNames connStr   -- IO probe of dbsync_sync_state
   → SchemaFresh        -- no dbsync_sync_state table
   | SchemaUnseeded     -- table present, no seeded row
   | analyzeExtractorState enabledNames observed  -- pure, when seeded
-      → SchemaMatches | SchemaMismatched (NonEmpty MissingExtractor)
+      → SchemaMatches | SchemaMismatched (NonEmpty SchemaMismatch)
 
 decideSchemaAction resyncFromGenesis schemaState
   → ActionRunInit | ActionSkipInit | ActionForceReinit | ActionAbort errs
@@ -153,17 +153,27 @@ decideSchemaAction resyncFromGenesis schemaState
 - **`SchemaUnseeded`** (table present but never seeded — a crash landed
   between init and the seed write) → `ActionSkipInit`; boot then aborts
   with a resync hint.
-- **`SchemaMatches`** (every enabled extractor present) →
-  `ActionSkipInit`: resume.
-- **`SchemaMismatched`** (an enabled extractor is missing) →
-  `ActionAbort`: refuse to start and render each `MissingExtractor`.
+- **`SchemaMatches`** (the two sets are equal) → `ActionSkipInit`:
+  resume.
+- **`SchemaMismatched`** → `ActionAbort`: refuse to start and render each
+  mismatch through `renderSchemaMismatch`.
 - `--resync-from-genesis` short-circuits to `ActionForceReinit`:
   `dropSchema` then `initSchema`.
 
-Extractors present in the database but absent from the running profile
-are ignored — removing an extractor from a profile does not require a
-re-sync. The pure core (`analyzeExtractorState`, `decideSchemaAction`)
-is covered by unit tests; the IO wrapper and DDL by the PG-backed
+`SchemaMismatch` covers **both directions**:
+
+```haskell
+data SchemaMismatch
+  = MissingExtractor    !Text  -- enabled in the config, absent from the DB
+  | UnexpectedExtractor !Text  -- recorded in the DB, absent from the config
+```
+
+`analyzeExtractorState` is deliberately symmetric, so **removing an
+extractor aborts the boot exactly as adding one does**. There is no
+"ignore the extra tables" mode. Both directions need a re-sync.
+
+The pure core — `analyzeExtractorState` and `decideSchemaAction` — is
+covered by unit tests; the IO wrapper and the DDL by the PG-backed
 `InitSpec`.
 
 ### Version and fingerprint gate
@@ -242,14 +252,22 @@ class). A separate harness
 ([`tests/lib/DbSync/Test/RecomputeInvariants.hs`](https://github.com/input-output-hk/dbsync/blob/main/tests/lib/DbSync/Test/RecomputeInvariants.hs),
 driven by
 [`tests/main/e2e/DbSync/Phase/RecomputeInvariantsSpec.hs`](https://github.com/input-output-hk/dbsync/blob/main/tests/main/e2e/DbSync/Phase/RecomputeInvariantsSpec.hs))
-asserts, after a real sync, that `epoch_finalized` equals the
-`block`+`tx` aggregate, `block.tx_count` equals `COUNT(tx)`, and
-`tx.out_sum` equals `SUM(tx_out.value)` for valid txs.
+asserts, after a real sync, that six recomputed values agree with the
+stored rows:
+
+| Check | What it recomputes |
+|---|---|
+| `epochFinalizedDriftCount` | `epoch_finalized` against the `block` + `tx` aggregate. |
+| `blockTxCountDriftCount` | `block.tx_count` against `COUNT(tx)`. |
+| `txOutSumDriftCount` | `tx.out_sum` against `SUM(tx_out.value)` for valid txs. |
+| `duplicateEpochRowGroupCount` | Epoch-keyed tables hold no duplicate group. |
+| `epochContiguityGapCount` | Epoch numbers have no gap. |
+| `consumedByDriftCount` | `tx_out.consumed_by_tx_id` against `tx_in`. |
 
 Ledger-state-sourced values — `reward`/`pot_reward` amounts,
 `epoch_stake`, `pool_stat`, `ada_pots`, `drep_distr`,
 `epoch_param`/`epoch_state`/`cost_model`, `gov_action_proposal` status,
 `epoch_sync_stats` — are not recomputable from PostgreSQL alone. The
-harness covers only the three PG-derivable invariants; validating
-ledger-sourced values needs a ledger or golden oracle, which it does not
-attempt.
+harness covers only the PG-derivable invariants; validating
+ledger-sourced values needs a ledger or a golden oracle, which it does
+not attempt.

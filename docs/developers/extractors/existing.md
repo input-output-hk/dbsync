@@ -6,11 +6,12 @@ sidebar_position: 3
 
 # Existing extractors
 
-The projections that ship with dbsync. Names match the keys in a
-config's `db_profile` block. Every extractor lives under
-`DbSync.Extractor.*` in the [`dbsync` package](https://github.com/input-output-hk/dbsync/tree/main/dbsync/src/DbSync/Extractor);
-each is registered in
-[`DbSync.App.Setup.buildExtractors`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/App/Setup.hs).
+The extractors that ship with dbsync. Names match the keys in a
+config's `extractors` block. Every extractor lives under
+`DbSync.Extractor.*` in the [`dbsync` package](https://github.com/input-output-hk/dbsync/tree/main/dbsync/src/DbSync/Extractor).
+The single source of truth for which exist is
+[`DbSync.Extractor.Registry.allKnownExtractors`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/Extractor/Registry.hs);
+`DbSync.App.Setup.buildExtractors` only resolves config keys against it.
 
 | Extractor | Always on? | Tables owned |
 |---|---|---|
@@ -32,24 +33,27 @@ each is registered in
 | `off_chain_votes` | no | the seven `off_chain_vote_*` tables |
 | `current_state` | no | — (reserved stub) |
 
-Every extractor except `core` is opt-in through its `db_profile` key.
-Several also need `ledger.enabled = true` to produce anything:
-`stake_delegation_ledger`, `pool_stats`, and `epoch_boundary` are
-driven by the ledger worker's per-epoch output, and `core` / `pool`
-fill their ledger-derived columns (deposits, refunds) only when ledger
-is on.
+Every extractor except `core` is opt-in through its `extractors` key.
+
+The validator requires `ledger.enabled = true` for four of them:
+`stake_delegation_ledger`, `pool_stats`, `epoch_boundary`, and
+`current_state`. The first three are driven by the ledger worker's
+per-epoch output. `core` and `pool` fill their ledger-derived columns —
+deposits and refunds — only when the ledger is on.
 
 :::caution `current_state` is a reserved stub
-`current_state` has no implementation yet — it's intentionally absent
-from `allKnownExtractors`, so `resolveExtractor` maps it to a no-op
-`ExtractorDef`. Enabling it in a profile is accepted (the validator
-doesn't reject it) but produces nothing and creates no tables.
+`current_state` has no implementation. It is deliberately absent from
+`allKnownExtractors`, so `resolveExtractor` maps it to a no-op
+`ExtractorDef`. Enabling it produces nothing and creates no tables.
+
+It still requires `ledger.enabled = true`; the validator rejects the
+config otherwise.
 :::
 
 ## `core`
 
 The unconditional extractor. Every other extractor's tables FK into
-its rows — there's no profile where `core` is off. It also owns the
+its rows — there is no config where `core` is off. It also owns the
 shared `stake_address` and `pool_hash` tables, so they are always
 present; the pipeline's dedup helper fills them on behalf of whichever
 extractors are enabled.
@@ -61,11 +65,14 @@ What it writes per block:
 - `tx` — one per transaction, with phase-aware fee and deposit fields.
 
 The phase-aware bit is real but small. In Ingest, `core` writes the
-phase-1 fee straight from the tx body and leaves the deposit column
-NULL where it depends on ledger state; the
-[`PreparingForVolatileTail`](../phases/preparing) backfill fills the
-deposit column from `epoch_param_pending`. In Follow with ledger on,
-both values come straight from the ledger worker's `BlockLedgerData`.
+phase-1 fee straight from the tx body and leaves the deposit column NULL
+where it depends on ledger state. The
+[`PreparingForVolatileTail`](../phases/preparing) backfill then fills
+`tx.deposit` from the deposit-source tables. `epoch_param_pending` feeds
+`pool_update.deposit` and `stake_registration.deposit`, not `tx.deposit`.
+
+In Follow with the ledger on, both values come straight from the ledger
+worker's `BlockLedgerData`.
 
 Owns `slot_leader.pool_hash_id` via a lookup the pipeline performs
 before any extractor runs — this avoids a circular `core` → `pool`
@@ -243,11 +250,10 @@ Stores the raw CBOR-encoded transaction bytes in `tx_cbor`. Useful
 for downstream consumers that need to re-serialise or replay txs.
 
 :::warning Big single contributor
-`tx_cbor` accounts for ~218 GB on its own at mainnet tip — roughly
-half of an `everything`-profile database. Both
-`everything-no-ledger.json` and `everything.json`
-enable `cbor` by default. If your consumers don't need raw CBOR,
-disabling this one option nearly halves the database.
+`tx_cbor` is the largest table in the schema by a wide margin — roughly
+half of an `everything` database. Both `everything-no-ledger.json` and
+`everything.json` enable `cbor` by default. If your consumers do not
+need raw CBOR, disabling this one key nearly halves the database.
 :::
 
 Byron txs don't carry CBOR through the parser; `cbor` skips them.
@@ -289,8 +295,9 @@ crossing. Like `epoch_boundary`, `pdProcess` is a no-op and the work
 happens in a boundary hook, so the table stays empty when ledger is
 off.
 
-`pool_stat.voting_power` is written as 0 for now; its derivation isn't
-wired yet.
+`pool_stat.voting_power` comes from the SPO voting distribution in the
+ledger state. It is `NULL`, not `0`, when the pool is absent from that
+distribution.
 
 ## `epoch_sync_stats`
 
@@ -325,7 +332,7 @@ its `gov_action_data`, `drep_data`, `author`, `reference`,
 
 ## `current_state`
 
-Reserved. The option key is accepted in a profile so a future release
+Reserved. The key is accepted so a future release
 can wire it up without a configuration-schema change, but today it
 maps to a stub `ExtractorDef` with no tables and a no-op process
 function. When implemented it will own the per-pool / per-account

@@ -1,0 +1,46 @@
+-- | Profiling overlay of the main project file.
+--
+-- Default build does info-table (-hi) heap profiling: every package is
+-- compiled with -finfo-table-map -fdistinct-constructor-tables, mapping
+-- live heap closures to the source location that allocated them. No
+-- -prof, so the binary keeps its optimised runtime behaviour.
+--
+--   cabal --project-file=cabal.project.profiling build dbsync
+--   <dbsync> … +RTS -hi -l-agu -i30 -RTS      # writes dbsync.eventlog
+--   eventlog2html dbsync.eventlog
+--
+-- scripts/run-everything-zellij.sh wires those RTS flags when IPE=1.
+--
+-- cabal.project.local is not auto-loaded for a non-default project file,
+-- so its snappy-c paths are repeated here.
+
+import: cabal.project
+
+package snappy-c
+  extra-include-dirs: /opt/homebrew/opt/snappy/include
+  extra-lib-dirs:     /opt/homebrew/opt/snappy/lib
+
+-- ---------------------------------------------------------------------------
+-- Info-table profiling
+-- ---------------------------------------------------------------------------
+--
+-- `package *` covers the whole tree, local packages and dependencies
+-- alike. Boot libraries (base, containers, …) only carry provenance when
+-- GHC itself was built with IPE. The first build recompiles everything;
+-- later builds are incremental.
+
+package *
+  ghc-options: -finfo-table-map -fdistinct-constructor-tables
+
+-- ---------------------------------------------------------------------------
+-- Cost-centre profiling (opt-in)
+-- ---------------------------------------------------------------------------
+--
+-- Uncomment to build a -prof binary for scripts/profile-dbsync.sh, whose
+-- -p / -hc / .prof output needs cost centres. This adds profiling overhead,
+-- so leave it off for -hi runs. toplevel-functions keeps source-level names
+-- in .prof; switch to `late` for timings that track optimised code more
+-- closely at the cost of mangled names.
+--
+profiling: True
+profiling-detail: late

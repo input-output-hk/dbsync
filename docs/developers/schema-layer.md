@@ -28,7 +28,7 @@ data TableDef = TableDef
   , tdUniqueConstraints :: ![NonEmpty Text]
   , tdGeneratedColumns  :: ![(Text, Text)]
   , tdIdentityColumns   :: ![Text]
-  , tdForeignKeys       :: ![ForeignKey]
+  , tdParentRefs        :: ![ParentRef]
   }
 
 data ColumnDef = ColumnDef
@@ -37,21 +37,32 @@ data ColumnDef = ColumnDef
   , cdNullable :: !Bool
   }
 
-data ForeignKey = ForeignKey
-  { fkColumn       :: !Text
-  , fkParentTable  :: !Text
-  , fkParentColumn :: !Text
+data ParentRef = ParentRef
+  { prColumn       :: !Text
+  , prParentTable  :: !Text
+  , prParentColumn :: !Text
   }
 ```
 
-Every extractor data table is described by one `TableDef`. The
-optional-shaped fields (primary key, checks, defaults, unique
-constraints, generated columns) are empty for most extractor tables —
-those run UNLOGGED with no constraints during Ingest and get
-constraints retrofitted by [`PreparingForVolatileTail`](phases/preparing).
-They exist for the small number of tables that need LOGGED-from-day-one
-semantics (currently `dbsync_sync_state`) and to carry per-table
-metadata that is consumed later.
+One `TableDef` describes one extractor data table.
+
+The optional-shaped fields — primary key, checks, defaults, unique
+constraints, generated columns — are empty for most extractor tables.
+Those run UNLOGGED and constraint-free during Ingest, and
+[`PreparingForVolatileTail`](phases/preparing) retrofits the
+constraints. The fields exist for the three tables created LOGGED from
+the start — `dbsync_sync_state`, `epoch_param_pending`, and
+`epoch_finalized` — and to carry metadata consumed later.
+
+`tdParentRefs` declares **ownership**: rows of this table belong to a
+row of `prParentTable` and must die with it. It drives three things —
+the resume trim, the Follow rollback cascade, and the `FOREIGN KEY`
+constraints created during Prep.
+
+A reference to a deduplicated row is deliberately *not* an ownership
+edge. `tx_out.inline_datum_id`, `tx_in.redeemer_id`, and
+`ma_tx_out.ident` are shared between transactions rather than owned by
+one, so they are neither cascaded nor constrained.
 
 ## Layout
 
@@ -66,38 +77,44 @@ dbsync-db/src/DbSync/Db/
 │   ├── Entity.hs         # Key type family
 │   ├── Generate.hs       # CREATE TABLE DDL from TableDef
 │   ├── Init.hs           # initSchema + schema-mode flip DDL
-│   ├── Core.hs           # block, tx, slot_leader, meta, reverse_index
+│   ├── Core.hs           # block, tx, slot_leader, stake_address, pool_hash
 │   ├── UTxO.hs           # tx_out, tx_in, collateral, reference_tx_in
-│   ├── Pool.hs           # pool_hash, pool_update, etc.
-│   ├── … (one per feature)
+│   ├── Pool.hs           # pool_update, pool_owner, pool_relay, …
+│   ├── … (one per domain)
 │   ├── SyncState.hs      # dbsync_sync_state singleton metadata
 │   └── EpochParamPending.hs  # Ingest → Prep bridge
-├── Statement/            # one module per table + cross-cutting ones
-│   ├── Block.hs
-│   ├── Tx.hs
+├── Statement/            # one module per domain, mirroring Schema/
+│   ├── Core.hs           # block, tx, slot_leader, stake_address, pool_hash
+│   ├── UTxO.hs
 │   ├── …
 │   ├── IdAllocator.hs    # sequence-batch allocation for Follow
 │   ├── Indexes.hs        # pre-resolve + production index DDL
 │   ├── Sequences.hs      # attach + setval after the LOGGED flip
-│   ├── Resolve.hs        # FK resolves (CTAS rebuilds)
-│   ├── Backfill.hs       # tx column backfills + epoch_param_pending
+│   ├── Constraints.hs    # ownership FOREIGN KEY DDL
 │   ├── Loader.hs         # libpq COPY stream primitives
-│   └── Rollback.hs       # Follow-phase rollback cascade
+│   └── Worker/
+│       ├── Resolve.hs           # FK resolves (CTAS rebuilds)
+│       ├── Backfill.hs          # tx column backfills
+│       ├── EpochParamPending.hs # the Ingest → Prep bridge table
+│       └── Rollback.hs          # Follow-phase rollback cascade
 └── Loader/
     └── Encoder.hs        # Builder-based COPY-text encoding
 ```
+
+`Schema/` and `Statement/` group by **domain**, not by table. One
+module covers a family of related tables.
 
 `Schema/<Domain>.hs` is the canonical place for a domain. Each one
 exposes:
 
 - The row types (`Block`, `Tx`, ...).
 - A `<table>TableDef` value used by DDL generation.
-- A `encode<Table>Copy` function for the Ingest writer.
+- An `encode<Table>Copy` function for the Ingest writer.
 - `<table>Encoder` / `<table>Decoder` hasql codecs used by the Follow
   writer and any control-plane queries.
 
-`Statement/<Table>.hs` provides hasql `Statement`s the Follow loop and
-the Preparing phase need.
+`Statement/<Domain>.hs` provides the hasql `Statement`s the Follow loop
+and the Preparing phase need.
 
 ## DDL generation
 
@@ -126,19 +143,22 @@ CREATE TABLE "dbsync_sync_state" (
 );
 ```
 
-Indexes and foreign keys are never emitted here. Indexes are built
-post-load by
-[`Phase.Preparing.Indexes`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/Phase/Preparing/Indexes.hs);
-foreign keys aren't emitted at all — `tdForeignKeys` is metadata
-consumed by the Follow rollback cascade, not a SQL constraint. That
-keeps cascading deletes off the hot path; the cascade walks the
-schema graph itself.
+Neither indexes nor foreign keys are emitted here. Both arrive during
+[`PreparingForVolatileTail`](phases/preparing), after the bulk load:
+
+- Indexes come from
+  [`Phase.Preparing.Indexes`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/Phase/Preparing/Indexes.hs).
+- Foreign keys come from `Phase.Preparing.Constraints`, which turns
+  each `tdParentRefs` entry into an `ALTER TABLE … ADD CONSTRAINT …
+  FOREIGN KEY … NOT VALID`, then validates them in a second step.
+
+`tdParentRefs` therefore does double duty: it is both the SQL
+constraint source and the graph the Follow rollback cascade walks.
 
 [`initSchema`](https://github.com/input-output-hk/dbsync/blob/main/dbsync-db/src/DbSync/Db/Schema/Init.hs)
-walks every enabled extractor's `pdTables`, runs `generateCreateTable`
-over each, and pipes the result through `psql`. Disabling an extractor
-in the profile means its tables never get created — there's no
-empty-table residue.
+takes the `TableDef` list from its caller, generates the DDL, and pipes
+it through `psql`. An extractor left out of the config never gets its
+tables created, so there is no empty-table residue.
 
 ## COPY encoders
 
@@ -181,8 +201,9 @@ expose preparable statements for the common operations:
   the ID via `RETURNING id`. Used at boot for one-shot inserts.
 - `next<Table>IdStmt :: Statement () <Id>` — allocate the next ID
   from the table's sequence.
-- `query<Table>By<Column>Stmt :: Statement <Key> (Maybe <Id>)` —
-  dedup lookups for the Follow resolver.
+- `query<Table>IdStmt :: Statement <Key> (Maybe <Id>)` — dedup lookups
+  for the Follow resolver. The block and tx hash lookups use the
+  longer `query<Table>By<Column>Stmt` form instead.
 
 Cross-cutting statements live in dedicated modules:
 
@@ -191,34 +212,48 @@ Cross-cutting statements live in dedicated modules:
 | [`Statement.IdAllocator`](https://github.com/input-output-hk/dbsync/blob/main/dbsync-db/src/DbSync/Db/Statement/IdAllocator.hs) | Bulk `setval` / batch `nextval` for the Follow per-block ID allocator. |
 | [`Statement.Indexes`](https://github.com/input-output-hk/dbsync/blob/main/dbsync-db/src/DbSync/Db/Statement/Indexes.hs) | Pre-resolve + production index builders. |
 | [`Statement.Sequences`](https://github.com/input-output-hk/dbsync/blob/main/dbsync-db/src/DbSync/Db/Statement/Sequences.hs) | Attach sequences after the LOGGED flip; advance via `setval`. |
-| [`Statement.Resolve`](https://github.com/input-output-hk/dbsync/blob/main/dbsync-db/src/DbSync/Db/Statement/Resolve.hs) | The `tx_in.tx_out_id` / collateral / reference FK resolves. |
-| [`Statement.Backfill`](https://github.com/input-output-hk/dbsync/blob/main/dbsync-db/src/DbSync/Db/Statement/Backfill.hs) | The Preparing-pass `tx` column backfills + `epoch_param_pending`. |
+| [`Statement.Constraints`](https://github.com/input-output-hk/dbsync/blob/main/dbsync-db/src/DbSync/Db/Statement/Constraints.hs) | Ownership `FOREIGN KEY` DDL built from `tdParentRefs`. |
 | [`Statement.Loader`](https://github.com/input-output-hk/dbsync/blob/main/dbsync-db/src/DbSync/Db/Statement/Loader.hs) | Helpers for the libpq COPY streams. |
-| [`Statement.Rollback`](https://github.com/input-output-hk/dbsync/blob/main/dbsync-db/src/DbSync/Db/Statement/Rollback.hs) | The Follow-phase rollback cascade. |
+| [`Statement.Worker.Resolve`](https://github.com/input-output-hk/dbsync/blob/main/dbsync-db/src/DbSync/Db/Statement/Worker/Resolve.hs) | The `tx_in.tx_out_id` / collateral / reference FK resolves. |
+| [`Statement.Worker.Backfill`](https://github.com/input-output-hk/dbsync/blob/main/dbsync-db/src/DbSync/Db/Statement/Worker/Backfill.hs) | The Preparing-pass `tx` column backfills. |
+| [`Statement.Worker.EpochParamPending`](https://github.com/input-output-hk/dbsync/blob/main/dbsync-db/src/DbSync/Db/Statement/Worker/EpochParamPending.hs) | The `epoch_param_pending` Ingest → Prep bridge. |
+| [`Statement.Worker.Rollback`](https://github.com/input-output-hk/dbsync/blob/main/dbsync-db/src/DbSync/Db/Statement/Worker/Rollback.hs) | The Follow-phase rollback cascade. |
 
 `hasql` was chosen over `postgresql-simple` for two reasons:
 prepared-statement reuse (Follow runs the same statements every block,
 so prepared-statement caching matters) and `Pipeline` (the Follow
 writer drains a block's writes as one round-trip).
 
-## Profile-driven schema
+## Config-driven schema
 
-A profile selects which extractors are enabled, and each extractor
-declares the tables it owns. The schema layer is the consumer of that:
+The config selects which extractors are enabled, and each extractor
+declares the tables it owns through `pdTables`.
+
+The two packages meet at `initSchema`'s argument list, not inside it:
 
 ```haskell
--- in DbSync.Db.Schema.Init.initSchema
-allTables :: [TableDef]
-allTables = syncStateTableDef : concatMap pdTables enabledExtractors
+initSchema :: [TableDef] -> Text -> IO ()
 ```
 
-`initSchema` walks `allTables` once at boot, generates the DDL, and
-pipes through `psql`. The shape of the database is decided by the
-profile and is fixed for the lifetime of that database — see
-[The config file](/users/profiles/overview) on the user side.
+`dbsync-db` never sees an `ExtractorDef`. `dbsync` depends on
+`dbsync-db`, so the dependency cannot run the other way. The caller in
+`DbSync.App.Run` flattens the enabled extractors' `pdTables` and hands
+the resulting list down.
 
-No JSON-RPC, no admin endpoints, no schema_version row that lets you
-toggle extractors at runtime. A profile change means a fresh sync.
+`initSchemaStatements` then emits, in order:
+
+1. `dbsync_sync_state`.
+2. `epoch_param_pending`, always, even with the ledger disabled.
+3. Every table in the list, as one batch.
+4. The `epoch_current` and `epoch` views, if `epoch_finalized` is in
+   the list.
+
+The migration baseline file is generated from this same list, so it
+cannot drift from what `initSchema` creates.
+
+The database's shape is fixed for its lifetime. There is no JSON-RPC,
+no admin endpoint, and no row that toggles extractors at runtime — see
+[`extractors` is fixed per database](/users/config/overview#extractors-is-fixed-per-database).
 
 ## Domain types
 

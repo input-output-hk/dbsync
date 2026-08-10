@@ -25,28 +25,30 @@ the platform pages cover the per-OS specifics.
 
 | Library | Required? | Used by |
 |---|---|---|
-| `snappy` | yes | Compression for the on-disk ledger snapshots. |
+| `snappy` | yes | Compression in the LSM-tree stores. Required even with `ledger.enabled = false`, because the Ingest dedup and UTxO stores use them too. |
 | `pkg-config` | yes | Build-time discovery of `snappy` and `libpq`. |
 | `libpq` | yes | Bundled with PostgreSQL on most distros. |
-| `liburing` | Linux only | The asynchronous block-I/O backend used by the LSM-tree dedup stores and the LedgerDB. |
+| `liburing` | Linux only | The asynchronous block-I/O backend for the LSM-tree stores and the LedgerDB. |
 
-On macOS (and Windows, and any non-Linux target), `liburing` isn't
-available. dbsync detects this at build time and selects a synchronous
-fallback automatically — no manual flag required. See the
-[macOS page](macos) for the details.
+On macOS, and on any non-Linux target, `liburing` does not exist.
+dbsync detects this at build time and selects a synchronous fallback.
+You need no manual flag. See the [macOS page](macos).
 
 ## PostgreSQL
 
-PostgreSQL 16 or newer is required — dbsync uses features in the COPY
-path and the LOGGED/UNLOGGED machinery that landed in 16. PostgreSQL
-18 is recommended, and is the version CI and the installation guides
-below target.
+Use **PostgreSQL 18**. CI builds and tests against it, and the
+installation pages below target it.
 
-You don't need a separate database account — the connection string is
-read from the profile JSON, and a local installation with peer
-authentication for the current OS user works for development. For a
-production deployment, give dbsync a dedicated user with `CREATEDB`
-the first time, then narrow the grants afterwards.
+dbsync performs no version check, so an older server may work. Nothing
+in the codebase establishes a hard floor.
+
+**dbsync does not create the database.** You create it, then dbsync
+creates the tables inside it. The user therefore needs `CONNECT` on
+the database plus `CREATE` and `USAGE` on the `public` schema. It does
+not need `CREATEDB`.
+
+For development, a local install with peer authentication for your OS
+user works with no extra setup.
 
 :::tip Read the tuning config first
 `scripts/postgres-tuning.conf` in the repository documents the
@@ -63,14 +65,21 @@ n2c-supporting node works — see [Cardano node setup](../node-setup)
 for how to get one, including pre-built binaries, Docker, Nix, and
 source builds via the official Cardano docs.
 
-## Disk
+## Disk space
 
-Rough figures for a mainnet sync. The `everything` row is measured;
-the smaller profiles are approximations derived from the
-`everything`-profile per-table breakdown. Actual usage depends on
-the profile and on PostgreSQL's autovacuum behaviour:
+:::caution These are observations, not guarantees
+The figures below come from one `everything` sync against mainnet.
+The other rows are derived from its per-table breakdown. Your result
+will differ with the network, the chain's growth since these were
+taken, and PostgreSQL's autovacuum behaviour.
 
-| Profile | Approximate `pg_database_size` at mainnet tip |
+Size the disk from the ordering, not from the absolute numbers, and
+leave generous headroom.
+:::
+
+Approximate `pg_database_size` at mainnet tip:
+
+| Preset | Size |
 |---|---|
 | `minimal` | ~30 GB |
 | `utxo-only` | ~160 GB |
@@ -79,21 +88,20 @@ the profile and on PostgreSQL's autovacuum behaviour:
 | `everything-no-ledger` | ~475 GB |
 | `everything` | ~480 GB |
 
-Plus ~220 GB for the cardano-node database (mostly the ImmutableDB
-chain history at mainnet tip). Allow comfortable headroom over these
-figures — the bulk-load phase needs working space for index builds
-and the LOGGED-flip table rewrite.
+Budget for three more things on top:
 
-The on-disk ledger state (if `ledger.enabled = true`) lives under
-whatever directory you pass to `--ledger-state-dir` and runs ~11 GB
-at mainnet tip with the LSM backend.
+- **The cardano-node database**, roughly 220 GB at mainnet tip, mostly
+  the ImmutableDB chain history.
+- **Working space for `PreparingForVolatileTail`**, which builds
+  indexes and rewrites every table for the LOGGED flip.
+- **The on-disk ledger state**, if `ledger.enabled = true`. It lives
+  under `--ledger-state-dir` and runs about 11 GB at mainnet tip.
 
-:::tip Big single contributor: `tx_cbor`
-The `cbor` extractor stores raw transaction CBOR bytes and accounts
-for ~218 GB on its own — roughly half of an `everything`-profile
-database. If your consumers don't need to re-serialise or replay
-transactions, disabling `cbor` in a custom profile derived from one
-of the bigger presets cuts the database nearly in half. See
-[Preset configs](../profiles/presets) for the per-extractor
-breakdown.
+:::tip `cbor` dominates the total
+The `cbor` extractor stores raw transaction CBOR. It accounts for
+roughly 218 GB on its own, about half of an `everything` database.
+
+Disable `cbor` unless your consumers re-serialise or replay
+transactions. It nearly halves the database. See
+[Preset configs](../config/presets).
 :::

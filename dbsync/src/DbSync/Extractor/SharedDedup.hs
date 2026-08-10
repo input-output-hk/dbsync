@@ -1,12 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Resolve-or-insert helpers for tables that are shared between
--- extractors via dedup maps.
---
--- Each helper looks up the input key in the appropriate dedup map; if
--- new, it writes the row and returns the assigned ID. Multiple
--- extractors may call the same helper for the same key — the resolver
--- guarantees only the first call produces a write.
+-- | Resolve-or-insert helpers for the tables that extractors share
+-- through dedup maps. Each helper looks the key up, then writes the
+-- row only when the key is new. Several extractors may call the same
+-- helper with the same key; the resolver lets only the first call
+-- write.
 module DbSync.Extractor.SharedDedup
   ( resolveAndWritePoolHash
   , resolveAndWriteStakeAddress
@@ -80,8 +78,7 @@ import DbSync.Writer (HasWriter (..), Writer (..))
 -- * Resolvers
 -- ---------------------------------------------------------------------------
 
--- | Resolve a pool hash by 28-byte key hash, writing a fresh
--- @pool_hash@ row on first sighting.
+-- | The key is the 28-byte pool key hash.
 resolveAndWritePoolHash
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
   => ByteString
@@ -97,17 +94,14 @@ resolveAndWritePoolHash poolKeyHash = do
   when isNew $ liftIO $ writePoolHash writer phId ph
   pure phId
 
--- | Resolve a stake address by 28-byte credential hash, writing a fresh
--- @stake_address@ row on first sighting.
+-- | The key is the 28-byte credential hash. The stored @hash_raw@ is
+-- the full 29-byte serialised reward address (@header || credential@),
+-- which the @addr29type@ domain holds, and @view@ is its Bech32 form.
 --
--- The stored @hash_raw@ is the full 29-byte serialised reward address
--- (header byte || credential), matching the original schema's
--- @addr29type@. The @view@ is its Bech32 encoding.
---
--- The header nibble follows CIP-19: reward addresses use @0xE_@ for a
+-- The header nibble follows CIP-19: a reward address uses @0xE_@ for a
 -- stake-key credential and @0xF_@ for a stake-script credential, with
--- the low bit set on mainnet. Script credentials also populate
--- @script_hash@; key credentials leave it NULL.
+-- the low bit set on mainnet. A script credential also fills
+-- @script_hash@; a key credential leaves it NULL.
 resolveAndWriteStakeAddress
   :: ( HasResolver env
      , HasWriter env
@@ -140,8 +134,8 @@ resolveAndWriteStakeAddress credHash isScript = do
   when isNew $ liftIO $ writeStakeAddress writer saId sa
   pure saId
 
--- | Resolve a 'CredHash' to its @stake_address@ id, threading the
--- script\/key flag through to the header byte and @script_hash@.
+-- | The credential's script\/key flag drives both the header byte and
+-- @script_hash@.
 resolveStakeCred
   :: ( HasResolver env
      , HasWriter env
@@ -160,13 +154,10 @@ rewardAddrHeader :: Bool -> Bool -> Word8
 rewardAddrHeader mainnet isScript =
   0xE0 .|. (if isScript then 0x10 else 0x00) .|. (if mainnet then 0x01 else 0x00)
 
--- | Resolve a multi-asset by @(policy, name)@, writing a fresh
--- @multi_asset@ row on first sighting.
---
--- The in-memory dedup key is @hashDedupKey (policy <> name)@. The
--- boot-time rebuild path in 'DbSync.SyncState.Row.populateMultiAsset'
--- MUST apply the same hash to the same input; otherwise resumed
--- runs will allocate fresh ids for already-known assets.
+-- | The in-memory dedup key is @hashDedupKey (policy <> name)@. The
+-- boot-time rebuild in 'DbSync.SyncState.Row.populateMultiAsset' MUST
+-- apply the same hash to the same input. If it does not, a resumed run
+-- allocates fresh ids for assets the database already holds.
 resolveAndWriteMultiAsset
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
   => ByteString    -- ^ policy ID
@@ -185,9 +176,8 @@ resolveAndWriteMultiAsset policy name = do
   when isNew $ liftIO $ writeMultiAsset writer maId ma
   pure maId
 
--- | Resolve a datum by 32-byte hash, writing the @datum@ row on
--- first sighting. The caller supplies the typed row so the same
--- helper covers all eras' datum shapes.
+-- | The caller supplies the typed row, so this one helper covers the
+-- datum shape of every era.
 resolveAndWriteDatum
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
   => ByteString
@@ -200,8 +190,6 @@ resolveAndWriteDatum hash row = do
   when isNew $ liftIO $ writeDatum writer did row
   pure did
 
--- | Resolve a script by its hash, writing the @script@ row on
--- first sighting.
 resolveAndWriteScript
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
   => ByteString
@@ -214,9 +202,9 @@ resolveAndWriteScript hash row = do
   when isNew $ liftIO $ writeScript writer sid row
   pure sid
 
--- | Resolve a parsed script (witness, aux-data, or output reference)
--- by hash, writing the @script@ row — attributed to the carrying tx —
--- on first sighting.
+-- | Takes a parsed script from a witness set, from auxiliary data, or
+-- from an output reference, and attributes the row to the tx that
+-- carries it.
 resolveAndWriteTxScript
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
   => TxId
@@ -232,8 +220,6 @@ resolveAndWriteTxScript txId gts =
     , scriptSerialisedSize = gtsSerialisedSize gts
     }
 
--- | Resolve a redeemer-data payload by 32-byte hash, writing the
--- @redeemer_data@ row on first sighting.
 resolveAndWriteRedeemerData
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
   => ByteString
@@ -250,8 +236,8 @@ resolveAndWriteRedeemerData hash row = do
 -- * Governance dedup helpers
 -- ---------------------------------------------------------------------------
 
--- | Resolve a concrete DRep credential, writing the @drep_hash@ row
--- on first sighting. @has_script@ flags script-credential DReps.
+-- | Handles the concrete DRep credentials.
+-- 'resolveAndWriteAbstractDrep' handles the other two.
 resolveAndWriteDrepHash
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
   => ByteString    -- ^ 28-byte credential hash
@@ -269,9 +255,9 @@ resolveAndWriteDrepHash credHash hasScript = do
   when isNew $ liftIO $ writeDrepHash writer did row
   pure did
 
--- | Resolve one of the two abstract DReps (@always_abstain@,
--- @always_no_confidence@). The @raw@ column is NULL on these rows;
--- the @view@ string is the dedup key.
+-- | Handles the two abstract DReps, @always_abstain@ and
+-- @always_no_confidence@. Their @raw@ column is NULL, so the @view@
+-- string is the dedup key.
 resolveAndWriteAbstractDrep
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
   => Text          -- ^ Sentinel @view@ string.
@@ -288,8 +274,7 @@ resolveAndWriteAbstractDrep viewText = do
   when isNew $ liftIO $ writeDrepHash writer did row
   pure did
 
--- | Resolve a committee-key credential by @(raw, has_script)@,
--- writing the @committee_hash@ row on first sighting.
+-- | The dedup key is the @(raw, has_script)@ pair.
 resolveAndWriteCommitteeHash
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
   => ByteString    -- ^ 28-byte credential hash
@@ -306,8 +291,7 @@ resolveAndWriteCommitteeHash credHash hasScript = do
   when isNew $ liftIO $ writeCommitteeHash writer cid row
   pure cid
 
--- | Resolve a voting anchor by @(url, data_hash, type)@, writing
--- the @voting_anchor@ row on first sighting.
+-- | The dedup key is the @(url, data_hash, type)@ triple.
 resolveAndWriteVotingAnchor
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
   => Text          -- ^ Anchor URL.
@@ -329,11 +313,10 @@ resolveAndWriteVotingAnchor url dataHash anchorType blockId = do
   when isNew $ liftIO $ writeVotingAnchor writer vid row
   pure vid
 
--- | Resolve a Plutus cost-model map by its canonical CBOR hash,
--- writing the @cost_model@ row on first sighting. Lives here rather
--- than in 'Extractor.EpochBoundary' so both the epoch-boundary path
--- and the governance @ParameterChange@ path can share the dedup
--- cache.
+-- | The dedup key is the canonical CBOR hash of the cost-model map.
+-- This helper lives here, not in 'Extractor.EpochBoundary', so the
+-- epoch-boundary path and the governance @ParameterChange@ path share
+-- one dedup cache.
 resolveAndWriteCostModel
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
   => Map Language Alonzo.CostModel

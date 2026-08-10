@@ -45,12 +45,12 @@ realMain = do
   args <- parseCliArgs
   printBanner
 
-  -- Bootstrap tracer so config-parse errors get logged before the
-  -- configured tracer exists.
+  -- Bootstrap tracer, so a config-parse error still reaches the log
+  -- before the configured tracer exists.
   bootTracer <- mkStdErrTracer Info
   let bootLogError msg = traceWith bootTracer $ LogMsg Error "App" msg
 
-  -- 1. Behaviour config (sync mode, ledger flag, db profile, logging).
+  -- 1. Behaviour config (ledger flag, extractors, logging).
   validConfig <- loadConfig bootLogError (caConfig args)
 
   -- 2. Rebuild the tracer at the configured severity.
@@ -87,9 +87,9 @@ realMain = do
 -- * Top-level error handling
 -- ---------------------------------------------------------------------------
 
--- | Render an unhandled exception escaping 'runApp' into the app log
--- and exit non-zero. 'ExitCode's pass through so an intentional exit
--- keeps its status.
+-- | Log an unhandled exception that escaped 'runApp', then exit
+-- non-zero. An 'ExitCode' passes through, so an intentional exit keeps
+-- its status.
 handleFatalError :: AppTracer -> SomeException -> IO ()
 handleFatalError tracer e = case fromException e of
   Just ec -> Exception.throwIO (ec :: ExitCode)

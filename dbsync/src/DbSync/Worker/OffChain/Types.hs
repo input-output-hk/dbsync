@@ -37,25 +37,19 @@ import qualified DbSync.Worker.OffChain.Vote.Types as Vote
 -- worker that schedules and retries fetches.
 data OffChainFetcher = OffChainFetcher
   { ofFetchPoolMetadata :: !(PoolMetadataRef -> IO (Either FetchError PoolMetadata))
-      -- ^ Fetch pool metadata from the URL in the reference
   , ofFetchVoteMetadata :: !(VotingAnchorRef -> IO (Either FetchError VoteMetadata))
-      -- ^ Fetch vote/governance anchor metadata
   , ofGetPendingPools   :: !(IO [PoolMetadataRef])
-      -- ^ Retrieve pool metadata references awaiting fetch
   , ofGetPendingVotes   :: !(IO [VotingAnchorRef])
-      -- ^ Retrieve voting anchor references awaiting fetch
   , ofSavePoolResult    :: !(PoolMetadataRef -> Either FetchError PoolMetadata -> IO ())
-      -- ^ Persist the result (success or failure) of a pool metadata fetch
   , ofSaveVoteResult    :: !(VotingAnchorRef -> Either FetchError VoteMetadata -> IO ())
-      -- ^ Persist the result (success or failure) of a vote metadata fetch
   }
 
 -- ---------------------------------------------------------------------------
 -- * Reference types
 -- ---------------------------------------------------------------------------
 
--- | Reference to off-chain pool metadata.
--- Contains the URL and expected hash from the on-chain registration.
+-- | Reference to off-chain pool metadata, from the on-chain
+-- registration certificate.
 data PoolMetadataRef = PoolMetadataRef
   { pmrPoolId   :: !ByteString  -- ^ Pool key hash
   , pmrUrl      :: !Text        -- ^ Metadata URL from the registration certificate
@@ -63,8 +57,8 @@ data PoolMetadataRef = PoolMetadataRef
   }
   deriving stock (Eq, Show)
 
--- | Reference to a governance voting anchor.
--- Contains the URL and expected hash from the on-chain proposal/vote.
+-- | Reference to a governance voting anchor, from the on-chain
+-- proposal or vote.
 data VotingAnchorRef = VotingAnchorRef
   { varUrl        :: !Text        -- ^ Anchor URL
   , varMetaHash   :: !ByteString  -- ^ Expected content hash
@@ -78,12 +72,9 @@ data VotingAnchorRef = VotingAnchorRef
 
 -- | Successfully fetched pool metadata.
 --
--- 'pmHash' is the Blake2b_256 digest of 'pmRawBytes' computed by the
--- fetcher; it has already been verified against the expected hash on
--- the on-chain @pool_metadata_ref@ row. 'pmCanonicalJson' is the
--- aeson-roundtripped JSON encoding — PG's @jsonb@ parser is stricter
--- than aeson's, so the round-trip avoids inserts failing on bytes
--- aeson accepted.
+-- 'pmCanonicalJson' is the aeson round-tripped encoding. PG's @jsonb@
+-- parser is stricter than aeson's, so the round trip stops inserts
+-- that fail on bytes aeson accepted.
 data PoolMetadata = PoolMetadata
   { pmTicker        :: !Text          -- ^ Pool ticker symbol
   , pmHash          :: !ByteString    -- ^ Verified content hash
@@ -94,12 +85,11 @@ data PoolMetadata = PoolMetadata
 
 -- | Result of a vote-anchor HTTP fetch.
 --
--- The fetcher returns a 'VoteMetadata' on any HTTP success, including
--- responses whose body isn't valid JSON or doesn't conform to a CIP
--- schema — those cases still produce an @off_chain_vote_data@ row,
--- with 'vmIsValidJson' / 'vmCipData' encoding the validation outcome.
--- Network failures and hash mismatches surface as 'Left' 'FetchError'
--- and become @off_chain_vote_fetch_error@ rows instead.
+-- The fetcher returns a 'VoteMetadata' on any HTTP success, even when
+-- the body is not valid JSON or does not match a CIP schema. Those
+-- cases still write an @off_chain_vote_data@ row. Network failures
+-- and hash mismatches return 'Left' and become
+-- @off_chain_vote_fetch_error@ rows instead.
 data VoteMetadata = VoteMetadata
   { vmHash          :: !ByteString          -- ^ Verified content hash
   , vmRawBytes      :: !ByteString          -- ^ Raw response body
@@ -124,23 +114,18 @@ data VoteMetadata = VoteMetadata
 -- 'renderFetchError' turns one into the @fetch_error@ column text.
 data FetchError
   = FetchErrorHttp !Text
-      -- ^ HTTP request failure (timeout, DNS, connection refused, etc.)
   | FetchErrorHashMismatch !ByteString !ByteString
-      -- ^ Expected hash vs actual hash mismatch
+      -- ^ Expected hash, then actual hash.
   | FetchErrorDecode !Text
-      -- ^ JSON decoding failure
   | FetchErrorTooLarge !Int
-      -- ^ Response body exceeded the size limit
+      -- ^ Body size that exceeded the limit.
   | FetchErrorBadContentType !Text
-      -- ^ Server returned an unacceptable Content-Type
   | FetchErrorBadUrl !Text
-      -- ^ URL validation rejected the ref (non-http(s), private IP, etc.)
+      -- ^ URL validation rejected the ref: non-http(s), private IP, etc.
   | FetchErrorTimeout !Text
-      -- ^ Connection or response timeout
   | FetchErrorConnectionFailure
-      -- ^ TCP-level connection failure
   | FetchErrorIpfsAllGatewaysFailed ![Text]
-      -- ^ Every configured gateway returned an error for an @ipfs://@ url
+      -- ^ Every configured gateway failed for an @ipfs:\/\/@ url.
   deriving stock (Eq, Show)
 
 renderFetchError :: FetchError -> Text

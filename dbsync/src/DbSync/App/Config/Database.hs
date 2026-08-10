@@ -1,10 +1,8 @@
 -- | PostgreSQL connection settings, read from the @--pg-config@ file.
 --
--- Kept separate from the behaviour config so deployments can mount
--- the connection details (and the password file they point at) as
--- secrets without touching the rest of the configuration. The file
--- never carries an inline password — only an optional
--- @password_file@ path.
+-- This file stays separate from the behaviour config, so a deployment
+-- mounts the connection details as secrets. The file never carries an
+-- inline password, only an optional @password_file@ path.
 module DbSync.App.Config.Database
   ( -- * Types
     DatabaseConfig (..)
@@ -36,13 +34,13 @@ data DatabaseConfig = DatabaseConfig
   , dcName     :: !Text
   , dcUser     :: !Text
   , dcPassword :: !Text
-    -- ^ Contents of @password_file@ (trailing newlines stripped);
-    -- empty when no @password_file@ is configured.
+    -- ^ Contents of @password_file@, minus trailing newlines. Empty
+    -- when the config sets no @password_file@.
   }
   deriving stock (Eq, Show)
 
--- | The pg-config file as written on disk: @host@ and @name@ are
--- required, the password only ever arrives via @password_file@.
+-- | The pg-config file as written on disk. @host@ and @name@ are
+-- required; the password only ever arrives through @password_file@.
 data RawDatabaseConfig = RawDatabaseConfig
   { rdcHost         :: !Text
   , rdcPort         :: !Int
@@ -64,13 +62,11 @@ instance FromJSON RawDatabaseConfig where
 -- * Parsing
 -- ---------------------------------------------------------------------------
 
--- | Parse a pg-config file (YAML or JSON) and resolve its
--- @password_file@.
+-- | Reads YAML or JSON, then resolves @password_file@.
 --
--- A relative @password_file@ is resolved against the pg-config
--- file's own directory. Trailing newlines are stripped from the
--- file contents (mounted secrets usually end in one); any other
--- whitespace is preserved.
+-- A relative @password_file@ resolves against the pg-config file's own
+-- directory. Trailing newlines drop from the contents, because a
+-- mounted secret usually ends in one. Other whitespace survives.
 parseDatabaseConfig :: FilePath -> IO (Either ConfigError DatabaseConfig)
 parseDatabaseConfig fp = do
   parsed <- first (ConfigParseError . show) <$> Yaml.decodeFileEither fp

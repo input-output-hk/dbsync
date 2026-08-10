@@ -1,17 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 
--- | Schema types for the @scripts_datums@ extractor, which owns five
--- tables, all populated from the witness set of a transaction:
---
---   * @datum@ — Plutus datums (deduped on @hash@).
---   * @script@ — script payloads (Plutus / native; deduped on @hash@).
---   * @redeemer@ — script invocations.
---   * @redeemer_data@ — Plutus redeemer payloads (deduped on @hash@).
---   * @extra_key_witness@ — required-signer hashes.
+-- | Schema types for the @scripts_datums@ extractor. Every table here
+-- comes from the witness set of a transaction.
 --
 -- The FK from @redeemer.redeemer_data_id@ to @redeemer_data.id@ forces
--- all five tables into the same extractor.
+-- all five tables into one extractor.
 module DbSync.Db.Schema.ScriptsDatums
   ( -- * Schema types
     Datum (..)
@@ -106,7 +100,7 @@ type instance Key ExtraKeyWitness = ExtraKeyWitnessId
 -- * Schema types
 -- ---------------------------------------------------------------------------
 
--- | The @datum@ table. Unique on @hash@. JSONB @value@.
+-- | Unique on @hash@. JSONB @value@.
 data Datum = Datum
   { datumHash  :: !ByteString
   , datumTxId  :: !TxId
@@ -115,7 +109,7 @@ data Datum = Datum
   }
   deriving stock (Eq, Show)
 
--- | The @script@ table. Unique on @hash@.
+-- | Unique on @hash@.
 data Script = Script
   { scriptTxId            :: !TxId
   , scriptHash            :: !ByteString
@@ -126,7 +120,7 @@ data Script = Script
   }
   deriving stock (Eq, Show)
 
--- | The @redeemer@ table. References @redeemer_data@ via 'redeemerRedeemerDataId'.
+-- | References @redeemer_data@ via 'redeemerRedeemerDataId'.
 data Redeemer = Redeemer
   { redeemerTxId            :: !TxId
   , redeemerUnitMem         :: !Word64
@@ -139,7 +133,7 @@ data Redeemer = Redeemer
   }
   deriving stock (Eq, Show)
 
--- | The @redeemer_data@ table. Unique on @hash@. JSONB @value@.
+-- | Unique on @hash@. JSONB @value@.
 data RedeemerData = RedeemerData
   { redeemerDataHash  :: !ByteString
   , redeemerDataTxId  :: !TxId
@@ -148,7 +142,6 @@ data RedeemerData = RedeemerData
   }
   deriving stock (Eq, Show)
 
--- | The @extra_key_witness@ table.
 data ExtraKeyWitness = ExtraKeyWitness
   { extraKeyWitnessHash :: !ByteString
   , extraKeyWitnessTxId :: !TxId

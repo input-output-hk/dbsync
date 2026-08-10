@@ -2,12 +2,10 @@
 
 -- | Low-level loader-stream connection management.
 --
--- Each table gets its own dedicated connection running a loader-stream
--- session over PostgreSQL's @COPY FROM STDIN@ via @postgresql-libpq@.
--- The @beginStream@\/@writeStreamRow@\/@endStream@ vocabulary insulates
--- callers from that transport detail.
---
--- Errors are thrown as 'AppDatabaseError' with source location tracking.
+-- Each table gets a dedicated connection running PostgreSQL's
+-- @COPY FROM STDIN@ over @postgresql-libpq@. The
+-- @beginStream@\/@writeStreamRow@\/@endStream@ vocabulary hides that
+-- transport. Failures throw 'AppDatabaseError'.
 module DbSync.Db.Loader.Connection
   ( -- * Types
     LoaderConnection (..)
@@ -53,10 +51,8 @@ data LoaderConnection = LoaderConnection
 -- * Connection lifecycle
 -- ---------------------------------------------------------------------------
 
--- | Open a new @libpq@ connection and prepare it for streaming.
---
--- Connects to PostgreSQL, begins a transaction, and starts a
--- @COPY tablename (columns) FROM STDIN@ stream.
+-- | Connect, begin a transaction, and start the COPY stream. The
+-- connection is ready for 'writeStreamRow' on return.
 openLoaderConnection :: ByteString -> TableDef -> IO LoaderConnection
 openLoaderConnection connStr tableDef = do
   conn <- PQ.connectdb connStr
@@ -79,7 +75,6 @@ openLoaderConnection connStr tableDef = do
   beginStream bc
   pure bc
 
--- | Close the @libpq@ connection and release resources.
 closeLoaderConnection :: LoaderConnection -> IO ()
 closeLoaderConnection bc = PQ.finish (bcConnection bc)
 
@@ -87,10 +82,8 @@ closeLoaderConnection bc = PQ.finish (bcConnection bc)
 -- * Stream operations
 -- ---------------------------------------------------------------------------
 
--- | Start a loader-stream session on this connection.
---
--- The connection must be in a transaction (after 'beginTransaction')
--- and NOT already streaming. Issues a @COPY FROM STDIN@ statement.
+-- | The connection must already be in a transaction and must not be
+-- streaming.
 beginStream :: LoaderConnection -> IO ()
 beginStream bc = do
   let sql = copyFromStdinSql (bcTableName bc) (bcColumnList bc)
@@ -99,10 +92,10 @@ beginStream bc = do
 
 -- | Write a chunk of one or more encoded rows to the stream.
 --
--- Rows are tab-separated and newline-terminated (produced by the
--- encoder helpers in @DbSync.Db.Loader.Encoder@); the protocol does
--- not require chunks to be row-aligned, so any concatenation of
--- complete rows is valid.
+-- The rows use COPY text format: tab-separated, newline-terminated,
+-- as produced by @DbSync.Db.Loader.Encoder@. The protocol does not
+-- require chunks to be row-aligned, so any concatenation of complete
+-- rows is valid.
 writeStreamRow :: LoaderConnection -> ByteString -> IO ()
 writeStreamRow bc rowBytes = do
   copyResult <- PQ.putCopyData (bcConnection bc) rowBytes
@@ -114,21 +107,18 @@ writeStreamRow bc rowBytes = do
         "putCopyData failed for table " <> bcTableName bc
         <> ": " <> maybe "(no error)" (toS . BS8.unpack) errMsg
     PQ.CopyInWouldBlock ->
-      -- For synchronous connections this shouldn't happen, but handle it
+      -- Unreachable on a synchronous connection, but retry anyway.
       writeStreamRow bc rowBytes
 
--- | End the current loader stream.
+-- | End the current stream, which must happen before
+-- 'commitTransaction'. The connection returns to normal SQL mode.
 --
--- Must be called before 'commitTransaction'. After this, the
--- connection is back in normal SQL mode.
---
--- This is where a /server-side/ COPY failure surfaces: @libpq@
--- buffers rows locally, so a row the server rejects is only
--- reported in the final result after the stream ends. If that
--- result were not checked, the subsequent COMMIT would run inside
--- an aborted transaction — which PostgreSQL executes as ROLLBACK
--- while still reporting success — silently dropping every row of
--- the stream.
+-- A /server-side/ COPY failure surfaces here. @libpq@ buffers rows
+-- locally, so the server only reports a rejected row in the final
+-- result after the stream ends. An unchecked result would let the
+-- COMMIT run inside an aborted transaction, which PostgreSQL executes
+-- as ROLLBACK while still reporting success, and every row of the
+-- stream would vanish.
 endStream :: LoaderConnection -> IO ()
 endStream bc = do
   copyResult <- PQ.putCopyEnd (bcConnection bc) mempty
@@ -143,7 +133,7 @@ endStream bc = do
       endStream bc
   where
     -- Consume every pending result. The COPY command's final status
-    -- must be CommandOk; anything else means the server rejected the
+    -- must be CommandOk. Anything else means the server rejected the
     -- stream and the transaction is already aborted.
     drainResults :: IO ()
     drainResults = do
@@ -177,7 +167,6 @@ commitTransaction bc = do
 -- * Internal helpers
 -- ---------------------------------------------------------------------------
 
--- | Check that a @libpq@ result is not an error.
 checkResult :: LoaderConnection -> Text -> Maybe PQ.Result -> IO ()
 checkResult bc operation mResult = case mResult of
   Nothing -> do

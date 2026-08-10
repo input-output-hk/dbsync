@@ -1,10 +1,6 @@
--- | Shared types for the LocalStateQuery integration.
---
--- Split into its own module so 'DbSync.App.Env' (and other consumers
--- that only need the handle's shape) can depend on these definitions
--- without pulling in 'DbSync.StateQuery'\'s monadic helpers, which
--- import 'DbSync.App.Env' — the types must sit below the
--- @Env -> StateQuery@ dependency arrow.
+-- | Shared types for the LocalStateQuery integration. They sit below
+-- the @Env -> StateQuery@ dependency arrow, so 'DbSync.App.Env' can
+-- use the handle without importing 'DbSync.StateQuery'.
 module DbSync.StateQuery.Types
   ( -- * Types
     SlotDetails (..)
@@ -51,35 +47,27 @@ data SlotDetails = SlotDetails
   }
   deriving stock (Eq, Show)
 
--- | The HardFork Interpreter, correctly handles all era transitions.
 type CardanoInterpreter = Interpreter (CardanoEras StandardCrypto)
 
--- | Channel for LocalStateQuery request\/response communication and a
--- locally-observed fallback summary.
---
--- Three slots:
---
--- * 'sqvRequestVar' — used by 'DbSync.StateQuery.getSlotDetailsIO's
---   node-fallback path to request an interpreter from the node via
---   'DbSync.StateQuery.localStateQueryHandler'.
--- * 'sqvInterpreterVar' — caches the node's authoritative interpreter
---   once acquired. 'Just' means we have it; 'Nothing' means we don't.
--- * 'sqvObservedVar' — locally-observed summary, updated by
---   'DbSync.StateQuery.observeBlockSTM' as ChainSync delivers blocks.
+-- | LocalStateQuery request channel plus the two interpreter sources.
 data StateQueryVar = StateQueryVar
   { sqvRequestVar     :: !(TMVar ( Query (CardanoBlock StandardCrypto) CardanoInterpreter
                                  , TMVar (Either AcquireFailure CardanoInterpreter)
                                  ))
+    -- ^ Query paired with the reply slot the requester blocks on.
+    --   'DbSync.StateQuery.localStateQueryHandler' drains it.
   , sqvInterpreterVar :: !(TVar (Maybe CardanoInterpreter))
+    -- ^ Cached authoritative interpreter. 'Nothing' until a snapshot
+    --   or the node supplies one.
   , sqvObservedVar    :: !(TVar ObservedSummary)
+    -- ^ Fallback summary, updated per block by
+    --   'DbSync.StateQuery.observeBlockSTM'.
   }
 
--- | Access the local-state-query handle from env. Used to derive
--- 'SlotDetails' for each block.
 class HasStateQueryVar env where
   getStateQueryVar :: env -> StateQueryVar
 
--- | Access the network 'SystemStart' from env. Required alongside
--- 'HasStateQueryVar' to convert relative slot times into UTC.
+-- | Needed alongside 'HasStateQueryVar' to turn relative slot times
+-- into UTC.
 class HasSystemStart env where
   getSystemStart :: env -> SystemStart

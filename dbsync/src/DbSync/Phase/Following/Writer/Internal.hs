@@ -1,14 +1,7 @@
--- | Shared runners used by the per-extractor Follow writers.
---
--- Two flavours:
---
--- * 'runConn'  — run the insert immediately against the connection
---                ("DbSync.Phase.Following.Writer.mkWriter" path).
--- * 'queueBuf' — append the insert to a per-block pipeline buffer
---                ("DbSync.Phase.Following.Writer.mkBufferedWriter" path).
---
--- Per-extractor write functions take one of these as their first
--- argument; this is the only thing that varies between the two flavours.
+-- | Shared runners for the per-extractor Follow writers. Each write
+-- function takes one of these as its first argument, and it is the
+-- only difference between the @mkWriter@ and @mkBufferedWriter@
+-- paths in "DbSync.Phase.Following.Writer".
 module DbSync.Phase.Following.Writer.Internal
   ( runConn
   , queueBuf
@@ -24,12 +17,11 @@ import qualified Hasql.Statement as Stmt
 import DbSync.Db.Run (useConn)
 import DbSync.Phase.Following.WriteBuffer (WriteBuffer, append)
 
--- | Run an insert statement immediately against the connection.
--- Failures surface as 'AppDatabaseError'; the per-block transaction
--- envelope catches it and rolls back the block.
+-- | Run the insert now. A failure raises 'AppDatabaseError', and the
+-- per-block transaction envelope rolls the block back.
 runConn :: Conn.Connection -> a -> Stmt.Statement a () -> IO ()
 runConn conn p stmt = useConn "Phase.Following.Writer" conn (Sess.statement p stmt)
 
--- | Append an insert statement to the per-block pipeline buffer.
+-- | Append the insert to the per-block pipeline buffer.
 queueBuf :: WriteBuffer -> a -> Stmt.Statement a () -> IO ()
 queueBuf buf p stmt = append buf (Pipeline.statement p stmt)

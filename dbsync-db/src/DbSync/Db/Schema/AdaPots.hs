@@ -1,13 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 
--- | Schema type for the @ada_pots@ table.
+-- | Schema type for the @ada_pots@ table: protocol-level ada accounting
+-- at each epoch boundary, from Shelley onward.
 --
--- Protocol-level ada accounting at each epoch boundary (treasury,
--- reserves, rewards, utxo, fees, deposit pots). Populated by the
--- @EpochBoundary@ extractor on a 'NewEpoch' event. Shelley and later
--- only; treasury and rewards hold for the whole epoch, the other
--- fields change block by block.
+-- The @epoch_boundary@ extractor writes one row per 'NewEpoch' event.
+-- Treasury and rewards hold for the whole epoch; the other pots change
+-- block by block.
 module DbSync.Db.Schema.AdaPots
   ( -- * Schema type
     AdaPots (..)
@@ -56,10 +55,8 @@ type instance Key AdaPots = AdaPotsId
 -- * Schema type
 -- ---------------------------------------------------------------------------
 
--- | The @ada_pots@ table.
---
--- One row per epoch boundary, capturing the protocol-level ada
--- accounting at the transition slot.
+-- | One row per epoch boundary, holding the protocol-level ada accounting
+-- at the transition slot.
 data AdaPots = AdaPots
   { adaPotsSlotNo            :: !Word64
       -- ^ The slot at which this snapshot was taken (the boundary

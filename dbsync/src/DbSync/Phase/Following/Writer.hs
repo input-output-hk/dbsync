@@ -1,28 +1,10 @@
--- | FollowingChainTip writer: typed records to hasql INSERTs against
--- a single connection. IDs come from the resolver; this layer only
--- writes.
+-- | FollowingChainTip writer: typed records to hasql INSERTs. The
+-- resolver supplies the ids; this layer only writes. Per-table write
+-- functions live in @Writer\/\<extractor\>.hs@.
 --
--- Two implementations:
---
--- * 'mkWriter' — every @write*@ goes straight to PG via the connection.
---   One round-trip per row; used by the integration test suite where
---   deterministic per-row behaviour makes assertions easier to author.
---
--- * 'mkBufferedWriter' — every @write*@ appends a
---   'Hasql.Pipeline.statement' to a per-block 'WriteBuffer'. The
---   orchestrator drains the buffer in one round-trip at end of block.
---   Used in production; the per-row cost drops from one round-trip to
---   one append.
---
--- The within-block dedup pattern (a SELECT seeing a just-inserted
--- row) is preserved because the buffered resolver maintains an
--- in-process map for the duration of the block.
---
--- 'commit' is a no-op in both implementations; the per-block
--- @BEGIN@\/@COMMIT@ envelope owned by 'DbSync.Phase.Following.Run'
--- is what actually closes the transaction.
---
--- Per-table write functions live in @Writer\/\<extractor\>.hs@.
+-- 'mkWriter' sends each row straight to PG, which the integration
+-- tests want for deterministic per-row assertions. Production uses
+-- 'mkBufferedWriter'.
 module DbSync.Phase.Following.Writer
   ( mkWriter
   , mkBufferedWriter
@@ -50,8 +32,7 @@ import qualified DbSync.Phase.Following.Writer.StakeDelegationLedger as StakeLed
 import qualified DbSync.Phase.Following.Writer.UTxO as UTxO
 import DbSync.Writer (Writer (..))
 
--- | Build a 'Writer IO' that runs each insert immediately against
--- the supplied connection.
+-- | Runs each insert immediately, one round-trip per row.
 mkWriter :: Conn.Connection -> Writer IO
 mkWriter conn = Writer
   { -- Core
@@ -154,18 +135,17 @@ mkWriter conn = Writer
   , writeCommitteeRegistration   = Governance.writeCommitteeRegistrationConn conn
   , writeCommitteeDeRegistration = Governance.writeCommitteeDeRegistrationConn conn
 
-    -- No-op: the per-block transaction envelope is owned by
-    -- 'DbSync.Phase.Following.Run', not the Writer.
+    -- 'DbSync.Phase.Following.Run' owns the per-block transaction
+    -- envelope, not the Writer.
   , commit = pure ()
   }
 
--- | Buffered writer: every @write*@ appends to the supplied
--- 'WriteBuffer' instead of running the statement immediately. The
--- caller flushes the buffer once at end of block.
+-- | Appends each @write*@ to the 'WriteBuffer', which the caller
+-- flushes once at end of block. The rows, encoders and SQL match
+-- 'mkWriter'; only the network timing differs.
 --
--- Same row shapes, same encoders, same SQL — only the network timing
--- differs: each append is a 'modifyIORef', each immediate-mode call
--- would be a libpq round-trip.
+-- Within-block dedup still works, because the buffered resolver
+-- holds an in-process map for the block.
 mkBufferedWriter :: WriteBuffer -> Writer IO
 mkBufferedWriter buf = Writer
   { -- Core

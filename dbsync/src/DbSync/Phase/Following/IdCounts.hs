@@ -1,17 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Count the IDs an extractor pipeline will assign for a block.
+-- | Count the ids an extractor pipeline assigns for a block. The
+-- Follow path pre-allocates the FK-referenced ids in one
+-- 'Hasql.Pipeline' call, which needs the exact per-sequence count up
+-- front.
 --
--- The Follow path pre-allocates the FK-referenced IDs in a single
--- 'Hasql.Pipeline' call before any extractor runs. That requires
--- knowing the exact count per sequence up front; this module
--- supplies the walker.
---
--- Counts cover only the IDs assigned with @assignXxxId@ — dedup
--- tables ('slot_leader', 'pool_hash', 'stake_address',
--- 'multi_asset', 'address') resolve through their own SELECT/INSERT
--- paths and leaf tables let PostgreSQL allocate via IDENTITY at
--- INSERT time, so neither is pre-allocated here.
+-- The counts cover only the ids that @assignXxxId@ assigns. A dedup
+-- table resolves through its own SELECT and INSERT path, and a leaf
+-- table lets PostgreSQL allocate through IDENTITY.
 module DbSync.Phase.Following.IdCounts
   ( IdCounts (..)
   , emptyIdCounts
@@ -32,12 +28,10 @@ import DbSync.Parser.Types
   , PoolRegistrationData (..)
   )
 
--- | Per-sequence ID demand for one block.
---
--- The field order matches the dependency order the IDs are consumed
--- in by the extractors, which in turn matches the order the
--- allocator's pipeline issues nextvals — letting tests assert that
--- the allocator returns the same shape it was asked for.
+-- | Per-sequence id demand for one block. The field order matches
+-- the order the extractors consume the ids, and the order the
+-- allocator's pipeline issues its nextvals, so a test can assert the
+-- allocator returns the shape it received.
 data IdCounts = IdCounts
   { icTxIds                 :: !Int
   , icTxOutIds              :: !Int
@@ -66,12 +60,13 @@ emptyIdCounts = IdCounts
   , icConstitutionIds      = 0
   }
 
--- | Walk every transaction in the block once and tally the ID
--- demand per sequence. Pure; no IO.
+-- | Walk every transaction in the block once and tally the id demand
+-- per sequence.
 --
--- Redeemer ids match the pipeline's assignment gate: none are counted
--- when the @scripts_datums@ extractor is off (its sequence may not
--- exist) or for a phase-2 invalid tx (no redeemer rows are written).
+-- The redeemer count matches the pipeline's assignment gate: it
+-- counts none with the @scripts_datums@ extractor off, because its
+-- sequence may not exist, and none for a phase-2 invalid tx, because
+-- nothing writes redeemer rows for one.
 countAssignableIds :: [ExtractorDef] -> GenericBlock -> IdCounts
 countAssignableIds extractors blk =
   foldl' (tally (scriptsDatumsEnabled extractors)) emptyIdCounts (blkTxs blk)

@@ -2,26 +2,9 @@
 -- 'LedgerWorker' thread and drained by the consumer at each epoch
 -- boundary.
 --
--- The worker writes the current epoch's @(stake_key_deposit,
--- pool_deposit)@ pair on every applied block via
--- 'recordEpochParams'; subsequent writes for the same epoch are
--- idempotent (protocol params are constant within an epoch). At
--- each epoch boundary the consumer 'drainCompletedEpochs' to take
--- everything for epochs at or before a watermark, leaving any
--- in-progress entries behind.
---
--- The same mutable handle is used during 'IngestChainHistory' only;
--- 'FollowingChainTip' reads protocol params inline from the
--- worker's 'leLatestApplyResult' and does not exercise this buffer.
---
--- Replay handling: the worker calls 'recordEpochParams' only when
--- the block being applied is past the resume replay boundary. The
--- previous run will already have flushed every committed-epoch
--- entry to PG before advancing @sync_state@, so re-accumulating
--- during replay would either duplicate-INSERT (caught by the
--- @ON CONFLICT@ clause on @epoch_param_pending@) or leak stale
--- data if the clause were ever removed. The gate keeps the
--- invariant explicit.
+-- Only 'IngestChainHistory' uses this buffer. 'FollowingChainTip'
+-- reads protocol params inline from the worker's
+-- 'leLatestApplyResult'.
 module DbSync.Worker.Ledger.DepositAccumulator
   ( -- * Types
     EpochParams (..)
@@ -61,8 +44,8 @@ import DbSync.Error (throwDb)
 -- * Types
 -- ---------------------------------------------------------------------------
 
--- | The protocol-param deposit values that 'pool_update' and
--- 'stake_registration' need when the ledger feature is enabled.
+-- | The deposit values that @pool_update@ and @stake_registration@
+-- need when the ledger feature is enabled.
 data EpochParams = EpochParams
   { epStakeKeyDeposit :: !DbLovelace
   , epPoolDeposit     :: !DbLovelace
@@ -77,7 +60,6 @@ type EpochParamsRef = IORef (Map EpochNo EpochParams)
 -- * Construction
 -- ---------------------------------------------------------------------------
 
--- | Allocate an empty 'EpochParamsRef'.
 newEpochParamsRef :: IO EpochParamsRef
 newEpochParamsRef = newIORef Map.empty
 
@@ -85,10 +67,12 @@ newEpochParamsRef = newIORef Map.empty
 -- * Mutation
 -- ---------------------------------------------------------------------------
 
--- | Record this block's epoch params. Subsequent calls for the same
--- 'EpochNo' overwrite (the values are constant within an epoch so
--- this is a no-op in practice). Cheap; safe to call on every
--- applied non-replay block.
+-- | Record this block's epoch params. Repeat calls for the same
+-- 'EpochNo' overwrite; the values are constant within an epoch.
+--
+-- The worker calls this only past the resume replay boundary. The
+-- previous run flushed every committed epoch before it advanced
+-- @sync_state@, so accumulating during replay would re-insert rows.
 recordEpochParams :: EpochParamsRef -> EpochNo -> EpochParams -> IO ()
 recordEpochParams ref e ps =
   atomicModifyIORef' ref $ \m -> (insertParams e ps m, ())
@@ -135,7 +119,6 @@ flushEpochParams m
 -- * Pure helpers
 -- ---------------------------------------------------------------------------
 
--- | Insert (or overwrite) the params for one epoch.
 insertParams
   :: EpochNo
   -> EpochParams
@@ -143,9 +126,9 @@ insertParams
   -> Map EpochNo EpochParams
 insertParams = Map.insert
 
--- | Split the map at the supplied watermark: everything at or before
--- the watermark is returned as the @(toFlush, remaining)@ pair the
--- caller can plug into 'atomicModifyIORef''.
+-- | Split the map at the watermark. The result is the
+-- @(remaining, toFlush)@ pair that 'atomicModifyIORef'' expects, so
+-- the entries at or before the watermark come second.
 partitionCompleted
   :: EpochNo
   -> Map EpochNo EpochParams
@@ -154,10 +137,9 @@ partitionCompleted completedThrough m =
   let (toFlush, remaining) = Map.partitionWithKey (\k _ -> k <= completedThrough) m
    in (remaining, toFlush)
 
--- | Reshape the drained map into three parallel column vectors
--- matching 'insertEpochParamPendingStmt' (epoch_no, stake_key,
--- pool). Pure so callers can unit-test the projection without a
--- live connection.
+-- | Reshape the drained map into the three parallel column vectors
+-- that 'insertEpochParamPendingStmt' takes: epoch_no, stake_key,
+-- pool.
 depositColumnVectors
   :: Map EpochNo EpochParams
   -> ([Word64], [DbLovelace], [DbLovelace])

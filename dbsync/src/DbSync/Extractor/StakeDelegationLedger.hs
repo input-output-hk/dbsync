@@ -3,30 +3,15 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
--- | Ledger-derived stake-delegation extractor.
+-- | Ledger-derived stake-delegation extractor. It slices the ledger's
+-- "mark" stake snapshot into @epoch_stake@ and @epoch_stake_progress@
+-- per block, and fills @reward@ and @pot_reward@ from boundary events.
+-- All four tables are IDENTITY leaves, so PostgreSQL allocates the ids.
 --
--- Owns four tables:
---
---   * @epoch_stake@ — per-(stake, pool, epoch) active stake, emitted
---     from per-block slices of the ledger's "mark" snapshot, plus a
---     boundary catch-up slice for epochs too short to finish slicing.
---   * @epoch_stake_progress@ — one row per completed epoch's slicing.
---   * @reward@ — per-block-production rewards (leader / member) and
---     pool-deposit refunds. Boundary-only, sourced from @apEvents@.
---   * @pot_reward@ — pot-sourced payouts: MIR distributions
---     (Shelley→Babbage) and Conway+ enacted treasury withdrawals.
---     Boundary-only.
---
--- All four tables are IDENTITY leaves; PostgreSQL allocates ids.
---
--- Known omissions:
---
---   * 'LedgerRestrainedRewards' — the original cardano-db-sync DELETEs
---     reward rows for stake-deregistered credentials; we leave the
---     rows in place. Tracked as a known divergence.
---   * 'LedgerGovInfo' deposit refunds (the @garReturnAddr@ / @garDeposit@
---     half) are not written; only enacted treasury withdrawals land
---     in @pot_reward@.
+-- Two known omissions: 'LedgerRestrainedRewards' does not delete the
+-- reward rows of stake-deregistered credentials, and 'LedgerGovInfo'
+-- deposit refunds (the @garReturnAddr@ and @garDeposit@ half) reach no
+-- table. Only enacted treasury withdrawals land in @pot_reward@.
 module DbSync.Extractor.StakeDelegationLedger
   ( stakeDelegationLedgerExtractor
   , runStakeDelegationLedgerBoundary
@@ -190,15 +175,14 @@ processEvent poolCache currentEpoch = \case
     emitMirDist (currentEpoch + 1) potMap
   LedgerGovInfo enacted _dropped _expired _uncl ->
     emitGovInfoTreasury (currentEpoch + 1) enacted
-  -- LedgerRestrainedRewards: the original cardano-db-sync DELETEs
-  -- @reward@ rows for stake-deregistered credentials. We skip the
-  -- event; documented as a known divergence on the module.
+  -- Known divergence: nothing deletes the @reward@ rows of
+  -- stake-deregistered credentials.
   LedgerRestrainedRewards {} -> pure ()
   _ -> pure ()
 
 -- | Per-pool rewards from 'LedgerTotalRewards'. The cardano-ledger
--- shape splits by 'Ledger.RewardType' (leader vs member); we map
--- through 'rewardTypeToSource' to the DB enum.
+-- shape splits on 'Ledger.RewardType' (leader against member), so
+-- 'rewardTypeToSource' maps it to the DB enum.
 emitLedgerRewards
   :: ( HasResolver env
      , HasWriter env
@@ -225,9 +209,8 @@ emitLedgerRewards poolCache spendable rewardsMap = do
         , rewardEarnedEpoch    = 0      -- PG fills via the generated column
         }
 
--- | Pool-deposit refunds from 'LedgerPoolReap' arrive pre-converted
--- into our 'Generic.Reward' shape, so no 'rewardTypeToSource' bounce
--- is needed.
+-- | Pool-deposit refunds from 'LedgerPoolReap' arrive already in the
+-- 'Generic.Reward' shape, so they need no 'rewardTypeToSource' step.
 emitGenericRewards
   :: ( HasResolver env
      , HasWriter env
@@ -280,7 +263,7 @@ emitMirDist spendable potMap = do
         }
 
 -- | Conway enacted treasury withdrawals. Each withdrawal pays a
--- 'Coin' to an 'AccountAddress'; we credit the matching
+-- 'Coin' to an 'AccountAddress', which credits the matching
 -- @stake_address@ with a 'RwdTreasury'-tagged @pot_reward@ row.
 emitGovInfoTreasury
   :: ( HasResolver env
@@ -308,10 +291,10 @@ emitGovInfoTreasury spendable enacted = do
             , potRewardEarnedEpoch    = 0
             }
 
--- | 'resolveAndWritePoolHash' through a boundary-local cache. The
--- rewards map has one entry per credential but draws from the far
--- smaller set of registered pools, so the memo collapses repeated
--- LSM lookups into map hits.
+-- | 'resolveAndWritePoolHash' behind a boundary-local cache. The
+-- rewards map holds one entry per credential but draws on the far
+-- smaller set of registered pools, so the memo turns repeated LSM
+-- lookups into map hits.
 memoPoolHash
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
   => IORef (Map ByteString PoolHashId)

@@ -2,24 +2,12 @@
 
 -- | Post-load FK resolution for the three input tables.
 --
--- During Ingest the 'UtxoStore' resolves inputs at COPY time;
--- cache-misses land with @tx_out_id = NULL@. This module rebuilds
--- those tables via CTAS to fill the NULLs in one pass.
---
--- CTAS rather than UPDATE because UPDATE rewrites the heap MVCC-style
--- and PostgreSQL refuses to parallelise a plan that modifies rows; a
--- CTAS @SELECT@ is parallel-eligible and writes one sequential heap.
--- The price is that CTAS carries no constraints — 'rebuildTableScript'
--- re-attaches them from the 'TableDef'.
---
--- The @tx.hash@ lookup sits in the second arm of a @COALESCE@ rather
--- than a @LEFT JOIN@, so it is evaluated only for the rows the
--- 'UtxoStore' missed instead of once per input row. An input with no
--- matching @tx.hash@ at all stays NULL either way.
---
--- @tx_out.consumed_by_tx_id@ stays on an UPDATE: it touches a much
--- smaller residual (only what 'ConsumedByWorker' didn't write live)
--- and @tx_out@ has no indexes worth churning during Prep.
+-- The 'UtxoStore' resolves inputs at COPY time; a cache miss lands with
+-- @tx_out_id = NULL@. A CTAS rebuild fills those NULLs in one pass. CTAS
+-- beats UPDATE here because PostgreSQL refuses to parallelise a plan that
+-- modifies rows, and the @SELECT@ writes one sequential heap. CTAS drops
+-- the constraints, so 'rebuildTableScript' re-attaches them from the
+-- 'TableDef'.
 module DbSync.Db.Statement.Worker.Resolve
   ( -- * SQL scripts
     resolveTxInScript
@@ -74,11 +62,11 @@ resolveReferenceTxInScript =
     referenceTxInCols.rticTxOutId
     referenceTxInCols.rticTxOutHash
 
--- | Walk all resolved inputs and stamp the producing
--- @tx_out.consumed_by_tx_id@ with the consuming tx id. Run after the
--- three CTAS rebuilds so @tx_in.tx_out_id@ is fully populated.
--- Per-epoch ConsumedByWorker covers the bulk during Ingest; this
--- statement fills the cache-miss residual.
+-- | Stamp each producing @tx_out.consumed_by_tx_id@ with the consuming tx
+-- id. Runs after the three CTAS rebuilds, which populate
+-- @tx_in.tx_out_id@. The per-epoch ConsumedByWorker writes the bulk during
+-- Ingest, so this statement only fills the cache-miss residual. That
+-- residual is small enough to stay an UPDATE.
 resolveConsumedByTxIdStmt :: Stmt.Statement () Int64
 resolveConsumedByTxIdStmt =
   Stmt.preparable sql E.noParams D.rowsAffected
@@ -100,6 +88,9 @@ resolveConsumedByTxIdStmt =
 -- * Internals
 -- ---------------------------------------------------------------------------
 
+-- | The @tx.hash@ lookup sits in the second arm of the @COALESCE@, not in
+-- a @LEFT JOIN@, so it runs only for the rows the 'UtxoStore' missed. An
+-- input with no matching @tx.hash@ stays NULL either way.
 resolveScript :: TableDef -> TableColumn -> TableColumn -> Text
 resolveScript td txOutIdCol txOutHashCol =
   rebuildTableScript td [(tcName txOutIdCol, resolved)] (table td <> " src")

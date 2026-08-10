@@ -3,16 +3,11 @@
 
 -- | LSM session that backs Ingest-phase working state — the
 -- 'DbSync.Phase.Ingest.UtxoStore' and
--- 'DbSync.Phase.Ingest.DedupStore' tables.
---
--- 'openLsmSession' runs once when 'DbSync.App.Env.IngestEnv' is
--- built, restoring an existing on-disk session or creating a fresh
--- one. 'closeLsmSession' closes but preserves the directory for the
--- next boot; 'closeAndDeleteLsmSession' also removes @ingest-lsm/@.
--- The Follow phase never opens this session.
+-- 'DbSync.Phase.Ingest.DedupStore' tables. The Follow phase never
+-- opens it.
 --
 -- @lsm-tree@ sessions allow concurrent reads but race on writes, so
--- every table here is written only by the single consumer thread.
+-- only the single consumer thread writes these tables.
 module DbSync.Phase.Ingest.LsmSession
   ( -- * Types
     LsmSession (..)
@@ -58,46 +53,34 @@ import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 -- Types
 -- ---------------------------------------------------------------------------
 
--- | Tracer @lsm-tree@ writes its internal events to. The session
--- can be wired to 'nullLsmSessionTracer' (suppress everything) or
--- to 'lsmSessionTracerFromApp' (forward each event as a Debug
--- 'LogMsg', dropping the high-frequency per-operation table events
--- — see 'lsmSessionTracerFromApp').
+-- | Tracer @lsm-tree@ writes its internal events to. Wire it to
+-- 'nullLsmSessionTracer' or 'lsmSessionTracerFromApp'.
 type LsmSessionTracer = Tracer IO LSMTree.LSMTreeTrace
 
--- | Handle owned by 'DbSync.App.Env.IngestEnv'. Carries every resource
--- that needs releasing on shutdown plus the directory the session
--- writes to (needed by 'closeAndDeleteLsmSession').
+-- | Handle owned by 'DbSync.App.Env.IngestEnv'.
 data LsmSession = LsmSession
   { lsmHandle     :: !(LSMTree.Session IO)
-    -- ^ The opened session. Passed to per-table constructors —
-    -- e.g. @Phase.Ingest.UtxoStore.openUtxoStore@.
+    -- ^ Passed to the per-table constructors, e.g.
+    -- @Phase.Ingest.UtxoStore.openUtxoStore@.
   , lsmHasBlockIO :: !(BlockApi.HasBlockIO IO HandleIO)
-    -- ^ Underlying block-IO context. Closed after the session by
-    -- 'lsmClose' — 'BlockApi.close' is not idempotent on its own.
+    -- ^ 'lsmClose' closes this after the session — 'BlockApi.close'
+    -- is not idempotent on its own.
   , lsmRootDir    :: !FilePath
     -- ^ Absolute path to @\<state-dir\>/dbsync-ledger/ingest-lsm/@.
   , lsmClose      :: !(IO ())
-    -- ^ Idempotent shutdown action. Mirrors
-    -- 'DbSync.Worker.Ledger.Types.leClose' so the App-level cleanup treats
-    -- both LSM sessions uniformly. Internally guards @closeSession@
-    -- and @BlockApi.close@ behind an 'IORef Bool' so a second call
-    -- is a no-op.
+    -- ^ Idempotent shutdown action. An 'IORef Bool' guards
+    -- @closeSession@ and @BlockApi.close@, so a second call does
+    -- nothing.
   }
 
 -- ---------------------------------------------------------------------------
 -- Lifecycle
 -- ---------------------------------------------------------------------------
 
--- | Open or restore the session.
---
--- The directory is created if missing. On a fresh boot the
--- directory is empty and @lsm-tree@ creates a new session using the
--- supplied salt; on a resumed boot it contains an existing session,
--- which is restored and the salt is ignored.
---
--- The session returned must be released via 'closeLsmSession' or
--- 'closeAndDeleteLsmSession'.
+-- | Open or restore the session. An empty directory means a fresh
+-- boot, and @lsm-tree@ creates a new session; otherwise it restores
+-- the existing one. The caller must release the result through
+-- 'closeLsmSession' or 'closeAndDeleteLsmSession'.
 openLsmSession
   :: LsmSessionTracer
   -> FilePath
@@ -131,15 +114,14 @@ openLsmSession tracer parentDir = do
     , lsmClose      = closer
     }
 
--- | Idempotent close. Preserves the on-disk session so a later boot
--- can resume from it.
+-- | Idempotent close. Keeps the on-disk session, so a later boot can
+-- resume from it.
 closeLsmSession :: LsmSession -> IO ()
 closeLsmSession = lsmClose
 
 -- | Close the session and remove the @ingest-lsm/@ directory.
---
--- Precondition: Prep has completed cleanly. Calling this
--- mid-Ingest or mid-Prep destroys the restart anchor.
+-- Precondition: Prep finished cleanly. A call during Ingest or Prep
+-- destroys the restart anchor.
 closeAndDeleteLsmSession :: LsmSession -> IO ()
 closeAndDeleteLsmSession s = do
   lsmClose s
@@ -150,28 +132,19 @@ closeAndDeleteLsmSession s = do
 -- Tracing
 -- ---------------------------------------------------------------------------
 
--- | Drop every @lsm-tree@ event on the floor.
 nullLsmSessionTracer :: LsmSessionTracer
 nullLsmSessionTracer = nullTracer
 
--- | Forward each @lsm-tree@ event into the application tracer as a
--- Debug-level 'LogMsg' under the @"LsmIngest"@ component.
---
--- High-frequency per-operation table events ('LSMTree.TraceLookups',
--- 'LSMTree.TraceRangeLookup', 'LSMTree.TraceUpdates',
--- 'LSMTree.TraceUpdated') are dropped: during ingest they fire
--- on every batched operation and flood the log. Session lifecycle,
--- table lifecycle, snapshot ops, union ops and cursor ops are all
--- preserved.
+-- | Forward each @lsm-tree@ event to the application tracer as a
+-- Debug 'LogMsg' under the @"LsmIngest"@ component.
+-- 'isHotPathLsmTrace' drops the per-operation table events.
 lsmSessionTracerFromApp :: AppTracer -> LsmSessionTracer
 lsmSessionTracerFromApp inner = Tracer $ \e ->
   unless (isHotPathLsmTrace e) $
     traceWith inner (LogMsg Debug "LsmIngest" (show e))
 
--- | True for 'LSMTree.LSMTreeTrace' events that fire on every
--- batched table operation. These flood the log during ingest and
--- add no diagnostic value. The silenced set is intentionally
--- explicit so adding or removing an event is a one-line change.
+-- | True for events that fire on every batched table operation.
+-- These flood the log during ingest and add no diagnostic value.
 isHotPathLsmTrace :: LSMTree.LSMTreeTrace -> Bool
 isHotPathLsmTrace (LSMTree.TraceTable _ tt) = case tt of
   LSMTree.TraceLookups{}     -> True
@@ -185,26 +158,20 @@ isHotPathLsmTrace _ = False
 -- Shared table configuration
 -- ---------------------------------------------------------------------------
 
--- | 'LSMTree.TableConfig' used by every ingest-phase table.
+-- | Config shared by every ingest-phase table. Each override away
+-- from 'LSMTree.defaultTableConfig':
 --
--- Overrides from 'LSMTree.defaultTableConfig':
---
---   * 'LSMTree.AllocNumEntries' 200_000 — large write buffer to
---     keep transient level-0 run counts low under the sustained
---     insert rate of 'DbSync.Phase.Ingest.UtxoStore.recordTx'.
---   * 'LSMTree.AllocRequestFPR' 1e-3 — bloom-filter false-positive
---     target.
---   * 'LSMTree.CompactIndex' — every key in this session is a
---     blake2b hash concatenated with a 2-byte output index; the
---     high 64 bits remain uniformly distributed.
---   * 'LSMTree.Incremental' — spread merge work across operations
+--   * 200_000 write-buffer entries keep the transient level-0 run
+--     count low under the insert rate of
+--     'DbSync.Phase.Ingest.UtxoStore.recordTx'.
+--   * 'LSMTree.CompactIndex' suits these keys: each one is a blake2b
+--     hash plus a 2-byte output index, so the high 64 bits stay
+--     uniformly distributed.
+--   * 'LSMTree.Incremental' spreads merge work across operations
 --     instead of doing it all at one level overflow.
---
--- 'LSMTree.confDiskCachePolicy' is pinned to 'LSMTree.DiskCacheAll'
--- (the library default): every on-disk level is admitted to the OS
--- page cache, so deep-level lookups avoid raw disk reads on macOS's
--- serial blockio. Page-cache pages are OS memory, reclaimable under
--- pressure — they never appear on the GHC heap.
+--   * 'LSMTree.DiskCacheAll' admits every on-disk level to the OS
+--     page cache, so deep-level lookups avoid raw disk reads on
+--     macOS's serial blockio.
 defaultIngestTableConfig :: LSMTree.TableConfig
 defaultIngestTableConfig = LSMTree.defaultTableConfig
   { LSMTree.confWriteBufferAlloc  = LSMTree.AllocNumEntries 200_000

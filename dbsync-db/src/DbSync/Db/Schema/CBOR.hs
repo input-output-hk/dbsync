@@ -50,8 +50,7 @@ type instance Key TxCbor = TxCborId
 -- * Schema types
 -- ---------------------------------------------------------------------------
 
--- | The @tx_cbor@ table.
--- One row per transaction, storing the raw CBOR bytes.
+-- | One row per transaction, storing the raw CBOR bytes.
 data TxCbor = TxCbor
   { txCborTxId  :: !TxId
   , txCborBytes :: !ByteString  -- ^ Raw CBOR-encoded transaction

@@ -3,37 +3,10 @@
 
 -- | Locally-observed Cardano hard-fork summary.
 --
--- Builds a 'History.Summary' (and hence an 'Interpreter') by /observing/
--- the era of each block delivered by ChainSync, instead of asking the
--- cardano-node for an authoritative summary via @GetInterpreter@.
---
--- This serves dbsync during the brief window where the node's LedgerDB
--- is still replaying, when a 'GetInterpreter' query would fail with
--- @AcquireFailurePointTooOld@. As soon as the node finishes replaying,
--- 'StateQuery' switches to the node's authoritative interpreter; this
--- module's output is discarded.
---
--- == Why this is the same point of truth as the node
---
--- Every 'CardanoBlock' carries its era in its constructor
--- ('BlockByron', 'BlockShelley', …). When the era of an incoming block
--- differs from the era of the previous block, an era transition just
--- occurred. The transition's epoch boundary is computed using the
--- previous era's 'EraParams' (epoch size in slots), which we sourced
--- from the consensus library's 'History.Shape' (built from the genesis
--- configs at startup). No hardcoded per-network table; the chain is the
--- point of truth.
---
--- == Limitation
---
--- If dbsync resumes from a non-Byron postgres tip without observing the
--- preceding transitions, the resulting summary will be incomplete. The
--- 'isObservationBroken' flag detects this case (the era of an incoming
--- block jumps more than one era past the currently-known era), and
--- callers fall back to the existing retry-with-backoff path. In
--- practice this only matters for the rare scenario where both dbsync
--- and the node are restarted simultaneously and the node hasn't
--- finished replaying yet.
+-- Builds a 'History.Summary' from the era constructor of each block
+-- ChainSync delivers. This answers slot queries while the node's
+-- LedgerDB still replays and @GetInterpreter@ would fail with
+-- @AcquireFailurePointTooOld@.
 module DbSync.StateQuery.ObservedSummary
   ( -- * Types
     ObservedSummary
@@ -94,8 +67,9 @@ import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol () -- 'LedgerSupports
 -- * Era index
 -- ---------------------------------------------------------------------------
 
--- | Index identifying which Cardano era a block belongs to. Order matches
--- 'CardanoEras' StandardCrypto'.
+-- | Which Cardano era a block belongs to. The order matches
+-- 'CardanoEras' StandardCrypto', and 'observeAt' does arithmetic on
+-- 'fromEnum', so entries must stay in chain order.
 data EraIdx
   = ByronIdx
   | ShelleyIdx
@@ -119,7 +93,6 @@ renderEraIdx = \case
   ConwayIdx   -> "Conway"
   DijkstraIdx -> "Dijkstra"
 
--- | Pattern-match a 'CardanoBlock' to its era index.
 eraOf :: CardanoBlock StandardCrypto -> EraIdx
 eraOf = \case
   BlockByron _    -> ByronIdx
@@ -135,8 +108,9 @@ eraOf = \case
 -- * Cardano era params (record extracted from a Shape)
 -- ---------------------------------------------------------------------------
 
--- | The eight per-era 'EraParams' for a Cardano chain, extracted once at
--- startup from the consensus-derived 'History.Shape'.
+-- | The eight per-era 'EraParams', extracted once at startup from the
+-- consensus-derived 'History.Shape'. There is no per-network table
+-- here; the genesis configs are the point of truth.
 data CardanoEraParams = CardanoEraParams
   { cepByron    :: !History.EraParams
   , cepShelley  :: !History.EraParams
@@ -148,12 +122,8 @@ data CardanoEraParams = CardanoEraParams
   , cepDijkstra :: !History.EraParams
   } deriving stock (Show)
 
--- | Extract the eight per-era 'EraParams' from the consensus 'Shape'.
---
--- The 'CardanoEras StandardCrypto' shape has exactly eight entries
--- (Byron, Shelley, Allegra, Mary, Alonzo, Babbage, Conway, Dijkstra).
--- Pattern-matching all the way through is verbose but proves the
--- extraction is total.
+-- | The 'CardanoEras StandardCrypto' shape has exactly eight entries,
+-- so spelling out the whole 'ExactlyCons' chain proves this total.
 extractCardanoEraParams
   :: History.Shape (CardanoEras StandardCrypto)
   -> CardanoEraParams
@@ -178,7 +148,6 @@ extractCardanoEraParams shape =
         , cepDijkstra = dijkstra
         }
 
--- | Look up the 'EraParams' for a given era index.
 paramsAt :: EraIdx -> CardanoEraParams -> History.EraParams
 paramsAt = \case
   ByronIdx    -> cepByron
@@ -194,31 +163,26 @@ paramsAt = \case
 -- * Observed summary
 -- ---------------------------------------------------------------------------
 
--- | Locally-observed hard-fork summary state.
---
--- Maintained as a list of /closed/ past eras plus the /current/ era's
--- start bound. As ChainSync delivers blocks we pattern-match on the era
--- constructor and, on transitions, close the previous era and open the
--- next one.
+-- | A list of /closed/ past eras plus the /current/ era's start
+-- bound. Each observed transition closes the previous era and opens
+-- the next one.
 data ObservedSummary = ObservedSummary
   { osCurrentEra      :: !EraIdx
     -- ^ Era of the most-recently-observed block
   , osCurrentEraStart :: !History.Bound
     -- ^ Start bound of the current era
   , osPastEras        :: ![History.EraSummary]
-    -- ^ Closed past eras, in order (oldest first)
+    -- ^ Closed past eras, oldest first
   , osParams          :: !CardanoEraParams
     -- ^ Per-era params, extracted from the consensus 'Shape' at startup
   , osBroken          :: !Bool
-    -- ^ True if we observed an era jump greater than one era. The
-    --   summary is then incomplete and callers should fall back to the
-    --   node's interpreter.
+    -- ^ True after an era jump greater than one era. The summary is
+    --   then incomplete and callers must use the node's interpreter.
   } deriving stock (Show)
 
--- | Initial state: only Byron is known, with no past eras.
---
--- Takes the entire 'TopLevelConfig' so that the per-era 'EraParams' can
--- be sourced directly from consensus rather than redefined locally.
+-- | Initial state: only Byron is known, with no past eras. Takes the
+-- whole 'TopLevelConfig' so 'EraParams' come from consensus rather
+-- than a local redefinition.
 initObservedSummary
   :: TopLevelConfig (CardanoBlock StandardCrypto)
   -> ObservedSummary
@@ -255,31 +219,23 @@ data ObservedTransition = ObservedTransition
   , otAtEpoch :: !EpochNo
   } deriving stock (Eq, Show)
 
--- | Observe one block. Returns the outcome and the updated state.
---
--- Convenience wrapper around 'observeAt' that extracts the era and
--- slot from the block.
 observeBlock
   :: CardanoBlock StandardCrypto
   -> ObservedSummary
   -> (ObservationResult, ObservedSummary)
 observeBlock blk = observeAt (eraOf blk) (blockSlot blk)
 
--- | Observe an era + slot directly. Useful for testing without having
--- to construct a real 'CardanoBlock'.
+-- | Observe an era + slot directly, so tests need not build a real
+-- 'CardanoBlock'.
 --
--- Cases:
---
--- * @era == current era@ → no change.
--- * @era == current era + 1@ → era transition observed; close the
---   previous era at the epoch boundary containing the slot and open
---   the new era there.
--- * @era > current era + 1@ → set the 'osBroken' flag (we cannot
---   construct correct intermediate boundaries from a single
---   observation). The state is preserved otherwise so that the
---   partial summary is at least usable for blocks before the gap.
--- * @era < current era@ → defensive no-op (the chain doesn't move
---   backwards in eras within a single sync).
+-- * @era == current@ → no change.
+-- * @era == current + 1@ → close the previous era at the epoch
+--   boundary containing the slot and open the new era there.
+-- * @era > current + 1@ → set 'osBroken'. A single observation
+--   cannot place the skipped boundaries. The rest of the state
+--   stays usable for blocks before the gap.
+-- * @era < current@ → defensive no-op; eras never move backwards
+--   within one sync.
 observeAt
   :: EraIdx
   -> SlotNo
@@ -321,11 +277,10 @@ closeCurrentEra slot os newEra =
     prevParams :: History.EraParams
     prevParams = paramsAt (osCurrentEra os) (osParams os)
 
-    -- Compute the epoch of the era boundary. The transition fires at
-    -- the start of the epoch /containing/ the first block of the new
-    -- era (with respect to the previous era's epoch alignment). We
-    -- divide rather than 'slotToEpochBound' because the latter rounds
-    -- /up/.
+    -- The transition fires at the start of the epoch /containing/ the
+    -- first block of the new era, in the previous era's epoch
+    -- alignment. Divide rather than call 'slotToEpochBound', which
+    -- rounds /up/.
     newEpoch :: EpochNo
     newEpoch =
       let SlotNo blkSlot       = slot
@@ -356,26 +311,26 @@ closeCurrentEra slot os newEra =
 -- * Snapshotting
 -- ---------------------------------------------------------------------------
 
--- | The era of the most-recently-observed block.
 currentEra :: ObservedSummary -> EraIdx
 currentEra = osCurrentEra
 
--- | Whether the observation has broken (a too-large era gap was seen).
+-- | True once an era gap larger than one era was seen, which happens
+-- when dbsync resumes from a non-Byron tip without observing the
+-- preceding transitions. Callers must then use the node's
+-- interpreter.
 isObservationBroken :: ObservedSummary -> Bool
 isObservationBroken = osBroken
 
--- | Snapshot the current observed summary into a 'History.Summary'.
+-- | Snapshot the observed state into a 'History.Summary'.
 --
--- The current era is given 'EraUnbounded' as its end (we don't predict
--- future transitions). dbsync only uses the result for slots ≤ the
--- last-observed block, so the unbounded end is harmless.
+-- The current era ends 'EraUnbounded' because future transitions are
+-- unknown. Callers only ask about slots at or below the last observed
+-- block, so the unbounded end is harmless.
 --
--- The 'Summary' type's type-list parameter is the /maximum/ number of
--- eras the chain may have; the actual list of 'EraSummary' values may
--- be shorter. We use the SOP-provided 'nonEmptyFromList' to convert a
--- plain list into the length-indexed 'Data.SOP.NonEmpty.NonEmpty'.
--- 'nonEmptyFromList' returns 'Nothing' only on the empty list, which
--- cannot happen here because the current era is always present.
+-- The 'Summary' type parameter is the /maximum/ era count, so the
+-- actual 'EraSummary' list may be shorter. 'nonEmptyFromList' returns
+-- 'Nothing' only for an empty list, which cannot happen: the current
+-- era is always present.
 currentSummary :: ObservedSummary -> History.Summary (CardanoEras StandardCrypto)
 currentSummary os =
   case nonEmptyFromList (osPastEras os ++ [currentEraSum]) of
@@ -390,7 +345,6 @@ currentSummary os =
       , History.eraParams = paramsAt (osCurrentEra os) (osParams os)
       }
 
--- | Snapshot the current observed summary into an 'Interpreter'.
 currentInterpreter
   :: ObservedSummary
   -> History.Interpreter (CardanoEras StandardCrypto)

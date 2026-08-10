@@ -5,41 +5,8 @@
 -- | Slot-details service.
 --
 -- Computes 'SlotDetails' (epoch, time, slot-within-epoch, epoch size)
--- via a 'History.Interpreter' wrapping a hard-fork 'Summary'.
---
--- == Fallback order
---
--- 'getSlotDetailsIO' tries three sources, in order, before throwing:
---
--- 1. /Cached interpreter/ ('sqvInterpreterVar'). Seeded at boot from a
---    loaded snapshot via 'seedInterpreterFromLedgerState', then
---    re-seeded by the ledger worker after every block apply. The hot
---    path.
---
--- 2. /Locally-observed summary/ ('sqvObservedVar'). Built incrementally
---    by 'observeBlockSTM' as ChainSync delivers blocks. Skipped when
---    'isObservationBroken' is set — a broken summary would still
---    answer (its current era is 'EraUnbounded'), but with the wrong
---    era classification because the past-era list is missing entries.
---
--- 3. /Node 'GetInterpreter'/ via the LSQ protocol (driven by
---    'DbSync.StateQuery.Handler.localStateQueryHandler'). Last resort:
---    round-trips through the node's LedgerDB. Validated against the
---    requested slot before being cached; if the node's LedgerDB is
---    still behind the chain tip, the response cannot answer and we
---    back off and retry instead of poisoning the cache.
---
--- == Module layout
---
--- This module hosts the 'getSlotDetails*' entry points and the
--- helpers that thread them together. The pieces it depends on live
--- in:
---
--- * "DbSync.StateQuery.Types"   — 'SlotDetails', 'StateQueryVar', accessor classes
--- * "DbSync.StateQuery.Var"     — 'newStateQueryVar', 'RetryConfig'
--- * "DbSync.StateQuery.Observe" — 'observeBlockSTM' (called from the ChainSync receiver)
--- * "DbSync.StateQuery.Seed"    — 'seedInterpreterFromLedgerState', 'isInterpreterCached'
--- * "DbSync.StateQuery.Handler" — LSQ mini-protocol driver
+-- through a hard-fork 'History.Interpreter'. 'getSlotDetailsIOWith'
+-- documents the three sources it tries.
 module DbSync.StateQuery
   ( -- * Types (re-exports from .Types)
     SlotDetails (..)
@@ -135,10 +102,6 @@ import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 -- * Querying
 -- ---------------------------------------------------------------------------
 
--- | Get 'SlotDetails' for a given 'SlotNo'.
---
--- Reads the tracer, 'StateQueryVar' and 'SystemStart' from env;
--- delegates to 'getSlotDetailsIO' for the actual resolution.
 getSlotDetails
   :: ( HasTracer env
      , HasStateQueryVar env
@@ -153,15 +116,9 @@ getSlotDetails slot = do
   systemStart <- asks SQT.getSystemStart
   liftIO $ getSlotDetailsIO tracer sqv systemStart slot
 
--- | Get 'SlotDetails' for a given 'SlotNo' (raw 'IO' bridge).
---
--- Exposed so that callers without an 'IngestEnv' on hand (notably the
--- 'DbSync.Worker.Ledger.Worker' hooks, which only have 'LedgerEnv' +
--- 'StateQueryVar') can still reach it without spinning up an
--- 'IngestM' action.
---
--- Uses 'defaultRetryConfig' for the node fallback; tests inject a
--- faster schedule via 'getSlotDetailsIOWith'.
+-- | Raw 'IO' bridge for callers that hold only a 'StateQueryVar' and
+-- no phase env, such as the ledger worker hooks. Uses
+-- 'defaultRetryConfig' for the node fallback.
 getSlotDetailsIO
   :: AppTracer
   -> StateQueryVar
@@ -170,21 +127,20 @@ getSlotDetailsIO
   -> IO SlotDetails
 getSlotDetailsIO = getSlotDetailsIOWith defaultRetryConfig
 
--- | 'getSlotDetailsIO' with a caller-supplied 'RetryConfig'. Production
--- code uses 'getSlotDetailsIO' (= 'defaultRetryConfig'); tests pass a
--- microsecond-scale config to keep the suite fast.
+-- | 'getSlotDetailsIO' with a caller-supplied 'RetryConfig'. Tests
+-- pass a microsecond-scale config to keep the suite fast.
 --
 -- Resolution order:
 --
--- 1. Cached interpreter ('sqvInterpreterVar'). On success, return.
+-- 1. Cached interpreter ('sqvInterpreterVar').
 -- 2. Locally-observed summary ('sqvObservedVar'), unless
 --    'isObservationBroken' is set.
--- 3. Node 'GetInterpreter' via the LSQ request channel. Validated
---    against the requested slot; if too narrow, do not cache, back off
---    per 'RetryConfig', and retry.
+-- 3. Node 'GetInterpreter' over the LSQ request channel. The response
+--    is validated against the requested slot; a too-narrow horizon is
+--    not cached, so a lagging node LedgerDB cannot poison the cache.
 --
--- Throws 'AppBlockError' if all attempts in (3) fail, or if the LSQ
--- channel returns an unexpected 'AcquireFailure' other than
+-- Throws 'AppBlockError' if every attempt in (3) fails, or if the LSQ
+-- channel returns an 'AcquireFailure' other than
 -- 'AcquireFailurePointTooOld'.
 getSlotDetailsIOWith
   :: RetryConfig
@@ -207,9 +163,8 @@ getSlotDetailsIOWith rc tracer sqv systemStart slot = do
       now <- getCurrentTime
       pure sd { sdCurrentTime = now }
 
--- | Try the cached interpreter and then the observed summary. Returns
--- 'Just sd' the first time either source can answer; 'Nothing' if
--- neither can.
+-- | Try the cached interpreter, then the observed summary. 'Nothing'
+-- means neither source covers the slot.
 tryLocalInterpreters
   :: StateQueryVar
   -> (CardanoInterpreter -> Either PastHorizonException SlotDetails)
@@ -307,8 +262,7 @@ fetchFromNodeWithRetry rc tracer sqv systemStart slot = go (0 :: Int)
 -- * Query expression
 -- ---------------------------------------------------------------------------
 
--- | Build a 'Qry' that computes 'SlotDetails' for a given slot.
--- Uses the HardFork Interpreter's built-in epoch\/slot\/time calculation.
+-- | Build the 'Qry' the HardFork Interpreter evaluates for one slot.
 querySlotDetails :: SystemStart -> SlotNo -> Qry SlotDetails
 querySlotDetails start absSlot = do
   absTime <- qryFromExpr $
@@ -328,6 +282,5 @@ querySlotDetails start absSlot = do
     , sdEpochSize   = epochSize
     }
 
--- | Convert a 'RelativeTime' to 'UTCTime' given a 'SystemStart'.
 relToUTCTime :: SystemStart -> RelativeTime -> UTCTime
 relToUTCTime (SystemStart start) (RelativeTime rel) = addUTCTime rel start

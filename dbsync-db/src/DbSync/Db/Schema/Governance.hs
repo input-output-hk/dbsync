@@ -1,24 +1,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 
--- | Schema types for Conway-era governance tables.
+-- | Schema types for the Conway-era @governance@ extractor.
 --
--- One module, one extractor (@governance@). All 16 tables here are
--- populated from block data once a Conway-era transaction carries a
--- governance certificate, vote, proposal, or anchor URL.
+-- The FK graph across these tables is dense, so one extractor owns them
+-- all. That lets @processBlock@ pre-assign every ID up front and write the
+-- rows in any order. Separate extractors would need NULL FKs and a
+-- post-load resolution pass.
 --
--- The FK graph inside this module is dense — voting procedures
--- reference proposals, anchors, drep hashes, pool hashes, committee
--- hashes, and event-info rows; proposals reference param proposals,
--- voting anchors, and other proposals; constitutions reference
--- proposals and anchors. Splitting these into separate extractors
--- would force a dance of NULL FKs and post-load resolution; keeping
--- them together lets us pre-assign every ID up-front during
--- @processBlock@ and write rows in any order.
---
--- @param_proposal.cost_model_id@ references the @cost_model@ table
--- which is owned by the @epoch_boundary@ extractor; the column stays
--- as a nullable @BIGINT@ here so the schema compiles in isolation.
+-- The @epoch_boundary@ extractor owns @cost_model@, so
+-- @param_proposal.cost_model_id@ stays a nullable @BIGINT@ here and the
+-- schema compiles in isolation.
 module DbSync.Db.Schema.Governance
   ( -- * Schema types
     DrepHash (..)
@@ -189,11 +181,9 @@ type instance Key EventInfo = EventInfoId
 -- * Schema types
 -- ---------------------------------------------------------------------------
 
--- | The @drep_hash@ table (dedup table).
---
--- One row per DRep credential. @raw@ is nullable because the two
--- abstract DReps — @always_abstain@ and @always_no_confidence@ —
--- have no concrete hash; their @view@ string is the discriminator.
+-- | Dedup table, one row per DRep credential. @raw@ is nullable because
+-- the two abstract DReps — @always_abstain@ and @always_no_confidence@ —
+-- have no concrete hash. Their @view@ string is the discriminator.
 data DrepHash = DrepHash
   { drepHashRaw       :: !(Maybe ByteString) -- ^ 28-byte credential hash, or NULL for abstract DReps
   , drepHashView      :: !Text               -- ^ Bech32 form, or @drep_always_abstain@ / @drep_always_no_confidence@
@@ -201,10 +191,8 @@ data DrepHash = DrepHash
   }
   deriving stock (Eq, Show)
 
--- | The @drep_registration@ table.
---
--- @deposit@ is a signed @Int64@ rather than 'DbLovelace' because a
--- DRep deregistration row carries a negative refund amount.
+-- | @deposit@ is a signed @Int64@, not a 'DbLovelace', because a DRep
+-- deregistration row carries a negative refund amount.
 data DrepRegistration = DrepRegistration
   { drepRegistrationTxId           :: !TxId
   , drepRegistrationCertIndex      :: !Word16
@@ -214,8 +202,8 @@ data DrepRegistration = DrepRegistration
   }
   deriving stock (Eq, Show)
 
--- | The @drep_distr@ table. One row per (drep, epoch); written by the
--- ledger worker. Unique on @(hash_id, epoch_no)@.
+-- | One row per (drep, epoch), written by the ledger worker. Unique on
+-- @(hash_id, epoch_no)@.
 data DrepDistr = DrepDistr
   { drepDistrHashId      :: !DrepHashId
   , drepDistrAmount      :: !Word64
@@ -224,7 +212,7 @@ data DrepDistr = DrepDistr
   }
   deriving stock (Eq, Show)
 
--- | The @delegation_vote@ table — a stake address picks a DRep.
+-- | A stake address picks a DRep.
 data DelegationVote = DelegationVote
   { delegationVoteAddrId     :: !StakeAddressId
   , delegationVoteCertIndex  :: !Word16
@@ -234,11 +222,7 @@ data DelegationVote = DelegationVote
   }
   deriving stock (Eq, Show)
 
--- | The @gov_action_proposal@ table.
---
--- @description@ is JSONB at the column level; we hand it to the COPY
--- writer as plain text and let PostgreSQL parse it on insert. The
--- self-FK @prev_gov_action_proposal@ links amendment chains.
+-- | The self-FK @prev_gov_action_proposal@ links amendment chains.
 data GovActionProposal = GovActionProposal
   { govActionProposalTxId                  :: !TxId
   , govActionProposalIndex                 :: !Word64
@@ -257,11 +241,9 @@ data GovActionProposal = GovActionProposal
   }
   deriving stock (Eq, Show)
 
--- | The @voting_procedure@ table.
---
--- Three nullable voter ID columns — exactly one of @drep_voter@,
--- @pool_voter@, @committee_voter@ is non-NULL per row, picked by
--- @voter_role@.
+-- | @voter_role@ picks which of the three nullable voter columns —
+-- @drep_voter@, @pool_voter@, @committee_voter@ — is non-NULL. Exactly one
+-- of them is set per row.
 data VotingProcedure = VotingProcedure
   { votingProcedureTxId                :: !TxId
   , votingProcedureIndex               :: !Word16
@@ -276,8 +258,8 @@ data VotingProcedure = VotingProcedure
   }
   deriving stock (Eq, Show)
 
--- | The @voting_anchor@ table — an off-chain document URL plus its
--- expected hash. Unique on @(data_hash, url, type)@.
+-- | An off-chain document URL plus its expected hash. Unique on
+-- @(data_hash, url, type)@.
 data VotingAnchor = VotingAnchor
   { votingAnchorUrl      :: !VoteUrl
   , votingAnchorDataHash :: !ByteString
@@ -286,7 +268,7 @@ data VotingAnchor = VotingAnchor
   }
   deriving stock (Eq, Show)
 
--- | The @constitution@ table. One row per constitution change.
+-- | One row per constitution change.
 data Constitution = Constitution
   { constitutionGovActionProposalId :: !(Maybe GovActionProposalId)
   , constitutionVotingAnchorId      :: !VotingAnchorId
@@ -294,7 +276,7 @@ data Constitution = Constitution
   }
   deriving stock (Eq, Show)
 
--- | The @committee@ table — one row per committee membership change.
+-- | One row per committee membership change.
 data Committee = Committee
   { committeeGovActionProposalId :: !(Maybe GovActionProposalId)
   , committeeQuorumNumerator     :: !Word64
@@ -302,17 +284,16 @@ data Committee = Committee
   }
   deriving stock (Eq, Show)
 
--- | The @committee_hash@ table (dedup table). Holds both cold and hot
--- committee key hashes; a single row can be referenced as either.
--- Unique on @(raw, has_script)@.
+-- | Dedup table for both cold and hot committee key hashes. One row can
+-- serve as either. Unique on @(raw, has_script)@.
 data CommitteeHash = CommitteeHash
   { committeeHashRaw       :: !ByteString
   , committeeHashHasScript :: !Bool
   }
   deriving stock (Eq, Show)
 
--- | The @committee_member@ table. Members are scoped by @committee_id@
--- so the same hash can appear under different committee snapshots.
+-- | @committee_id@ scopes each member, so the same hash can appear under
+-- different committee snapshots.
 data CommitteeMember = CommitteeMember
   { committeeMemberCommitteeId     :: !CommitteeId
   , committeeMemberCommitteeHashId :: !CommitteeHashId
@@ -320,8 +301,8 @@ data CommitteeMember = CommitteeMember
   }
   deriving stock (Eq, Show)
 
--- | The @committee_registration@ table. Each row pairs a cold key
--- (the on-chain identity) with a hot key (used for actual voting).
+-- | Each row pairs a cold key, the on-chain identity, with a hot key,
+-- which does the voting.
 data CommitteeRegistration = CommitteeRegistration
   { committeeRegistrationTxId        :: !TxId
   , committeeRegistrationCertIndex   :: !Word16
@@ -330,7 +311,6 @@ data CommitteeRegistration = CommitteeRegistration
   }
   deriving stock (Eq, Show)
 
--- | The @committee_de_registration@ table.
 data CommitteeDeRegistration = CommitteeDeRegistration
   { committeeDeRegistrationTxId            :: !TxId
   , committeeDeRegistrationCertIndex       :: !Word16
@@ -339,9 +319,8 @@ data CommitteeDeRegistration = CommitteeDeRegistration
   }
   deriving stock (Eq, Show)
 
--- | The @param_proposal@ table — 53 columns of optional parameter
--- overrides. Most columns are nullable; only those the proposer chose
--- to change are populated.
+-- | Optional protocol-parameter overrides. Only the parameters the
+-- proposer changed are non-NULL.
 data ParamProposal = ParamProposal
   { paramProposalEpochNo                    :: !(Maybe Word64)
   , paramProposalKey                        :: !(Maybe ByteString)
@@ -400,8 +379,8 @@ data ParamProposal = ParamProposal
   }
   deriving stock (Eq, Show)
 
--- | The @treasury_withdrawal@ table — a join row between an enacted
--- gov_action_proposal and the stake address receiving the withdrawal.
+-- | A join row between an enacted @gov_action_proposal@ and the stake
+-- address that receives the withdrawal.
 data TreasuryWithdrawal = TreasuryWithdrawal
   { treasuryWithdrawalGovActionProposalId :: !GovActionProposalId
   , treasuryWithdrawalStakeAddressId      :: !StakeAddressId
@@ -409,9 +388,9 @@ data TreasuryWithdrawal = TreasuryWithdrawal
   }
   deriving stock (Eq, Show)
 
--- | The @event_info@ table — a free-form audit record attached to
--- voting procedures whose evaluation produced a notable event.
--- @type@ is plain text, not an enum.
+-- | A free-form audit record for a voting procedure whose evaluation
+-- produced a notable event. @type@ is plain text, not an enum. No
+-- extractor writes this table.
 data EventInfo = EventInfo
   { eventInfoTxId        :: !(Maybe TxId)
   , eventInfoEpoch       :: !Word64
@@ -720,10 +699,9 @@ committeeDeRegistrationTableDef = TableDef
       ]
   }
 
--- | 53-column @param_proposal@. Rational parameters ride @numeric@
--- columns, matching @epoch_param@ / @pool_update.margin@.
--- @committee_max_term_length@ uses the @numeric@ shape shared by every
--- other @DbWord64@ column.
+-- | Rational parameters use @numeric@ columns, which match @epoch_param@
+-- and @pool_update.margin@. @committee_max_term_length@ uses the same
+-- @numeric@ shape as every other @DbWord64@ column.
 paramProposalTableDef :: TableDef
 paramProposalTableDef = TableDef
   { tdName    = "param_proposal"
@@ -1542,8 +1520,8 @@ encodeDelegationVoteCopy dv =
     , bInt64 . getRedeemerId <$> delegationVoteRedeemerId dv
     ]
 
--- | @description@ is JSONB at the column level; we hand it to the
--- COPY writer as plain text and PostgreSQL parses it on insert.
+-- | @description@ is a JSONB column. The encoder writes plain text and
+-- PostgreSQL parses it on insert.
 encodeGovActionProposalCopy
   :: GovActionProposalId -> GovActionProposal -> ByteString
 encodeGovActionProposalCopy (GovActionProposalId rid) gap =
@@ -1642,7 +1620,6 @@ encodeCommitteeDeRegistrationCopy cdr =
     , Just $ bInt64 (getCommitteeHashId $ committeeDeRegistrationColdKeyId cdr)
     ]
 
--- | 53 nullable parameter columns plus id and registered_tx_id.
 encodeParamProposalCopy :: ParamProposalId -> ParamProposal -> ByteString
 encodeParamProposalCopy (ParamProposalId rid) pp =
   buildCopyRow

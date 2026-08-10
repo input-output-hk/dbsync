@@ -1,13 +1,9 @@
 {-# LANGUAGE DataKinds #-}
 
--- | Block parsing: HFC era dispatch.
---
--- Takes a 'CardanoBlock' from the ChainSync protocol and converts it
--- into an era-independent 'GenericBlock' suitable for extraction.
---
--- The dispatch pattern-matches on the Hard Fork Combinator era tags
--- ('BlockByron', 'BlockShelley', etc.) and delegates to era-specific
--- converters in "DbSync.Parser.Byron" and "DbSync.Parser.Block".
+-- | Turns a 'CardanoBlock' from ChainSync into an era-independent
+-- 'GenericBlock'. The dispatch matches on the Hard Fork Combinator era
+-- tag and calls the converter in "DbSync.Parser.Byron" or
+-- "DbSync.Parser.Block".
 module DbSync.Parser.Dispatch
   ( -- * Parsing
     parseBlock
@@ -47,15 +43,13 @@ import DbSync.StateQuery (SlotDetails)
 -- * HFC era dispatch
 -- ---------------------------------------------------------------------------
 
--- | Convert a 'CardanoBlock' from the node into an era-independent 'GenericBlock'.
+-- | The 'SlotDetails', which come from the HardFork Interpreter, give
+-- the correct epoch number, slot-within-epoch and time for any slot
+-- across every era transition.
 --
--- Takes 'SlotDetails' (computed from the HardFork Interpreter) which provides
--- the correct epoch number, slot-within-epoch, and time for any slot across
--- all era transitions.
---
--- The 'Bool' is whether the @cbor@ extractor is enabled; when it is off the
--- per-tx raw-CBOR field is cleared so its thunks don't pin the decoded ledger
--- transactions for the lifetime of the block.
+-- The 'Bool' says whether the @cbor@ extractor is on. When it is off,
+-- 'gateTxCbor' clears the per-tx raw-CBOR field, so its thunks do not
+-- pin the decoded ledger transactions for the life of the block.
 parseBlock :: Bool -> SlotDetails -> CardanoBlock StandardCrypto -> GenericBlock
 parseBlock cborEnabled sd = gateTxCbor cborEnabled . \case
   -- Byron era (pre-Shelley, includes Epoch Boundary Blocks)
@@ -69,10 +63,10 @@ parseBlock cborEnabled sd = gateTxCbor cborEnabled . \case
   BlockConway conwayBlk    -> fromConwayBlock sd conwayBlk
   BlockDijkstra dijkBlk    -> fromDijkstraBlock sd dijkBlk
 
--- | Drop each transaction's raw CBOR when the @cbor@ extractor is disabled.
--- The field is built speculatively during parsing and its thunk pins the whole
--- decoded ledger transaction until forced; clearing it lets the ledger txs be
--- collected as soon as the block is parsed.
+-- | Drops each transaction's raw CBOR when the @cbor@ extractor is
+-- off. The parser builds that field speculatively, and its thunk pins
+-- the whole decoded ledger transaction until something forces it.
+-- Clearing it lets the ledger txs go as soon as the parse ends.
 gateTxCbor :: Bool -> GenericBlock -> GenericBlock
 gateTxCbor True  gb = gb
 gateTxCbor False gb = gb {blkTxs = map clearTxCbor (blkTxs gb)}

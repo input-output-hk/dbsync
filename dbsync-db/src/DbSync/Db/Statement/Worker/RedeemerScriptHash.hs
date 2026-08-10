@@ -2,22 +2,10 @@
 
 -- | Fill @redeemer.script_hash@ for spend redeemers.
 --
--- Every other purpose resolves its hash from the tx body while
--- parsing. A spend redeemer points at a 'TxIn', so its hash is the
--- payment credential of the /spent/ output — reachable only through
--- @tx_in.tx_out_id@, which Ingest leaves unresolved.
---
--- The two paths differ in scale, so they differ in mechanism. Follow
--- appends the id-scoped UPDATE to each block's pipeline. Prep has a
--- hash for nearly every spend redeemer in the database, and an UPDATE
--- at that fraction leaves a dead tuple per row, writes in join order
--- rather than heap order, and cannot go parallel — PostgreSQL refuses
--- to parallelise any plan that modifies rows — so it rebuilds instead.
---
--- The rebuild's subquery yields at most one row per @redeemer_id@:
--- @tx_out@'s @(tx_id, index)@ is unique and @address.id@ is a primary
--- key, so neither join fans out, and the parser points each
--- @tx_in.redeemer_id@ at its own redeemer.
+-- Every other purpose resolves its hash from the tx body while parsing. A
+-- spend redeemer points at a 'TxIn', so its hash is the payment credential
+-- of the /spent/ output, which is reachable only through
+-- @tx_in.tx_out_id@. Ingest leaves that column unresolved.
 module DbSync.Db.Statement.Worker.RedeemerScriptHash
   ( -- * Prep rebuild
     rebuildSpendScriptHashScript
@@ -58,9 +46,13 @@ import DbSync.Db.Statement.Common (arrayParam, rebuildTableScript)
 -- * Prep rebuild
 -- ---------------------------------------------------------------------------
 
--- | Rebuild @redeemer@ with every spend hash the ingested range can
--- resolve. Requires @tx_in.tx_out_id@ (the CTAS resolve) and
--- @tx_out.address_id@ (the per-epoch address worker) to be populated.
+-- | Rebuild @redeemer@ with every spend hash the ingested range resolves.
+-- Requires the CTAS resolve to populate @tx_in.tx_out_id@ and the
+-- per-epoch address worker to populate @tx_out.address_id@.
+--
+-- Prep rebuilds instead of updating, because nearly every spend redeemer
+-- needs a hash. An UPDATE at that fraction leaves one dead tuple per row,
+-- writes in join order rather than heap order, and cannot go parallel.
 rebuildSpendScriptHashScript :: Text
 rebuildSpendScriptHashScript =
   rebuildTableScript
@@ -83,7 +75,9 @@ rebuildSpendScriptHashScript =
       ]
 
 -- | @(redeemer_id, script_hash)@ for every input that unlocks a
--- script-locked output.
+-- script-locked output. It yields at most one row per @redeemer_id@:
+-- @tx_out.(tx_id, index)@ is unique and @address.id@ is a primary key, so
+-- neither join fans out.
 spendHashSubquery :: Text
 spendHashSubquery = T.unwords
   [ "SELECT", qcol "ti" txInCols.ticRedeemerId

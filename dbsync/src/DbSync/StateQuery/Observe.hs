@@ -1,10 +1,4 @@
--- | Locally-observed Cardano hard-fork summary — STM updater.
---
--- The ChainSync receiver calls 'observeBlockSTM' once per delivered
--- block. This keeps the observed summary in 'StateQueryVar' in sync
--- with the chain history we've seen, so 'DbSync.StateQuery' can answer
--- 'SlotDetails' queries locally without a node round-trip while the
--- node's LedgerDB is still replaying.
+-- | STM updater for the locally-observed hard-fork summary.
 module DbSync.StateQuery.Observe
   ( observeBlockSTM
   ) where
@@ -18,13 +12,10 @@ import Ouroboros.Consensus.Cardano.Block (CardanoBlock, StandardCrypto)
 import DbSync.StateQuery.ObservedSummary (ObservationResult, observeBlock)
 import DbSync.StateQuery.Types (StateQueryVar (..))
 
--- | Atomically feed a block to the locally-observed summary.
---
--- Returns the 'ObservationResult' so the caller can trace era
--- transitions. Intended to be called once per block by the consumer,
--- /before/ the corresponding 'DbSync.StateQuery.getSlotDetails' call
--- so that the transition's epoch boundary is in the summary by the
--- time slot details are computed.
+-- | Feed one block to the observed summary. The caller must call this
+-- /before/ the matching 'DbSync.StateQuery.getSlotDetails', so a new
+-- era boundary is already in the summary when the slot is resolved.
+-- The 'ObservationResult' lets the caller trace era transitions.
 observeBlockSTM
   :: StateQueryVar
   -> CardanoBlock StandardCrypto

@@ -1,10 +1,6 @@
--- | Reset every @<table>_id_seq@ to @MAX(id) + 1@ so that
--- 'FollowingChainTip' can allocate IDs from the sequence rather
--- than from in-process counters.
---
--- All setval statements ship in one libpq pipeline so the pass
--- costs a single round-trip rather than one per UNLOGGED table.
--- The SQL builder lives in 'DbSync.Db.Statement.Sequences'.
+-- | Reset every @\<table\>_id_seq@ to @MAX(id) + 1@, so
+-- 'FollowingChainTip' can allocate ids from the sequence instead of
+-- from in-process counters.
 module DbSync.Phase.Preparing.Sequences
   ( resetSequences
   ) where
@@ -19,13 +15,9 @@ import DbSync.Db.Schema.Types (TableDef (..), TableMode (..))
 import DbSync.Db.Statement.Sequences (resetSequenceStmt)
 import DbSync.Db.Transaction (HasHasqlConnection (..))
 
--- | Run @setval@ on every UNLOGGED table's @id@ sequence so that
--- 'FollowingChainTip' allocates ids past the rows Ingest already
--- loaded. Tables that were already LOGGED at schema creation (e.g.
--- @dbsync_sync_state@) manage their own ids and are skipped.
--- 'DbSync.Db.Statement.Sequences.resetSequenceSql' resolves the
--- sequence via @pg_get_serial_sequence@, so explicit and
--- IDENTITY-backed sequences are handled uniformly.
+-- | Skips tables that schema creation made LOGGED, such as
+-- @dbsync_sync_state@: those manage their own ids. All the @setval@
+-- statements ship in one pipeline, so the pass costs one round-trip.
 resetSequences
   :: (HasHasqlConnection env, MonadReader env m, MonadIO m)
   => [TableDef] -> m ()

@@ -1,27 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Post-load backfill of four @tx@ columns the ingest parser cannot
--- fill from the body alone:
+-- | Post-load backfill of the @tx.fee@ and @tx.deposit@ columns that the
+-- ingest parser cannot fill from the transaction body alone.
 --
---   * @fee@ on phase-2 failed Alonzo+ txs — body fee is meaningless;
---     real fee is @collateral_inputs - collateral_return@. Parser
---     writes @0@ sentinel.
---   * @fee@ on Byron txs — no explicit fee field; real fee is
---     @inputs - outputs@. Parser writes @0@ sentinel.
---   * @deposit@ on phase-2 failed txs — always @0@. Parser leaves NULL.
---   * @deposit@ on valid-contract txs in ledger-disabled mode —
---     @inputs + withdrawals - outputs - fee - treasury_donation@.
---     Parser leaves NULL until 'DbSync.Db.Statement.Worker.Resolve'
---     populates @tx_in.tx_out_id@.
---
--- The @fee@ UPDATEs drive off the small set of rows that need
--- patching and use per-row subqueries. The valid-contract @deposit@
--- UPDATE uses an aggregate-then-join because every valid tx needs
--- the computation in ledger-disabled mode — bulk-scan locality wins
--- at that scale.
---
--- All identifiers go through 'DbSync.Db.Sql.Refs' so a 'TableDef'
--- rename surfaces at module-load time, not as silently-wrong SQL.
+-- The @fee@ UPDATEs touch few rows, so they use per-row subqueries. The
+-- valid-contract @deposit@ UPDATE aggregates and then joins, because in
+-- ledger-disabled mode every valid tx needs the computation.
 module DbSync.Db.Statement.Worker.Backfill
   ( -- * Prepared 'Stmt.Statement' values
     backfillPhaseTwoFeeStmt
@@ -32,11 +16,9 @@ module DbSync.Db.Statement.Worker.Backfill
   , depositSourceTxIds
     -- * Raw SQL strings
     --
-    -- Exported so tests can feed them to @EXPLAIN@ and assert on the
-    -- plan shape. A bad plan (e.g. a Nested Loop around a large
-    -- aggregate) doesn't surface as a functional failure on small
-    -- fixtures — it surfaces as a stall on a real chain. Plan-shape
-    -- assertions catch that regardless of fixture size.
+    -- Exported so tests can run @EXPLAIN@ and assert on the plan shape.
+    -- A bad plan does not fail on small fixtures; it stalls on a real
+    -- chain.
   , backfillPhaseTwoFeeSql
   , backfillPhaseTwoDepositSql
   , backfillValidContractDepositSql

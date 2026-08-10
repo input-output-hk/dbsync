@@ -3,21 +3,12 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
--- | Boot lifecycle: pure decision + effectful resolution.
+-- | Boot lifecycle: a pure decision plus its effectful resolution.
 --
--- 'decideBoot' classifies the observed state (sync-state row +
--- on-disk snapshots) into a 'BootDecision' (pure). The resolve
--- helpers ('resolveFreshBoot', 'resolveResumeBoot',
--- 'runBootFollowRestart') turn that decision into either an
--- 'IngestBootState' the caller wires into the Ingest pipeline, or —
--- on a 'BootFollowRestart' — drive the Follow loop inline and
--- return.
---
--- 'handlePreBootRollback' applies an outstanding rollback request
--- (CLI flag or on-DB marker) before 'decideBoot' runs.
---
--- Mismatch cases are returned as 'BootError'; 'abortBoot' renders
--- them via 'renderBootError' and exits.
+-- 'decideBoot' classifies the sync-state row and the on-disk
+-- snapshots into a 'BootDecision'. The resolve helpers turn that
+-- decision into an 'IngestBootState', or run the Follow loop inline
+-- on a 'BootFollowRestart'. Mismatches surface as 'BootError'.
 module DbSync.App.Boot
   ( -- * Types
     BootDecision (..)
@@ -154,13 +145,12 @@ data BootDecision
     -- ^ A prior run completed sync; resume directly in Follow.
   deriving stock (Eq, Show)
 
--- | Information needed to resume from a 'SyncStateRow'.
+-- | What a resume from a 'SyncStateRow' needs.
 --
--- Invariant: when 'rcChosenSnapshot' is 'Just' (ledger-enabled
--- resume), its 'dsNumber' equals the head of 'rcIntersection'\'s
--- @NeedsPgHashes@ list — that snapshot is the one the in-RAM
--- ledger is restored from, and also the preferred intersection
--- point we offer the node.
+-- Invariant: when 'rcChosenSnapshot' is 'Just', its 'dsNumber' equals
+-- the head of the @NeedsPgHashes@ list in 'rcIntersection'. That
+-- snapshot restores the in-RAM ledger and is also the preferred
+-- intersection point offered to the node.
 data ResumeContext = ResumeContext
   { rcSyncState      :: !SyncStateRow
   , rcChosenSnapshot :: !(Maybe DiskSnapshot)
@@ -168,10 +158,9 @@ data ResumeContext = ResumeContext
   }
   deriving stock (Eq, Show)
 
--- | Information needed to enter the Follow phase on a restart after
--- Ingest+Prep have completed (@sync_complete = true@). 'frcMode'
--- carries the ledger-aware data ('FollowRestartMode'); 'frcSyncState'
--- carries the raw row for diagnostics and bookkeeping.
+-- | What entering Follow on a restart needs, after Ingest and Prep
+-- completed (@sync_complete = true@). 'frcSyncState' carries the raw
+-- row for diagnostics.
 data FollowRestartContext = FollowRestartContext
   { frcSyncState :: !SyncStateRow
   , frcMode      :: !FollowRestartMode
@@ -181,19 +170,14 @@ data FollowRestartContext = FollowRestartContext
 -- | What the Follow-restart path knows about the chainsync resume
 -- point before 'prepareFollowRestart' runs.
 --
--- Ledger disabled: PG is the single source of truth. The decision
--- step pre-builds the intersection point from
--- @last_committed_slot@/@last_committed_block_hash@; if either is
--- missing the row is malformed and 'decideFollowRestart' returns
--- 'BootSyncStateMissing' instead of constructing this.
+-- Ledger disabled: PG is the single source of truth, so the decision
+-- step pre-builds the point from the @last_committed_*@ columns.
 --
--- Ledger enabled: the decision step hands the orchestrator a
--- non-empty list of candidate snapshots (newest-first). The
--- orchestrator walks them newest-first, picking the first whose
--- slot has a matching @block.hash@ in PG. That chosen snapshot
--- becomes the restart point: the ledger is loaded from it, the gap
--- to @last_committed_slot@ becomes the replay window, and chainsync
--- intersects at the snapshot\'s point.
+-- Ledger enabled: the decision step hands over candidate snapshots.
+-- The orchestrator walks them newest-first and takes the first whose
+-- slot has a matching @block.hash@ in PG. That snapshot restores the
+-- ledger, the gap to @last_committed_slot@ becomes the replay window,
+-- and chainsync intersects at the snapshot's point.
 data FollowRestartMode
   = FollowRestartLedgerDisabled !CardanoPoint
     -- ^ Pre-validated intersection point.
@@ -201,50 +185,40 @@ data FollowRestartMode
     -- ^ Non-empty candidate list, newest-first.
   deriving stock (Eq, Show)
 
--- | How the chainsync intersection point(s) are produced.
+-- | How the chainsync intersection points are produced.
 --
--- Ledger-disabled resume can hand the receiver a fully-formed point
--- straight from the @last_committed_*@ columns. Ledger-enabled resume
--- can\'t: a snapshot only knows its slot (consensus's 'DiskSnapshot'
--- is @dsNumber + dsSuffix@), and PG\'s last-committed hash refers to
--- a /different/ block. So we nominate slots here and let the caller
--- ask PG for the canonical hash at each — mirrors upstream
+-- A ledger-disabled resume hands the receiver a complete point from
+-- the @last_committed_*@ columns. A ledger-enabled resume cannot: a
+-- 'DiskSnapshot' knows only its slot, and PG's last-committed hash
+-- belongs to a different block. So this nominates slots and the
+-- caller asks PG for the canonical hash at each. Mirrors upstream
 -- cardano-db-sync's @verifySnapshotPoint@.
 data ResumeIntersection
   = ReadyPoint !CardanoPoint
-    -- ^ Ledger-disabled: @(slot, hash)@ from 'SyncStateRow'.
+    -- ^ Ledger disabled: @(slot, hash)@ from the 'SyncStateRow'.
   | NeedsPgHashes ![Word64]
-    -- ^ Ledger-enabled: candidate snapshot slots, /newest-first/.
-    -- Head is the chosen snapshot for ledger restoration; the rest
-    -- are fallbacks. The caller resolves each via PG and drops
-    -- orphans (no matching @block.hash@) silently.
+    -- ^ Ledger enabled: candidate snapshot slots, newest-first. The
+    -- head restores the ledger; the rest are fallbacks. The caller
+    -- resolves each against PG and drops orphans silently.
   deriving stock (Eq, Show)
 
--- | Resolved state handed from the boot-resolution step to the
--- Ingest pipeline setup.
---
--- The boot resolution produces 'Just' this on 'BootFresh' /
--- 'BootResume'; on 'BootFollowRestart' it runs the Follow loop
--- inline and returns 'Nothing'.
+-- | State the boot resolution hands to the Ingest pipeline setup.
 data IngestBootState = IngestBootState
   { ibsInitialExtractState :: !ExtractState
-    -- ^ Counters and per-table state to seed the consumer with.
   , ibsDedupStores         :: !DedupStores
-    -- ^ LSM-backed dedup tables, either freshly opened ('BootFresh')
-    -- or rebuilt from PG ('BootResume').
+    -- ^ Freshly opened on 'BootFresh', rebuilt from PG on
+    -- 'BootResume'.
   , ibsIntersection        :: !IntersectionRequirement
-    -- ^ Where chainsync should resume from.
   , ibsReplayBoundary      :: !(Maybe SlotNo)
     -- ^ Upper edge of the replay window. The consumer skips
-    -- 'processBlock' for blocks at or below this slot. 'Nothing'
-    -- when ledger is off or the snapshot is aligned with PG.
+    -- 'processBlock' at or below this slot. 'Nothing' when the ledger
+    -- is off, or when the snapshot already aligns with PG.
   , ibsReplayStart         :: !(Maybe SlotNo)
-    -- ^ Lower edge of the replay window: the chosen snapshot's
-    -- slot. Drives the percentage in the consumer's replay
-    -- progress log. 'Just' iff 'ibsReplayBoundary' is.
+    -- ^ Lower edge of the replay window: the chosen snapshot's slot.
+    -- 'Just' exactly when 'ibsReplayBoundary' is.
   , ibsAddressIdCounter    :: !Int64
-    -- ^ Initial @address.id@ for the 'TxOutWorker'. Seeded from the
-    -- sync-state row on resume, 1 on fresh.
+    -- ^ Initial @address.id@ for the 'TxOutWorker'. Read from the
+    -- sync-state row on resume, 1 on a fresh boot.
   }
 
 -- | Boot mismatches that abort the run.
@@ -286,7 +260,6 @@ data BootError
 -- * Decision
 -- ---------------------------------------------------------------------------
 
--- | Classify the boot.
 decideBoot
   :: Maybe SyncStateRow
   -> [DiskSnapshot]            -- ^ Disk snapshots, newest-first. Empty when ledger disabled.
@@ -341,21 +314,13 @@ decideBoot mRow snapshots ledgerEnabledCfg = case mRow of
                         }
           _ -> Left BootSyncStateMissing
 
--- | Build the 'BootFollowRestart' decision for @sync_complete =
--- true@.
+-- | Build the 'BootFollowRestart' decision for @sync_complete = true@.
 --
--- Ledger disabled: PG is the single source of truth. The caller
--- intersects chainsync directly at the row's @last_committed_*@,
--- which the decision pre-builds into 'FollowRestartLedgerDisabled'.
--- A row missing either of @last_committed_slot@ or
--- @last_committed_block_hash@ is malformed and rejected as
--- 'BootSyncStateMissing'.
---
--- Ledger enabled: returns the candidate list (snapshots at or
--- before @last_committed_slot@, newest-first). Same fallback
--- conditions as 'BootResume' — empty snapshot directory is
--- 'BootResumeStateMissing', candidates all beyond the committed
--- slot is 'BootNoUsableSnapshot'.
+-- A row missing @last_committed_slot@ or @last_committed_block_hash@
+-- is malformed and becomes 'BootSyncStateMissing'. With the ledger
+-- enabled the failure cases match 'BootResume': an empty snapshot
+-- directory gives 'BootResumeStateMissing', and candidates that all
+-- sit beyond the committed slot give 'BootNoUsableSnapshot'.
 decideFollowRestart
   :: SyncStateRow
   -> [DiskSnapshot]
@@ -392,18 +357,16 @@ decideFollowRestart row snapshots ledgerEnabledCfg
                       , frcMode      = FollowRestartLedgerEnabled candidates
                       }
 
--- | True when the row has no committed chain position.
 rowHasNoCommittedProgress :: SyncStateRow -> Bool
 rowHasNoCommittedProgress r =
   isNothing (ssrLastCommittedSlot r)
     && isNothing (ssrLastCommittedBlockNo r)
     && isNothing (ssrLastCommittedBlockHash r)
 
--- | Build a 'ResumeContext' with no chosen snapshot and a default
--- intersection point. Used by the in-process Ingest → Prep → Follow
--- handoff where chainsync intersects at the row's last committed
--- block (the ledger and PG are already aligned by the receiver's
--- 'latestPointRef').
+-- | Build a 'ResumeContext' with no chosen snapshot. Serves the
+-- in-process Ingest → Prep → Follow handoff, where chainsync
+-- intersects at the row's last committed block and the receiver has
+-- already aligned the ledger with PG.
 resumeContextFrom :: SyncStateRow -> Maybe DiskSnapshot -> ResumeContext
 resumeContextFrom row mSnap =
   ResumeContext
@@ -414,8 +377,8 @@ resumeContextFrom row mSnap =
         _                -> ReadyPoint GenesisPoint
     }
 
--- | Snapshots at or before @lastSlot@, newest-first (relies on
--- @listSnapshots@\'s newest-first ordering).
+-- | Snapshots at or before @lastSlot@. Relies on the newest-first
+-- order that @listSnapshots@ returns.
 candidateSnapshotSlots :: [DiskSnapshot] -> Word64 -> [DiskSnapshot]
 candidateSnapshotSlots snaps lastSlot =
   filter (\ds -> dsNumber ds <= lastSlot) snaps
@@ -424,9 +387,10 @@ candidateSnapshotSlots snaps lastSlot =
 -- * Helpers
 -- ---------------------------------------------------------------------------
 
--- | Build a 'CardanoPoint' from a raw slot number and 32-byte block
--- header hash.
-mkCardanoPoint :: Word64 -> ByteString -> CardanoPoint
+mkCardanoPoint
+  :: Word64
+  -> ByteString   -- ^ 32-byte block header hash
+  -> CardanoPoint
 mkCardanoPoint slotNo blockHash =
   BlockPoint
     (SlotNo slotNo)
@@ -573,19 +537,18 @@ renderBootError = \case
 -- * Lifecycle
 -- ---------------------------------------------------------------------------
 
--- | Render a 'BootError' and exit. Never returns.
+-- | Never returns.
 abortBoot :: AppTracer -> BootError -> IO a
 abortBoot tracer err = do
   for_ (T.lines (renderBootError err)) (logErrorIO tracer "Boot")
   exitFailure
 
--- | Apply a rollback request that arrived before normal boot.
+-- | Apply a rollback request that arrived before the normal boot.
 --
--- The CLI flag wins over the on-DB marker; if neither is set, this
--- is a no-op. On success the marker is cleared so the next boot
--- doesn't replay the rollback. Ledger snapshots strictly newer than
--- the target are dropped so the next boot's snapshot picker stays
--- aligned with the rolled-back chain.
+-- The CLI flag wins over the on-DB marker. On success this clears the
+-- marker, so the next boot does not repeat the rollback. It also
+-- drops ledger snapshots newer than the target, which keeps the next
+-- boot's snapshot picker aligned with the rolled-back chain.
 handlePreBootRollback
   :: AppTracer
   -> CoreEnv
@@ -624,9 +587,8 @@ handlePreBootRollback tracer coreEnv ctrl tableDefs hasLE mCli = do
       LedgerDisabled _ -> pure ()
     runAppM ctrl clearPendingRollbackSlot
 
--- | Resolve a 'BootFresh' decision: seed the ledger DB from genesis
--- (when ledger is enabled), open the dedup stores, and start
--- chainsync at 'IntersectGenesis'.
+-- | Seed the ledger DB from genesis when the ledger is on, open the
+-- dedup stores, and start chainsync at 'IntersectGenesis'.
 resolveFreshBoot
   :: AppTracer
   -> HasLedgerEnv
@@ -650,14 +612,12 @@ resolveFreshBoot tracer hasLedgerEnv lsmSession = do
 
 -- | Resolve a 'BootResume' decision.
 --
--- Cleans rows past @last_committed_slot@ left over from a prior
--- crash, rebuilds the dedup stores from PG, populates the
--- cost-model cache, and (when ledger is on) loads the chosen
--- snapshot into the in-memory 'LedgerDB' and seeds the HFC
--- interpreter. When the snapshot lags PG the replay window
--- ('ibsReplayBoundary' / 'ibsReplayStart') is set so the consumer
--- can suppress its PG-write path until the ledger worker has
--- re-applied the gap.
+-- Deletes rows past @last_committed_slot@ left by a prior crash,
+-- rebuilds the dedup stores from PG, fills the cost-model cache, and
+-- — with the ledger on — loads the chosen snapshot and seeds the HFC
+-- interpreter. When the snapshot lags PG it sets the replay window,
+-- so the consumer suppresses its PG-write path until the ledger
+-- worker re-applies the gap.
 resolveResumeBoot
   :: AppTracer
   -> TopLevelConfig (CardanoBlock StandardCrypto)
@@ -706,8 +666,8 @@ resolveResumeBoot
       , ibsAddressIdCounter    = ssrAddressIdCounter row
       }
 
--- | Load the resume snapshot (when ledger is on) and compute the
--- replay window. Internal helper of 'resolveResumeBoot'.
+-- | Load the resume snapshot when the ledger is on, then compute the
+-- replay window.
 resolveResumeReplay
   :: AppTracer
   -> TopLevelConfig (CardanoBlock StandardCrypto)
@@ -740,10 +700,9 @@ resolveResumeReplay tracer topLevelCfg stateQueryVar hasLedgerEnv row rc =
         )
 
 -- | Turn a 'ResumeContext' into the receiver's intersection
--- requirement. Mirrors upstream cardano-db-sync's
--- @verifySnapshotPoint@: the snapshot supplies /the slot/, PG\'s
--- @block@ table is the oracle for /the hash/. Orphaned candidates
--- are dropped silently; panics when every candidate is orphaned.
+-- requirement. The snapshot supplies the slot; PG's @block@ table is
+-- the oracle for the hash. Orphaned candidates drop out silently.
+-- Panics when every candidate is orphaned.
 resolveIntersection
   :: AppTracer
   -> ControlConnection
@@ -788,41 +747,26 @@ resolveSlot tracer ctrl slot = do
 -- ---------------------------------------------------------------------------
 
 -- | Resolved Follow-restart parameters: the chainsync intersection
--- point and, when the on-disk snapshot lags PG, the (lower, upper)
--- edges of the replay window the ledger worker walks while Follow's
--- consumer skips its PG-write path.
---
--- Both replay edges are 'Just' together or 'Nothing' together;
--- 'Nothing' when ledger is off or the snapshot is aligned with PG.
+-- point, plus the replay window edges when the on-disk snapshot lags
+-- PG. Both edges are 'Just' together or 'Nothing' together.
 data FollowRestartStart = FollowRestartStart
   { frsIntersectPoint  :: !CardanoPoint
   , frsReplayBootSlot  :: !(Maybe SlotNo)
   , frsReplayStartSlot :: !(Maybe SlotNo)
   }
 
--- | Block-count threshold above which a Follow-restart resume warns
--- that @--resync-from-genesis@ may be faster than replaying every
--- block one transaction at a time.
---
--- Below this the per-block Follow loop is the right tool; above it the
--- COPY pipeline that @--resync-from-genesis@ triggers typically catches
--- up faster despite redoing the historical work.
+-- | Gap size above which a Follow restart suggests
+-- @--resync-from-genesis@ instead of a per-block replay.
 resumeGapWarnBlocks :: Word64
 resumeGapWarnBlocks = 500_000
 
--- | One-shot helper that waits for the receiver to publish its first
--- rollback-boundary observation, computes the gap between the
--- resumed @last_committed_block_no@ and the node tip, and warns the
--- operator when the gap exceeds 'resumeGapWarnBlocks'.
+-- | Warn when the resume point sits more than 'resumeGapWarnBlocks'
+-- behind the node tip.
 --
--- The receiver publishes @nodeTip - k@ on every 'MsgRollForward'; we
--- recover the tip as @boundary + k@. While the chain is shorter than
--- @k@ the boundary stays 'Nothing' and the helper blocks until a
--- tip is seen, which on mainnet always happens within the first
--- chainsync intersection.
---
--- Exits silently when there is no resumed block number (the row was
--- inconsistent) or when the gap is below the threshold.
+-- The receiver publishes @nodeTip - k@ on every 'MsgRollForward', so
+-- this recovers the tip as @boundary + k@. It blocks until the
+-- receiver publishes its first boundary, and returns silently when
+-- the row carries no block number or the gap is below the threshold.
 checkResumeGap
   :: AppTracer
   -> Word64                          -- ^ Protocol security parameter @k@.
@@ -848,32 +792,28 @@ checkResumeGap tracer kBlocks (Just lastBlock) boundaryVar = do
         <> "the bulk-load pipeline. Consider --resync-from-genesis if "
         <> "catch-up time matters."
 
--- | Boot directly into 'FollowingChainTip' on a restart after Prep
--- has already marked sync complete. Releases the Ingest LSM
--- session (the follow loop doesn't use it), flips the phase, and
--- runs the follow loop with the ledger worker bracket parametrised
--- by the replay window computed from the loaded snapshot.
+-- | Boot straight into Follow on a restart where Prep already marked
+-- sync complete. Releases the Ingest LSM session, flips the phase,
+-- and runs the Follow loop under the ledger-worker bracket.
 --
--- When ledger is enabled, the on-disk snapshot is the authoritative
--- restart point. The flow:
+-- With the ledger enabled the on-disk snapshot is the authoritative
+-- restart point:
 --
---   1. Walk the candidate snapshots newest-first; pick the first
+--   1. Walk the candidate snapshots newest-first. Take the first
 --      whose slot has a matching @block.hash@ in PG.
 --   2. Load that snapshot into the in-memory 'LedgerDB'.
---   3. If the snapshot's slot is below @last_committed_slot@ —
---      the async snapshot writer was behind the consumer at
---      shutdown — configure a replay window. The ledger worker
---      re-applies the gap from the receiver fan-out; Follow's
---      consumer skips its PG-write path for blocks in the window.
---   4. Start the ledger worker + snapshot writer and intersect
---      chainsync at the snapshot's point.
+--   3. When the snapshot slot is below @last_committed_slot@ — the
+--      async snapshot writer trailed the consumer at shutdown —
+--      configure a replay window. The ledger worker re-applies the
+--      gap while Follow's consumer skips its PG-write path.
+--   4. Start the ledger worker and intersect chainsync at the
+--      snapshot's point.
 --
--- When ledger is disabled there is no snapshot to load; chainsync
--- intersects directly at the row's @last_committed_*@.
+-- With the ledger disabled there is no snapshot, so chainsync
+-- intersects at the row's @last_committed_*@.
 --
--- When the optional shutdown signal fires, the Follow loop is
--- cancelled and this returns normally; otherwise it blocks forever
--- (production behaviour).
+-- This returns when the shutdown signal fires; otherwise it blocks
+-- forever.
 runBootFollowRestart
   :: AppTracer
   -> HasqlSettings.Settings
@@ -894,9 +834,8 @@ runBootFollowRestart
   socketPath systemStart stateQueryVar hasLedgerEnv consumerCtrlConn
   lsmSession frc mShutdown = do
     logInfoIO tracer "Boot" "Boot: sync_complete=true; entering FollowingVolatileTail"
-    -- The follow loop doesn't touch the ingest LSM tables; release
-    -- the session so the directory lock is dropped before entering
-    -- the long-running follow loop.
+    -- The Follow loop never touches the ingest LSM tables. Release the
+    -- session so the directory lock drops before the long-running loop.
     closeLsmSession lsmSession
     runAppM coreEnv (setCurrentPhase (ceCurrentPhase coreEnv) FollowingVolatileTail)
 
@@ -904,9 +843,9 @@ runBootFollowRestart
         tableDefs = concatMap pdTables (ceExtractors coreEnv)
     -- 'FollowRestart' mode skips the dedup-counter DELETE. The counter
     -- columns on 'SyncStateRow' are frozen at Ingest's last
-    -- pending-boundary snapshot; running them here would wipe every
-    -- dedup row Ingest's last two epochs and Follow wrote, silently
-    -- orphaning the fact-table FKs that reference them.
+    -- pending-boundary snapshot. Running the DELETE here would wipe
+    -- every dedup row that Ingest's last two epochs and Follow wrote,
+    -- and silently orphan the fact-table FKs that reference them.
     logInfoIO tracer "Boot" "Cleaning rows past last_committed_slot…"
     deleted <- runAppM (TracerWithControl tracer consumerCtrlConn)
                  (deleteRowsPastSlot FollowRestart tableDefs row)
@@ -924,10 +863,9 @@ runBootFollowRestart
         mReplayStart   = frsReplayStartSlot restartStart
 
     withIOManager $ \iomgr ->
-      -- Start the ledger worker + snapshot writer with the replay
-      -- boundary baked in. Inside the window the worker suppresses
-      -- snapshot writes and 'accumulateEpochParams' because those
-      -- epochs are already represented in PG / on disk.
+      -- Inside the replay window the worker suppresses snapshot writes
+      -- and 'accumulateEpochParams', because PG and disk already hold
+      -- those epochs.
       withLedgerThreads hasLedgerEnv mReplayBoot stateQueryVar $
         bracket
           (setupOffChainPoolWorker tracer hasqlSettings (scExtractors (ceConfig coreEnv)))
@@ -935,11 +873,10 @@ runBootFollowRestart
         bracket
           (setupOffChainVoteWorker tracer hasqlSettings (scExtractors (ceConfig coreEnv)))
           (mapM_ closeOffChainVoteWorker) $ \mVoteWorker -> do
-          -- A fresh receiver-side state. Ingest has been bypassed on this
-          -- restart path, so none of it is inherited from an upstream env.
-          -- Queue depth matches the Ingest path in App.Run, where
-          -- the sizing rationale lives; a Follow-mode queue stays
-          -- near-empty regardless.
+          -- Fresh receiver state: this restart path bypasses Ingest, so
+          -- there is no upstream env to inherit from. The queue depth
+          -- matches the Ingest path in App.Run, which carries the
+          -- sizing rationale.
           blockQueue       <- newTBQueueIO 300
           latestPointRef   <- newTVarIO Nothing
           rollbackBoundary <- newTVarIO Nothing
@@ -978,15 +915,12 @@ runBootFollowRestart
               networkMagic socketPath intersectReq consumedTracking mShutdown mkEnv
 
 -- | Open a dedicated Follow hasql connection, build its resolver and
--- writer, hand them to the caller-supplied 'FollowEnv' builder, and
--- run 'Follow.run' against the resulting env. The chainsync receiver
--- runs as a linked async for the duration; an optional shutdown
--- signal races the loop so tests can stop cleanly.
+-- writer, pass them to the caller's 'FollowEnv' builder, and run
+-- 'Follow.run' against the result. The chainsync receiver runs as a
+-- linked async for the duration.
 --
--- Shared by 'runBootFollowRestart' (cold restart into Follow) and
--- 'handoffToFollow' (in-process Ingest \\u2192 Prep \\u2192 Follow handoff).
--- Each caller is responsible for the watchdog and ledger-worker
--- asyncs being alive across this call.
+-- Shared by 'runBootFollowRestart' and 'handoffToFollow'. Each caller
+-- must keep the ledger-worker asyncs alive across this call.
 runFollowSession
   :: AppTracer
   -> Text                                              -- ^ Log component
@@ -999,17 +933,17 @@ runFollowSession
   -> ConsumedTracking
   -> Maybe (IO ())                                     -- ^ mShutdown
   -> (Conn.Connection -> IdResolver IO -> Writer IO -> FollowEnv)
-       -- ^ FollowEnv builder. Receives the just-opened Follow
-       --   connection along with its resolver + writer.
+       -- ^ Receives the just-opened Follow connection with its
+       --   resolver and writer.
   -> IO ()
 runFollowSession
   tracer component iomgr hasqlSettings topLevelCfg networkMagic
   socketPath intersectReq consumedTracking mShutdown mkFollowEnv = do
     followCtrl <- openControlConnection hasqlSettings
     let followConn = unControlConnection followCtrl
-    -- @synchronous_commit = off@: per-block COMMITs don't wait on
-    -- WAL fsync. Crash recovery is covered by chainsync replay from
-    -- @last_committed_slot@.
+    -- @synchronous_commit = off@: a per-block COMMIT does not wait on
+    -- the WAL fsync. Chainsync replay from @last_committed_slot@
+    -- covers crash recovery.
     runAppM followConn (setFollowSessionGUCs defaultFollowTuning)
     resolver <- FollowResolver.mkFollowResolver followConn consumedTracking
     let writer    = FollowingWriter.mkWriter followConn
@@ -1024,8 +958,6 @@ runFollowSession
                   logErrorIO tracer component $
                     "Error closing Follow connection: " <> show e
 
-        -- When 'mShutdown' is provided, race it against the Follow
-        -- loop so a test can stop the app cleanly.
         racedFollow = case mShutdown of
           Nothing      -> followAction
           Just waitSig -> void (race waitSig followAction)
@@ -1034,15 +966,14 @@ runFollowSession
       link nodeThread
       racedFollow
 
--- | Resolve the chainsync intersection point for a Follow restart,
--- loading the ledger snapshot and computing the replay window when
--- the snapshot lags PG. Panics when every candidate snapshot is
--- orphaned in PG.
+-- | Resolve the chainsync intersection point for a Follow restart. It
+-- loads the ledger snapshot and computes the replay window when the
+-- snapshot lags PG. Panics when every candidate snapshot is orphaned.
 --
--- 'HasLedgerEnv' and 'frcMode' must agree (both ledger-enabled or
--- both ledger-disabled); this is established by 'decideBoot' running
--- against the same @ledger.enabled@ config that drove
--- 'mkHasLedgerEnv'. A mismatch is a programmer error.
+-- 'HasLedgerEnv' and 'frcMode' must agree on whether the ledger is
+-- enabled. 'decideBoot' guarantees that, because it reads the same
+-- @ledger.enabled@ config that drove 'mkHasLedgerEnv'. A mismatch is
+-- a programmer error.
 prepareFollowRestart
   :: CoreEnv
   -> ControlConnection
@@ -1099,9 +1030,8 @@ prepareFollowRestart coreEnv ctrl hasLE sqv topLevelCfg frc =
         , frsReplayStartSlot = mReplayStart
         }
 
--- | Walk the candidate snapshots newest-first; return the first one
--- whose slot has a matching @block.hash@ in PG, paired with that
--- hash. Logs each skipped orphan.
+-- | Walk the candidates newest-first and return the first whose slot
+-- has a matching @block.hash@ in PG, paired with that hash.
 pickValidatedSnapshot
   :: AppTracer
   -> ControlConnection
@@ -1127,9 +1057,8 @@ pickValidatedSnapshot tracer ctrl = go
           go rest
 
 -- | Load a 'DiskSnapshot' into the in-memory 'LedgerDB' and seed the
--- HFC interpreter from the resulting ledger state. Emits a heartbeat
--- line every 15 s so a slow load doesn't read as a stalled boot.
--- Panics on load failure.
+-- HFC interpreter from the resulting ledger state. Panics when the
+-- load fails.
 loadAndSeedSnapshot
   :: AppTracer
   -> LedgerEnv
@@ -1151,7 +1080,6 @@ loadAndSeedSnapshot tracer lenv sqv topLevelCfg snap = do
       seedInterpreterFromLedgerState topLevelCfg loadedExt sqv
   where
     snapSlot = dsNumber snap
-    -- Heartbeat cadence tuned so a fast load emits no heartbeats
-    -- while a slow one still gives the operator visibility within
-    -- the first minute.
+    -- Long enough that a fast load stays silent, short enough that a
+    -- slow load does not read as a stalled boot.
     heartbeatSeconds = 15

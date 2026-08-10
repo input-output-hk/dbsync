@@ -1,6 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Prometheus counters and gauges exposed via the metrics HTTP endpoint.
+-- | Metrics are not implemented. The 'Metrics' record is a
+-- placeholder, the mutators below record nothing, and no endpoint
+-- exports anything. The shape exists so call sites can stay in place
+-- until a real backend lands.
 module DbSync.Metrics
   ( -- * Types
     Metrics (..)
@@ -22,17 +25,18 @@ import Cardano.Slotting.Slot (EpochNo (..))
 -- * Types
 -- ---------------------------------------------------------------------------
 
--- | Prometheus counters and gauges exposed to the metrics endpoint.
+-- | Every field is zero in the only value ever built,
+-- @DbSync.App.Setup.placeholderMetrics@.
 data Metrics = Metrics
-  { mBlocksProcessed :: !Int64
-  , mCurrentEpoch    :: !Int64
-  , mCurrentBlock    :: !Int64
-  , mCurrentSlot     :: !Int64
-  , mBlocksPerSec    :: !Double
-  , mCopyRowsWritten :: !Int64
-  , mPhase           :: !Int64   -- ^ 0=Ingest, 1=Preparing, 2=Following
-  , mDedupStoreSize  :: !Int64
-  , mQueueDepth      :: !Int64
+  { mBlocksProcessed :: !Int64   -- ^ Unused. Nothing reads this field.
+  , mCurrentEpoch    :: !Int64   -- ^ Unused. Nothing reads this field.
+  , mCurrentBlock    :: !Int64   -- ^ Unused. Nothing reads this field.
+  , mCurrentSlot     :: !Int64   -- ^ Unused. Nothing reads this field.
+  , mBlocksPerSec    :: !Double  -- ^ Unused. Nothing reads this field.
+  , mCopyRowsWritten :: !Int64   -- ^ Unused. Nothing reads this field.
+  , mPhase           :: !Int64   -- ^ Unused. Intended as 0=Ingest, 1=Preparing, 2=Following.
+  , mDedupStoreSize  :: !Int64   -- ^ Unused. Nothing reads this field.
+  , mQueueDepth      :: !Int64   -- ^ Unused. Nothing reads this field.
   }
   deriving stock (Show)
 
@@ -40,13 +44,15 @@ data Metrics = Metrics
 -- * Accessor class
 -- ---------------------------------------------------------------------------
 
--- | Access metrics from any environment.
 class HasMetrics env where
   getMetrics :: env -> Metrics
 
 -- ---------------------------------------------------------------------------
 -- * Convenience
 -- ---------------------------------------------------------------------------
+
+-- Each mutator below discards its argument and returns @()@. They
+-- keep the call sites typed until a real metrics backend lands.
 
 incBlocksProcessed :: (MonadReader env m, HasMetrics env) => m ()
 incBlocksProcessed = do

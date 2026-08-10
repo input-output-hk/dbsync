@@ -1,9 +1,8 @@
 -- | Human-readable rendering of crashes and 'AppError's for the log.
 --
--- The one-line summary comes from the 'AppError' itself (kind, source
--- location, message). Depth — block context, IPE backtrace, and any
--- nested cause — comes from the exception's 'ExceptionContext'
--- annotations.
+-- The one-line summary comes from the 'AppError': kind, source
+-- location, message. The block context, IPE backtrace and nested
+-- cause come from the exception's 'ExceptionContext' annotations.
 module DbSync.Error.Render
   ( renderAppError
   , renderCrash

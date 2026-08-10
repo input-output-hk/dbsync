@@ -1,11 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Hasql 'Statement' bindings for the @governance@ extractor tables:
--- @drep_hash@, @drep_registration@, @drep_distr@, @delegation_vote@,
--- @gov_action_proposal@, @voting_procedure@, @voting_anchor@,
--- @constitution@, @committee@, @committee_hash@, @committee_member@,
--- @committee_registration@, @committee_de_registration@,
--- @param_proposal@, @treasury_withdrawal@, @event_info@.
+-- | Hasql 'Statement' bindings for the @governance@ extractor tables.
 --
 -- Three flavours appear here:
 --
@@ -16,9 +11,6 @@
 --     @constitution@, @committee@, @param_proposal@, @event_info@) —
 --     the resolver allocates a fresh id per row.
 --   * IDENTITY leaves (everything else) — PostgreSQL fills @id@.
---
--- @event_info@ is never written today; the statements exist so the
--- Follow Writer can be flipped on when a population path lands.
 module DbSync.Db.Statement.Governance
   ( -- * drep_hash
     insertDrepHashRowStmt
@@ -422,6 +414,7 @@ insertTreasuryWithdrawalRowStmt =
 -- * event_info
 -- ---------------------------------------------------------------------------
 
+-- | No extractor populates @event_info@, so nothing calls this statement.
 insertEventInfoRowStmt :: Stmt.Statement (EventInfoId, EventInfo) ()
 insertEventInfoRowStmt =
   Stmt.preparable (insertRowSql eventInfoTableDef) encoder D.noResult

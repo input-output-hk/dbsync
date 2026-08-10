@@ -3,12 +3,13 @@
 
 -- | Schema types for the @epoch_sync_stats@ extractor.
 --
--- The extractor owns two tables, both written by the consumer thread
--- at each epoch-boundary commit:
+-- The extractor owns @epoch_sync_stats@ (blocks/sec, throughput,
+-- phase), written by the consumer thread at each epoch-boundary
+-- commit.
 --
---   * @epoch_sync_stats@ — sync metrics (blocks/sec, throughput, phase).
---   * @epoch_sync_time@ — upstream parity table (epoch number, elapsed
---     seconds, sync state).
+-- 'epochSyncTimeTableDef' describes the upstream @epoch_sync_time@
+-- table for schema comparison only. It is absent from @pdTables@, so
+-- dbsync never creates or writes it.
 module DbSync.Db.Schema.EpochSyncStats
   ( -- * Schema types
     EpochSyncStats (..)
@@ -68,8 +69,7 @@ type instance Key EpochSyncTime = EpochSyncTimeId
 -- * Schema types
 -- ---------------------------------------------------------------------------
 
--- | The @epoch_sync_stats@ table.
--- One row per epoch, recording sync performance metrics.
+-- | One row per epoch, recording sync performance metrics.
 data EpochSyncStats = EpochSyncStats
   { epochSyncStatsEpochNo         :: !Word64
   , epochSyncStatsBlocksProcessed :: !Word64
@@ -80,8 +80,7 @@ data EpochSyncStats = EpochSyncStats
   }
   deriving stock (Eq, Show)
 
--- | The @epoch_sync_time@ table.
--- Upstream parity. Unique on @no@.
+-- | Upstream parity. Unique on @no@.
 data EpochSyncTime = EpochSyncTime
   { epochSyncTimeNo      :: !Word64
   , epochSyncTimeSeconds :: !Word64

@@ -70,9 +70,8 @@ import DbSync.Phase.Type (SyncPhase)
 import DbSync.Resolver (HasResolver)
 import DbSync.Writer (HasWriter)
 
--- | Access the chain's 'Network' from any environment. Read once
--- at startup from the Shelley genesis and stable for the lifetime
--- of a sync.
+-- | The sync reads the 'Network' once at startup from the Shelley
+-- genesis; it is stable for the lifetime of the process.
 class HasNetwork env where
   getNetwork :: env -> Network
 
@@ -80,44 +79,36 @@ class HasNetwork env where
 -- * Types
 -- ---------------------------------------------------------------------------
 
--- | Definition of a single extractor.
---
--- Extractors are the unit of modular extraction — each one owns a set
--- of tables and a processing function that extracts data from a block,
--- resolves foreign key IDs, and writes rows.
+-- | One extractor: the tables it owns, plus the function that fills them.
 data ExtractorDef = ExtractorDef
   { pdName    :: !Text
-      -- ^ Unique extractor name (e.g. "core", "utxo", "governance")
+      -- ^ Unique name, e.g. "core", "utxo", "governance".
   , pdTables  :: ![TableDef]
-      -- ^ Table definitions owned by this extractor
+      -- ^ Tables this extractor owns.
   , pdProcess :: ProcessBlockFn
-      -- ^ Process a block: extract data, resolve IDs, write rows
+      -- ^ Reads the block, resolves FK ids, writes rows.
   }
 
--- | Whether the @cbor@ extractor is active. It is the only consumer of a
--- parsed transaction's raw-CBOR field, so the parser uses this to skip
--- building (and retaining) @tx_cbor@ payloads when nothing will read them.
+-- | The @cbor@ extractor is the only consumer of a parsed transaction's
+-- raw-CBOR field. The parser reads this to skip building (and
+-- retaining) @tx_cbor@ payloads that nothing will read.
 cborCaptureEnabled :: [ExtractorDef] -> Bool
 cborCaptureEnabled = any ((== "cbor") . pdName)
 
--- | Whether the @scripts_datums@ extractor is active. Gates redeemer id
--- assignment and counting: when it is off no @redeemer@ rows are written
--- (the table's sequence may not even exist), so no ids may be drawn.
+-- | Gates redeemer id assignment. When the extractor is off, nothing
+-- writes @redeemer@ rows and the table's sequence may not exist, so
+-- the pipeline must draw no ids from it.
 scriptsDatumsEnabled :: [ExtractorDef] -> Bool
 scriptsDatumsEnabled = any ((== "scripts_datums") . pdName)
 
--- | Whether the @utxo@ extractor is active, and with it the @tx_in@
--- table that carries the redeemer back-references.
+-- | Also gates the @tx_in@ table, which carries the redeemer
+-- back-references.
 utxoEnabled :: [ExtractorDef] -> Bool
 utxoEnabled = any ((== "utxo") . pdName)
 
--- | Process a single block through this extractor.
---
--- Polymorphic over any env that satisfies 'HasResolver',
--- 'HasWriter' and 'HasNetwork', so the same body works in 'IngestM'
--- (COPY-backed) and 'FollowM' (INSERT-backed). The pre-assigned
--- shared IDs and the per-block worker output ride on the
--- 'BlockContext'.
+-- | Polymorphic over any env with 'HasResolver', 'HasWriter' and
+-- 'HasNetwork', so one body works in 'IngestM' (COPY-backed) and
+-- 'FollowM' (INSERT-backed).
 type ProcessBlockFn =
   forall env m.
   ( HasResolver env
@@ -132,42 +123,36 @@ type ProcessBlockFn =
 -- * Block context (pre-assigned shared IDs)
 -- ---------------------------------------------------------------------------
 
--- | A block with pre-assigned shared IDs.
+-- | A block with its shared ids already assigned.
 --
--- The pipeline assigns 'BlockId', 'SlotLeaderId', per-tx 'TxId',
--- and per-output 'TxOutId' centrally. Extractors consume these
--- without needing to know about each other's execution order.
+-- The pipeline assigns 'BlockId', 'SlotLeaderId', per-tx 'TxId' and
+-- per-output 'TxOutId' centrally, so extractors do not depend on each
+-- other's execution order.
 data BlockContext = BlockContext
   { bcBlockId      :: !BlockId
-      -- ^ Pre-assigned id of this block.
   , bcSlotLeaderId :: !SlotLeaderId
-      -- ^ Pre-assigned id of this block's slot leader.
   , bcSlotLeaderNew :: !Bool
       -- ^ 'True' when this slot leader was seen for the first time.
   , bcSlotLeaderPoolHashId :: !(Maybe PoolHashId)
       -- ^ Pool-hash FK for Shelley+ blocks; 'Nothing' for Byron and EBBs.
   , bcPrevBlockId  :: !(Maybe BlockId)
-      -- ^ Id of the previous block; 'Nothing' for the first block of
-      -- the current session.
+      -- ^ 'Nothing' for the first block of the current session.
   , bcGenBlock     :: !GenericBlock
-      -- ^ Parsed block payload.
   , bcTxs          :: ![TxContext]
       -- ^ One entry per transaction, in block order.
   , bcNetwork      :: !Network
-      -- ^ Chain network ID; drives the HRP on Bech32 stake / reward
-      -- encodings produced by extractors.
+      -- ^ Drives the HRP on the Bech32 stake and reward encodings.
   , bcLedgerData   :: !BlockLedgerData
-      -- ^ Worker output for this block. Empty when ledger is OFF.
+      -- ^ Ledger-worker output for this block.
   , bcSyncPhase    :: !SyncPhase
-      -- ^ Drives Ingest vs Follow tx-row construction inside the core extractor.
+      -- ^ Selects Ingest or Follow tx-row construction in the core
+      -- extractor.
   }
 
--- | A transaction with pre-assigned shared IDs.
+-- | A transaction with its shared ids already assigned.
 data TxContext = TxContext
   { tcTxId   :: !TxId
-      -- ^ Pre-assigned id of this transaction.
   , tcGenTx  :: !GenericTx
-      -- ^ Parsed transaction payload.
   , tcOutIds :: ![TxOutId]
       -- ^ One TxOutId per output, same length and order as @txOutputs gtx@.
   , tcOutStakeIds :: ![Maybe StakeAddressId]
@@ -180,10 +165,9 @@ data TxContext = TxContext
       -- failed phase-2 validation — no redeemer rows exist to point at.
   }
 
--- | Look up the pre-assigned redeemer id for a parser annotation
--- (a position into @txRedeemers@). 'Nothing' passes through, and an
--- annotation without a matching id (@scripts_datums@ off) resolves to
--- 'Nothing' so the FK cell stays NULL.
+-- | The 'Word64' is a parser annotation: a position into
+-- @txRedeemers@. An annotation with no matching id (@scripts_datums@
+-- off) gives 'Nothing', so the FK cell stays NULL.
 redeemerIdAt :: TxContext -> Maybe Word64 -> Maybe RedeemerId
 redeemerIdAt tc mIx = do
   ix <- mIx
@@ -193,12 +177,11 @@ redeemerIdAt tc mIx = do
 -- * Per-block ledger output
 -- ---------------------------------------------------------------------------
 
--- | One block's worth of ledger-worker output, consumed by extractors.
+-- | One block's worth of ledger-worker output.
 --
--- 'LedgerDataOff' is the only valid shape when the ledger feature is
--- disabled; the per-block 'Maybe' fields are unconstructible in that
--- case so the impossible "off-with-populated-fields" state is ruled
--- out at the type level.
+-- 'LedgerDataOff' is the only shape available when the ledger feature
+-- is off. The per-block fields are then unconstructible, so the type
+-- rules out the "off with populated fields" state.
 data BlockLedgerData
   = LedgerDataOff
   | LedgerDataOn !LedgerOutputs
@@ -217,22 +200,20 @@ data LedgerOutputs = LedgerOutputs
   , loStakeSlice       :: !Generic.StakeSliceRes
       -- ^ Per-block slice of the "mark" stake distribution.
   , loRegisteredPools  :: !(Set.Set ByteString)
-      -- ^ Raw pool-hash bytes registered in the ledger before this
-      -- block; used to decide the pool_update.active_epoch_no offset.
+      -- ^ Raw pool-hash bytes the ledger registered before this block.
+      -- Decides the @pool_update.active_epoch_no@ offset.
   , loGovExpiresAfter  :: !(Maybe Word64)
       -- ^ Gov-action lifetime (in epochs) from this block's protocol
       -- params; 'Nothing' outside Conway. Drives
-      -- gov_action_proposal.expiration.
+      -- @gov_action_proposal.expiration@.
   , loCommitteeMembers :: !(Map.Map (ByteString, Word64) [ProposedCommitteeMember])
       -- ^ Full resolved committee per committee-updating proposal in
       -- this block, keyed by @(proposal tx hash, proposal index)@.
   }
 
--- | Default for the ledger-disabled case.
 emptyBlockLedgerData :: BlockLedgerData
 emptyBlockLedgerData = LedgerDataOff
 
--- | All-zero/Nothing 'LedgerOutputs'.
 emptyLedgerOutputs :: LedgerOutputs
 emptyLedgerOutputs = LedgerOutputs
   { loDepositsMap      = emptyDepositsMap
@@ -245,63 +226,50 @@ emptyLedgerOutputs = LedgerOutputs
   , loCommitteeMembers = Map.empty
   }
 
--- | Per-tx deposits map; 'emptyDepositsMap' when ledger is off.
 blockDepositsMap :: BlockLedgerData -> DepositsMap
 blockDepositsMap = \case
   LedgerDataOff   -> emptyDepositsMap
   LedgerDataOn lo -> loDepositsMap lo
 
--- | Protocol-param stake-key deposit; 'Nothing' when ledger is off.
 blockStakeKeyDeposit :: BlockLedgerData -> Maybe Coin
 blockStakeKeyDeposit = \case
   LedgerDataOff   -> Nothing
   LedgerDataOn lo -> loStakeKeyDeposit lo
 
--- | Protocol-param pool deposit; 'Nothing' when ledger is off.
 blockPoolDeposit :: BlockLedgerData -> Maybe Coin
 blockPoolDeposit = \case
   LedgerDataOff   -> Nothing
   LedgerDataOn lo -> loPoolDeposit lo
 
--- | Plutus execution prices; 'Nothing' when ledger is off or pre-Alonzo.
 blockPrices :: BlockLedgerData -> Maybe Prices
 blockPrices = \case
   LedgerDataOff   -> Nothing
   LedgerDataOn lo -> loPrices lo
 
--- | Per-block stake slice; 'Generic.NoSlices' when ledger is off
--- and for Byron / pre-Shelley blocks.
 blockStakeSlice :: BlockLedgerData -> Generic.StakeSliceRes
 blockStakeSlice = \case
   LedgerDataOff   -> Generic.NoSlices
   LedgerDataOn lo -> loStakeSlice lo
 
--- | Pool hashes registered in the ledger before this block; empty
--- when ledger is off.
 blockRegisteredPools :: BlockLedgerData -> Set.Set ByteString
 blockRegisteredPools = \case
   LedgerDataOff   -> Set.empty
   LedgerDataOn lo -> loRegisteredPools lo
 
--- | Gov-action lifetime (epochs) from this block's protocol params;
--- 'Nothing' when ledger is off or outside Conway.
 blockGovExpiresAfter :: BlockLedgerData -> Maybe Word64
 blockGovExpiresAfter = \case
   LedgerDataOff   -> Nothing
   LedgerDataOn lo -> loGovExpiresAfter lo
 
--- | Full resolved committee per committee-updating proposal in this
--- block; empty when ledger is off or outside Conway.
 blockCommitteeMembers
   :: BlockLedgerData -> Map.Map (ByteString, Word64) [ProposedCommitteeMember]
 blockCommitteeMembers = \case
   LedgerDataOff   -> Map.empty
   LedgerDataOn lo -> loCommitteeMembers lo
 
--- | Drain the worker's next per-block 'BlockApplyData' and project it
--- onto 'BlockLedgerData'. Blocks until one is available; the
--- ledger-OFF arm returns 'emptyBlockLedgerData' without touching any
--- queue.
+-- | Take the worker's next per-block 'BlockApplyData'. Blocks until
+-- one arrives; the ledger-off arm returns 'emptyBlockLedgerData'
+-- without touching a queue.
 takeBlockLedgerData :: HasLedgerEnv -> IO BlockLedgerData
 takeBlockLedgerData = \case
   LedgerDisabled _   -> pure emptyBlockLedgerData
@@ -324,12 +292,11 @@ takeBlockLedgerData = \case
 -- * Accessor classes
 -- ---------------------------------------------------------------------------
 
--- | Read the active extractor list from the env.
 class HasExtractors env where
   getExtractors :: env -> [ExtractorDef]
 
--- | Fetch per-block ledger data. Ingest+ON blocks until the worker
--- has applied the block; ledger-OFF returns 'emptyBlockLedgerData'.
+-- | With the ledger on, this blocks until the worker applies the
+-- block; with it off, it returns 'emptyBlockLedgerData'.
 class HasLedgerData env where
   getLedgerData :: env -> GenericBlock -> IO BlockLedgerData
 
@@ -337,33 +304,26 @@ class HasLedgerData env where
 -- * ExtractState
 -- ---------------------------------------------------------------------------
 
--- | Mutable state threaded during 'IngestChainHistory'.
+-- | Mutable state for 'IngestChainHistory', which assigns ids from
+-- monotonic counters. 'FollowingChainTip' does not use it; there the
+-- 'IdResolver' assigns ids through PostgreSQL.
 --
--- Contains the monotonic ID counters and tracking state that ensure
--- stable, deterministic ID assignment.
---
--- Deduplication state ('DedupStores') lives separately on top of
--- the shared 'LsmSession' and is passed directly to the resolver,
--- not through this 'IORef'-wrapped record.
---
--- NOT used during 'FollowingChainTip' — the 'IdResolver' handles
--- ID assignment via PostgreSQL directly.
+-- Dedup state ('DedupStores') sits on the shared 'LsmSession' and goes
+-- straight to the resolver, not through this record.
 data ExtractState = ExtractState
   { esIdCounters     :: !IdCounters
-      -- ^ Per-table monotonic ID counters
   , esLastBlockId    :: !(Maybe Int64)
-      -- ^ ID of the most recently processed block (for previous_id).
-      --   'Nothing' before any block has been processed.
+      -- ^ Id of the last processed block, for @previous_id@. 'Nothing'
+      --   before the first block.
   , esCostModelCache :: !(Map ByteString Int64)
-      -- ^ Hash → cost_model.id dedup cache. Populated at boot from
-      --   the @cost_model@ table when resuming an existing sync;
-      --   empty on a fresh start.
+      -- ^ Hash to @cost_model.id@. The boot path fills it from the
+      --   @cost_model@ table when a sync resumes; it starts empty on a
+      --   fresh sync.
   , esGovActionProposalCache :: !(Map (ByteString, Word64) Int64)
-      -- ^ @(proposing tx hash, proposal index) -> gov_action_proposal.id@
-      --   so vote rows in later blocks can resolve their target
-      --   proposal without a SELECT. Populated as proposals are
-      --   written; rebuilt at boot from @tx.hash@ +
-      --   @gov_action_proposal.index@.
+      -- ^ @(proposing tx hash, proposal index) -> gov_action_proposal.id@,
+      --   so votes in later blocks resolve their target proposal
+      --   without a SELECT. The boot path rebuilds it from @tx.hash@
+      --   and @gov_action_proposal.index@.
   , esCurrentCommitteeId    :: !(Maybe Int64)
       -- ^ @committee.id@ representing the currently enacted committee,
       --   stamped onto @epoch_state.committee_id@ at the next boundary.
@@ -379,13 +339,12 @@ data ExtractState = ExtractState
       --   at the next boundary.
   , esGovExpiresAfter       :: !(Maybe Word64)
       -- ^ Latest @apGovExpiresAfter@ (gov-action lifetime in epochs)
-      --   reported by the ledger worker. Used by the proposal pass
-      --   to compute @gov_action_proposal.expiration@.
+      --   from the ledger worker. The proposal pass reads it to
+      --   compute @gov_action_proposal.expiration@.
   }
   deriving stock (Eq, Show)
 
--- | Initial state for a brand-new sync — every counter at 1, no
--- previously-seen block.
+-- | Every counter starts at 1, with no previous block.
 freshExtractState :: ExtractState
 freshExtractState = ExtractState
   { esIdCounters             = freshIdCounters

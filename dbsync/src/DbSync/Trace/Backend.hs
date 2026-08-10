@@ -1,10 +1,5 @@
--- | Tracer backend constructors.
---
--- Provides concrete tracer implementations: stderr (human-readable),
--- null (silent), and test (capture to IORef). The stderr tracer
--- prepends a UTC timestamp and serialises writes through an 'MVar'
--- lock so concurrent threads can't interleave their bytes on the
--- buffered handle.
+-- | Concrete tracers: stderr, null, and a test tracer that captures
+-- into an 'IORef'.
 module DbSync.Trace.Backend
   ( -- * Tracer constructors
     mkStdErrTracer
@@ -33,22 +28,18 @@ mkStdErrTracer minSeverity = do
       ts <- formatTimestamp
       writeLine lock stderr (ts <> " " <> formatLogMsg msg)
 
--- | Silent tracer — discards all messages.
 mkNullTracer :: AppTracer
 mkNullTracer = nullTracer
 
--- | Test tracer — captures messages into an IORef for assertions.
--- No timestamps — tests check message content, not timing.
+-- | No timestamps: tests assert on message content, not timing.
 mkTestTracer :: IORef [LogMsg] -> AppTracer
 mkTestTracer ref = Tracer $ \msg ->
   modifyIORef' ref (msg :)
 
 -- * Internal
 
--- | Atomically write a single line to the handle. The 'MVar' makes
--- the whole @hPutStrLn@ critical-section visible to one thread at a
--- time so concurrent loggers can't interleave their bytes on the
--- buffered handle.
+-- | The 'MVar' admits one thread at a time, so concurrent loggers
+-- cannot interleave their bytes on the buffered handle.
 writeLine :: MVar () -> Handle -> [Char] -> IO ()
 writeLine lock h line = withMVar lock $ \_ -> hPutStrLn h line
 

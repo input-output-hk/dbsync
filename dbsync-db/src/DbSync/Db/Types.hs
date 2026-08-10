@@ -3,20 +3,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Domain-specific newtypes, enum types, and COPY\/hasql encoding
--- helpers for database column types.
+-- helpers, shared by the @Schema.<Domain>@ modules.
 --
--- This module groups types referenced from multiple
--- @Schema/<Domain>.hs@ modules so the schema modules can import them
--- without a dependency cycle.
---
--- __Encoding rule for @numeric@ columns:__ 'DbLovelace' \/ 'DbWord64' \/
--- 'Word128' are stored in PostgreSQL @numeric@ and must be encoded\/
--- decoded through 'Sci.Scientific'. Going via @int8@ silently
--- truncates aggregation results (e.g. @SUM(tx.out_sum)@) once they
--- exceed @maxBound \@Int64@. The decoders here use
--- 'Sci.toBoundedInteger' \/ 'floor' rather than 'Sci.coefficient' so
--- a value normalised by PostgreSQL (e.g. @Scientific 38 16@ for
--- @380_000_000_000_000_000@) is reconstructed correctly.
+-- __Encoding rule for @numeric@ columns:__ 'DbLovelace', 'DbWord64' and
+-- 'Word128' must go through 'Sci.Scientific'. An @int8@ round-trip
+-- silently truncates an aggregate such as @SUM(tx.out_sum)@ once it
+-- passes @maxBound \@Int64@. The decoders use 'Sci.toBoundedInteger' and
+-- 'floor', not 'Sci.coefficient', so a value PostgreSQL normalised — for
+-- example @Scientific 38 16@ — reconstructs correctly.
 module DbSync.Db.Types
   ( -- * Numeric domain types
     DbLovelace (..)
@@ -127,58 +121,41 @@ import DbSync.Db.Loader.Encoder (bInt64)
 -- * Numeric domain types
 -- ---------------------------------------------------------------------------
 
--- | Lovelace values stored as PostgreSQL @numeric(20,0)@.
---
--- Uses a newtype rather than raw 'Word64' so that:
---
---   * The column type is unambiguous at the Haskell level.
---   * Encoders\/decoders can be swapped in later without changing call sites.
---   * Values that exceed @Int64@ range are handled correctly via @numeric@.
+-- | Lovelace values stored as PostgreSQL @numeric(20,0)@. The newtype
+-- keeps the column type unambiguous and carries values past @Int64@ range.
 newtype DbLovelace = DbLovelace { unDbLovelace :: Word64 }
   deriving stock (Eq, Ord)
   deriving newtype (Show, Read)
 
--- | Large unsigned integers stored as PostgreSQL @numeric@.
---
--- Same motivation as 'DbLovelace' but for non-monetary Word64 columns
--- (e.g. @invalid_before@, @invalid_hereafter@).
+-- | Large unsigned integers stored as PostgreSQL @numeric@, for
+-- non-monetary columns such as @invalid_before@ and @invalid_hereafter@.
 newtype DbWord64 = DbWord64 { unDbWord64 :: Word64 }
   deriving stock (Eq, Ord)
   deriving newtype (Show, Read, Num)
 
--- | A signed 65-bit integer stored as PostgreSQL @numeric@.
+-- | A signed 65-bit integer stored as PostgreSQL @numeric@, for the
+-- signed ledger amounts in @ada_pots@, @pot_transfer@,
+-- @treasury.amount@, @reserve.amount@ and @ma_tx_mint.quantity@.
 --
--- 'DbInt65' is the in-memory representation upstream uses for signed
--- amounts that may briefly exceed 'Int64' range during ledger
--- accounting (e.g. @ada_pots.*@, @pot_transfer.*@,
--- @treasury.amount@, @reserve.amount@, @ma_tx_mint.quantity@ when
--- burning more than was minted in the same epoch).
+-- Bit 63 of the 'Word64' is the sign and the other 63 bits are the
+-- magnitude. 'minBound' is special-cased as sign bit set with magnitude
+-- zero, so it survives the 'abs' that would otherwise overflow.
 --
--- The encoding uses a 'Word64' with bit 63 as the sign bit and the
--- remaining 63 bits as the magnitude. 'minBound' is special-cased
--- (sign bit set, magnitude zero) so it survives the 'abs' that would
--- otherwise overflow.
---
--- Most callers never reach for the constructor — use 'toDbInt65' to
--- pack an 'Int64' and 'fromDbInt65' to recover one. The derived
--- 'Show' / 'Read' instances surface the raw 'Word64' bit pattern;
--- prefer 'fromDbInt65' for human-readable output.
+-- Use 'toDbInt65' and 'fromDbInt65' rather than the constructor. The
+-- derived 'Show' and 'Read' expose the raw bit pattern.
 newtype DbInt65 = DbInt65 { unDbInt65 :: Word64 }
   deriving stock (Eq, Ord)
   deriving newtype (Show, Read)
 
--- | Pack an 'Int64' into the sign-magnitude 'DbInt65' representation.
---
--- The 'minBound' edge case (negate would overflow) is encoded as
--- @sign bit set, magnitude zero@ — the only representation 'fromDbInt65'
--- maps back to 'minBound'.
+-- | 'minBound' would overflow under negation, so it encodes as sign bit
+-- set with magnitude zero. That is the only pattern 'fromDbInt65' maps
+-- back to 'minBound'.
 toDbInt65 :: Int64 -> DbInt65
 toDbInt65 n
   | n >= 0          = DbInt65 (fromIntegral n)
   | n == minBound   = DbInt65 (setBit 0 63)
   | otherwise       = DbInt65 (setBit (fromIntegral (abs n)) 63)
 
--- | Recover the 'Int64' from a 'DbInt65'.
 fromDbInt65 :: DbInt65 -> Int64
 fromDbInt65 (DbInt65 w)
   | testBit w 63 =
@@ -192,9 +169,8 @@ fromDbInt65 (DbInt65 w)
 -- * Enum types
 -- ---------------------------------------------------------------------------
 --
--- Each enum is paired with a COPY builder ('b<Name>') a few sections
--- down. Hasql encoders\/decoders are deliberately deferred to the
--- per-schema-module Statement wiring (Phase 2 of SCHEMA-PLAN.md).
+-- Each enum has a COPY builder ('b\<Name>') and a hasql codec further
+-- down. The two must emit the same strings.
 
 -- | What a Plutus script is being run for. Stored in @redeemer.purpose@.
 data ScriptPurpose
@@ -308,27 +284,20 @@ newtype VoteMetaHash = VoteMetaHash { unVoteMetaHash :: ByteString }
 -- * COPY encoding helpers
 -- ---------------------------------------------------------------------------
 
--- | Encode a 'DbInt65' as a decimal-ASCII signed integer.
---
--- The wire format is just the 'Int64' decimal — PostgreSQL's
--- @numeric@ accepts that without ceremony. The bit-packing in
--- 'DbInt65' is a Haskell-side memory optimisation only.
+-- | The wire value is the plain 'Int64' decimal, which @numeric@ accepts.
+-- The bit-packing in 'DbInt65' is a Haskell-side memory optimisation only.
 {-# INLINE bInt65 #-}
 bInt65 :: DbInt65 -> Builder
 bInt65 = bInt64 . fromDbInt65
 
--- | Encode a 'Word128' as decimal ASCII.
---
--- The only column that uses this is @epoch.out_sum@, which can grow
--- past 'maxBound \@Word64' once the cumulative output sum of an
--- entire epoch is involved. PostgreSQL stores it as @numeric(39,0)@.
+-- | Only @epoch.out_sum@ uses this. An epoch's cumulative output sum can
+-- pass @maxBound \@Word64@, so the column is @numeric(39,0)@.
 {-# INLINE bWord128 #-}
 bWord128 :: Word128 -> Builder
 bWord128 = byteString . BS8.pack . show . toInteger
 
--- | COPY-builder for a 'Rational' that lands in a @numeric@ column.
--- Emits plain fixed-notation decimal via 'rationalToScientific', so
--- the wire value matches 'rationalAsNumericEncoder'.
+-- | Writes fixed-notation decimal through 'rationalToScientific', so the
+-- wire value matches 'rationalAsNumericEncoder'.
 {-# INLINE bRational #-}
 bRational :: Rational -> Builder
 bRational =
@@ -338,10 +307,9 @@ bRational =
 -- ** Per-enum COPY builders
 -- ---------------------------------------------------------------------------
 --
--- The PG strings here are the source of truth — the original schema's
--- @CHECK (column IN (…))@ constraints reject any other value, so a
--- mismatch between the Haskell constructor and the PG string is a
--- silent data-corruption bug.
+-- The strings here are the source of truth for the column values. The
+-- columns are plain @text@ with no @CHECK@, so a mismatch between a
+-- constructor and its string corrupts data silently.
 
 bScriptPurpose :: ScriptPurpose -> Builder
 bScriptPurpose = byteString . \case
@@ -444,37 +412,29 @@ word128ToScientific = fromInteger . toInteger
 -- * Hasql encoders / decoders for numeric domain types
 -- ---------------------------------------------------------------------------
 
--- | 'E.Value'-level encoder for 'DbLovelace' against a @numeric@ column.
--- Use this inside @mconcat@ encoders that need a 'E.Value' (e.g. when
--- the field is wrapped in 'E.nullable').
+-- | The 'E.Value' form, for use inside an @mconcat@ encoder that wraps the
+-- field in 'E.nullable'.
 dbLovelaceValueEncoder :: E.Value DbLovelace
 dbLovelaceValueEncoder = (word64ToScientific . unDbLovelace) >$< E.numeric
 
--- | 'D.Value'-level decoder for 'DbLovelace'. Pair to 'dbLovelaceValueEncoder'.
 dbLovelaceValueDecoder :: D.Value DbLovelace
 dbLovelaceValueDecoder = DbLovelace . scientificToWord64 <$> D.numeric
 
--- | 'E.Params'-level encoder for a non-nullable 'DbLovelace' column.
 dbLovelaceEncoder :: E.Params DbLovelace
 dbLovelaceEncoder = E.param (E.nonNullable dbLovelaceValueEncoder)
 
--- | Row decoder consuming exactly one non-null 'DbLovelace' column.
 dbLovelaceDecoder :: D.Row DbLovelace
 dbLovelaceDecoder = D.column (D.nonNullable dbLovelaceValueDecoder)
 
--- | 'E.Params'-level encoder for a nullable 'DbLovelace' column.
 maybeDbLovelaceEncoder :: E.Params (Maybe DbLovelace)
 maybeDbLovelaceEncoder = E.param (E.nullable dbLovelaceValueEncoder)
 
--- | Row decoder consuming exactly one nullable 'DbLovelace' column.
 maybeDbLovelaceDecoder :: D.Row (Maybe DbLovelace)
 maybeDbLovelaceDecoder = D.column (D.nullable dbLovelaceValueDecoder)
 
--- | 'E.Value'-level encoder for 'DbWord64' against a @numeric@ column.
 dbWord64ValueEncoder :: E.Value DbWord64
 dbWord64ValueEncoder = (word64ToScientific . unDbWord64) >$< E.numeric
 
--- | 'D.Value'-level decoder for 'DbWord64'. Pair to 'dbWord64ValueEncoder'.
 dbWord64ValueDecoder :: D.Value DbWord64
 dbWord64ValueDecoder = DbWord64 . scientificToWord64 <$> D.numeric
 
@@ -490,32 +450,29 @@ maybeDbWord64Encoder = E.param (E.nullable dbWord64ValueEncoder)
 maybeDbWord64Decoder :: D.Row (Maybe DbWord64)
 maybeDbWord64Decoder = D.column (D.nullable dbWord64ValueDecoder)
 
--- | 'DbInt65' is a sign-magnitude 'Word64' that always fits in 'Int64',
--- so it rides the @int8@ column type — not @numeric@. The schema
--- columns it backs (@ada_pots.*@, @pot_transfer.*@, @treasury.amount@,
--- @reserve.amount@) are still declared @numeric@; PostgreSQL accepts
--- the implicit @int8@ → @numeric@ cast on input, and we recover
--- exactness on read because individual rows always fit in 'Int64'.
+-- | 'DbInt65' always fits in 'Int64', so this codec uses @int8@, not
+-- @numeric@. The columns stay @numeric@: PostgreSQL applies the implicit
+-- @int8@ → @numeric@ cast on input, and the read stays exact because one
+-- row never exceeds 'Int64'.
 dbInt65Encoder :: E.Value DbInt65
 dbInt65Encoder = fromDbInt65 >$< E.int8
 
 dbInt65Decoder :: D.Value DbInt65
 dbInt65Decoder = toDbInt65 <$> D.int8
 
--- | 'Word128' encoder for the @epoch.out_sum@ column (and any other
--- @numeric(39,0)@ columns). Goes through 'Sci.Scientific' so values
--- larger than 'maxBound' @Word64' round-trip correctly.
+-- | For @epoch.out_sum@ and any other @numeric(39,0)@ column. It goes
+-- through 'Sci.Scientific', so a value larger than @maxBound \@Word64@
+-- round-trips correctly.
 word128Encoder :: E.Value Word128
 word128Encoder = word128ToScientific >$< E.numeric
 
 word128Decoder :: D.Value Word128
 word128Decoder = scientificToWord128 <$> D.numeric
 
--- | Fractional-digit cap when encoding a 'Rational' to @numeric@.
--- 80 covers every terminating decimal with a 'Word64'-bounded
--- denominator (at most 63 digits), so ledger rationals encode
--- exactly; non-terminating expansions truncate here instead of
--- looping.
+-- | Fractional-digit cap when encoding a 'Rational' to @numeric@. 80
+-- covers every terminating decimal with a 'Word64'-bounded denominator,
+-- which is at most 63 digits, so a ledger rational encodes exactly. A
+-- non-terminating expansion truncates here instead of looping.
 rationalNumericScale :: Int
 rationalNumericScale = 80
 
@@ -540,11 +497,9 @@ maybeRationalAsNumericEncoder = E.param (E.nullable rationalAsNumericEncoder)
 maybeRationalAsNumericDecoder :: D.Row (Maybe Rational)
 maybeRationalAsNumericDecoder = D.column (D.nullable rationalAsNumericDecoder)
 
--- | 'Double' encoder against a @numeric@ column.
 doubleAsNumericEncoder :: E.Value Double
 doubleAsNumericEncoder = Sci.fromFloatDigits >$< E.numeric
 
--- | 'Double' decoder against a @numeric@ column.
 doubleAsNumericDecoder :: D.Value Double
 doubleAsNumericDecoder = Sci.toRealFloat <$> D.numeric
 
@@ -552,9 +507,8 @@ doubleAsNumericDecoder = Sci.toRealFloat <$> D.numeric
 -- * Hasql encoders / decoders for enum types
 -- ---------------------------------------------------------------------------
 --
--- Enums hit PostgreSQL as plain @text@. The string values must match
--- the ones in the per-enum COPY builder above; drift between them
--- corrupts data silently.
+-- Every string here must match the per-enum COPY builder above. Drift
+-- between the two corrupts data silently.
 
 scriptPurposeEncoder :: E.Value ScriptPurpose
 scriptPurposeEncoder = scriptPurposeToText >$< E.text
@@ -711,9 +665,8 @@ anchorTypeDecoder = D.refine textToAnchorType D.text
 -- * Hasql encoders / decoders for newtype wrappers
 -- ---------------------------------------------------------------------------
 
--- | 'VoteUrl' is a thin newtype around 'Text' — encode\/decode as
--- a plain @text@ column. Wrapping at the Haskell level gives us
--- type safety without any wire-format ceremony.
+-- | 'VoteUrl' rides a plain @text@ column; the newtype adds no wire
+-- ceremony.
 voteUrlEncoder :: E.Value VoteUrl
 voteUrlEncoder = unVoteUrl >$< E.text
 

@@ -46,20 +46,17 @@ data SrcInfo = SrcInfo
   }
   deriving stock (Eq, Show)
 
--- | Structured log message with severity, component, and optional source location.
 data LogMsg = LogMsg
   { lmSeverity  :: !Severity
-  , lmComponent :: !Text        -- ^ "IngestChainHistory", "LoaderStream", etc.
-  , lmMessage   :: !Text
+  , lmComponent :: !Text  -- ^ "IngestChainHistory", "LoaderStream", etc.
+  , lmMessage   :: !Text  -- ^ Rendered line, without severity or component.
   }
   deriving stock (Show)
 
--- | The tracer type used throughout the application — contra-tracer.
 type AppTracer = Tracer IO LogMsg
 
--- | Parse the profile's @logging.level@ string. Case-insensitive;
--- unrecognised values fall back to 'Info' so a typo doesn't break
--- the boot.
+-- | Parse the config's @logging.level@ string. Case-insensitive. An
+-- unknown value falls back to 'Info', so a typo cannot break the boot.
 severityFromText :: Text -> Severity
 severityFromText t = case Text.toLower (Text.strip t) of
   "debug"   -> Debug
@@ -69,9 +66,7 @@ severityFromText t = case Text.toLower (Text.strip t) of
   "error"   -> Error
   _         -> Info
 
--- | Emit an 'Info' log line through an 'AppTracer'. Used by
--- IO-level helpers (boot, schema setup, resource shutdown) that
--- don't have a phase env in scope.
+-- | For boot, schema setup and shutdown code that has no phase env.
 logInfoIO :: AppTracer -> Text -> Text -> IO ()
 logInfoIO tracer component msg =
   traceWith tracer (LogMsg Info component msg)
@@ -86,11 +81,9 @@ logErrorIO :: AppTracer -> Text -> Text -> IO ()
 logErrorIO tracer component msg =
   traceWith tracer (LogMsg Error component msg)
 
--- | Extract the top frame of a 'CallStack' into 'SrcInfo'.
---
--- The function name comes from the first element of @getCallStack@'s
--- tuple (the name of the function that pushed the frame), not from
--- the 'SrcLoc'.
+-- | Extract the top frame of a 'CallStack'. The function name comes
+-- from the first element of the @getCallStack@ tuple, which names the
+-- function that pushed the frame; the 'SrcLoc' does not carry it.
 captureCallSite :: CallStack -> SrcInfo
 captureCallSite cs = case getCallStack cs of
   (fn, loc) : _ ->

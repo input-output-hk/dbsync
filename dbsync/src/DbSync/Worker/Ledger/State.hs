@@ -11,22 +11,13 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 
--- | Core ledger-state operations: the 'LedgerDB' buffer, block
--- application, and rollback. Sits between the consensus LedgerDB V2
--- machinery and the sync engine. Owns:
+-- | Core ledger-state operations: the 'LedgerDB' checkpoint buffer,
+-- block application, and rollback. Sits between the consensus LedgerDB
+-- V2 machinery and the sync engine.
 --
---   * The in-memory 'LedgerDB' checkpoint buffer (push, prune, current
---     tip, atomic read\/write against 'leStateVar').
---   * 'applyBlock' \/ 'applyBlockAndSnapshot' — tick the chain to the
---     block's slot, reapply against the LSM tables, and return an
---     'ApplyResult' for the extractors.
---   * 'loadLedgerAtPoint' — rollback: walk the in-memory buffer first,
---     then fall back to a disk-snapshot load when the target predates
---     the buffer.
---
--- Small ledger projections (@getPrices@, @findAdaPots@,
--- @findProposedCommittee@, @getStakeSlice@) live here, each pulling one
--- value out of a 'CardanoLedgerState' or event stream.
+-- Small read-only helpers (@getPrices@, @findAdaPots@,
+-- @findProposedCommittee@, @getStakeSlice@) live here too. Each pulls
+-- one value out of a 'CardanoLedgerState' or an event stream.
 module DbSync.Worker.Ledger.State
   ( -- * LedgerDB management
     pushLedgerDB
@@ -201,36 +192,30 @@ import DbSync.Util (maybeToStrictMaybe)
 -- * LedgerDB management
 -- ---------------------------------------------------------------------------
 
--- | Hard cap on how many recent 'DbSyncStateRef' values the in-memory
--- buffer retains once a Follow path is live. Matching this against
--- @k=2160@ would be ideal, but keeping 2160 full state references in
--- RAM is not cheap; 100 gives fast rollback within a tenth of a
--- security-parameter window and forces deeper rollbacks through the
+-- | Hard cap on the checkpoint buffer once a Follow path is live.
+-- Matching @k=2160@ would be ideal, but 2160 full state references in
+-- RAM are not cheap. 100 gives fast rollback within a tenth of a
+-- security-parameter window and sends deeper rollbacks to the
 -- disk-snapshot path.
 ledgerDbCheckpointBufferSize :: Int
 ledgerDbCheckpointBufferSize = 100
 
--- | Buffer cap during 'IngestChainHistory'. Rollbacks are impossible
--- below @nodeTip − k@ (the consumer panics on one), so the buffer is
--- pure overhead during ingest — and each retained ref pins an open
--- LSM tables handle. Two slots rather than one: while a snapshot
--- write holds the oldest generation open (via @srCanClose@), the
--- worker can still advance into the spare slot instead of blocking
--- for the whole write; the extra generation is only held while a
--- snapshot writes. The buffer grows to
--- 'ledgerDbCheckpointBufferSize' naturally within ~100 blocks of
--- the Follow handoff.
+-- | Buffer cap during 'IngestChainHistory'. Rollbacks below
+-- @nodeTip − k@ are impossible (the consumer panics on one), so the
+-- buffer is pure overhead here, and every retained ref pins an open
+-- LSM tables handle.
+--
+-- Two slots, not one: while a snapshot write holds the oldest
+-- generation open through @srCanClose@, the worker advances into the
+-- spare slot instead of blocking for the whole write.
 ingestLedgerDbCheckpointBufferSize :: Int
 ingestLedgerDbCheckpointBufferSize = 2
 
--- | Push a new 'DbSyncStateRef' onto the newest end of the
--- 'LedgerDB', then prune any entries that fall outside the supplied
--- cap.
+-- | Push a new 'DbSyncStateRef' onto the newest end of the 'LedgerDB',
+-- then prune entries beyond the cap.
 --
--- Returns the new 'LedgerDB' along with any pruned refs whose
--- 'LedgerTablesHandle' the caller is responsible for closing
--- (subject to invariant I3 — the snapshot writer must release
--- 'srCanClose' before the close is permitted).
+-- The caller owns the 'LedgerTablesHandle' of every pruned ref and must
+-- close it, but only after the snapshot writer sets 'srCanClose'.
 pushLedgerDB :: Int -> LedgerDB -> DbSyncStateRef -> (LedgerDB, [DbSyncStateRef])
 pushLedgerDB cap db sref =
   pruneLedgerDb cap $
@@ -244,14 +229,9 @@ pruneLedgerDb k (LedgerDB s) =
    in (LedgerDB kept, dropped)
 {-# INLINE pruneLedgerDb #-}
 
--- | Polymorphic spine-only logic underlying 'pruneLedgerDb'. Split
--- a 'StrictSeq' at index @k@; return the @k@ newest along with the
--- older ones as a plain list.
---
--- Exported (above 'pruneLedgerDb') so tests can exercise the
--- shape-only behaviour against simple element types — constructing
--- a 'DbSyncStateRef' just to test sequence slicing would require an
--- LSM session (Phase 6 fixture territory).
+-- | Spine-only logic under 'pruneLedgerDb'. Exported so tests can
+-- check the slicing against simple element types; a 'DbSyncStateRef'
+-- would need a live LSM session.
 pruneStrictSeq :: Int -> StrictSeq.StrictSeq a -> (StrictSeq.StrictSeq a, [a])
 pruneStrictSeq k s =
   let (kept, dropped) = StrictSeq.splitAt k s
@@ -260,11 +240,9 @@ pruneStrictSeq k s =
 
 -- | Newest 'DbSyncStateRef' in the buffer.
 --
--- Partial on an empty buffer, which the system maintains as an
--- invariant: the 'LedgerDB' is initialised with the genesis ref at
--- boot and the buffer is only ever re-populated (never emptied) by
--- the rollback path. An empty buffer at this call site is therefore
--- a programmer error and results in a panic.
+-- Partial: boot seeds the buffer with the genesis ref and the rollback
+-- path only ever re-populates it, so an empty buffer here is a
+-- programmer error and panics.
 ledgerDbCurrent :: LedgerDB -> DbSyncStateRef
 ledgerDbCurrent (LedgerDB s) =
   case s of
@@ -279,10 +257,9 @@ writeLedgerState mDb = do
   env <- ask
   liftIO $ atomically $ writeTVar (leStateVar env) mDb
 
--- | Read the newest 'ExtLedgerState' out of the buffer. Throws via
--- STM if the buffer hasn't been initialised yet (pre-boot); callers
--- downstream of 'mkHasLedgerEnv' + genesis init should never see
--- that, so we treat it as a programmer error.
+-- | Read the newest 'ExtLedgerState' out of the buffer. Throws through
+-- STM when the buffer is not initialised yet. Callers downstream of
+-- 'mkHasLedgerEnv' plus genesis init never see that.
 readCurrentStateUnsafe
   :: LedgerM (ExtLedgerState (CardanoBlock StandardCrypto) EmptyMK)
 readCurrentStateUnsafe = do
@@ -303,16 +280,13 @@ readStateUnsafe env = do
 -- * Environment construction
 -- ---------------------------------------------------------------------------
 
--- | Construct a 'HasLedgerEnv' in the 'LedgerEnabled' arm: opens an
--- LSM session under the configured state directory, builds the
--- consensus 'SnapshotManager', wires up the genesis-init and
--- snapshot-load callbacks, and allocates all the in-process
--- coordination primitives.
+-- | Construct a 'HasLedgerEnv' in the 'LedgerEnabled' arm: open an LSM
+-- session under the state directory, build the consensus
+-- 'SnapshotManager', wire the genesis-init and snapshot-load
+-- callbacks, and allocate the in-process coordination primitives.
 --
--- Per decision D1 (LSM only) the 'LedgerBackend' is always
--- 'LedgerBackendLSM'; the in-memory branch was rejected at config
--- parse time. We still take the backend value as input so a future
--- knob (\"use a different LSM directory\") can flow through.
+-- The 'LedgerBackend' is always 'LedgerBackendLSM'; config parsing
+-- rejects anything else. It carries the optional LSM directory.
 mkHasLedgerEnv
   :: AppTracer
   -> Consensus.ProtocolInfo (CardanoBlock StandardCrypto)
@@ -341,15 +315,12 @@ mkHasLedgerEnv
     epochWait       <- newEmptyTMVarIO
     snapshotQueue   <- newTBQueueIO snapshotQueueBound
 
-    -- One snapshot, two directories — both halves required, neither a duplicate:
+    -- One snapshot, two directories. Both halves are required:
     --   <dir>/snapshot-headers/<slot>/  ExtLedgerState minus UTxO, plus
-    --     utxoSize + checksum. The entry door on resume; without it we'd
-    --     replay from genesis.
+    --     utxoSize + checksum. The entry door on resume.
     --   <dir>/lsm/snapshots/<slot>/     UTxO tables.
-    -- Retention is bounded by 'snapshotRetention' (currently 3).
-    -- 'LSM.saveSnapshot' rejects pre-existing dirs and the load path
-    -- is upstream's V2 LSM 'implTakeSnapshot', so the two halves can't
-    -- be merged.
+    -- 'LSM.saveSnapshot' rejects pre-existing dirs and the load path is
+    -- upstream's V2 LSM 'implTakeSnapshot', so the halves cannot merge.
     let snapshotsDir = dir </> "snapshot-headers"
     createDirectoryIfMissing True snapshotsDir
 
@@ -455,27 +426,23 @@ mkHasLedgerEnv
     snapshotQueueBound :: Natural
     snapshotQueueBound = 4
 
-    -- Each entry is a small, NF-forced 'BoundaryApplyData' projection
-    -- (never a full 'ApplyResult'), and the replay window suppresses
-    -- the enqueue, so this only absorbs the rare case where the
-    -- consumer briefly lags a boundary. Look-ahead is capped by the
-    -- receiver-to-worker queue, so few boundaries are ever in
-    -- flight; 4 is ample slack.
+    -- Each entry is a small, NF-forced 'BoundaryApplyData', never a
+    -- full 'ApplyResult'. The receiver-to-worker queue caps look-ahead,
+    -- so few boundaries are ever in flight and 4 is ample slack.
     boundaryQueueBound :: Natural
     boundaryQueueBound = 4
 
-    -- One slot per worker-side look-ahead block; entries are small,
-    -- fully-forced projections. Deep enough that the consumer (one pop
-    -- per block) keeps draining banked results while the worker pauses
-    -- for its epoch-boundary tick; a bound below the consumer's drain
-    -- batch (100) turns every worker pause into per-block consumer stalls.
+    -- One slot per worker-side look-ahead block; entries are small and
+    -- fully forced. Deep enough that the consumer keeps draining banked
+    -- results while the worker pauses for its epoch-boundary tick. A
+    -- bound below the consumer's drain batch (100) turns every worker
+    -- pause into per-block consumer stalls.
     blockApplyQueueBound :: Natural
     blockApplyQueueBound = 256
 
--- | Seed the in-memory 'LedgerDB' buffer with the genesis state on
--- a fresh boot. The resume path uses 'initLedgerDbFromSnapshot'
--- instead so an existing populated database does not replay from
--- genesis.
+-- | Seed the checkpoint buffer with the genesis state on a fresh boot.
+-- The resume path uses 'initLedgerDbFromSnapshot' instead, so a
+-- populated database does not replay from genesis.
 initLedgerDbFromGenesis :: LedgerM ()
 initLedgerDbFromGenesis = do
   env <- ask
@@ -484,9 +451,9 @@ initLedgerDbFromGenesis = do
     atomically $ writeTVar (leStateVar env)
       (Strict.Just (LedgerDB (StrictSeq.singleton sref)))
 
--- | Restore the in-memory 'LedgerDB' from an on-disk snapshot.
--- Returns 'Left' with the backend's error text on failure; the
--- caller decides how to escalate.
+-- | Restore the checkpoint buffer from an on-disk snapshot. Returns
+-- 'Left' with the backend's error text; the caller decides how to
+-- escalate.
 initLedgerDbFromSnapshot :: DiskSnapshot -> LedgerM (Either Text ())
 initLedgerDbFromSnapshot snap = do
   env <- ask
@@ -498,12 +465,9 @@ initLedgerDbFromSnapshot snap = do
         (Strict.Just (LedgerDB (StrictSeq.singleton sref)))
       pure (Right ())
 
--- | Recursively wipe the ledger state directory (LSM session +
--- snapshot headers). Companion to @dropSchema@: invoked when
--- @--resync-from-genesis@ is in effect so the next boot starts from
--- genesis with a clean slate.
---
--- A no-op when the directory doesn't exist.
+-- | Wipe the ledger state directory: LSM session plus snapshot
+-- headers. Companion to @dropSchema@ under @--resync-from-genesis@.
+-- A no-op when the directory does not exist.
 dropLedgerStateDir :: FilePath -> IO ()
 dropLedgerStateDir dir = do
   exists <- doesDirectoryExist dir
@@ -608,16 +572,13 @@ tickThenReapplyCheckHash cfg block = do
             , "."
             ]
 
--- | Apply a single block to the current ledger state, returning the
--- /old/ state ref (for snapshot bookkeeping), the 'ApplyResult'
--- carrying every derived value the downstream extractors need, and
--- the list of pruned refs whose LSM handles must subsequently be
--- closed.
+-- | Apply a single block. Returns the /old/ state ref for snapshot
+-- bookkeeping, the 'ApplyResult' the extractors read, and the pruned
+-- refs whose LSM handles the caller must close.
 --
--- 'SlotDetails' is supplied by the caller (the worker computes it
--- via 'DbSync.StateQuery.getSlotDetails' before invoking this
--- function) — block application itself does not query the slot
--- machinery.
+-- The caller supplies 'SlotDetails' from
+-- 'DbSync.StateQuery.getSlotDetails'. Block application never queries
+-- the slot machinery itself.
 applyBlock
   :: CardanoBlock StandardCrypto
   -> SlotDetails
@@ -701,12 +662,12 @@ applyBlock blk slotDetails suppressBoundary = do
               -- "mark" snapshot fed that epoch's per-block slices.
               , bndCatchupStakeSlice = getCatchupStakeSlice env oldCls
               }
-      -- Force the per-block projection to normal form before queueing
-      -- so a buffered entry can't pin the ledger state it came from.
+      -- Force the per-block record to normal form before queueing, so a
+      -- buffered entry cannot pin the ledger state it came from.
       blockData' <- liftIO (evaluate (force blockData))
-      -- At an epoch boundary (outside the replay window) force the
-      -- boundary projection too, so the queued entry holds only
-      -- compact data and never pins a 'NewEpochState' generation.
+      -- Outside the replay window, force the boundary record too, so
+      -- the queued entry holds only compact data and never pins a
+      -- 'NewEpochState' generation.
       mBoundaryData <-
         if isBoundary && not suppressBoundary
           then Just <$> liftIO (evaluate (force boundaryData))
@@ -719,18 +680,17 @@ applyBlock blk slotDetails suppressBoundary = do
           Nothing -> pure ()
       pure (oldRef, appResult, pruned)
 
--- | 'applyBlock' plus the snapshot-cadence decision and pruning of
--- old-ref handles.
+-- | 'applyBlock' plus the snapshot-cadence decision and the close of
+-- pruned handles.
 --
--- Pruned refs are closed only after their 'srCanClose' flag clears,
--- so an in-flight snapshot write can't lose its handle (I3 in the
--- ledger-state plan).
+-- A pruned ref closes only after its 'srCanClose' flag is set, so an
+-- in-flight snapshot write cannot lose its handle.
 --
--- The optional @replayBoundary@ suppresses snapshot writes inside
--- the @[snapshotSlot+1, last_committed_slot]@ resume catch-up
--- window; the consensus V2 backend would reject those attempts as
--- redundant anyway (its tip overlaps the just-loaded snapshot),
--- producing a confusing @takeSnapshot returned Nothing@ trace.
+-- @replayBoundary@ suppresses snapshot writes inside the
+-- @[snapshotSlot+1, last_committed_slot]@ resume catch-up window. The
+-- consensus V2 backend rejects those writes as redundant, because its
+-- tip overlaps the loaded snapshot, and traces a confusing
+-- @takeSnapshot returned Nothing@.
 applyBlockAndSnapshot
   :: CardanoBlock StandardCrypto
   -> SlotDetails
@@ -742,17 +702,13 @@ applyBlockAndSnapshot blk slotDetails phase mReplayBoundary = do
   let proximity      = isSyncedNearTip slotDetails
       inReplayWindow = maybe False (blockSlot blk <=) mReplayBoundary
   (oldRef, appResult, pruned) <- applyBlock blk slotDetails inReplayWindow
-  -- Record this block's epoch params in the in-memory accumulator
-  -- so the consumer can flush them at the next epoch boundary.
-  -- Skipped inside the replay window: those epochs are already in
-  -- @epoch_param_pending@ from the previous run.
+  -- Skipped inside the replay window: the previous run already wrote
+  -- those epochs to @epoch_param_pending@.
   unless inReplayWindow $
     accumulateEpochParams appResult
-  -- Snapshot cadence: outside the replay window, at the epoch
-  -- boundaries 'shouldSnapshotAtEpoch' permits for this phase /
-  -- tip-proximity / threshold, hand the prior ref to the snapshot
-  -- writer. The writer drains its queue on its own thread and
-  -- releases 'srCanClose' once the on-disk write completes.
+  -- Hand the prior ref to the snapshot writer at the boundaries
+  -- 'shouldSnapshotAtEpoch' permits. The writer drains its queue on its
+  -- own thread and sets 'srCanClose' when the on-disk write completes.
   when (not inReplayWindow
         && shouldSnapshotAtEpoch appResult phase proximity (leSnapshotNearTipEpoch env)) $
     DbSync.Worker.Ledger.Snapshot.saveCurrentLedgerState oldRef
@@ -761,11 +717,9 @@ applyBlockAndSnapshot blk slotDetails phase mReplayBoundary = do
     Consensus.close (srTables sr)
   pure appResult
 
--- | Project the 'ApplyResult'\'s deposit data into the per-epoch
--- accumulator. Byron blocks (no @apDeposits@) and pre-Shelley
--- blocks are skipped — there are no protocol-param deposits to
--- record. Multiple writes for the same epoch are idempotent
--- because protocol params are constant within an epoch.
+-- | Copy the 'ApplyResult' deposit data into the per-epoch
+-- accumulator. Byron and pre-Shelley blocks carry no @apDeposits@ and
+-- are skipped.
 accumulateEpochParams :: ApplyResult -> LedgerM ()
 accumulateEpochParams result =
   case apDeposits result of
@@ -810,10 +764,10 @@ ledgerStateEra = \case
   LedgerStateConway _   -> Conway
   LedgerStateDijkstra _ -> Dijkstra
 
--- | Project the current 'EpochNo' from a ledger state via the HFC
--- interpreter built from the ledger's hard-fork summary. Returns
--- @'Right' 'Nothing'@ at the genesis tip and @'Left' err@ if the
--- requested slot falls outside the summary's horizon.
+-- | Read the current 'EpochNo' through the HFC interpreter built from
+-- the ledger's hard-fork summary. Returns @'Right' 'Nothing'@ at the
+-- genesis tip, and 'Left' when the slot falls outside the summary's
+-- horizon.
 ledgerEpochNo
   :: LedgerEnv
   -> ExtLedgerState (CardanoBlock StandardCrypto) mk
@@ -838,18 +792,12 @@ data TipProximity
   | LaggingTip
   deriving stock (Eq, Show)
 
--- | Pure decision: should we save a snapshot at this epoch boundary?
+-- | Pure decision: save a snapshot at this epoch boundary?
 --
--- Cadence:
---
---   * Only fires on epoch boundaries (when @apNewEpoch@ is 'Just').
---   * Never fires at epoch @0@ — nothing to snapshot at boot.
---   * Ingest path: every 10 epochs, regardless of @nearTip@ or the
---     epoch threshold. Keeps the same coarse cadence whether the
---     resume point is epoch 5 or 1200.
---   * Follow path: every epoch when 'NearTip', or once we cross
---     @thresholdEpoch@ (catches the "Follow but slightly lagging"
---     case).
+-- It fires only on an epoch boundary, and never at epoch @0@. The
+-- Ingest path fires every 10 epochs, whatever the tip proximity or
+-- threshold. The Follow path fires every epoch when 'NearTip', and
+-- again past @thresholdEpoch@ to catch a slightly lagging Follow.
 shouldSnapshotAtEpoch
   :: ApplyResult
   -> SyncPhase     -- ^ caller's current lifecycle phase
@@ -869,9 +817,8 @@ shouldSnapshotAtEpoch result phase proximity thresholdEpoch =
                  || n `mod` 10 == 0
                )
 
--- | Approximate "is the chain tip near the current wall-clock time?"
--- Uses a 60-second window, generous enough to absorb consumer-side
--- latency without flapping at the threshold.
+-- | Is the chain tip near wall-clock time? The 60-second window is
+-- wide enough to absorb consumer latency without flapping.
 isSyncedNearTip :: SlotDetails -> TipProximity
 isSyncedNearTip sd =
   let secsBehind =
@@ -943,23 +890,16 @@ finaliseDrepDistr ledger =
 -- * Rollback
 -- ---------------------------------------------------------------------------
 
-{- |
-Load the ledger state at a given 'CardanoPoint'. The memory-first
-walk is implemented here; the disk-snapshot fallback is delivered by
-the snapshot-manager integration.
-
-Returns:
-
-  * @'Right' sref@ — the point was found in the in-memory buffer, and
-    the buffer has been trimmed to end at that ref.
-  * @'Left' []@ — not in memory; caller should try the on-disk
-    snapshot manager. The caller is also responsible for deleting any
-    newer snapshots that fail the \"resume constraint\" check.
-
-When the target point lives in the in-memory buffer we write the
-trimmed 'LedgerDB' back into 'leStateVar' before returning; the ref
-we return is the new tip. Callers don't need to push or prune.
--}
+-- | Load the ledger state at a 'CardanoPoint' from the checkpoint
+-- buffer.
+--
+-- @'Right' sref@ means the buffer held the point. This function has
+-- already trimmed the buffer to end there and written it back to
+-- 'leStateVar', so the caller does not push or prune.
+--
+-- @'Left' []@ means the caller must fall back to the on-disk snapshot
+-- manager, and must delete any newer snapshots that fail the resume
+-- constraint check.
 loadLedgerAtPoint
   :: CardanoPoint
   -> LedgerM (Either [DiskSnapshot] DbSyncStateRef)
@@ -979,10 +919,9 @@ loadLedgerAtPoint point = do
         Nothing ->
           pure (Left [])
 
--- | Walk the 'LedgerDB' newest-first, dropping refs whose tip is
--- newer than the rollback target. If the resulting buffer is
--- non-empty and its head tip is at or before the target slot, return
--- it; otherwise the point is too far back for the in-memory buffer.
+-- | Walk the 'LedgerDB' newest first and drop every ref newer than the
+-- rollback target. 'Nothing' means the point is older than the whole
+-- buffer.
 rollbackBuffer :: CardanoPoint -> LedgerDB -> Maybe LedgerDB
 rollbackBuffer point (LedgerDB s) =
   let trimmed = StrictSeq.dropWhileL isNewerThanTarget s
@@ -1000,10 +939,10 @@ rollbackBuffer point (LedgerDB s) =
 -- * Stake slice shim
 -- ---------------------------------------------------------------------------
 
--- | Produce the per-block stake slice for the EpochBoundary path.
--- Byron / pre-Shelley states carry 'ByronEpochBlockNo' and yield
--- 'Generic.NoSlices'; everywhere else we hand the counter to
--- 'Generic.getStakeSlice' to read the \"mark\" snapshot.
+-- | Per-block stake slice for the EpochBoundary path. Byron and
+-- pre-Shelley states carry 'ByronEpochBlockNo' and give
+-- 'Generic.NoSlices'. Otherwise the counter goes to
+-- 'Generic.getStakeSlice', which reads the \"mark\" snapshot.
 getStakeSlice
   :: LedgerEnv
   -> CardanoLedgerState
@@ -1040,12 +979,12 @@ getCatchupStakeSlice env cls =
 -- * Governance / ledger projections
 -- ---------------------------------------------------------------------------
 
--- | Given a governance-action id and the current 'ConwayGovState',
--- compute the @Committee@ it would install — or 'Nothing' if the
--- action isn't a committee update (or isn't in the proposals map).
+-- | The @Committee@ a governance action would install. 'Nothing' when
+-- the action is not a committee update, or is absent from the
+-- proposals map.
 --
--- Walks the proposal tree up to the root action so that
--- chains of committee updates are applied in the correct order.
+-- Walks the proposal tree up to the root action, so a chain of
+-- committee updates applies in the correct order.
 findProposedCommittee
   :: GovActionId
   -> ConwayGovState ConwayEra
@@ -1097,12 +1036,12 @@ findProposedCommittee gaId cgs = do
 
     fromNothing err = maybe (Left err) Right
 
--- | Resolve the full committee membership for every committee-updating
--- proposal pending in this block's gov state, keyed by
--- @(proposal tx hash, proposal index)@ so the proposal pass can write
--- the complete @committee_member@ set rather than only the tx-body
--- delta. A proposal that fails to resolve is dropped, and the extractor
--- falls back to the added-members delta.
+-- | Full committee membership for every committee-updating proposal
+-- pending in this block's gov state, keyed by
+-- @(proposal tx hash, proposal index)@. This lets the proposal pass
+-- write the complete @committee_member@ set instead of only the
+-- tx-body delta. A proposal that fails to resolve is dropped and the
+-- extractor falls back to the added-members delta.
 resolveBlockCommittees
   :: ConwayGovState ConwayEra
   -> Map.Map (ByteString, Word64) [ProposedCommitteeMember]
@@ -1128,8 +1067,8 @@ resolveBlockCommittees cgs =
       KeyHashObj {}    -> False
       ScriptHashObj {} -> True
 
--- | Project a ledger 'GovActionId' to the @(tx hash, proposal index)@
--- key the proposal pass looks its committee membership up by.
+-- | The @(tx hash, proposal index)@ key the proposal pass looks its
+-- committee membership up by.
 govActionIdKey :: GovActionId -> (ByteString, Word64)
 govActionIdKey (GovActionId (TxId h) (GovActionIx ix)) =
   (Crypto.hashToBytes (extractHash h), fromIntegral ix)
@@ -1181,15 +1120,14 @@ getPrices st = case ledgerState $ clsState st of
       )
   _ -> Strict.Nothing
 
--- | Raw 28-byte hashes of the pools registered in the ledger as of
--- this state. Empty for Byron (no pools). Returned as 'ByteString' so
--- extractors can match against their raw pool-hash bytes without
--- pulling in ledger key types.
+-- | Raw 28-byte hashes of the pools registered in this state. Empty for
+-- Byron. 'ByteString' so extractors can match raw pool-hash bytes
+-- without ledger key types.
 --
--- Cached on the pointer identity of the ledger's registered-pool
--- 'Map' ('RegisteredPoolsCache'): the 'Map' is structure-shared
--- across blocks without pool certificates, so the projection is
--- rebuilt only when a certificate actually changed it.
+-- 'RegisteredPoolsCache' keys on the pointer identity of the ledger's
+-- registered-pool 'Map'. That 'Map' is structure-shared across blocks
+-- with no pool certificate, so the set rebuilds only when a
+-- certificate changed it.
 getRegisteredPools
   :: IORef (Maybe RegisteredPoolsCache)
   -> CardanoLedgerState
@@ -1211,9 +1149,9 @@ registeredPoolBytes
   -> LedgerState (ShelleyBlock p era) mk
   -> IO (Set.Set ByteString)
 registeredPoolBytes cacheRef lState = do
-  -- Force the projection to the shared 'Map' object itself before
-  -- taking its 'StableName' — a fresh projection thunk would never
-  -- compare equal and the cache would always miss.
+  -- Force down to the shared 'Map' object itself before taking its
+  -- 'StableName'. A fresh thunk never compares equal, so the cache
+  -- would always miss.
   pools  <- evaluate (certState ^. Shelley.certPStateL . Shelley.psStakePoolsL)
   key    <- makeStableName pools
   cached <- readIORef cacheRef
@@ -1234,21 +1172,18 @@ registeredPoolBytes cacheRef lState = do
 -- * Miscellaneous helpers
 -- ---------------------------------------------------------------------------
 
--- | The 'TopLevelConfig' embedded in the 'LedgerEnv'\'s
--- 'ProtocolInfo'. Exposed so the worker can build an 'ExtLedgerCfg'
--- to pass to 'tickThenReapplyCheckHash'.
+-- | The 'TopLevelConfig' inside the 'LedgerEnv'. The worker needs it to
+-- build the 'ExtLedgerCfg' for 'tickThenReapplyCheckHash'.
 getTopLevelConfig :: LedgerEnv -> TopLevelConfig (CardanoBlock StandardCrypto)
 getTopLevelConfig = Consensus.pInfoConfig . leProtocolInfo
 
--- | Serialise a Cardano header hash to its 32-byte raw form.
--- Delegates to the consensus 'OneEraHash' encoding used everywhere
--- else in the pipeline.
+-- | Serialise a Cardano header hash to its 32-byte raw form, through
+-- the consensus 'OneEraHash' encoding the rest of the pipeline uses.
 getHeaderHash :: Network.HeaderHash (CardanoBlock StandardCrypto) -> ByteString
 getHeaderHash = SBS.fromShort . Consensus.getOneEraHash
 
--- | Pull out the first 'LedgerAdaPots' event seen in a stream.
--- Returns 'Nothing' when the stream is pots-free (any non-epoch
--- boundary, or pre-Shelley).
+-- | First 'LedgerAdaPots' event in a stream. 'Nothing' outside an epoch
+-- boundary, and before Shelley.
 findAdaPots :: [LedgerEvent] -> Maybe AdaPots
 findAdaPots = go
   where

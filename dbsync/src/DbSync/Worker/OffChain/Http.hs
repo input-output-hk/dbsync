@@ -4,15 +4,12 @@
 
 -- | HTTP utilities for the off-chain pool and vote workers.
 --
--- Provides a 'Http.Manager' that refuses to connect to private or
--- loopback IP addresses (DNS rebinding and SSRF defence), a URL
--- validator that only allows http(s) GETs to non-localhost hosts,
--- and the per-type fetchers that the two workers wrap.
+-- Provides a 'Http.Manager' that refuses private and loopback IP
+-- addresses, as DNS-rebinding and SSRF defence, plus a URL validator
+-- that allows only http(s) GETs to non-localhost hosts.
 --
--- Pool and vote fetchers share 'httpGetBytes' for the actual HTTP
--- round-trip and content-type / hash validation; the rest is
--- per-domain decoding (pool: a ticker-bearing JSON object; vote: a
--- CIP-100/108/119 envelope — see "DbSync.Worker.OffChain.Vote.Types").
+-- Both fetchers share 'httpGetBytes' for the round-trip and the
+-- content-type and hash validation. Only the decoding differs.
 module DbSync.Worker.OffChain.Http
   ( -- * Manager
     newRestrictedManager
@@ -148,9 +145,8 @@ isLocalhostHost host =
     || host == "::1"
     || host == "[::1]"
 
--- | If @url@ is an @ipfs://@ URI, return the list of HTTPS URLs the
--- caller should try (one per configured gateway). Otherwise return
--- 'Nothing'.
+-- | For an @ipfs:\/\/@ URI, one HTTPS URL per configured gateway for
+-- the caller to try. 'Nothing' for any other scheme.
 rewriteIpfsUrl :: Text -> [Text] -> Maybe [Text]
 rewriteIpfsUrl url gateways = case Text.stripPrefix "ipfs://" url of
   Just suffix -> Just (map (<> suffix) gateways)
@@ -327,9 +323,9 @@ fetchSingle manager url expectedHash anchorType = runExceptT $ do
     ExceptT (httpGetBytes manager request voteBytesToRead voteMaxBytes)
   ExceptT . pure $ buildVoteMetadata respBS respLBS expectedHash anchorType
 
--- | Three-way validation of a vote anchor body. Pure, so tests and
--- the IPFS fallback share one source of truth for the hash-check +
--- JSON-validity + CIP-conformance decision tree.
+-- | Three-way validation of a vote anchor body: hash check, JSON
+-- validity, CIP conformance. Pure, so tests and the IPFS fallback
+-- share one source of truth for the decision tree.
 buildVoteMetadata
   :: ByteString
   -> LBS.ByteString

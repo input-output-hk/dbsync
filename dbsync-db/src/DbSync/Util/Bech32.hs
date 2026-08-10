@@ -36,10 +36,9 @@ import qualified Data.ByteString as BS
 
 -- | Bech32-encode @bytes@ with the given human-readable prefix.
 --
--- The HRP must be valid Bech32 (lower-case ASCII, length 1-83); if it
--- isn't, we 'panic' rather than return a bad encoding silently. All
--- HRPs used in this project are static literals checked by the unit
--- tests, so a panic here only fires on a programming mistake.
+-- An invalid HRP — Bech32 wants lower-case ASCII, length 1-83 — panics
+-- instead of returning a bad encoding. Every HRP here is a static literal
+-- that the unit tests check, so the panic only fires on a code mistake.
 serialiseToBech32 :: Text -> ByteString -> Text
 serialiseToBech32 prefix bytes =
   Bech32.encodeLenient hrp (Bech32.dataPartFromBytes bytes)
@@ -52,16 +51,15 @@ serialiseToBech32 prefix bytes =
 -- * Fixed-HRP encoders
 -- ---------------------------------------------------------------------------
 
--- | VRF verification key — HRP @vrf_vk@.
 serialiseVrfVkToBech32 :: ByteString -> Text
 serialiseVrfVkToBech32 = serialiseToBech32 "vrf_vk"
 
--- | Stake-pool key hash (28 bytes) — HRP @pool@. Yields @pool1…@.
+-- | Takes the 28-byte pool key hash and yields @pool1…@.
 serialisePoolKeyHashToBech32 :: ByteString -> Text
 serialisePoolKeyHashToBech32 = serialiseToBech32 "pool"
 
--- | DRep credential hash (28 bytes) — HRP @drep@. Used as the
--- @view@ string on @drep_hash@ rows.
+-- | Takes the 28-byte DRep credential hash. The result is the @view@
+-- string on a @drep_hash@ row.
 serialiseDrepToBech32 :: ByteString -> Text
 serialiseDrepToBech32 = serialiseToBech32 "drep"
 
@@ -69,21 +67,17 @@ serialiseDrepToBech32 = serialiseToBech32 "drep"
 -- * Address encoders
 -- ---------------------------------------------------------------------------
 
--- | Encode a Shelley payment address from its raw bytes.
---
--- The header byte's low bit selects the network: @1@ → mainnet
--- (HRP @addr@), @0@ → testnet (HRP @addr_test@). Caller must ensure
--- @bs@ is a Shelley address — Byron bootstrap addresses (header
--- @0x80@) round-trip via Base58, not Bech32.
+-- | The low bit of the header byte selects the network: @1@ gives mainnet
+-- (HRP @addr@), @0@ gives testnet (HRP @addr_test@). The caller must pass
+-- a Shelley address. A Byron bootstrap address (header @0x80@) round-trips
+-- through Base58, not Bech32.
 serialiseShelleyAddrToBech32 :: ByteString -> Text
 serialiseShelleyAddrToBech32 bs
   | BS.null bs = panic "serialiseShelleyAddrToBech32: empty bytes"
   | otherwise  = serialiseToBech32 (addrHrp (BS.head bs)) bs
 
--- | Encode a stake-key reward address from a 28-byte credential and
--- the network. Builds the full 29-byte serialised reward address
--- (header @0xE0 .|. net@ + credential) and Bech32-encodes it with
--- HRP @stake@ / @stake_test@.
+-- | Builds the 29-byte reward address — header @0xE0 .|. net@ plus the
+-- 28-byte credential — then encodes it with HRP @stake@ or @stake_test@.
 serialiseStakeKeyHashToBech32 :: Bool -> ByteString -> Text
 serialiseStakeKeyHashToBech32 mainnet credHash =
   serialiseToBech32 (rewardHrp mainnet) (BS.cons header credHash)
@@ -112,9 +106,7 @@ mkAssetFingerprint policy assetName =
 -- * Helpers
 -- ---------------------------------------------------------------------------
 
--- | HRP for a Shelley address: derived from the network bit (low bit
--- of the header byte). Reward and base addresses share the same
--- network-bit encoding.
+-- | Reward and base addresses share this network-bit encoding.
 addrHrp :: Word8 -> Text
 addrHrp header
   | header .&. 0x01 == 0x01 = "addr"

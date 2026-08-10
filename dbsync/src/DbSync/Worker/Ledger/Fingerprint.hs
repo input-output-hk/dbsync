@@ -4,11 +4,9 @@
 
 -- | Chain-identity fingerprint for the @dbsync-ledger/@ directory.
 --
--- A small JSON file written on first init and checked on every
--- subsequent boot. Refusing to start when the on-disk identity
--- (network magic + system start) doesn't match the current config
--- prevents silent corruption from pointing a stale ledger dir at a
--- different chain.
+-- A small JSON file, written on first init and checked on every boot.
+-- A refusal to start on a mismatch of network magic or system start
+-- stops a stale ledger directory corrupting a different chain.
 module DbSync.Worker.Ledger.Fingerprint
   ( -- * Type
     LedgerStateFingerprint (..)
@@ -85,11 +83,12 @@ currentFormatVersion = 1
 -- | Outcome of comparing the on-disk fingerprint to the expected one.
 data FingerprintCheck
   = FingerprintFresh
-    -- ^ Ledger directory empty or absent; the caller writes the
+    -- ^ Ledger directory empty or absent. The caller writes the
     -- fingerprint after ledger init succeeds.
   | FingerprintMatch
+    -- ^ On-disk identity equals the expected one; boot continues.
   | FingerprintMismatch !LedgerStateFingerprint !LedgerStateFingerprint
-    -- ^ Fields: @(onDisk, expected)@.
+    -- ^ On-disk fingerprint, then expected fingerprint.
   | FingerprintMissing !FilePath
     -- ^ Directory has content but no readable fingerprint file.
   deriving stock (Eq, Show)
@@ -98,7 +97,6 @@ data FingerprintCheck
 -- * Operations
 -- ---------------------------------------------------------------------------
 
--- | Path of the fingerprint file inside the ledger state directory.
 fingerprintPath :: FilePath -> FilePath
 fingerprintPath dir = dir </> "state.fingerprint.json"
 
@@ -113,9 +111,9 @@ computeFingerprint genesisCfg =
        , lsfSystemStart   = sgSystemStart sg
        }
 
--- | Compare the on-disk fingerprint (if any) against the expected
--- value. Unreadable JSON falls into 'FingerprintMissing' so the
--- operator-facing message stays the same.
+-- | Compare the on-disk fingerprint against the expected value.
+-- Unreadable JSON reports 'FingerprintMissing', so the operator sees
+-- one message for both cases.
 checkFingerprint :: FilePath -> LedgerStateFingerprint -> IO FingerprintCheck
 checkFingerprint dir expected = do
   dirExists <- doesDirectoryExist dir
@@ -138,7 +136,7 @@ checkFingerprint dir expected = do
             then pure FingerprintFresh
             else pure $ FingerprintMissing dir
 
--- | Write the fingerprint to disk, creating the directory if needed.
+-- | Write the fingerprint to disk. Creates the directory if it is absent.
 writeFingerprint :: FilePath -> LedgerStateFingerprint -> IO ()
 writeFingerprint dir fp = do
   createDirectoryIfMissing True dir

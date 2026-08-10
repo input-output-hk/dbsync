@@ -1,15 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | ID resolution interface for the extraction pipeline.
+-- | How extractors obtain database ids during block processing.
 --
--- An 'IdResolver' provides the mechanism for obtaining database IDs
--- during block processing. Two implementations exist:
---
--- * 'DbSync.Phase.Ingest.Resolver' — DedupStore\/Counter-based for 'IngestChainHistory'
--- * 'DbSync.Phase.Following.Resolver' — SELECT->INSERT for 'FollowingChainTip'
---
--- Extractors are parameterised by 'IdResolver' so the same extraction
--- logic works in both phases.
+-- 'DbSync.Phase.Ingest.Resolver' backs the record with dedup stores
+-- and counters; 'DbSync.Phase.Following.Resolver' backs it with
+-- SELECT->INSERT. Extractors take an 'IdResolver', so one extractor
+-- body runs in both phases.
 module DbSync.Resolver
   ( -- * Types
     IdResolver (..)
@@ -40,38 +36,23 @@ import DbSync.Worker.OffChain.Types (PoolMetadataRef, VotingAnchorRef)
 -- * Types
 -- ---------------------------------------------------------------------------
 
--- | How to obtain database IDs during block processing.
+-- | Every @resolve*@ field returns @(id, isNew)@; the caller writes the
+-- row itself when @isNew@ is 'True'. Every @assign*@ field allocates a
+-- fresh id and writes nothing.
 data IdResolver m = IdResolver
-  { -- ---------------------------------------------------------------
-    -- Core (shared IDs — used by processBlock centrally)
-    -- ---------------------------------------------------------------
-
-    -- | Assign the next block ID.
+  { -- Core ids, assigned centrally by processBlock
     assignBlockId     :: !(m BlockId)
-
-    -- | Assign the next transaction ID.
   , assignTxId        :: !(m TxId)
-
-    -- | Assign the next transaction output ID.
   , assignTxOutId     :: !(m TxOutId)
-
-    -- | Resolve a slot leader by its hash.
-    -- Returns @(SlotLeaderId, isNew)@. When @isNew = True@, the caller
-    -- should also write the 'SlotLeader' row via the 'Writer'.
   , resolveSlotLeader :: !(ByteString -> SlotLeader -> m (SlotLeaderId, Bool))
-
-    -- | Look up the previous block's ID by its hash.
   , resolvePrevBlock  :: !(ByteString -> m (Maybe BlockId))
 
-    -- | The most-recently-assigned block ID, or 'Nothing' before the
-    -- first block of the current session. Used by the boundary
-    -- handler to populate FK columns that reference the boundary
-    -- block's @id@.
+    -- | The last id 'assignBlockId' gave out. 'Nothing' before the
+    -- first block of the session. The boundary handler stamps it onto
+    -- FK columns that reference the boundary block.
   , lookupLastBlockId :: !(m (Maybe BlockId))
 
-    -- ---------------------------------------------------------------
-    -- UTxO extractor IDs
-    -- ---------------------------------------------------------------
+    -- UTxO ids
 
     -- | Ingest-only: queue @(tx_out_id, raw, resolved stake id)@ for
     -- the 'AddressResolver' worker, which bulk-fills
@@ -81,221 +62,154 @@ data IdResolver m = IdResolver
     -- | As 'recordTxOutAddress' but for @collateral_tx_out@.
   , recordCollateralTxOutAddress :: !(CollateralTxOutId -> ByteString -> Maybe StakeAddressId -> m ())
 
-    -- | Follow-only: resolve raw bytes to an 'AddressId', queuing the
-    -- @address@ INSERT on the per-block buffer when the bytes are new.
-    -- Callers fill @tx_out.address_id@ at INSERT time rather than
-    -- INSERT-then-UPDATE. Panics in Ingest.
+    -- | Follow-only: the caller fills @tx_out.address_id@ at INSERT
+    -- time instead of INSERT-then-UPDATE. Panics in Ingest.
   , resolveAddressId :: !(ByteString -> Address -> m AddressId)
 
   , assignCollateralTxOutId :: !(m CollateralTxOutId)
 
-    -- ---------------------------------------------------------------
-    -- MultiAsset extractor IDs
-    -- ---------------------------------------------------------------
+    -- MultiAsset ids
 
-    -- | Resolve a multi-asset by its (policy ++ name) key.
-    -- Key is 'ShortByteString' (unpinned) to avoid pinned ByteString
-    -- concatenation in the hot multi-asset lookup path.
-    -- Returns @(MultiAssetId, isNew)@.
+    -- | The @policy ++ name@ key is 'ShortByteString' (unpinned) to
+    -- keep pinned 'ByteString' concatenation out of this hot path.
   , resolveMultiAsset :: !(ShortByteString -> MultiAsset -> m (MultiAssetId, Bool))
 
-    -- ---------------------------------------------------------------
-    -- StakeDelegation extractor IDs
-    -- ---------------------------------------------------------------
+    -- StakeDelegation ids
 
-    -- | Resolve a stake address by its credential hash.
-    -- Returns @(StakeAddressId, isNew)@.
   , resolveStakeAddress :: !(ByteString -> StakeAddress -> m (StakeAddressId, Bool))
 
-    -- ---------------------------------------------------------------
-    -- Pool extractor IDs
-    -- ---------------------------------------------------------------
+    -- Pool ids
 
-    -- | Resolve a pool hash by its key hash.
-    -- Returns @(PoolHashId, isNew)@.
   , resolvePoolHash :: !(ByteString -> PoolHash -> m (PoolHashId, Bool))
 
-    -- | Look up an existing pool hash by its key hash without
-    -- inserting. 'Nothing' means the key was never registered as a
-    -- pool, so a slot leader bearing it is a genesis-key delegate.
+    -- | Look up a pool hash without inserting. 'Nothing' means the key
+    -- was never registered as a pool, so a slot leader that bears it
+    -- is a genesis-key delegate.
   , resolvePoolHashQuery :: !(ByteString -> m (Maybe PoolHashId))
 
-    -- | Assign the next pool_update ID.
   , assignPoolUpdateId :: !(m PoolUpdateId)
-
-    -- | Assign the next pool_metadata_ref ID.
   , assignPoolMetadataRefId :: !(m PoolMetadataRefId)
 
-    -- ---------------------------------------------------------------
-    -- OffChainPools extractor hook
-    -- ---------------------------------------------------------------
+    -- OffChain hooks
 
-    -- | Record that the extractor observed a pool-metadata
-    -- registration. The production resolvers leave this as a no-op
-    -- — the off-chain pool worker independently polls PG for
-    -- @pool_metadata_ref@ rows that lack a result. Test resolvers
-    -- capture the call for assertions.
+    -- | No-op in both production resolvers: the off-chain pool worker
+    -- polls PG for @pool_metadata_ref@ rows that lack a result. Test
+    -- resolvers capture the call for assertions.
   , enqueuePoolMetaFetch :: !(PoolMetadataRef -> m ())
 
-    -- ---------------------------------------------------------------
-    -- OffChainVotes extractor hook
-    -- ---------------------------------------------------------------
-
-    -- | Record that the extractor observed a voting anchor. The
-    -- production resolvers leave this as a no-op — the off-chain
-    -- vote worker independently polls PG for @voting_anchor@ rows
-    -- that lack a result. Test resolvers capture the call for
-    -- assertions.
+    -- | No-op in both production resolvers: the off-chain vote worker
+    -- polls PG for @voting_anchor@ rows that lack a result. Test
+    -- resolvers capture the call for assertions.
   , enqueueVoteMetaFetch :: !(VotingAnchorRef -> m ())
 
-    -- ---------------------------------------------------------------
-    -- EpochSyncStats IDs
-    -- ---------------------------------------------------------------
+    -- EpochSyncStats ids
 
-    -- | Assign the next epoch_sync_stats ID.
   , assignEpochSyncStatsId :: !(m EpochSyncStatsId)
 
-    -- ---------------------------------------------------------------
-    -- EpochBoundary IDs
-    -- ---------------------------------------------------------------
+    -- EpochBoundary ids
 
-    -- | Resolve a cost_model by its 32-byte canonical hash.
-    -- Returns @(CostModelId, isNew)@; the caller writes the
-    -- 'CostModel' row when @isNew = True@.
+    -- | The key is the 32-byte canonical hash of the cost model.
   , resolveCostModel :: !(ByteString -> CostModel -> m (CostModelId, Bool))
 
-    -- ---------------------------------------------------------------
-    -- ScriptsDatums extractor IDs
-    -- ---------------------------------------------------------------
+    -- ScriptsDatums ids
 
-    -- | Resolve a datum by its 32-byte hash. Returns @(DatumId, isNew)@.
   , resolveDatum :: !(ByteString -> Datum -> m (DatumId, Bool))
-
-    -- | Resolve a script by its hash. Returns @(ScriptId, isNew)@.
   , resolveScript :: !(ByteString -> Script -> m (ScriptId, Bool))
-
-    -- | Resolve a redeemer_data by its 32-byte hash.
-    -- Returns @(RedeemerDataId, isNew)@.
   , resolveRedeemerData :: !(ByteString -> RedeemerData -> m (RedeemerDataId, Bool))
-
-    -- | Assign the next redeemer ID.
   , assignRedeemerId :: !(m RedeemerId)
 
     -- | Fill @redeemer.script_hash@ for the spend redeemers among the
     -- given ids, reading the payment credential off the spent output's
-    -- address. Called once per block after every extractor has run, so
-    -- the @tx_in@ and @redeemer@ rows it joins are already queued.
-    -- No-op in Ingest: @tx_in.tx_out_id@ is unresolved there and
-    -- 'DbSync.Phase.Preparing.Backfill' covers the whole range in one
-    -- pass instead.
+    -- address. The pipeline calls this once per block after every
+    -- extractor runs, so the @tx_in@ and @redeemer@ rows it joins are
+    -- already queued. No-op in Ingest: @tx_in.tx_out_id@ is unresolved
+    -- there, and 'DbSync.Phase.Preparing.Backfill' covers the whole
+    -- range in one pass instead.
   , fillSpendScriptHashes :: !([RedeemerId] -> m ())
 
-    -- ---------------------------------------------------------------
-    -- Governance extractor IDs
-    -- ---------------------------------------------------------------
+    -- Governance ids
 
-    -- | Resolve a DRep credential. The 'ByteString' is the 28-byte
-    -- credential hash for concrete DReps; the abstract
-    -- @always_abstain@ / @always_no_confidence@ DReps share a
-    -- distinct sentinel (the Bech32 @view@ string encoded as bytes)
-    -- so the dedup key is total.
+    -- | The 'ByteString' is the 28-byte credential hash for concrete
+    -- DReps. The abstract @always_abstain@ and @always_no_confidence@
+    -- DReps each use a distinct sentinel (the Bech32 @view@ string as
+    -- bytes) so the dedup key is total.
   , resolveDrepHash :: !(ByteString -> DrepHash -> m (DrepHashId, Bool))
 
-    -- | Resolve a committee-hash credential by @(raw, has_script)@.
-    -- The pair is encoded as @raw <> [has_script_byte]@ so the
-    -- key is a single 'ByteString'.
+    -- | The caller encodes the @(raw, has_script)@ key as
+    -- @raw <> [has_script_byte]@ to keep it a single 'ByteString'.
   , resolveCommitteeHash :: !(ByteString -> CommitteeHash -> m (CommitteeHashId, Bool))
 
-    -- | Resolve a voting anchor by the @(url, data_hash, type)@
-    -- natural key. The key is encoded by the caller; the resolver
-    -- only sees a single 'ByteString'.
+    -- | The caller encodes the @(url, data_hash, type)@ natural key;
+    -- the resolver sees one 'ByteString'.
   , resolveVotingAnchor :: !(ByteString -> AnchorType -> VotingAnchor -> m (VotingAnchorId, Bool))
 
-    -- | Assign the next gov_action_proposal ID.
   , assignGovActionProposalId :: !(m GovActionProposalId)
-
-    -- | Assign the next param_proposal ID.
   , assignParamProposalId :: !(m ParamProposalId)
-
-    -- | Assign the next committee ID.
   , assignCommitteeId :: !(m CommitteeId)
-
-    -- | Assign the next constitution ID.
   , assignConstitutionId :: !(m ConstitutionId)
-
-    -- | Assign the next event_info ID.
   , assignEventInfoId :: !(m EventInfoId)
 
-    -- | Look up an existing @gov_action_proposal.id@ by the proposing
-    -- tx hash + proposal index. 'Nothing' for cross-block references
-    -- that have not been seen yet (or have rolled back). Reads from
-    -- the in-process cache in Ingest; SELECTs from PG in Follow.
+    -- | Look up @gov_action_proposal.id@ by proposing tx hash and
+    -- proposal index. 'Nothing' for a cross-block reference the sync
+    -- has not seen, or that rolled back. Ingest reads the in-process
+    -- cache; Follow SELECTs from PG.
   , lookupGovActionProposalId
       :: !(ByteString -> Word64 -> m (Maybe GovActionProposalId))
 
-    -- | Stash a freshly written @gov_action_proposal.id@ in the
-    -- cache so later blocks' votes can resolve it without a SELECT.
-    -- No-op in Follow (cache lives in PG via @SELECT@).
+    -- | Stash a freshly written @gov_action_proposal.id@ so votes in
+    -- later blocks resolve it without a SELECT. No-op in Follow.
   , recordGovActionProposalId
       :: !(ByteString -> Word64 -> GovActionProposalId -> m ())
 
-    -- | Snapshot the @(committee_id, no_confidence_id, constitution_id)@
-    -- triple representing the currently enacted gov state. EpochBoundary
-    -- reads this when building the next @epoch_state@ row.
+    -- | The @(committee_id, no_confidence_id, constitution_id)@ triple
+    -- of the currently enacted gov state. EpochBoundary reads it when
+    -- it builds the next @epoch_state@ row.
   , readEnactedEpochStateIds
       :: !(m (Maybe Int64, Maybe Int64, Maybe Int64))
 
-    -- | Replace the snapshot read by 'readEnactedEpochStateIds'.
-    -- Called by the governance boundary handler after detecting an
-    -- enactment.
+    -- | Replace the snapshot 'readEnactedEpochStateIds' returns. The
+    -- governance boundary handler calls this after an enactment.
   , writeEnactedEpochStateIds
       :: !((Maybe Int64, Maybe Int64, Maybe Int64) -> m ())
 
-    -- | Latest @apGovExpiresAfter@ (gov-action lifetime, epochs)
-    -- reported by the ledger worker. 'Nothing' pre-Conway. Read by
-    -- the per-block proposal pass to compute
+    -- | Latest @apGovExpiresAfter@ (gov-action lifetime, in epochs)
+    -- from the ledger worker. 'Nothing' pre-Conway. The per-block
+    -- proposal pass reads it to compute
     -- @gov_action_proposal.expiration@.
   , readGovExpiresAfter :: !(m (Maybe Word64))
 
-    -- | Stash the latest @apGovExpiresAfter@. Called by the
-    -- governance boundary handler.
   , writeGovExpiresAfter :: !(Maybe Word64 -> m ())
 
-    -- ---------------------------------------------------------------
-    -- Inline value resolution (Follow path)
-    -- ---------------------------------------------------------------
+    -- Input resolution
 
-    -- | Look up output values by (producing tx hash, output index).
-    -- 'Nothing' for any pair the resolver cannot fulfil. During Ingest,
-    -- the value comes from the 'UtxoStore' (hit) or 'Nothing' (
-    -- miss, deferred to the post-load resolve).
+    -- | Look up output values by @(producing tx hash, output index)@.
+    -- 'Nothing' for any pair the resolver cannot fulfil; in Ingest a
+    -- 'UtxoStore' miss defers the value to the post-load resolve.
   , resolveInputValues :: !([(ByteString, Word16)] -> m [Maybe DbLovelace])
 
-    -- | Look up the producing tx's id, the producer-output's tx_out
-    -- row id, and the output value in one call. 'Nothing' on miss.
-    -- Used by the UTxO extractor to write @tx_in.tx_out_id@ at COPY
-    -- time, to enqueue the consumed-by triple keyed by the output's
-    -- 'TxOutId', and to accumulate input values for the deposit
-    -- calculation. Ingest reads from the in-process 'UtxoStore';
-    -- buffered Follow checks the block-local outputs map (the
-    -- producer's INSERT may still be unflushed) before SQL.
+    -- | Look up the producing tx id, the producer output's @tx_out@
+    -- row id, and the output value in one call. The UTxO extractor
+    -- uses it to write @tx_in.tx_out_id@ at COPY time, to enqueue the
+    -- consumed-by pair, and to sum input values for the deposit
+    -- calculation. Ingest reads the in-process 'UtxoStore'; buffered
+    -- Follow checks the block-local outputs map first, because the
+    -- producer's INSERT may still be unflushed.
   , resolveInputUtxo :: !(ByteString -> Word16 -> m (Maybe (TxId, TxOutId, DbLovelace)))
 
-    -- | Record a tx's outputs so later inputs spending them resolve
-    -- in-process: into the Ingest 'UtxoStore', or the buffered
+    -- | Record a tx's outputs so later inputs that spend them resolve
+    -- in-process: into the Ingest 'UtxoStore', or into the buffered
     -- Follow resolver's block-local map.
   , recordTxOutputs :: !(ByteString -> UtxoTxEntry -> m ())
 
     -- | Mark the producer output consumed by the tx. Ingest buffers
-    -- the pair for the 'TxOutWorker''s per-epoch bulk UPDATE;
-    -- Follow runs the UPDATE inside the block's own transaction.
-    -- No-op when @utxo.consumed_by_tx_id@ is off.
+    -- the pair for the 'TxOutWorker''s per-epoch bulk UPDATE; Follow
+    -- runs the UPDATE inside the block's own transaction. No-op when
+    -- @utxo.consumed_by_tx_id@ is off.
   , recordConsumed :: !(TxOutId -> TxId -> m ())
 
-    -- | Remove a consumed output from the Ingest 'UtxoStore' so the
-    -- table tracks the live UTxO set rather than chain history.
-    -- Called for regular inputs and for phase-2 failed collateral.
-    -- No-op in Follow.
+    -- | Drop a consumed output from the Ingest 'UtxoStore' so the
+    -- store tracks the live UTxO set, not chain history. Callers pass
+    -- regular inputs and phase-2 failed collateral. No-op in Follow.
   , deleteCachedUtxo :: !(ByteString -> Word16 -> m ())
   }
 

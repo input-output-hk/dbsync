@@ -1,8 +1,7 @@
 -- | Schema identity of this binary: the global schema version and the
--- fingerprint that ties each released version to an exact schema shape.
--- Drift between code and a released version is caught in CI (pin test)
--- and at boot (stored fingerprint comparison) instead of surfacing as a
--- broken query mid-sync.
+-- fingerprint that ties each released version to an exact schema
+-- shape. CI and boot both compare the fingerprint, so drift fails
+-- early instead of breaking a query mid-sync.
 module DbSync.Schema.Version
   ( -- * Version
     currentSchemaVersion
@@ -57,11 +56,10 @@ releasedSchemaFingerprints =
 newtype Fingerprint = Fingerprint {unFingerprint :: Text}
   deriving stock (Eq, Show)
 
--- | Hash the declared schema: every table (sorted by name, so input order
--- is irrelevant) plus any raw DDL that lives outside 'TableDef' (for
--- example the epoch view definitions). The rendering spells out every
--- 'TableDef' field explicitly so renaming a Haskell field cannot silently
--- change the hash.
+-- | Hash every table, sorted by name so input order is irrelevant,
+-- plus any raw DDL outside 'TableDef' such as the epoch views. The
+-- rendering spells out each 'TableDef' field, so renaming a Haskell
+-- field cannot change the hash.
 schemaFingerprint :: [TableDef] -> [Text] -> Fingerprint
 schemaFingerprint tables extraDdl =
   Fingerprint . hashToTextAsHex . hashWith @Blake2b_256 TE.encodeUtf8 $

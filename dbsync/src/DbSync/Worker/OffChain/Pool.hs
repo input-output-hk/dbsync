@@ -2,10 +2,9 @@
 
 -- | Pool-specific glue for the off-chain fetch worker.
 --
--- The worker discovers refs by polling PG via the work-queue
--- statements in 'DbSync.Db.Statement.Worker.OffChainPool'. Each ref is
--- fetched via a pluggable 'OffChainFetcher': 'httpPoolFetcher' for
--- the live HTTP path, 'stubPoolFetcher' for tests.
+-- The worker polls PG for refs through the work-queue statements in
+-- 'DbSync.Db.Statement.Worker.OffChainPool', then fetches each one with
+-- a pluggable 'OffChainFetcher'.
 module DbSync.Worker.OffChain.Pool
   ( OffChainPoolWorker
   , OffChainPoolConfig (..)
@@ -78,8 +77,7 @@ data OffChainPoolConfig = OffChainPoolConfig
   , opcBatchSize   :: !Int32
   }
 
--- | Production defaults: 5-minute cycle, 100 refs per cycle. Tests
--- override 'opcSleepMicros' with a much shorter value.
+-- | 5-minute cycle, 100 refs per cycle.
 defaultOffChainPoolConfig :: OffChainPoolConfig
 defaultOffChainPoolConfig = OffChainPoolConfig
   { opcSleepMicros = 5 * 60 * 1_000_000
@@ -126,7 +124,6 @@ runOnePoolCycle tracer conn batchSize fetcher =
 -- * Hooks
 -- ---------------------------------------------------------------------------
 
--- | The complete hook triple for a pool worker.
 poolHooks :: OffChainFetcher -> OffChainHooks PendingPoolFetch PoolMetadata
 poolHooks fetcher = OffChainHooks
   { ohLoadPending = loadPendingPoolFetches
@@ -150,8 +147,6 @@ isDue now ppf = case ppfPrevFetchTime ppf of
     let r = retryAgain (utcTimeToPOSIXSeconds t) (ppfPrevRetryCount ppf)
     in retryRetryTime r <= now
 
--- | Project a 'PendingPoolFetch' into the public 'PoolMetadataRef'
--- shape that 'OffChainFetcher' speaks.
 toFetchRef :: PendingPoolFetch -> PoolMetadataRef
 toFetchRef ppf = PoolMetadataRef
   { pmrPoolId   = mempty
@@ -238,10 +233,9 @@ nextRetryCount conn phId pmrId = do
 -- * Fetchers
 -- ---------------------------------------------------------------------------
 
--- | Production fetcher: performs a real HTTP request via the shared
--- restricted 'Http.Manager'. Only 'ofFetchPoolMetadata' is wired —
--- the other hooks are inert because the work-queue + persistence
--- live in this module, not in the fetcher record.
+-- | Production fetcher, over the shared restricted 'Http.Manager'. Only
+-- 'ofFetchPoolMetadata' is wired. The other hooks stay inert because
+-- the work queue and persistence live in this module.
 httpPoolFetcher :: Http.Manager -> OffChainFetcher
 httpPoolFetcher manager = OffChainFetcher
   { ofFetchPoolMetadata = \pmr ->

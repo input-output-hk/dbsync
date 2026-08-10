@@ -1,16 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Extractor for Plutus and native-script witness data.
+-- | Plutus and native-script witness data: @datum@, @script@,
+-- @redeemer@, @redeemer_data@ and @extra_key_witness@. Dedup on hash
+-- gives @datum@, @script@ and @redeemer_data@ one row per payload,
+-- however many transactions reference it.
 --
--- Populates five witness-derived tables: 'datum', 'script',
--- 'redeemer', 'redeemer_data', and 'extra_key_witness'. The
--- @datum@, @script@, and @redeemer_data@ rows are deduplicated on
--- their hash so the same payload referenced by multiple
--- transactions yields one row.
---
--- A spend redeemer's @script_hash@ is left for the pipeline's
--- 'DbSync.Resolver.fillSpendScriptHashes' hook: it lives on the
--- output being unlocked, not in this transaction.
+-- A spend redeemer's @script_hash@ lives on the output the tx unlocks,
+-- not in the tx itself, so 'DbSync.Resolver.fillSpendScriptHashes'
+-- fills it later.
 module DbSync.Extractor.ScriptsDatums
   ( scriptsDatumsExtractor
   , redeemerScriptFee
@@ -66,8 +63,8 @@ scriptsDatumsExtractor = ExtractorDef
 -- * Processing
 -- ---------------------------------------------------------------------------
 
--- Phase-2 failures are skipped: the ledger never applies an invalid
--- tx's witnesses, so its scripts, datums, and redeemers are not
+-- A phase-2 failure is skipped: the ledger never applies an invalid
+-- tx's witnesses, so its scripts, datums and redeemers are not
 -- on-chain data.
 processScriptsDatums :: ProcessBlockFn
 processScriptsDatums ctx = do
@@ -111,10 +108,10 @@ writeExtraKey txId h = do
     , extraKeyWitnessTxId = txId
     }
 
--- | @redeemer.fee@ needs the block's Plutus execution prices;
--- 'Nothing' (ledger off) leaves the fee cell NULL. The row id is
--- pre-assigned by the pipeline so FK writers in other extractors can
--- reference it without ordering games.
+-- | @redeemer.fee@ needs the block's Plutus execution prices, so
+-- 'Nothing' (ledger off) leaves that cell NULL. The pipeline
+-- pre-assigns the row id, so FK writers in other extractors reference
+-- it whatever the order.
 writeRedeemerEntry
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
   => Maybe Prices -> TxId -> RedeemerId -> GenericTxRedeemer -> m ()
@@ -141,8 +138,6 @@ writeRedeemerEntry mPrices txId rid gtr = do
     , redeemerRedeemerDataId  = rdId
     }
 
--- | Script-execution fee for one redeemer: 'txscriptfee' over the
--- block's prices and the redeemer's execution units.
 redeemerScriptFee :: Prices -> Word64 -> Word64 -> DbLovelace
 redeemerScriptFee prices mem steps =
   coinToDbLovelace (txscriptfee prices (ExUnits (fromIntegral mem) (fromIntegral steps)))

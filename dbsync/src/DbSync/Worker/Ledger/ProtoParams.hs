@@ -4,13 +4,9 @@
 
 -- | Era-agnostic protocol parameters and per-era builders.
 --
--- 'ProtoParams' holds every protocol parameter used across Shelley
--- through Dijkstra. Fields that only appear from a given era onwards
--- ('ppCoinsPerUtxo' from Alonzo, 'ppGovActionDeposit' from Conway, …)
--- carry a 'Maybe' so earlier eras leave them empty.
--- 'epochProtoParams' / 'getDeposits' project the current-epoch params
--- out of an 'ExtLedgerState'; the per-era @fromXxxParams@ helpers do
--- the era-specific extraction.
+-- 'ProtoParams' holds every protocol parameter from Shelley through
+-- Dijkstra. A field that appears only from a later era carries a
+-- 'Maybe', so earlier eras leave it empty.
 module DbSync.Worker.Ledger.ProtoParams
   ( ProtoParams (..)
   , Deposits (..)
@@ -51,11 +47,9 @@ import Ouroboros.Consensus.Cardano.Block (CardanoBlock)
 -- * Types
 -- ---------------------------------------------------------------------------
 
--- | Era-collapsed view of the on-chain protocol parameters.
---
--- Fields appearing from Alonzo onwards are wrapped in 'Maybe' (and
--- set to 'Nothing' in Shelley\/Allegra\/Mary); the Conway governance
--- knobs are similarly optional until Conway.
+-- | Era-collapsed view of the on-chain protocol parameters. The
+-- Alonzo additions are 'Nothing' before Alonzo, and the Conway
+-- governance knobs are 'Nothing' before Conway.
 data ProtoParams = ProtoParams
   { ppMinfeeA            :: !Natural
   , ppMinfeeB            :: !Natural
@@ -136,8 +130,7 @@ data Deposits = Deposits
 -- * Projection
 -- ---------------------------------------------------------------------------
 
--- | Project 'ProtoParams' out of the current ledger state.
--- Returns 'Nothing' for Byron (no Shelley-style protocol parameters).
+-- | 'Nothing' for Byron, which has no Shelley-style protocol parameters.
 epochProtoParams :: ExtLedgerState (CardanoBlock StandardCrypto) mk -> Maybe ProtoParams
 epochProtoParams lstate =
   case ledgerState lstate of
@@ -157,8 +150,7 @@ getProtoParams
   -> PParams era
 getProtoParams st = Shelley.nesEs (Consensus.shelleyLedgerState st) ^. Shelley.curPParamsEpochStateL
 
--- | Project the key \/ pool deposits out of the current ledger state.
--- Byron has no deposits, so returns 'Nothing'.
+-- | 'Nothing' for Byron, which has no deposits.
 getDeposits :: ExtLedgerState (CardanoBlock StandardCrypto) mk -> Maybe Deposits
 getDeposits lstate =
   case ledgerState lstate of

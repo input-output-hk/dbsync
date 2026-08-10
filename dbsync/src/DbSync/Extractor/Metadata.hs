@@ -1,12 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Metadata extractor.
---
--- Emits one @tx_metadata@ row per metadata key in a transaction.
--- Each row stores the single-key CBOR encoding of that pair (matching
--- what the original @cardano-db-sync@ writes) plus the no-schema JSON
--- rendering of the value — SQL @NULL@ when the value contains a
--- Unicode NUL that PostgreSQL cannot store (see 'renderMetadataJson').
+-- | Writes one @tx_metadata@ row per metadata key in a transaction.
+-- The row holds the single-key CBOR encoding of the pair plus the
+-- no-schema JSON rendering of the value. The JSON column takes SQL
+-- @NULL@ when the value holds a Unicode NUL that PostgreSQL rejects;
+-- see 'renderMetadataJson'.
 module DbSync.Extractor.Metadata
   ( metadataExtractor
   ) where
@@ -37,10 +35,9 @@ metadataExtractor = ExtractorDef
 -- * Processing
 -- ---------------------------------------------------------------------------
 
--- | Walk every metadata key in every tx and emit one row per pair.
--- Empty maps (parser saw aux-data but it carried no metadata) yield
--- no rows. Failed phase-2 txs are skipped — their metadata is not
--- recorded on-chain.
+-- | An empty map, where the parser saw aux-data that carried no
+-- metadata, gives no rows. A failed phase-2 tx is skipped, because the
+-- chain does not record its metadata.
 processMetadata :: ProcessBlockFn
 processMetadata ctx = do
   writer <- asks getWriter

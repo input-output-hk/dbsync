@@ -2,26 +2,14 @@
 {-# LANGUAGE DerivingVia        #-}
 {-# LANGUAGE OverloadedStrings  #-}
 
--- | LSM-backed deduplication stores for entity ID assignment.
+-- | LSM-backed deduplication stores for entity id assignment. Each
+-- 'DedupStore' maps an entity's natural key to its database id, and
+-- 'lookupOrInsert' allocates a new id on a miss.
 --
--- Each 'DedupStore' maps a blockchain entity's natural key
--- ('ShortByteString') to its assigned database ID ('Int64'). On
--- first encounter of a key the store allocates the next id from an
--- in-process counter, writes the @(key, id)@ pair to its LSM table,
--- and reports @isNew = True@ so the caller emits the matching COPY
--- row; subsequent encounters return the existing id with @isNew =
--- False@.
---
--- 'DedupStores' aggregates the dedup tables used during
--- 'IngestChainHistory', each under a distinct snapshot label in the
--- shared 'LsmSession' so they coexist without name collisions.
---
--- Values are a fixed 8-byte big-endian 'Int64' (see 'encodeInt64' /
--- 'decodeInt64'). All access is single-threaded — @lsm-tree@
--- rejects concurrent writers on a table. The snapshot persists the
--- @(key, id)@ pairs but not the next-id counter; on a resumed boot
--- 'DbSync.SyncState.Row.rebuildDedupMaps' calls 'insertExisting' per
--- existing row, which raises the counter to @max(existingId) + 1@.
+-- Only one thread may access these: @lsm-tree@ rejects concurrent
+-- writers on a table. A snapshot keeps the @(key, id)@ pairs but not
+-- the counter, so a resumed boot runs
+-- 'DbSync.SyncState.Row.rebuildDedupMaps' to raise it again.
 module DbSync.Phase.Ingest.DedupStore
   ( -- * Types
     DedupStore
@@ -66,27 +54,21 @@ import DbSync.Phase.Ingest.LsmSession
 -- Types
 -- ---------------------------------------------------------------------------
 
--- | A single dedup store: one LSM table plus an in-process id
--- counter.
---
--- The table handle is wrapped in an 'IORef' so 'compactDedupStore'
--- can atomically replace it with a freshly-opened-from-snapshot
--- handle without changing the 'DedupStore' value held by callers.
+-- | One LSM table plus an in-process id counter. An 'IORef' holds
+-- the table so 'compactDedupStore' can swap in a reopened handle
+-- without changing the 'DedupStore' value that callers hold.
 data DedupStore = DedupStore
   { dstTable        :: !(IORef (LSMTree.Table IO ShortByteString DedupIdBytes ByteString))
-    -- ^ The blob type ('ByteString') is required for 'LSMTree.insert'
-    -- to typecheck but never used — every call passes 'Nothing' for
-    -- the optional blob.
+    -- ^ The blob type only makes 'LSMTree.insert' typecheck. Every
+    -- call passes 'Nothing' for the optional blob.
   , dstCounter      :: !(IORef Int64)
-    -- ^ Next id to allocate. Bumped by 'lookupOrInsert' on a miss
-    -- and by 'insertExisting' when the incoming id is at or past
-    -- the current value.
+    -- ^ Next id to allocate. 'lookupOrInsert' bumps it on a miss,
+    -- and 'insertExisting' bumps it past an incoming id.
   , dstSnapshotName :: !LSMTree.SnapshotName
-    -- ^ Per-store snapshot name. See 'newStores' for the distinct
-    -- names.
+    -- ^ 'newStores' assigns a distinct name per store.
   , dstLabel        :: !LSMTree.SnapshotLabel
-    -- ^ Per-store snapshot label. @lsm-tree@ rejects an open whose
-    -- label differs from the save label.
+    -- ^ @lsm-tree@ rejects an open whose label differs from the save
+    -- label.
   }
 
 -- | The dedup stores used during 'IngestChainHistory'.
@@ -103,10 +85,10 @@ data DedupStores = DedupStores
   , dstVotingAnchor  :: !DedupStore  -- ^ encoded (url, data_hash, type) -> VotingAnchorId
   }
 
--- | Wire-format wrapper around an 'Int64' value. The
--- 'ResolveValue' instance is 'LSMTree.ResolveAsFirst' — collisions
--- on the same key only happen on replay, and the replayed value is
--- bit-identical to the original.
+-- | Wire-format wrapper around an 'Int64' value.
+-- 'LSMTree.ResolveAsFirst' is safe here: two values collide on the
+-- same key only on replay, and the replayed value is bit-identical
+-- to the original.
 newtype DedupIdBytes = DedupIdBytes ShortByteString
   deriving stock (Eq, Show)
   deriving newtype (LSMTree.SerialiseValue)
@@ -116,13 +98,11 @@ newtype DedupIdBytes = DedupIdBytes ShortByteString
 -- Lifecycle
 -- ---------------------------------------------------------------------------
 
--- | Open one dedup store under the given session.
---
--- If the session already has a snapshot saved under the supplied
--- name, restore from it; otherwise create a fresh empty table with
--- 'defaultIngestTableConfig'. The counter is initialised to 1 in
--- both cases; 'DbSync.SyncState.Row.rebuildDedupMaps' is
--- responsible for bumping it past existing ids on a resumed boot.
+-- | Restore the table from the session's snapshot of that name, or
+-- create an empty one with 'defaultIngestTableConfig'. The counter
+-- starts at 1 either way, and
+-- 'DbSync.SyncState.Row.rebuildDedupMaps' bumps it past the existing
+-- ids on a resumed boot.
 openDedupStore
   :: LsmSession
   -> LSMTree.SnapshotLabel
@@ -144,8 +124,7 @@ openDedupStore lsm label name = do
     , dstLabel        = label
     }
 
--- | Close the store's currently-active table. The session it lives
--- in is not touched.
+-- | Closes the active table only. The session stays open.
 closeDedupStore :: DedupStore -> IO ()
 closeDedupStore store = do
   table <- readIORef (dstTable store)
@@ -175,8 +154,8 @@ newStores lsm = DedupStores
   <*> openDedupStore lsm (LSMTree.SnapshotLabel "dedup-voting-anchor")
                          (LSMTree.toSnapshotName "current-voting-anchor")
 
--- | Every store in the aggregate, for callers that apply a uniform
--- lifecycle step (close \/ persist \/ compact) across all of them.
+-- | Every store in the aggregate, for a caller that applies one
+-- lifecycle step across all of them.
 allDedupStores :: DedupStores -> [DedupStore]
 allDedupStores ds =
   [ dstPoolHash      ds
@@ -199,10 +178,10 @@ closeStores = traverse_ closeDedupStore . allDedupStores
 -- Hot path
 -- ---------------------------------------------------------------------------
 
--- | Look up a key. If new, allocate the next id, write
--- @(key, id)@ to the LSM table, and return @(id, True)@. If
--- existing, return @(existingId, False)@. The 'Bool' indicates
--- whether a new COPY row should be written.
+-- | Look up a key. A new key allocates the next id, writes
+-- @(key, id)@ to the table, and returns @(id, True)@. A known key
+-- returns @(existingId, False)@. 'True' tells the caller to write a
+-- new COPY row.
 lookupOrInsert :: ShortByteString -> DedupStore -> IO (Int64, Bool)
 lookupOrInsert key store = do
   table  <- readIORef (dstTable store)
@@ -226,11 +205,10 @@ lookupOnly key store = do
     Just bs -> decodeInt64 bs
     Nothing -> Nothing
 
--- | Insert a @(key, id)@ pair retaining the supplied id, and bump
--- the counter to @max(currentCounter, id + 1)@ so subsequent
--- 'lookupOrInsert' allocations don't collide with rebuilt entries.
---
--- Used at boot to repopulate dedup stores from rows already in PG.
+-- | Insert a @(key, id)@ pair keeping the supplied id, and raise the
+-- counter to @max(counter, id + 1)@, so a later 'lookupOrInsert'
+-- cannot collide with a rebuilt entry. Boot calls this to repopulate
+-- the stores from the rows PG already holds.
 insertExisting :: ShortByteString -> Int64 -> DedupStore -> IO ()
 insertExisting key existingId store = do
   table <- readIORef (dstTable store)
@@ -243,18 +221,15 @@ insertExisting key existingId store = do
 -- Sizes
 -- ---------------------------------------------------------------------------
 
--- | O(1) approximate size derived from the id counter.
--- Returns @counter - 1@: exact on a fresh run; on a resumed run
--- where 'insertExisting' bumped the counter, this is an upper bound
--- (the max assigned id). Cheap enough to call at every epoch
--- boundary.
+-- | O(1) size from the id counter, as @counter - 1@. A fresh run
+-- gives the exact count. On a resumed run 'insertExisting' already
+-- raised the counter, so this is an upper bound.
 sizeApprox :: DedupStore -> IO Int
 sizeApprox store = do
   cnt <- readIORef (dstCounter store)
   pure $ max 0 (fromIntegral cnt - 1)
 
--- | Approximate entry counts for every dedup store, named for log
--- output.
+-- | Approximate entry counts, named for log output.
 dedupStoreSizes :: DedupStores -> IO [(Text, Int)]
 dedupStoreSizes ds = do
   pool   <- sizeApprox (dstPoolHash      ds)
@@ -284,16 +259,16 @@ dedupStoreSizes ds = do
 -- Epoch boundary
 -- ---------------------------------------------------------------------------
 
--- | Flush the write buffer and atomically replace the store's
--- on-disk snapshot. Cheap (run files are hard-linked); runs at
--- every epoch boundary as the warm-restart anchor. Resume
--- correctness never depends on it — 'rebuildDedupMaps' repopulates
--- every store from PostgreSQL at boot.
+-- | Flush the write buffer and replace the store's on-disk snapshot.
+-- The snapshot hard-links the run files, so every epoch boundary can
+-- run this as the warm-restart anchor. Resume correctness never
+-- depends on it, because 'rebuildDedupMaps' repopulates every store
+-- from PostgreSQL at boot.
 persistDedupStore :: DedupStore -> LsmSession -> IO ()
 persistDedupStore store lsm = mask_ $ do
-  -- delete-then-save would lose this table's snapshot if interrupted
-  -- between the two calls; mask covers the whole cycle so cancel
-  -- either lands before any work or after a fresh snapshot exists.
+  -- An interrupt between the delete and the save would lose the
+  -- snapshot. The mask covers both, so a cancel lands either before
+  -- any work or after a fresh snapshot exists.
   let session = lsmHandle lsm
   table <- readIORef (dstTable store)
   hasSnap <- LSMTree.doesSnapshotExist session (dstSnapshotName store)
@@ -301,13 +276,10 @@ persistDedupStore store lsm = mask_ $ do
   LSMTree.saveSnapshot (dstSnapshotName store) (dstLabel store) table
 
 -- | 'persistDedupStore', then close the active table and reopen it
--- from the snapshot, swapping the handle in 'dstTable'.
---
--- Same shape and rationale as
--- 'DbSync.Phase.Ingest.UtxoStore.compactUtxoStore': caps the active
--- LSM run count (and hence open file descriptors) at the price of a
--- full re-read of the table's run files, so the boundary handler
--- runs it on a coarse epoch cadence only.
+-- from the snapshot. This matches
+-- 'DbSync.Phase.Ingest.UtxoStore.compactUtxoStore': it caps the
+-- active run count and the open fds, but re-reads every run file, so
+-- the boundary handler runs it on a coarse epoch cadence only.
 compactDedupStore :: DedupStore -> LsmSession -> IO ()
 compactDedupStore store lsm = mask_ $ do
   persistDedupStore store lsm
@@ -322,10 +294,10 @@ compactDedupStore store lsm = mask_ $ do
 -- Internal: wire format
 -- ---------------------------------------------------------------------------
 
--- | Encode an 'Int64' as 8 big-endian bytes. Built directly — a
--- 'Data.ByteString.Builder' round-trip allocates a ~4KB pinned
--- chunk per call, and this runs once per new dedup entity plus once
--- per existing row during the boot-time 'insertExisting' rebuild.
+-- | Encode an 'Int64' as 8 big-endian bytes. This builds them
+-- directly: a 'Data.ByteString.Builder' round-trip allocates a 4KB
+-- pinned chunk per call, and this runs once per new dedup entity,
+-- plus once per row during the boot-time rebuild.
 encodeInt64 :: Int64 -> DedupIdBytes
 encodeInt64 i =
   DedupIdBytes . SBS.toShort $
@@ -337,9 +309,9 @@ pokeWord64BE p off w =
     pokeByteOff p (off + i)
       (fromIntegral (w `shiftR` ((7 - i) * 8)) :: Word8)
 
--- | Inverse of 'encodeInt64'. 'Nothing' on a length mismatch —
--- should never happen for a value the store itself produced, so
--- the call site treats 'Nothing' as a cache miss.
+-- | Inverse of 'encodeInt64'. 'Nothing' means a length mismatch,
+-- which cannot happen for a value the store produced, so the call
+-- site treats it as a cache miss.
 decodeInt64 :: DedupIdBytes -> Maybe Int64
 decodeInt64 (DedupIdBytes sbs)
   | SBS.length sbs /= 8 = Nothing

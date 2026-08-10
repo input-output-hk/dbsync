@@ -1,29 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | DDL builders for the post-load index passes.
+-- | DDL builders for the index passes.
 --
--- During @IngestChainHistory@ tables are UNLOGGED with no indexes —
--- the COPY path runs flat-out. Three passes build the indexes the
--- resolves and Follow query patterns need:
---
---   * 'ingestResolveIndexStatements' — built at the start of Ingest
---     so the per-epoch address-resolver worker doesn't hash-join
---     the unindexed @tx_out@ / @address@ heaps.
---   * 'preResolveIndexStatements' — the minimum set before the
---     post-load UPDATEs run. Tables are still UNLOGGED so the build
---     skips WAL writes and the second-pass scan that @CONCURRENTLY@
---     would force.
---   * 'tableIndexStatements' — per table, the PK and unique
---     constraints (from 'tdPrimaryKey' and 'tdUniqueConstraints')
---     plus the FK/scope indexes from 'foreignKeyIndexStatements'.
---     @IF NOT EXISTS@ makes a crash-rerun of the pass a no-op.
---
--- Every index the resolve passes create is dropped again before the
--- UNLOGGED → LOGGED flip ('resolveScaffoldingIndexNames' +
--- 'dropIndexSql'): @ALTER TABLE … SET LOGGED@ rewrites the heap and
--- rebuilds every index on the table inside the ALTER, so any index
--- alive at flip time is paid for twice. The production pass after
--- the flip rebuilds the shapes Follow needs exactly once.
+-- @IngestChainHistory@ keeps the tables UNLOGGED and index-free so COPY
+-- runs flat-out. The resolve passes add scaffolding indexes and drop them
+-- again before the LOGGED flip; the Prep pass then builds the shapes
+-- Follow needs. Every builder uses @IF NOT EXISTS@, so a crash-rerun is a
+-- no-op.
 module DbSync.Db.Statement.Indexes
   ( IndexStatement (..)
   , tableIndexStatements
@@ -161,23 +144,18 @@ import DbSync.Db.Schema.UTxO
   )
 import DbSync.Db.Sql (quoteIdent)
 
--- | A named @CREATE INDEX@ DDL statement. The name is carried
--- alongside the SQL so log lines and @DROP INDEX@ statements can
--- refer to the index without parsing DDL.
+-- | The name travels beside the SQL, so log lines and @DROP INDEX@
+-- statements need not parse the DDL.
 data IndexStatement = IndexStatement
   { isName :: !Text
   , isSql  :: !Text
   }
   deriving stock (Eq, Show)
 
--- | One entry for the implicit @id@ key when no primary key is
--- declared, plus one per unique constraint. A declared
--- 'tdPrimaryKey' already carries its unique index from CREATE TABLE
--- time, so emitting @\<table>_pkey_idx@ for it would just duplicate
--- the @\<table>_pkey@ constraint index.
--- 'Concurrent' = @CREATE INDEX CONCURRENTLY@ (live database, no
--- @ShareLock@); 'NonConcurrent' = full parallel maintenance worker
--- support.
+-- | One entry for the implicit @id@ key when the table declares no
+-- primary key, plus one per unique constraint and the FK/scope indexes.
+-- A declared 'tdPrimaryKey' already owns a unique index from CREATE TABLE
+-- time, so @\<table>_pkey_idx@ would duplicate @\<table>_pkey@.
 tableIndexStatements :: Concurrency -> TableDef -> [IndexStatement]
 tableIndexStatements conc td =
   pkStatements <> uniqueStatements <> foreignKeyIndexStatements conc td
@@ -197,10 +175,9 @@ tableIndexStatements conc td =
         [1 ..]
         (tdUniqueConstraints td)
 
--- | The name 'tableIndexStatements' emits for the @n@-th (1-based)
--- entry in @td.tdUniqueConstraints@. Callers that hand-roll a
--- non-concurrent build use this so a later concurrent re-build's
--- @IF NOT EXISTS@ matches.
+-- | The name 'tableIndexStatements' emits for the @n@-th (1-based) entry
+-- in @td.tdUniqueConstraints@. A hand-rolled build must use this name, so
+-- that the @IF NOT EXISTS@ of a later rebuild matches.
 uniqueConstraintIndexName :: TableDef -> Int -> Text
 uniqueConstraintIndexName td n =
   tdName td <> "_unique_" <> show n <> "_idx"
@@ -350,13 +327,10 @@ fkIndexColumns =
   where
     tableEntry td cols = (tdName td, cols)
 
--- | Built at the start of Ingest. Index names match what
--- 'tableIndexStatements' would emit later, so the schema-driven Prep
--- pass dedupes via @IF NOT EXISTS@.
---
--- Without these, every per-epoch resolve scans the full @tx_out@
--- heap — the visible cause of @awaitTxOutDrained (epoch N-1)@ stalls
--- late in Ingest.
+-- | Built at the start of Ingest. The names match what
+-- 'tableIndexStatements' emits later, so the Prep pass dedupes them
+-- through @IF NOT EXISTS@. Without them, every per-epoch resolve scans
+-- the whole @tx_out@ heap.
 ingestResolveIndexStatements :: [IndexStatement]
 ingestResolveIndexStatements =
   [ -- 'bulkUpdateTxOutAddressIdsStmt' and 'bulkUpdateConsumedByTxIdStmt'
@@ -424,12 +398,11 @@ postResolveIndexStatements =
 -- * Scaffolding teardown
 -- ---------------------------------------------------------------------------
 
--- | Every index name the ingest-time and pre/post-resolve passes may
--- have created. Dropped in one pass right before the UNLOGGED →
--- LOGGED flip so the flip rewrites bare heaps; the production index
--- pass afterwards rebuilds the shapes Follow needs (under the same
--- names) exactly once, with per-index pool fan-out and parallel
--- maintenance workers instead of serially inside each table's ALTER.
+-- | Every index name the ingest-time and pre/post-resolve passes create.
+-- One pass drops them all right before the UNLOGGED → LOGGED flip, so the
+-- flip rewrites bare heaps. @ALTER TABLE … SET LOGGED@ rebuilds every
+-- surviving index serially inside the ALTER, so an index left alive costs
+-- a second build.
 resolveScaffoldingIndexNames :: [Text]
 resolveScaffoldingIndexNames =
   nub $ map isName $
@@ -444,10 +417,9 @@ dropIndexSql idxName = "DROP INDEX IF EXISTS " <> quoteIdent idxName
 -- * Internals
 -- ---------------------------------------------------------------------------
 
--- | Concurrent builds are required when the table is LOGGED and
--- being written to. Non-concurrent avoids the second validation
--- scan and gets full @max_parallel_maintenance_workers@ — preferred
--- for UNLOGGED tables or LOGGED tables without concurrent writers.
+-- | A LOGGED table with concurrent writers needs 'Concurrent', which takes
+-- no @ShareLock@. 'NonConcurrent' skips the second validation scan and
+-- uses the full @max_parallel_maintenance_workers@.
 data Concurrency = Concurrent | NonConcurrent
 
 data Uniqueness  = Unique | NonUnique

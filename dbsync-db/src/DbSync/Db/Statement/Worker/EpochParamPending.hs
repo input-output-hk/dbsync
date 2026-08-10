@@ -1,17 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Hasql 'Statement' bindings for the @epoch_param_pending@
--- workspace table. Three roles:
---
---   * 'insertEpochParamPendingStmt' — bulk insert by the consumer at
---     each epoch boundary. @ON CONFLICT (epoch_no) DO NOTHING@
---     makes a re-flush after a partial crash a no-op.
---   * 'applyPoolUpdateDepositStmt' / 'applyStakeRegistrationDepositStmt'
---     — Prep-phase UPDATEs that fill the ledger-derived deposit
---     columns on @pool_update@ and @stake_registration@.
---   * 'truncateEpochParamPendingStmt' — clears the table at the end
---     of Prep. Truncate (not DROP) so a future Follow → Ingest
---     re-entry finds the table intact.
+-- | Hasql 'Statement' bindings for the @epoch_param_pending@ workspace
+-- table: the consumer's boundary insert, the two Prep-phase deposit
+-- UPDATEs, and the end-of-Prep truncate.
 module DbSync.Db.Statement.Worker.EpochParamPending
   ( -- * Bulk insert
     insertEpochParamPendingStmt
@@ -144,6 +135,8 @@ applyStakeRegistrationDepositStmt =
 -- * Cleanup
 -- ---------------------------------------------------------------------------
 
+-- | Truncate rather than drop, so a later Follow → Ingest re-entry finds
+-- the table intact.
 truncateEpochParamPendingStmt :: Stmt.Statement () ()
 truncateEpochParamPendingStmt =
   Stmt.preparable

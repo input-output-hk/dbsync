@@ -1,16 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Core extractor.
+-- | Owns @block@, @tx@ and @slot_leader@, plus the shared dedup tables
+-- @stake_address@ and @pool_hash@ that the pipeline writes whatever
+-- the config enables. The operator cannot disable this extractor.
 --
--- Extracts the fundamental tables: @block@, @tx@, and @slot_leader@.
--- Also owns the shared dedup tables @stake_address@ and @pool_hash@,
--- which the block pipeline writes unconditionally regardless of which
--- optional extractors are enabled.
--- This extractor is always enabled and cannot be disabled.
---
--- Uses pre-assigned IDs from 'BlockContext' — it does NOT call
--- 'assignBlockId' or 'assignTxId' itself. Those are assigned
--- centrally by 'processBlock'.
+-- It reads the ids 'processBlock' pre-assigned on the 'BlockContext'
+-- and never calls 'assignBlockId' or 'assignTxId' itself.
 module DbSync.Extractor.Core
   ( coreExtractor
 
@@ -61,11 +56,6 @@ import DbSync.Writer (HasWriter (..), Writer (..))
 -- * Extractor definition
 -- ---------------------------------------------------------------------------
 
--- | The core extractor definition.
---
--- Produces rows for the @block@, @tx@, and @slot_leader@ tables and
--- owns the pipeline-written @stake_address@ and @pool_hash@ tables.
--- Always enabled.
 coreExtractor :: ExtractorDef
 coreExtractor = ExtractorDef
   { pdName    = "core"
@@ -83,12 +73,6 @@ coreExtractor = ExtractorDef
 -- * Processing function
 -- ---------------------------------------------------------------------------
 
--- | Process a single block through the core extractor.
---
--- Uses pre-assigned IDs from BlockContext:
--- 1. Write slot leader row if new
--- 2. Write block row
--- 3. Write tx rows (with phase- and ledger-aware fee/deposit dispatch)
 processCore :: ProcessBlockFn
 processCore ctx = do
   resolver <- asks getResolver
@@ -114,17 +98,13 @@ processCore ctx = do
               }
     liftIO $ writeTx writer (tcTxId tc) tx
 
--- | Pick @tx.fee@ and @tx.deposit@ for one transaction.
---
--- Dispatch turns on three orthogonal axes:
---
---   * Validity — phase-2 failure vs valid contract.
---   * Write path — Follow (INSERT, can resolve input values inline)
---     vs Ingest (COPY, post-load SQL fills the columns).
---   * Ledger worker — ON (deposits observed) vs OFF (identity backfill).
---
--- The Follow path is shared by 'FollowingVolatileTail' and
--- 'FollowingChainTip' via 'isFollowPath'.
+-- | Pick @tx.fee@ and @tx.deposit@ for one transaction. Three
+-- independent axes drive the dispatch: phase-2 failure against valid
+-- contract; Follow (INSERT, resolves input values inline) against
+-- Ingest (COPY, post-load SQL fills the columns); and ledger worker on
+-- (observed deposits) against off (identity backfill).
+-- 'isFollowPath' puts 'FollowingVolatileTail' and 'FollowingChainTip'
+-- on the same Follow path.
 computeTxFinancials
   :: IdResolver IO
   -> BlockContext
@@ -200,9 +180,8 @@ affectsDeposit = \case
 -- * Record builders (pure, shared across phases)
 -- ---------------------------------------------------------------------------
 
--- | Build a 'Block' record from a 'GenericBlock'. Epoch Boundary
--- Blocks carry no real block or slot number, so those columns are
--- left NULL; only the epoch number is meaningful for an EBB.
+-- | An Epoch Boundary Block carries no real block or slot number, so
+-- those columns stay NULL. Only the epoch number means anything there.
 mkBlock :: GenericBlock -> Maybe BlockId -> SlotLeaderId -> Block
 mkBlock gb prevId slId = Block
   { blockHash          = blkHash gb
@@ -225,11 +204,9 @@ mkBlock gb prevId slId = Block
     notEbb :: a -> Maybe a
     notEbb x = if blkIsEBB gb then Nothing else Just x
 
--- | Build a 'SlotLeader' record.
---
--- The pool-hash FK arrives pre-resolved from the pipeline; it is
--- 'Nothing' for Byron blocks (the leader hash is a genesis-key
--- delegate, not a stake-pool key) and for EBBs.
+-- | The pipeline pre-resolves the pool-hash FK. It is 'Nothing' for
+-- EBBs and for Byron blocks, where the leader hash names a genesis-key
+-- delegate rather than a stake-pool key.
 mkSlotLeader :: Maybe PoolHashId -> GenericBlock -> SlotLeader
 mkSlotLeader mPoolHashId gb = SlotLeader
   { slotLeaderHash        = blkSlotLeader gb
@@ -257,10 +234,10 @@ mkTx blkId gtx = Tx
 -- * Internal helpers
 -- ---------------------------------------------------------------------------
 
--- | Describe a slot leader. Byron EBBs carry a synthetic null leader;
--- Byron regular blocks are signed by a genesis-key delegate; from
--- Shelley on, a block with no resolved pool hash is a genesis-key
--- delegate, otherwise it is a registered stake pool.
+-- | A Byron EBB carries a synthetic null leader. A genesis-key
+-- delegate signs a regular Byron block. From Shelley on, a block with
+-- no resolved pool hash comes from a genesis-key delegate; any other
+-- block comes from a registered stake pool.
 mkSlotLeaderDesc :: GenericBlock -> Maybe PoolHashId -> Text
 mkSlotLeaderDesc gb mPoolHashId
   | blkIsEBB gb           = "Epoch boundary slot leader"

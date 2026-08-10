@@ -1,9 +1,5 @@
--- | LocalStateQuery mini-protocol handler.
---
--- Reads request\/response pairs from 'sqvRequestVar' and drives the
--- LSQ state machine on the n2c socket: Acquire → Query → Release,
--- writing each response back into the per-request reply TMVar that
--- the caller in 'DbSync.StateQuery' is blocked on.
+-- | LocalStateQuery mini-protocol handler. Drives Acquire → Query →
+-- Release on the n2c socket for each request on 'sqvRequestVar'.
 module DbSync.StateQuery.Handler
   ( localStateQueryHandler
   ) where
@@ -26,11 +22,8 @@ import Ouroboros.Network.Protocol.LocalStateQuery.Type (Target (..))
 
 import DbSync.StateQuery.Types (StateQueryVar (..))
 
--- | LocalStateQuery protocol client that handles interpreter requests.
---
--- Loops forever, reading requests from the 'StateQueryVar' TMVar,
--- sending them to the node via Acquire → Query → Release, and
--- writing responses back to the response TMVar.
+-- | Loops forever. Each response goes back on the reply TMVar the
+-- requester is blocked on, including an 'AcquireFailure'.
 localStateQueryHandler
   :: StateQueryVar
   -> LocalStateQueryClient

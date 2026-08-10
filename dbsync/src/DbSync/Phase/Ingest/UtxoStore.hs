@@ -3,20 +3,14 @@
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
--- | LSM-backed live UTxO cache mapping @(tx_hash, output_idx)@ to
--- the producing tx's @(TxId, TxOutId, value)@.
+-- | LSM-backed live UTxO cache mapping @(tx_hash, output_idx)@ to the
+-- producing tx's @(TxId, TxOutId, value)@, one entry per unspent
+-- output. 'DbSync.Extractor.Pipeline' fills it,
+-- 'DbSync.Extractor.UTxO' reads it, and 'deleteConsumed' removes
+-- spent outputs.
 --
--- One entry per unspent output. Populated as each tx is processed
--- by 'DbSync.Extractor.Pipeline'; consulted by 'DbSync.Extractor.UTxO'
--- when resolving inputs; entries are removed by 'deleteConsumed'
--- when a regular input consumes them (or when a phase-2 failed
--- tx's collateral is consumed).
---
--- The active LSM table is held behind an 'IORef' because
--- 'compactUtxoStore' periodically swaps it for a freshly-reopened
--- handle; readers \/ writers dereference on each call. All
--- operations are called from the consumer thread only — @lsm-tree@
--- rejects concurrent writers on a single table.
+-- Only the consumer thread calls these operations: @lsm-tree@ rejects
+-- concurrent writers on one table.
 module DbSync.Phase.Ingest.UtxoStore
   ( -- * Types
     UtxoStore
@@ -70,11 +64,8 @@ import DbSync.Phase.Ingest.LsmSession
 -- Types
 -- ---------------------------------------------------------------------------
 
--- | Per-tx entry as it arrives from the pipeline: producer 'TxId'
--- plus, for every output, its 'TxOutId' and lovelace value.
---
--- 'recordTx' splits this into one LSM entry per output, keyed by
--- @(tx_hash, idx)@.
+-- | Per-tx entry as it arrives from the pipeline. 'recordTx' splits
+-- it into one LSM entry per output, keyed by @(tx_hash, idx)@.
 data UtxoTxEntry = UtxoTxEntry
   { uteTxId    :: !TxId
   , uteOutputs :: !(Seq (TxOutId, DbLovelace))
@@ -82,25 +73,24 @@ data UtxoTxEntry = UtxoTxEntry
   }
   deriving stock (Eq, Show)
 
--- | Cumulative counters. Sampled at epoch boundaries for the
+-- | Cumulative counters. The epoch boundary samples these for the
 -- diagnostic log line.
 data StoreStats = StoreStats
   { ssHits    :: !Word64
+    -- ^ 'lookupInput' calls that found an entry.
   , ssMisses  :: !Word64
+    -- ^ 'lookupInput' calls that found nothing.
   , ssInserts :: !Word64
-    -- ^ Total successful 'recordTx' calls (per tx, not per output).
+    -- ^ Successful 'recordTx' calls, per tx, not per output.
   , ssDeletes :: !Word64
-    -- ^ Total successful 'deleteConsumed' calls (per output).
+    -- ^ Successful 'deleteConsumed' calls, per output.
   }
   deriving stock (Eq, Show)
 
--- | Cache handle. Owns one table under the session passed to
--- 'openUtxoStore'; the session itself is owned by
--- 'DbSync.App.Env.IngestEnv' \/ closed at App-level shutdown.
---
--- The table handle is wrapped in an 'IORef' so 'compactUtxoStore'
--- can atomically replace it with a freshly-opened-from-snapshot
--- handle without changing the 'UtxoStore' value held by callers.
+-- | Cache handle owning one table under the session passed to
+-- 'openUtxoStore'. An 'IORef' holds the table so 'compactUtxoStore'
+-- can swap in a reopened handle without changing the 'UtxoStore'
+-- value that callers hold.
 data UtxoStore = UtxoStore
   { usTable :: !(IORef (LSMTree.Table IO ShortByteString UtxoOutputBytes ByteString))
     -- ^ The blob type ('ByteString') is required for 'LSMTree.insert'
@@ -109,10 +99,10 @@ data UtxoStore = UtxoStore
   , usStats :: !(IORef StoreStats)
   }
 
--- | Wire-format wrapper around the encoded per-output value. The
--- 'ResolveValue' instance is 'LSMTree.ResolveAsFirst' — collisions
--- on the same @(tx_hash, idx)@ key only happen on replay, and the
--- replayed value is bit-identical to the original.
+-- | Wire-format wrapper around the encoded per-output value.
+-- 'LSMTree.ResolveAsFirst' is safe here: two values collide on the
+-- same @(tx_hash, idx)@ key only on replay, and the replayed value is
+-- bit-identical to the original.
 newtype UtxoOutputBytes = UtxoOutputBytes ShortByteString
   deriving stock (Eq, Show)
   deriving newtype (LSMTree.SerialiseValue)
@@ -122,10 +112,8 @@ newtype UtxoOutputBytes = UtxoOutputBytes ShortByteString
 -- Lifecycle
 -- ---------------------------------------------------------------------------
 
--- | Open the store's table.
---
--- If the session has a saved snapshot, restore from it; otherwise
--- create a fresh empty table with 'defaultIngestTableConfig'.
+-- | Restore the table from the session's snapshot, or create an empty
+-- one with 'defaultIngestTableConfig'.
 openUtxoStore :: LsmSession -> IO UtxoStore
 openUtxoStore lsm = do
   let session = lsmHandle lsm
@@ -138,8 +126,7 @@ openUtxoStore lsm = do
   stats <- newIORef emptyStats
   pure UtxoStore { usTable = tableRef, usStats = stats }
 
--- | Close the cache's currently-active table. The session it lives
--- in is not touched.
+-- | Closes the active table only. The session stays open.
 closeUtxoStore :: UtxoStore -> IO ()
 closeUtxoStore store = do
   table <- readIORef (usTable store)
@@ -149,12 +136,10 @@ closeUtxoStore store = do
 -- Hot path
 -- ---------------------------------------------------------------------------
 
--- | Record a tx and its outputs in the cache.
---
--- Inserts one LSM entry per output, keyed by @(tx_hash, idx)@. A
--- subsequent 'recordTx' on the same hash replaces those entries —
--- the 'ResolveValue' constraint is type-system-only for 'insert',
--- only 'upsert' uses it.
+-- | Insert one LSM entry per output, keyed by @(tx_hash, idx)@. A
+-- later 'recordTx' on the same hash replaces those entries: 'insert'
+-- carries the 'ResolveValue' constraint but never applies it, and
+-- only 'upsert' does.
 recordTx :: UtxoStore -> ByteString -> UtxoTxEntry -> IO ()
 recordTx cache hash (UtxoTxEntry txId outputs)
   | Seq.null outputs = pure ()
@@ -168,14 +153,12 @@ recordTx cache hash (UtxoTxEntry txId outputs)
       modifyIORef' (usStats cache) $ \s ->
         s { ssInserts = ssInserts s + 1 }
 
--- | Look up the producer of an input by @(tx_hash, output_idx)@.
+-- | Look up the producer of an input. The triple holds the
+-- producer's @tx.id@ (which @tx_in.tx_out_id@ stores, despite the
+-- column name), the produced output's @tx_out.id@ for the
+-- consumed-by UPDATE, and the value for the deposit calculation.
 --
--- Returns the producer's @tx.id@ (for @tx_in.tx_out_id@ — yes, the
--- column name lags the meaning), the producer-output's @tx_out.id@
--- (for the consumed-by UPDATE), and the lovelace value (for the
--- deposit calculation).
---
--- 'Nothing' on cache miss; the caller writes the row with
+-- 'Nothing' means a cache miss. The caller then writes
 -- @tx_out_id = NULL@ and the post-load resolve fills it in.
 lookupInput
   :: UtxoStore
@@ -202,13 +185,10 @@ lookupInput cache hash idx = do
     bumpMiss = modifyIORef' (usStats cache) $ \s ->
       s { ssMisses = ssMisses s + 1 }
 
--- | Remove a consumed output from the cache.
---
--- Called by the UTxO extractor after a regular input resolves (the
--- chain consumes that output exactly once) and after a phase-2
--- failed tx's collateral input resolves (the chain consumes the
--- collateral on failure). Deleting a non-existent key is a no-op
--- in LSM, so a stale call is harmless.
+-- | Remove a consumed output. The UTxO extractor calls this after a
+-- regular input resolves, and after the collateral input of a
+-- phase-2 failed tx resolves. LSM ignores a delete of a missing key,
+-- so a stale call does no harm.
 deleteConsumed :: UtxoStore -> ByteString -> Word16 -> IO ()
 deleteConsumed cache hash idx = do
   let !key = mkKey hash idx
@@ -221,15 +201,15 @@ deleteConsumed cache hash idx = do
 -- Epoch boundary
 -- ---------------------------------------------------------------------------
 
--- | Flush the write buffer and atomically replace the on-disk
--- snapshot with the table's current contents. Cheap — run files are
--- hard-linked into the snapshot, not copied — so this runs at every
--- epoch boundary to keep the restart-resume anchor fresh.
+-- | Flush the write buffer and replace the on-disk snapshot with the
+-- table's current contents. The snapshot hard-links the run files
+-- instead of copying them, so every epoch boundary can run this to
+-- keep the restart anchor fresh.
 persistUtxoStore :: UtxoStore -> LsmSession -> IO ()
 persistUtxoStore store lsm = mask_ $ do
-  -- delete-then-save would lose this table's snapshot if interrupted
-  -- between the two calls; mask covers the whole cycle so cancel
-  -- either lands before any work or after a fresh snapshot exists.
+  -- An interrupt between the delete and the save would lose the
+  -- snapshot. The mask covers both, so a cancel lands either before
+  -- any work or after a fresh snapshot exists.
   let session = lsmHandle lsm
   table <- readIORef (usTable store)
   hasSnap <- LSMTree.doesSnapshotExist session currentSnapshotName
@@ -237,18 +217,12 @@ persistUtxoStore store lsm = mask_ $ do
   LSMTree.saveSnapshot currentSnapshotName ingestSnapshotLabel table
 
 -- | 'persistUtxoStore', then close the active table and reopen it
--- from the snapshot, swapping the handle in 'usTable'.
---
--- Effect: the active LSM directory drops every run that isn't part
--- of the snapshot (in-flight merges discarded, accumulated level-0
--- runs collapsed into the snapshot's compacted form), capping the
--- active run and fd counts. Opening from a snapshot re-reads and
--- CRC-checks every run file in full, so the cost grows linearly
--- with store size — which is why the boundary handler runs this on
--- a coarse epoch cadence and 'persistUtxoStore' alone on every
--- other boundary.
---
--- The store must be quiescent for the duration of the call.
+-- from the snapshot. The reopen drops every run outside the
+-- snapshot, which caps the active run and fd counts. It also
+-- re-reads and CRC-checks every run file, so its cost grows with
+-- store size — the boundary handler therefore runs this on a coarse
+-- epoch cadence and 'persistUtxoStore' alone on the other
+-- boundaries. The store must stay quiescent for the whole call.
 compactUtxoStore :: UtxoStore -> LsmSession -> IO ()
 compactUtxoStore store lsm = mask_ $ do
   persistUtxoStore store lsm
@@ -263,7 +237,6 @@ compactUtxoStore store lsm = mask_ $ do
 -- Stats
 -- ---------------------------------------------------------------------------
 
--- | Snapshot the live counters. Safe to call at any time.
 readStoreStats :: UtxoStore -> IO StoreStats
 readStoreStats = readIORef . usStats
 
@@ -274,23 +247,20 @@ emptyStats = StoreStats 0 0 0 0
 -- Internal: wire format
 -- ---------------------------------------------------------------------------
 
--- | Build the LSM key for one output.
+-- | Build the LSM key for one output: @hash (32 bytes) ++ idx
+-- (Word16 BE, 2 bytes)@. The hash spreads the high 64 bits evenly
+-- and the index suffix keeps that, so 'CompactIndex' stays optimal.
 --
--- Layout: @hash (32 bytes) ++ idx (Word16 BE, 2 bytes)@. Hash keys
--- are uniformly distributed in the high 64 bits and the index
--- suffix preserves that property, so 'CompactIndex' stays optimal.
---
--- Built directly rather than via a 'Data.ByteString.Builder' —
--- 'toLazyByteString' allocates a ~4KB pinned first chunk per call,
--- and this runs once per output, input, and delete on the hot path.
+-- This builds the bytes directly, not through a
+-- 'Data.ByteString.Builder': 'toLazyByteString' allocates a 4KB
+-- pinned first chunk per call, and this runs once per output, input
+-- and delete on the hot path.
 mkKey :: ByteString -> Word16 -> ShortByteString
 mkKey hash idx = SBS.toShort (hash <> idxBytes)
   where
     !idxBytes = BS.pack [fromIntegral (idx `shiftR` 8), fromIntegral idx]
 
--- | Encode a single output's resolved row data.
---
--- Layout (24 bytes, fixed):
+-- | Encode one output's resolved row data. Fixed 24-byte layout:
 --
 -- @
 -- 8 bytes  : txId    (Int64  big-endian)
@@ -311,18 +281,18 @@ pokeWord64BE p off w =
     pokeByteOff p (off + i)
       (fromIntegral (w `shiftR` ((7 - i) * 8)) :: Word8)
 
--- | Inverse of 'encodeOutput'. 'Nothing' on a length mismatch —
--- should never happen for a value the cache itself produced, so the
--- call site treats 'Nothing' as a cache miss.
+-- | Inverse of 'encodeOutput'. 'Nothing' means a length mismatch,
+-- which cannot happen for a value the cache produced, so the call
+-- site treats it as a cache miss.
 decodeOutput :: UtxoOutputBytes -> Maybe (TxId, TxOutId, DbLovelace)
 decodeOutput (UtxoOutputBytes sbs)
   | SBS.length sbs /= 24 = Nothing
   | otherwise =
-      -- Decoded strictly: the ids can outlive this call by a whole
-      -- epoch (the ConsumedByBuffer holds one per resolved input
-      -- until the boundary handoff), and the newtypes would
-      -- otherwise carry a 'readInt64BE' thunk plus the 24-byte
-      -- payload per entry for that entire window.
+      -- Force each read here. The ids outlive this call by a whole
+      -- epoch, because the ConsumedByBuffer holds one per resolved
+      -- input until the boundary handoff. The newtypes erase at
+      -- runtime, so a lazy read would retain a thunk plus the
+      -- 24-byte payload for that entire window.
       let !tid = readInt64BE  sbs 0
           !oid = readInt64BE  sbs 8
           !val = readWord64BE sbs 16

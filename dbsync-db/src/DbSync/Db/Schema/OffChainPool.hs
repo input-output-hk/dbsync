@@ -58,8 +58,7 @@ type instance Key OffChainPoolFetchError = OffChainPoolFetchErrorId
 -- * Schema types
 -- ---------------------------------------------------------------------------
 
--- | The @off_chain_pool_data@ table.
--- One row per successful pool-metadata fetch; unique on
+-- | One row per successful pool-metadata fetch; unique on
 -- @(pool_id, pmr_id)@.
 data OffChainPoolData = OffChainPoolData
   { offChainPoolDataPoolId     :: !PoolHashId
@@ -71,8 +70,7 @@ data OffChainPoolData = OffChainPoolData
   }
   deriving stock (Eq, Show)
 
--- | The @off_chain_pool_fetch_error@ table.
--- One row per failed (or retried) fetch attempt; unique on
+-- | One row per failed (or retried) fetch attempt; unique on
 -- @(pool_id, fetch_time, retry_count)@.
 data OffChainPoolFetchError = OffChainPoolFetchError
   { offChainPoolFetchErrorPoolId     :: !PoolHashId

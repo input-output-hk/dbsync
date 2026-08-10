@@ -2,17 +2,9 @@
 
 -- | Per-connection knobs for the Follow phase.
 --
--- @SET synchronous_commit = off@ is the headline tuning: every
--- forward block runs through one @BEGIN@/@COMMIT@ envelope that
--- writes its rows AND advances @last_committed_*@ atomically, so
--- the COMMIT-vs-fsync gap doesn't risk a torn write — either the
--- whole transaction is durable on crash or none of it is, and
--- chainsync replays anything that didn't make it to disk on the
--- next start.
---
--- Why @SET@, not @SET LOCAL@: Follow opens a long-lived per-phase
--- connection. Session-scoped @SET@ persists for the connection's
--- lifetime; @SET LOCAL@ would have to be re-issued per transaction.
+-- These use session-scoped @SET@, not @SET LOCAL@: Follow holds one
+-- long-lived connection, and @SET LOCAL@ would need a re-issue per
+-- transaction.
 module DbSync.Phase.Following.Tuning
   ( FollowTuning (..)
   , defaultFollowTuning
@@ -27,26 +19,24 @@ import DbSync.Db.Run (useConn)
 import DbSync.Db.Statement.Tuning (followGucSql)
 import DbSync.Db.Transaction (HasHasqlConnection (..))
 
--- | Tuning applied when the Follow connection is opened.
+-- | Tuning applied when Follow opens its connection.
 data FollowTuning = FollowTuning
-  { -- | @True@ → @synchronous_commit = off@. Trades a window of
-    -- crash-recovery durability for faster per-block COMMITs. Safe
-    -- because each per-block transaction is atomic in writes +
-    -- sync-state.
+  { -- | @True@ sets @synchronous_commit = off@, which trades
+    -- crash-recovery durability for faster per-block COMMITs. One
+    -- transaction writes the block's rows and advances
+    -- @last_committed_*@ together, so a crash loses the whole
+    -- transaction or none of it, and chainsync replays the rest.
     ftAsyncCommit :: !Bool
   }
   deriving stock (Eq, Show)
 
--- | Async-commit on. Mirrors Prep's default trade-off.
 defaultFollowTuning :: FollowTuning
 defaultFollowTuning = FollowTuning
   { ftAsyncCommit = True
   }
 
--- | Issue the @SET@ statements that bring the env's connection up
--- to the requested 'FollowTuning'. Surfaces driver failures as
--- 'AppDatabaseError' — these are unconditionally valid GUCs, so a
--- failure here points at a connection-level problem.
+-- | Raises 'AppDatabaseError' on failure. These GUCs are always
+-- valid, so a failure here points at the connection.
 setFollowSessionGUCs
   :: (HasHasqlConnection env, MonadReader env m, MonadIO m)
   => FollowTuning -> m ()

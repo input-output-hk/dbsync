@@ -4,18 +4,12 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
--- | Era-agnostic stake-distribution slice types and helpers.
+-- | Era-agnostic stake-distribution slices, cut from the
+-- @ssStakeMark@ snapshot of a Shelley-family 'ExtLedgerState' so that
+-- rows insert incrementally across the blocks of an epoch.
 --
---   * 'StakeSlice' / 'StakeSliceRes' — the era-collapsed shape for
---     incrementally inserting stake-distribution rows across the blocks
---     of an epoch.
---   * 'getStakeSlice', 'catchupStakeSlice', 'getPoolDistr' —
---     projections that slice the @ssStakeMark@ snapshot out of a
---     Shelley-family 'ExtLedgerState'.
---
--- Slices are anchored on the /next/ epoch: the \"mark\" snapshot's
--- values activate on @current epoch + 1@, so 'sliceEpochNo' is
--- @nesEL + 1@.
+-- A slice is anchored on the /next/ epoch: the \"mark\" values activate
+-- on @current epoch + 1@, so 'sliceEpochNo' is @nesEL + 1@.
 module DbSync.Worker.Ledger.StakeDist
   ( -- * Types
     StakeSliceRes (..)
@@ -103,10 +97,9 @@ data StakeSliceMode
 -- * Security parameter
 -- ---------------------------------------------------------------------------
 
--- | Extract the chain's security parameter @k@ from a 'ProtocolInfo'.
--- Used to decide the starting index into the \"mark\" snapshot when
--- slicing — we only start emitting stake slices once we're past block
--- @k@ of the epoch.
+-- | The chain's security parameter @k@. Slicing starts only past block
+-- @k@ of the epoch, so @k@ sets the first index into the \"mark\"
+-- snapshot.
 getSecurityParameter
   :: ConsensusProtocol (BlockProtocol blk)
   => ProtocolInfo blk
@@ -117,13 +110,11 @@ getSecurityParameter = maxRollbacks . configSecurityParam . pInfoConfig
 -- * Slicing across an epoch
 -- ---------------------------------------------------------------------------
 
--- | Compute the stake slice for a single block of an epoch.
+-- | Stake slice for a single block of an epoch.
 --
--- 'sliceIndex' can match the @epochBlockNo@ for every block.
---
--- 'minSliceSize' has to be constant or it could cause missing data; if
--- too small it is bumped to a @defaultEpochSliceSize@ big enough to
--- cover all delegations.
+-- 'minSliceSize' must stay constant or data goes missing. When it is
+-- too small, @defaultEpochSliceSize@ raises it enough to cover every
+-- delegation.
 getStakeSlice
   :: ConsensusProtocol (BlockProtocol blk)
   => ProtocolInfo blk
@@ -189,9 +180,9 @@ genericStakeSlice pInfo epochBlockNo lstate mode
 -- ---------------------------------------------------------------------------
 
 -- | Quantities every slice computation over a \"mark\" snapshot needs.
--- Both the per-block slicer and the boundary catch-up derive their
--- indices from the same context, which is what guarantees the two
--- never overlap and never leave a gap between them.
+-- The per-block slicer and the boundary catch-up take their indices
+-- from the same context, which is what stops them overlapping or
+-- leaving a gap.
 data SliceCtx = SliceCtx
   { scEpoch          :: !EpochNo
   , scK              :: !Word64
@@ -268,17 +259,14 @@ ctxSlice ctx start len =
 -- * Boundary catch-up
 -- ---------------------------------------------------------------------------
 
--- | Suffix of the just-ended epoch's stake distribution that per-block
+-- | Suffix of the ended epoch's stake distribution that per-block
 -- slicing never emitted.
 --
--- Per-block slices only start at epoch-block @k@, so an epoch with
--- fewer than @k + 1@ blocks emits nothing at all, and a short epoch
--- can end before its slices reach the end of the delegation vector.
--- Called at the epoch boundary with the /pre-boundary/ ledger state
--- (whose \"mark\" snapshot fed the ended epoch's slices) and that
--- epoch's final epoch-block counter; returns the un-emitted tail as a
--- final slice, or 'NoSlices' when the per-block path already covered
--- the whole vector.
+-- Per-block slices start only at epoch-block @k@, so a short epoch can
+-- end before its slices reach the end of the delegation vector. Takes
+-- the /pre-boundary/ ledger state, whose \"mark\" snapshot fed the
+-- ended epoch's slices. 'NoSlices' when the per-block path already
+-- covered the vector.
 catchupStakeSlice
   :: ConsensusProtocol (BlockProtocol blk)
   => ProtocolInfo blk

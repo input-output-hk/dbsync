@@ -21,7 +21,6 @@ import qualified Data.Text.Encoding as Text
 import qualified Data.Vector as Vector
 import qualified PlutusLedgerApi.V1 as Plutus
 
--- | Render a Plutus 'Data' value as canonical JSON text.
 plutusDataToJson :: Data era -> Text
 plutusDataToJson = renderJson . plutusValue . getPlutusData
   where

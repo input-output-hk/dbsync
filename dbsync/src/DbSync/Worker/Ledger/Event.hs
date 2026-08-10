@@ -10,13 +10,9 @@
 
 -- | Era-agnostic ledger events extracted from consensus.
 --
--- The 'LedgerEvent' sum is the canonical shape for the ledger events we
--- consume — rewards, MIR distributions, pool reaps, ada-pots totals,
--- governance-action refunds — emitted by consensus as 'AuxLedgerEvent'
--- values. 'convertAuxLedgerEvent' turns an era-specific
--- 'OneEraLedgerEvent' into a 'Maybe LedgerEvent' for accumulation in
--- 'ApplyResult'. 'splitDeposits' peels out deposit events for the
--- deposit-bookkeeping pass ('DbSync.Worker.Ledger.Types.DepositsMap').
+-- 'convertAuxLedgerEvent' collapses an era-specific 'OneEraLedgerEvent'
+-- into a 'LedgerEvent'. 'splitDeposits' then peels out the deposit
+-- events for 'DbSync.Worker.Ledger.Types.DepositsMap'.
 module DbSync.Worker.Ledger.Event
   ( LedgerEvent (..)
   , GovActionRefunded (..)
@@ -82,11 +78,9 @@ import DbSync.Phase.Type (SyncPhase)
 -- * Types
 -- ---------------------------------------------------------------------------
 
--- | Whether reward-related ledger events are kept or dropped at the
--- 'convertAuxLedgerEvent' boundary.
---
--- 'DropRewards' is the setting used when the reward extractor is
--- off — collecting the events would only waste allocation.
+-- | Keep or drop reward-related events at the 'convertAuxLedgerEvent'
+-- boundary. 'DropRewards' applies when the reward extractor is off,
+-- where collecting the events would only waste allocation.
 data RewardsCapture
   = CaptureRewards
   | DropRewards
@@ -94,10 +88,9 @@ data RewardsCapture
 
 -- | Era-collapsed ledger event stream.
 --
--- 'LedgerNewEpoch' records the era-generic 'SyncPhase' (the
--- three-valued state machine used across the codebase). Downstream
--- code that only cares about \"lagging vs following\" can
--- pattern-match on 'IngestChainHistory' / 'FollowingChainTip'.
+-- 'LedgerNewEpoch' carries the 'SyncPhase' the boundary was crossed in.
+-- Downstream code that only needs \"lagging vs following\" can use
+-- 'isFollowPath' instead of matching all four phases.
 data LedgerEvent
   = LedgerMirDist             !(Map StakeCred (Set Generic.PotReward))
   | LedgerPoolReap            !EpochNo !Generic.Rewards
@@ -112,10 +105,9 @@ data LedgerEvent
   | LedgerNewEpoch            !EpochNo !SyncPhase
   deriving stock (Eq)
 
--- | A governance action that is being refunded — either because it
--- was enacted, dropped, or expired. Carries enough info to credit the
--- return address and (for treasury-withdrawal actions) replay the
--- withdrawal map.
+-- | A governance action being refunded after it was enacted, dropped or
+-- expired. Carries enough to credit the return address, and to replay
+-- the withdrawal map for a treasury-withdrawal action.
 data GovActionRefunded = GovActionRefunded
   { garGovActionId :: GovActionId
   , garDeposit     :: Coin
@@ -168,9 +160,8 @@ instance NFData LedgerEvent where
 -- * Conversion from consensus events
 -- ---------------------------------------------------------------------------
 
--- | Turn a per-era consensus event into our era-collapsed
--- 'LedgerEvent'. 'DropRewards' suppresses reward-related events at
--- this boundary, used when the reward extractor is off.
+-- | Collapse a per-era consensus event into a 'LedgerEvent'.
+-- 'DropRewards' suppresses reward-related events here.
 convertAuxLedgerEvent
   :: RewardsCapture
   -> OneEraLedgerEvent (CardanoEras StandardCrypto)
@@ -395,15 +386,13 @@ mkTreasuryReward c =
     , Generic.prAmount = c
     }
 
--- | Convert a pool-rewards map (keyed by stake cred) into our
--- 'Rewards' shape, mapping each ledger 'Ledger.Reward' onto a
--- 'Generic.Reward'.
+-- | Convert a pool-rewards map, keyed by stake credential, into the
+-- 'Rewards' shape.
 --
--- Strict 'Map.map' (a bare @map@ here is the lazy 'fmap' regardless
--- of the strict import): the result rides in queued boundary
--- payloads, so the values must not be left as thunks over the
--- ledger's reward sets — that safety should not depend on a
--- downstream 'rnf'.
+-- Uses strict 'Map.map': a bare @map@ here is the lazy 'fmap' whatever
+-- the strict import says. The result rides in queued boundary
+-- payloads, so the values must not stay as thunks over the ledger's
+-- reward sets. That safety must not depend on a downstream 'rnf'.
 convertPoolRewards
   :: Map StakeCred (Set Ledger.Reward)
   -> Generic.Rewards
@@ -427,9 +416,9 @@ txHashFromSafe = Crypto.hashToBytes . extractHash
 -- * Event stream surgery
 -- ---------------------------------------------------------------------------
 
--- | Partition a 'LedgerEvent' stream into (non-deposit events,
--- deposit map). The deposit map is keyed by tx-body hash (the form
--- consumed by 'DbSync.Worker.Ledger.Types.DepositsMap').
+-- | Split a 'LedgerEvent' stream into the non-deposit events and a
+-- deposit map keyed by tx-body hash, the form
+-- 'DbSync.Worker.Ledger.Types.DepositsMap' takes.
 splitDeposits :: [LedgerEvent] -> ([LedgerEvent], Map ByteString Coin)
 splitDeposits les =
   (les', Map.fromList deposits)

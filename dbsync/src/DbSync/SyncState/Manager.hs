@@ -1,21 +1,6 @@
--- | Atomic epoch-boundary commit.
---
--- 'commitEpoch' is the one entry point the main ingestion pipeline
--- calls at each epoch boundary. It sequences three pieces of work so
--- that the system can safely crash and resume at any time:
---
---   1. Drain and commit every loader connection owned by the
---      'LoaderStream' — all data rows for the epoch flush to PG.
---   2. Update the 'dbsync_sync_state' singleton on the dedicated
---      'ControlConnection' — @last_committed_*@ and the counters
---      advance.
---   3. Reopen the loader streams so the next epoch can start writing.
---
--- If the sync-state write fails after the data flush succeeds, rows
--- exist past @last_committed_slot@. The resume flow on restart
--- issues @DELETE FROM <t> WHERE slot_no > s@, so the invariant
--- \"@last_committed_slot@ is never ahead of actual data\" holds by
--- construction.
+-- | Epoch-boundary commit. 'commitEpoch' is the single entry point
+-- the ingestion pipeline calls at each boundary, and it orders the
+-- work so the system can crash and resume at any point.
 module DbSync.SyncState.Manager
   ( commitEpoch
   , mkBoundarySyncStateRow
@@ -29,19 +14,16 @@ import DbSync.Db.Loader (LoaderStream (..), HasLoaderStream (..))
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Phase.Ingest.Counter (IdCounter (..), IdCounters (..), mkIdCounter)
 
--- | Perform an atomic epoch-boundary commit.
+-- | Flush the epoch's rows, advance the sync state, then reopen the
+-- loader streams. Failure semantics per step:
 --
--- Failure semantics:
---
---   * If step 1 ('lsCommit') throws, no sync-state update happens.
---     On restart the resume flow reads the stale sync state and
---     processing resumes from the previous epoch.
---   * If step 2 ('writeSyncState') throws, data is in PG past
---     @last_committed_slot@. Resume's @DELETE FROM <t> WHERE slot_no
---     > s@ removes it on restart.
---   * If step 3 ('lsReopen') throws, sync state is already advanced
---     and the loader connections are unusable. Caller should treat as
---     fatal and exit; a clean restart reopens the streams.
+--   * 'lsCommit' throws: no sync-state update happens, and the
+--     restart resumes from the previous epoch.
+--   * 'writeSyncState' throws: rows sit in PG past
+--     @last_committed_slot@, and the resume DELETE removes them.
+--   * 'lsReopen' throws: the sync state already advanced and the
+--     loader connections are dead. The caller must exit, and a clean
+--     restart reopens the streams.
 commitEpoch
   :: ( HasLoaderStream env
      , HasControlConnection env
@@ -56,16 +38,14 @@ commitEpoch newRow = do
   writeSyncState newRow
   liftIO (lsReopen bs)
 
--- | Build a 'SyncStateRow' from the boundary block's
--- @(slot, blockNo, hash)@, the current 'IdCounters' snapshot, the
--- address-resolver's in-process address counter, and the run-time
--- configuration. 'ssrLastSnapshotSlot', 'ssrSyncComplete', and
--- 'ssrPendingRollbackSlot' are left at their identity values; the
--- @writeSyncState@ encoder ignores those columns.
+-- | Build a 'SyncStateRow' for the boundary block.
+-- 'ssrLastSnapshotSlot', 'ssrSyncComplete' and
+-- 'ssrPendingRollbackSlot' stay at their identity values, because
+-- the @writeSyncState@ encoder ignores those columns.
 --
--- The address counter is passed in separately because it lives on the
--- 'DbSync.Worker.TxOut.Worker.TxOutWorker' (the worker is the sole
--- allocator of @address.id@) rather than in 'IdCounters'.
+-- The address counter arrives separately: it lives on the
+-- 'DbSync.Worker.TxOut.Worker.TxOutWorker', which is the only
+-- allocator of @address.id@, not in 'IdCounters'.
 mkBoundarySyncStateRow
   :: Word64        -- ^ Last committed slot (boundary block's slot)
   -> Word64        -- ^ Last committed block number
@@ -107,9 +87,8 @@ mkBoundarySyncStateRow slotNo blockNo blockHash counters addressIdCounter schema
     , ssrPendingRollbackSlot           = Nothing
     }
 
--- | Build the consumer's initial 'ExtractState' from a 'SyncStateRow'
--- read at boot. Each counter resumes at the row's recorded "next id
--- to assign".
+-- | Build the consumer's initial 'ExtractState' from the boot-time
+-- 'SyncStateRow'. Each counter resumes at the row's recorded next id.
 mkResumeExtractState :: SyncStateRow -> ExtractState
 mkResumeExtractState row =
   ExtractState

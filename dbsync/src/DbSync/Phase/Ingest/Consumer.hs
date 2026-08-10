@@ -2,16 +2,16 @@
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
--- | Block consumer for 'IngestChainHistory'.
+-- | Block consumer for 'IngestChainHistory'. It drains
+-- 'ChainSyncMsg' values from the env's 'TBQueue', parses each
+-- forward block into a 'GenericBlock', runs the extractors, and
+-- writes rows through the 'LoaderStream'. An 'sdEpochNo' change
+-- hands off to
+-- 'DbSync.Phase.Ingest.Boundary.handleEpochBoundary'.
 --
--- Drains 'ChainSyncMsg' values from the env's 'TBQueue'. Forward
--- blocks are parsed into 'GenericBlock', extractors run, and rows
--- are written via the 'LoaderStream'. Epoch boundaries are detected
--- on 'sdEpochNo' change and delegate to
--- 'DbSync.Phase.Ingest.Boundary.handleEpochBoundary' for the
--- commit + reopen cascade. Rollback markers are unreachable in this
--- phase — the receiver only enqueues them above @chain_tip − k@ and
--- the consumer exits before drainage; one slipping through panics.
+-- The receiver enqueues rollback markers at any depth, but this
+-- consumer exits at @nodeTip − k@, below which the chain cannot roll
+-- back. A marker that still arrives panics.
 module DbSync.Phase.Ingest.Consumer
   ( -- * Running
     runConsumer
@@ -114,9 +114,8 @@ import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()  -- 'LedgerSupport
 -- * Running
 -- ---------------------------------------------------------------------------
 
--- | Block stride (not a duration) between RTS memory samples feeding
--- the per-epoch peak; coarse enough to keep 'getRTSStats' off the
--- every-block path.
+-- | Block stride, not a duration, between RTS memory samples. It is
+-- coarse enough to keep 'getRTSStats' off the every-block path.
 memPeakSampleInterval :: Word64
 memPeakSampleInterval = 256
 
@@ -126,10 +125,8 @@ memPeakSampleInterval = 256
 majorGcProbeInterval :: Word64
 majorGcProbeInterval = 5000
 
--- | Run the consumer loop in 'IngestM'.
---
--- Drives a 'ConsumerLoopState' across the loop iterations; the inner
--- loop runs in 'IngestM' itself so 'processBlock' stays env-aware.
+-- | Drives a 'ConsumerLoopState' across the loop iterations. The
+-- inner loop runs in 'IngestM', so 'processBlock' stays env-aware.
 runConsumer :: IngestM ()
 runConsumer = do
   bootSlot      <- asks ieLastCommittedSlotAtBoot
@@ -166,11 +163,10 @@ runConsumer = do
       Just (slot, blk, _hash) ->
         "block " <> show blk <> " (slot " <> show slot <> ")"
 
-    -- | Drain the final queued resolve job and advance @sync_state@
-    -- to the last fully-completed epoch. During normal operation
-    -- @sync_state@ lags by one epoch; at the rollback boundary the
-    -- consumer exits mid-epoch so the previous epoch is the last
-    -- commit point. No-op when the pipeline never crossed a boundary.
+    -- Drain the final queued resolve job and advance @sync_state@ to
+    -- the last completed epoch. The consumer exits mid-epoch at the
+    -- rollback boundary, so the previous epoch is the last commit
+    -- point. It does nothing when the pipeline crossed no boundary.
     finalFlushSyncState :: ConsumerLoopState -> IngestM ()
     finalFlushSyncState cls = do
       ie <- ask
@@ -179,9 +175,9 @@ runConsumer = do
           loaderStream = ieLoaderStream ie
           ledgerEnabled = lcEnabled (scLedger (getConfig ie))
           schemaVersion = currentSchemaVersion
-      -- Drain any residual mid-epoch consumed-by pairs via one last
-      -- job carrying an empty address buffer. When consumed-by is
-      -- off this branch is unreachable.
+      -- Drain the residual mid-epoch consumed-by pairs through one
+      -- last job with an empty address buffer. Nothing reaches this
+      -- branch when consumed-by is off.
       mResidualCb <- liftIO $ case mConsumedBuf of
         Just ref -> Just <$> ConsumedByBuffer.takeAndReset ref
         Nothing  -> pure Nothing
@@ -205,9 +201,8 @@ runConsumer = do
     processBatch :: ConsumerLoopState -> [ChainSyncMsg] -> IngestM ()
     processBatch _   []                       = pure ()
     processBatch _   (MsgRollback point : _)  =
-      -- Reaching this branch means the node sent a rollback for a
-      -- block below the @chain_tip − k@ boundary — a k-safety
-      -- violation. Crash loudly so the operator can investigate.
+      -- This branch means the node sent a rollback for a block below
+      -- the @chain_tip − k@ boundary, which violates k-safety.
       panic (ingestRollbackPanicMessage point)
     processBatch cls (MsgForward cardanoBlock : rest) = do
       tracer        <- asks getTracer
@@ -224,13 +219,13 @@ runConsumer = do
 
       advanceReplayLog tracer (clsReplay cls) slot bootSlot replayStart
 
-      -- Replayed blocks bypass processBlock, but the worker still
-      -- enqueues a per-block ApplyResult; drain and discard so the
-      -- queue doesn't backpressure the worker.
+      -- A replayed block skips processBlock, but the worker still
+      -- enqueues a per-block ApplyResult. Drain and discard it, or
+      -- the queue backpressures the worker.
       when isReplay $
         liftIO $ void $ takeBlockLedgerData hasLedger
 
-      -- Replayed blocks are already in PG; skip processBlock.
+      -- PG already holds the replayed blocks.
       unless isReplay $ do
         obsResult <- liftIO $ atomically $ observeBlockSTM sqv cardanoBlock
         logObservation tracer obsResult
@@ -243,15 +238,14 @@ runConsumer = do
                             (unSlotNo  (blkSlotNo  genBlock))
                             (unBlockNo (blkBlockNo genBlock))
                             (blkHash   genBlock)
-            -- Tag every exception thrown while processing this block
-            -- with its slot/hash for the crash log.
+            -- Tag every exception from this block with its slot and
+            -- hash for the crash log.
             inBlock :: IngestM a -> IngestM a
             inBlock act = withRunInIO $ \run -> Exception.annotateIO blockAnn (run act)
 
         prevEpoch <- liftIO $ readIORef (clsPrevEpoch cls)
-        -- On the first block (fresh boot or post-replay resume),
-        -- restart the epoch timer so socket waits don't bleed into
-        -- the first epoch's elapsed-seconds stat.
+        -- Restart the epoch timer on the first block, so socket waits
+        -- stay out of the first epoch's elapsed-seconds stat.
         when (isNothing prevEpoch) $
           liftIO $ getCurrentTime >>= writeIORef (clsEpochStart cls)
 
@@ -262,15 +256,12 @@ runConsumer = do
 
         inBlock (processBlock genBlock)
 
-        -- Boundary-block extractor: epoch-table writes that depend
-        -- on the ledger worker's @apNewEpoch@.
-        --
-        -- The first processed block needs the same drain when it
-        -- crosses an epoch relative to the pre-boot chain (the
-        -- genesis block on a fresh boot; the first non-replay block
-        -- on resume): the worker enqueues a 'BoundaryApplyData' for
-        -- it too, and an unmatched payload shifts every later drain
-        -- onto its predecessor's payload.
+        -- Epoch-table writes that depend on the ledger worker's
+        -- @apNewEpoch@. The first processed block needs the same
+        -- drain when it crosses an epoch against the pre-boot chain:
+        -- the worker enqueues a 'BoundaryApplyData' for it too, and
+        -- an unmatched payload shifts every later drain onto its
+        -- predecessor's payload.
         boundaryBlock <- case prevEpoch of
           Just prev -> pure (prev /= blockEpoch)
           Nothing   -> bootBlockCrossesBoundary bootSlot blockEpoch
@@ -285,21 +276,16 @@ runConsumer = do
           , blkHash genBlock
           )
 
-        -- Sample RTS memory for the per-epoch peak on a coarse block
-        -- stride so 'getRTSStats' stays off the every-block path.
         liftIO $ do
           n <- readIORef (clsBlockCount cls)
           when (n `rem` memPeakSampleInterval == 0) $
             recordMemSample (clsMemStats cls)
 
-        -- Mid-fill forced-major-GC probe (Debug-gated). Distinguishes
-        -- reachable per-epoch structure from floating garbage: force a
-        -- major GC partway through the fill and log live before/after.
-        -- liveAfter far below liveBefore ⇒ the growth was collectible;
-        -- liveAfter tracking liveBefore ⇒ a reachable structure.
-        -- naturalMajorGCs across lines (minus the one forced per
-        -- probe) shows whether GHC majors fire mid-fill.
-        -- performMajorGC always completes, so this cannot wedge the loop.
+        -- Debug-gated probe separating reachable per-epoch structure
+        -- from floating garbage. A liveAfter far below liveBefore
+        -- means the growth was collectible; a liveAfter tracking
+        -- liveBefore means a reachable structure. performMajorGC
+        -- always completes, so this cannot wedge the loop.
         liftIO $ when (minSev <= Debug) $ do
           n <- readIORef (clsBlockCount cls)
           enabled <- getRTSStatsEnabled
@@ -330,11 +316,11 @@ advanceReplayLog
   -> Maybe SlotNo
   -> IngestM ()
 advanceReplayLog tracer replayRef slot bootSlot replayStart =
-  -- Early-out before any IO: a fresh sync has no replay window at
-  -- all, and on a resume the window closes permanently once the
-  -- machine reaches 'NoReplay'. Without this the clock read +
-  -- atomic CAS run on every block of the entire sync. The ref is
-  -- only written by this thread, so the plain read is exact.
+  -- Early-out before any IO. A fresh sync has no replay window, and
+  -- on a resume the window closes for good once the machine reaches
+  -- 'NoReplay'. Without this the clock read and the atomic CAS run
+  -- on every block of the whole sync. Only this thread writes the
+  -- ref, so the plain read is exact.
   when (isJust bootSlot) $ do
     st <- liftIO $ readIORef replayRef
     case st of
@@ -362,9 +348,9 @@ advanceReplayLog tracer replayRef slot bootSlot replayStart =
               <> " blocks in " <> fmtF2 (realToFrac elapsed :: Double)
               <> "s, resuming loader stream at slot " <> show (unSlotNo slot)
 
--- | Trace any era transition observed by 'observeBlockSTM'. Skips
--- the "falling back to node" warning when the interpreter is
--- already cached — the observed-summary path isn't used in that case.
+-- | Trace any era transition 'observeBlockSTM' reports. A cached
+-- interpreter skips the "falling back to node" warning, because
+-- nothing uses the observed-summary path then.
 logObservation :: AppTracer -> ObservationResult -> IngestM ()
 logObservation tracer = \case
   NewTransition t ->
@@ -384,14 +370,13 @@ logObservation tracer = \case
         )
   Unchanged -> pure ()
 
--- | Whether the first processed block crosses an epoch boundary
--- relative to the pre-boot chain. Mirrors the ledger worker's
--- 'mkOnNewEpoch' enqueue condition: the genesis block of a fresh
--- boot always crosses (into epoch 0); a resumed boot crosses exactly
--- when this block's epoch is one past the boot slot's. Anything else
--- (same epoch, or a gap the worker would not fire on) must not
--- trigger a drain — 'readBoundaryApplyResult' blocks until a payload
--- arrives, so an unmatched drain here would hang the consumer.
+-- | 'True' when the first processed block crosses an epoch boundary
+-- against the pre-boot chain. This matches the ledger worker's
+-- 'mkOnNewEpoch' enqueue condition: a fresh boot's genesis block
+-- always crosses into epoch 0, and a resumed boot crosses only when
+-- this block's epoch is one past the boot slot's. Any other case
+-- must not drain: 'readBoundaryApplyResult' blocks until a payload
+-- arrives, so an unmatched drain hangs the consumer.
 bootBlockCrossesBoundary :: Maybe SlotNo -> EpochNo -> IngestM Bool
 bootBlockCrossesBoundary mBootSlot blockEpoch = case mBootSlot of
   Nothing -> pure True
@@ -400,17 +385,14 @@ bootBlockCrossesBoundary mBootSlot blockEpoch = case mBootSlot of
     pure (unEpochNo blockEpoch == 1 + unEpochNo (sdEpochNo bootSd))
 
 -- | Drain the worker's next boundary 'ApplyResult' and run the
--- governance and epoch-boundary extractors against it. No-op when
--- the ledger feature is disabled or no block has yet been
--- extracted.
+-- boundary extractors against it. Does nothing when the ledger
+-- feature is off, or when no block arrived yet.
 --
--- 'runGovernanceBoundary' is only invoked when the @governance@
--- extractor is enabled — its writes target tables owned by that
--- extractor (committee, constitution, drep_distr, gov_action_proposal
--- status columns), which don't exist when governance is off. The
--- resolver's enacted-id snapshot then stays at its default
+-- 'runGovernanceBoundary' runs only with the @governance@ extractor
+-- enabled, because its writes target tables that extractor owns.
+-- Otherwise the resolver's enacted-id snapshot keeps its default
 -- @(Nothing, Nothing, Nothing)@ and 'runEpochBoundary' writes NULLs
--- into @epoch_state@'s three governance FK columns.
+-- into the three governance FK columns of @epoch_state@.
 runBoundaryExtractor
   :: HasLedgerEnv
   -> IORef ExtractState
@@ -424,10 +406,9 @@ runBoundaryExtractor hasLedger extractStRef = case hasLedger of
     poolStatsOn  <- asks (prEnabled . exPoolStats  . scExtractors . getConfig)
     sdlOn        <- asks (prEnabled . exStakeDelegationLedger . scExtractors . getConfig)
     for_ mLastBlockId $ \lastBid -> do
-      -- Governance runs first when enabled: it refreshes the
-      -- enacted-state ids and apGovExpiresAfter on ExtractState that
-      -- EpochBoundary then reads when it constructs the epoch_state
-      -- row.
+      -- Governance runs first: it refreshes the enacted-state ids and
+      -- apGovExpiresAfter on ExtractState, which EpochBoundary then
+      -- reads to build the epoch_state row.
       when governanceOn $
         runGovernanceBoundary applyResult (BlockId lastBid)
       runEpochBoundary applyResult (BlockId lastBid)
@@ -440,9 +421,8 @@ runBoundaryExtractor hasLedger extractStRef = case hasLedger of
 -- * Queue utilities
 -- ---------------------------------------------------------------------------
 
--- | Drain up to @maxN@ blocks from the queue. Blocks until at least
--- one is available, then takes as many as are immediately available
--- (up to @maxN@) without waiting.
+-- | Drain up to @maxN@ blocks. It waits for the first one, then
+-- takes every block already available without further waiting.
 drainTBQueue :: forall a. TBQueue a -> Int -> IO [a]
 drainTBQueue q maxN = atomically $ do
   hd <- readTBQueue q
@@ -461,10 +441,9 @@ drainTBQueue q maxN = atomically $ do
 -- * Rollback-boundary predicate
 -- ---------------------------------------------------------------------------
 
--- | 'True' when the most recently processed block has reached the
--- finalised-tip boundary (@nodeTip − k@). Returns 'False' if either
--- ref is unset — we haven't seen a block yet, or the receiver
--- hasn't observed a tip at or above @k@.
+-- | 'True' when the last processed block reached the finalised-tip
+-- boundary @nodeTip − k@. An unset ref gives 'False': either no
+-- block arrived yet, or the receiver saw no tip at or above @k@.
 rollbackBoundaryReached
   :: IORef (Maybe (Word64, Word64, ByteString))  -- ^ Last processed (slot, blockNo, hash)
   -> TVar  (Maybe BlockNo)                       -- ^ Latest @nodeTip − k@
@@ -476,11 +455,9 @@ rollbackBoundaryReached lastRef boundaryVar = do
     (Just (_slot, lastBlock, _hash), Just (BlockNo b)) -> lastBlock >= b
     _                                                  -> False
 
--- | The panic message issued when 'IngestChainHistory' receives a
--- 'MsgRollback'. Should be unreachable in practice; the receiver
--- only enqueues rollback markers above @chain_tip − k@ and the
--- consumer exits before drainage. Exposed so the test suite can pin
--- the message shape.
+-- | The panic message for a 'MsgRollback' during
+-- 'IngestChainHistory'. Exposed so the test suite can pin the
+-- message shape.
 ingestRollbackPanicMessage :: Show point => point -> Text
 ingestRollbackPanicMessage point =
   "IngestChainHistory: received MsgRollback at "

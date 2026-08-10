@@ -1,13 +1,10 @@
 -- | Types and 'FromJSON' decoders for the dbsync config file.
 --
--- The config is network-agnostic and carries no credentials:
--- operational paths (socket, ledger state dir) live on the CLI and
--- the PostgreSQL connection in the @--pg-config@ file, so the same
--- config travels across mainnet, preprod, etc.
+-- The config is network-agnostic and carries no credentials. The
+-- operational paths live on the CLI and the PostgreSQL connection in
+-- the @--pg-config@ file, so one config travels across networks.
 --
--- @extractors@ is opt-in: every extractor defaults to disabled and
--- must be enabled explicitly. The @core@ extractor is unconditional
--- and not represented in 'Extractors'.
+-- The @core@ extractor is unconditional and absent from 'Extractors'.
 module DbSync.App.Config.Types
   ( -- * Top-level config
     SyncConfig (..)
@@ -64,9 +61,11 @@ import qualified Data.Yaml as Yaml
 -- empty object is a valid (all-defaults) config.
 data SyncConfig = SyncConfig
   { scSync      :: !SyncSettings
+    -- ^ Unused. No production caller reads this section.
   , scLedger    :: !LedgerConfig
   , scExtractors :: !Extractors
   , scMetrics   :: !MetricsConfig
+    -- ^ Unused. No metrics endpoint reads this section.
   , scLogging   :: !LoggingConfig
   }
   deriving stock (Eq, Show)
@@ -80,9 +79,9 @@ instance FromJSON SyncConfig where
       <*> o .:? "metrics"    .!= defaultMetricsConfig
       <*> o .:? "logging"    .!= defaultLoggingConfig
 
--- | Sync behaviour settings.
 data SyncSettings = SyncSettings
   { ssMode :: !SyncMode
+    -- ^ Unused. 'DbSync.App.Boot.decideBoot' picks the start phase.
   }
   deriving stock (Eq, Show)
 
@@ -91,17 +90,17 @@ instance FromJSON SyncSettings where
     SyncSettings
       <$> o .:? "mode" .!= SyncModeAuto
 
--- | Default sync settings used when the "sync" section is omitted.
 defaultSyncSettings :: SyncSettings
 defaultSyncSettings = SyncSettings
   { ssMode = SyncModeAuto
   }
 
--- | How to determine which phase to start in.
+-- | Requested start phase. Parsed but not honoured: no caller reads
+-- 'ssMode'.
 data SyncMode
-  = SyncModeAuto    -- ^ Detect based on DB state and immutable tip
-  | SyncModeIngest  -- ^ Force IngestChainHistory
-  | SyncModeFollow  -- ^ Force FollowingChainTip (assumes DB is populated)
+  = SyncModeAuto
+  | SyncModeIngest
+  | SyncModeFollow
   deriving stock (Eq, Show)
 
 instance FromJSON SyncMode where
@@ -117,12 +116,11 @@ data LedgerConfig = LedgerConfig
   { lcEnabled              :: !Bool
   , lcBackend              :: !LedgerBackend
   , lcSnapshotNearTipEpoch :: !Word64
-    -- ^ Past this epoch number, the ledger writes a snapshot at
-    -- every epoch boundary regardless of the in-RAM cadence rules.
-    -- Production default is @580@; tests lower it so snapshots fire
-    -- on the short fixture chains. Below this threshold the cadence
-    -- is /every 10 epochs/ in Ingest and /every epoch when near
-    -- tip/ in Follow.
+    -- ^ Past this epoch the ledger writes a snapshot at every epoch
+    -- boundary, whatever the cadence rules say. Below it the cadence
+    -- is every 10 epochs in Ingest, and every epoch near tip in
+    -- Follow. Tests lower the value so snapshots fire on the short
+    -- fixture chains.
   }
   deriving stock (Eq, Show)
 
@@ -133,7 +131,6 @@ instance FromJSON LedgerConfig where
       <*> o .:? "backend" .!= defaultLedgerBackend
       <*> o .:? "snapshot_near_tip_epoch" .!= defaultSnapshotNearTipEpoch
 
--- | Default ledger config used when the @"ledger"@ section is omitted.
 defaultLedgerConfig :: LedgerConfig
 defaultLedgerConfig = LedgerConfig
   { lcEnabled              = False
@@ -141,17 +138,14 @@ defaultLedgerConfig = LedgerConfig
   , lcSnapshotNearTipEpoch = defaultSnapshotNearTipEpoch
   }
 
--- | Production default for 'lcSnapshotNearTipEpoch'.
 defaultSnapshotNearTipEpoch :: Word64
 defaultSnapshotNearTipEpoch = 580
 
 -- | Which backend stores the ledger-state UTxO tables. Only the
--- on-disk LSM backend is supported; the 'FromJSON' instance rejects
--- @"inmemory"@ with an explanatory error.
+-- on-disk LSM backend exists.
 --
--- The optional 'FilePath' is a directory override; 'Nothing' uses
--- the directory passed to @mkHasLedgerEnv@ (derived from
--- @--ledger-state-dir@).
+-- The optional 'FilePath' overrides the directory. 'Nothing' uses the
+-- directory passed to @mkHasLedgerEnv@.
 data LedgerBackend
   = LedgerBackendLSM !(Maybe FilePath)
   deriving stock (Eq, Show)
@@ -171,9 +165,9 @@ instance FromJSON LedgerBackend where
       Aeson.parseFail $
         "unexpected ledger.backend: " <> show other <> ". Expected \"lsm\"."
 
--- | Prometheus metrics settings.
 data MetricsConfig = MetricsConfig
   { mcPrometheusPort :: !Int
+    -- ^ Unused. The metrics HTTP endpoint is not wired up.
   }
   deriving stock (Eq, Show)
 
@@ -187,10 +181,10 @@ defaultMetricsConfig = MetricsConfig
   { mcPrometheusPort = 8080
   }
 
--- | Logging settings.
 data LoggingConfig = LoggingConfig
   { lgLevel  :: !Text
   , lgFormat :: !LogFormat
+    -- ^ Unused. The stderr tracer always writes text.
   }
   deriving stock (Eq, Show)
 
@@ -206,7 +200,8 @@ defaultLoggingConfig = LoggingConfig
   , lgFormat = LogFormatText
   }
 
--- | Output format for log messages.
+-- | Requested log format. Parsed but not honoured: no caller reads
+-- 'lgFormat'.
 data LogFormat
   = LogFormatText
   | LogFormatJson
@@ -223,11 +218,12 @@ instance FromJSON LogFormat where
 -- * Extractors
 -- ---------------------------------------------------------------------------
 
--- | Per-extractor configuration: which tables get populated. Omit a
--- key to disable; set @"key": true@ to enable.
+-- | Which extractors populate their tables. Omit a key to disable it;
+-- set @"key": true@ to enable it. 'exEpoch' is the one key that
+-- defaults to enabled.
 --
 -- 'exUtxo' has its own record because the UTxO extractor needs
--- multiple knobs; the rest are flat bools.
+-- several knobs; the rest are flat bools.
 data Extractors = Extractors
   { exUtxo                  :: !UtxoOption
   , exMultiAsset            :: !OptionFlag
@@ -271,9 +267,8 @@ instance FromJSON Extractors where
       disabled     = OptionFlag False
       epochDefault = OptionFlag True
 
--- | Default used when @"extractors"@ is omitted: every optional
--- extractor off /except/ 'exEpoch', so the @epoch@ view machinery is
--- available without an explicit opt-in.
+-- | Every optional extractor off except 'exEpoch', so the @epoch@
+-- view machinery is available without an explicit opt-in.
 defaultExtractors :: Extractors
 defaultExtractors = Extractors
   { exUtxo                  = defaultUtxoOption
@@ -294,33 +289,28 @@ defaultExtractors = Extractors
   , exOffChainVotes         = OptionFlag False
   }
 
--- | Configuration for a single option.
---
--- Wraps a 'Bool' explicitly so options that grow variants (e.g.
--- multi-asset policy allowlists, metadata key filters) can extend
--- without touching the @Extractors@ record.
+-- | Wraps a 'Bool' so an option that grows variants can extend
+-- without touching the 'Extractors' record.
 data OptionFlag = OptionFlag
   { prEnabled :: !Bool
   }
   deriving stock (Eq, Show)
 
--- | Parse a sync option from a plain JSON boolean (e.g. @"multi_asset": true@).
+-- | Reads a plain JSON boolean, as in @"multi_asset": true@.
 instance FromJSON OptionFlag where
   parseJSON = Aeson.withBool "OptionFlag" (pure . OptionFlag)
 
 -- UTxO option types
 
--- | UTxO extractor configuration.
 data UtxoOption = UtxoOption
   { uoEnabled        :: !Bool
-    -- ^ Whether the extractor runs at all. When 'False', @tx_in@,
-    -- @tx_out@, and @ma_tx_out@ stay empty.
+    -- ^ 'False' leaves @tx_in@, @tx_out@, and @ma_tx_out@ empty.
   , uoConsumedByTxId :: !Bool
-    -- ^ Whether @tx_out.consumed_by_tx_id@ is populated. The
-    -- per-epoch consumed-by worker covers most rows during Ingest;
-    -- a Prep residual UPDATE catches cache-misses.
+    -- ^ 'True' populates @tx_out.consumed_by_tx_id@. The per-epoch
+    -- worker covers most rows during Ingest; a residual UPDATE in
+    -- Prep catches the cache misses.
   , uoTxIn           :: !Bool
-    -- ^ Whether @tx_in@ rows are written.
+    -- ^ 'True' writes @tx_in@ rows.
   , uoStrategy       :: !UtxoStrategy
   }
   deriving stock (Eq, Show)
@@ -345,9 +335,8 @@ defaultUtxoOption = UtxoOption
   , uoStrategy       = StrategyArchive
   }
 
--- | Accepts the object form or a bare boolean shorthand
--- (@"utxo": true@ ≡ defaults with @enabled@ set), matching the
--- 'OptionFlag' ergonomics of the sibling options.
+-- | Accepts the object form, or the bare boolean shorthand
+-- @"utxo": true@, which matches the sibling 'OptionFlag' options.
 instance FromJSON UtxoOption where
   parseJSON (Aeson.Bool b) = pure defaultUtxoOption { uoEnabled = b }
   parseJSON v = flip (Aeson.withObject "UtxoOption") v $ \o -> do
@@ -385,14 +374,14 @@ instance FromJSON UtxoStrategy where
       "unexpected utxo.strategy: " <> show other
         <> ". Expected \"archive\", \"prune\", or \"from_ledger\"."
 
--- | Metadata storage format.
+-- | Metadata storage format. No decoder or caller reads it yet.
 data MetadataFormat
   = MetadataText
   | MetadataJsonb
   | MetadataKeysOnly
   deriving stock (Eq, Show)
 
--- | Governance option variants.
+-- | Governance option variants. No decoder or caller reads it yet.
 data GovernanceVariant
   = GovernanceProposalsOnly
   | GovernanceFull
@@ -402,10 +391,9 @@ data GovernanceVariant
 -- * Node config (from config.json)
 -- ---------------------------------------------------------------------------
 
--- | Whether the network requires magic (testnets) or not (mainnet).
 data NetworkMagicConfig
-  = RequiresNoMagic   -- ^ Mainnet (magic = 764824073)
-  | RequiresMagic     -- ^ Testnet (magic read from genesis)
+  = RequiresNoMagic   -- ^ Mainnet
+  | RequiresMagic     -- ^ Testnet; the magic comes from the genesis
   deriving stock (Eq, Show)
 
 instance FromJSON NetworkMagicConfig where
@@ -417,10 +405,8 @@ instance FromJSON NetworkMagicConfig where
                              "NetworkMagicConfig (RequiresNoMagic|RequiresMagic)"
                              (Aeson.String t)
 
--- | Fields we read from the cardano-node config.json: genesis
--- file paths, hashes, network magic, and optional hard-fork
--- trigger epochs (testnets only). Logging, tracing, and P2P keys
--- are ignored.
+-- | The fields dbsync reads from the cardano-node @config.json@. It
+-- ignores the logging, tracing, and P2P keys.
 data NodeConfig = NodeConfig
   { ncByronGenesisFile     :: !FilePath
   , ncByronGenesisHash     :: !Text
@@ -431,7 +417,7 @@ data NodeConfig = NodeConfig
   , ncConwayGenesisFile    :: !FilePath
   , ncConwayGenesisHash    :: !(Maybe Text)
   , ncRequiresNetworkMagic :: !NetworkMagicConfig
-    -- Hard fork triggers (optional — only on testnets)
+    -- Hard fork triggers; testnets only
   , ncTestShelleyHardForkAtEpoch :: !(Maybe Word64)
   , ncTestAllegraHardForkAtEpoch :: !(Maybe Word64)
   , ncTestMaryHardForkAtEpoch    :: !(Maybe Word64)
@@ -464,7 +450,6 @@ instance FromJSON NodeConfig where
 -- * Errors
 -- ---------------------------------------------------------------------------
 
--- | Configuration parsing and validation errors.
 data ConfigError
   = ConfigParseError !Text
   | ConfigMissingField !Text
@@ -477,12 +462,11 @@ instance Exception ConfigError
 -- * Config parsing
 -- ---------------------------------------------------------------------------
 
--- | Parse a dbsync config file (YAML or JSON) from a file path.
+-- | Reads YAML or JSON.
 parseConfig :: FilePath -> IO (Either ConfigError SyncConfig)
 parseConfig fp =
   first (ConfigParseError . show) <$> Yaml.decodeFileEither fp
 
--- | Parse a db-sync config from a raw ByteString. Useful for testing
--- without disk I/O.
+-- | Same as 'parseConfig', without disk I/O.
 parseConfigBS :: ByteString -> Either ConfigError SyncConfig
 parseConfigBS = first (ConfigParseError . show) . Yaml.decodeEither'

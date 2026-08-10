@@ -1,9 +1,8 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- | The sole Template Haskell in the codebase. 'embedDir' compiles the
--- migration @.sql@ files into the binary as raw bytes — data, not logic —
--- so the runner needs no files on disk. 'DbSync.Db.Schema.Migration'
--- decodes and orders them.
+-- | 'embedDir' compiles the migration @.sql@ files into the binary as raw
+-- bytes, so the runner needs no files on disk.
+-- 'DbSync.Db.Schema.Migration' decodes and orders them.
 module DbSync.Db.Schema.Migration.Files
   ( embeddedMigrationFiles
   ) where

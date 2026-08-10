@@ -1,13 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Off-chain votes extractor.
---
--- Owns the seven @off_chain_vote_*@ tables. The per-block pass
--- observes governance anchors carried by proposals, votes, DRep
--- registrations, committee resignations, and constitution updates,
--- and notifies the worker queue via 'enqueueVoteMetaFetch'. Result
--- rows are written by 'DbSync.Worker.OffChain.Vote', not by this
--- extractor.
+-- | Owns the seven @off_chain_vote_*@ tables. The per-block pass only
+-- reports the governance anchors on proposals, votes, DRep
+-- registrations, committee resignations and constitution updates,
+-- through 'enqueueVoteMetaFetch'. 'DbSync.Worker.OffChain.Vote' writes
+-- the result rows.
 module DbSync.Extractor.OffChainVotes
   ( offChainVotesExtractor
   ) where

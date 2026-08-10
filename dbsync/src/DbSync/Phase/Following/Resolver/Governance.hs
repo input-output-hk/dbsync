@@ -2,17 +2,11 @@
 
 -- | Follow 'IdResolver' fragments for the @governance@ extractor.
 --
--- Five counter-managed FK tables get @assign*Id@ helpers that pop
--- from per-block pre-allocated queues (Buf) or @nextval@ over the
--- connection (Conn).
---
--- Three dedup-backed tables get @resolve*@ helpers. The cache key is
--- the encoded ByteString that matches the Ingest LSM layout; the
--- SELECT keys on the row's structured columns.
---
--- Cross-block scratchpads — the proposal cache is a SELECT-on-PG
--- + per-block 'BlockDedupCache' shadow; the enacted-state triple and
--- gov-action lifetime remain IORef-backed because no PG mirror exists.
+-- The @assign*Id@ helpers pop a per-block pre-allocated queue (Buf)
+-- or call @nextval@ over the connection (Conn). The @resolve*@
+-- helpers key their cache on the encoded ByteString that matches the
+-- Ingest LSM layout, and key their SELECT on the row's structured
+-- columns.
 module DbSync.Phase.Following.Resolver.Governance
   ( -- * Counter / nextval-style FKs
     assignGovActionProposalIdConn
@@ -125,9 +119,8 @@ assignConstitutionIdBuf :: PreAllocatedIds -> IO ConstitutionId
 assignConstitutionIdBuf preAlloc =
   popHead "assignConstitutionId" (paiConstitutionIds preAlloc)
 
--- | @event_info@ has no pre-allocation lane in 'PreAllocatedIds'
--- because the table is unwritten; the Buf flavour falls through to
--- 'nextval' via the connection.
+-- | Nothing writes @event_info@, so 'PreAllocatedIds' carries no lane
+-- for it and the Buf flavour also calls 'nextval'.
 assignEventInfoIdConn :: Conn.Connection -> IO EventInfoId
 assignEventInfoIdConn conn = runStmt conn () nextEventInfoIdStmt
 
@@ -138,9 +131,8 @@ assignEventInfoIdBuf conn = runStmt conn () nextEventInfoIdStmt
 -- * Dedup-style SELECT-then-INSERT
 -- ---------------------------------------------------------------------------
 
--- | Resolve a @drep_hash@ row. The cache key is the encoded dedup
--- key supplied by 'SharedDedup.resolveAndWriteDrepHash'; the SELECT
--- keys on @(raw, has_script, view)@ — @view@ distinguishes the two
+-- | Resolve a @drep_hash@ row. The SELECT keys on
+-- @(raw, has_script, view)@, because @view@ separates the two
 -- abstract DReps, which share @(NULL, FALSE)@.
 resolveDrepHashConn
   :: Conn.Connection -> ByteString -> DrepHash -> IO (DrepHashId, Bool)
@@ -239,16 +231,16 @@ selectKey row =
 -- * Cross-block proposal cache
 -- ---------------------------------------------------------------------------
 
--- | Direct lookup: SELECT against PG. No in-process cache because each
--- proposal row lands immediately when the proposing tx commits.
+-- | SELECT against PG. No in-process cache, because each proposal row
+-- lands as soon as the proposing tx commits.
 lookupGovActionProposalIdConn
   :: Conn.Connection -> ByteString -> Word64 -> IO (Maybe GovActionProposalId)
 lookupGovActionProposalIdConn conn txHash idx =
   runStmt conn (txHash, idx) queryGovActionProposalByTxHashStmt
 
--- | Buffered lookup: check the per-block shadow first; on miss
--- SELECT against PG. The shadow covers same-block proposal/vote
--- pairs whose proposal write hasn't flushed yet.
+-- | Check the per-block shadow first, then SELECT against PG. The
+-- shadow covers a same-block proposal and vote pair whose proposal
+-- write has not flushed yet.
 lookupGovActionProposalIdBuf
   :: Conn.Connection
   -> BlockDedupCache
@@ -261,15 +253,14 @@ lookupGovActionProposalIdBuf conn cache txHash idx = do
     Just gid -> pure (Just gid)
     Nothing  -> runStmt conn (txHash, idx) queryGovActionProposalByTxHashStmt
 
--- | No-op for the direct flavour: the row lands via @writeGovActionProposal@
--- and a follow-up @lookupGovActionProposalIdConn@ finds it via SELECT.
+-- | Does nothing: @writeGovActionProposal@ lands the row, and a later
+-- 'lookupGovActionProposalIdConn' finds it with a SELECT.
 recordGovActionProposalIdConn
   :: ByteString -> Word64 -> GovActionProposalId -> IO ()
 recordGovActionProposalIdConn _ _ _ = pure ()
 
--- | Buffered flavour: stash the freshly-allocated id in the per-block
--- shadow so a same-block vote pass can resolve it without waiting for
--- the buffer flush.
+-- | Stash the new id in the per-block shadow, so a same-block vote
+-- pass resolves it without waiting for the buffer flush.
 recordGovActionProposalIdBuf
   :: BlockDedupCache
   -> ByteString
@@ -283,9 +274,8 @@ recordGovActionProposalIdBuf cache txHash idx gid =
 -- * Cross-block scratchpads (IORef-backed)
 -- ---------------------------------------------------------------------------
 
--- | Per-session governance scratchpad for state that survives a block
--- transition but has no direct PG mirror (the enacted-state triple
--- and the gov-action lifetime).
+-- | Per-session scratchpad for governance state that survives a block
+-- transition but has no PG mirror.
 data GovScratchpad = GovScratchpad
   { gsEnactedEpochStateIds :: !(IORef (Maybe Int64, Maybe Int64, Maybe Int64))
   , gsExpiresAfter         :: !(IORef (Maybe Word64))

@@ -134,10 +134,9 @@ type instance Key PoolHash = PoolHashId
 -- * Schema types
 -- ---------------------------------------------------------------------------
 
--- | The @block@ table.
---
--- Note: the @id@ column is NOT part of this record — it lives in
--- @'Key' Block = 'BlockId'@, paired via 'Entity'.
+-- | The @id@ column is not a field here. It lives in
+-- @'Key' Block = 'BlockId'@, paired through 'Entity'. Every row record in
+-- this package follows that rule.
 data Block = Block
   { blockHash           :: !ByteString       -- ^ hash32type
   , blockEpochNo        :: !(Maybe Word64)   -- ^ word31type
@@ -157,7 +156,6 @@ data Block = Block
   }
   deriving stock (Eq, Show)
 
--- | The @tx@ table.
 data Tx = Tx
   { txHash              :: !ByteString       -- ^ hash32type
   , txBlockId           :: !BlockId          -- ^ FK to block (noreference)
@@ -174,7 +172,6 @@ data Tx = Tx
   }
   deriving stock (Eq, Show)
 
--- | The @slot_leader@ table.
 data SlotLeader = SlotLeader
   { slotLeaderHash        :: !ByteString       -- ^ hash28type
   , slotLeaderPoolHashId  :: !(Maybe PoolHashId) -- ^ non-null when block mined by pool
@@ -182,8 +179,7 @@ data SlotLeader = SlotLeader
   }
   deriving stock (Eq, Show)
 
--- | The @stake_address@ table (dedup table).
--- One row per unique stake credential hash.
+-- | Dedup table, one row per unique stake credential hash.
 data StakeAddress = StakeAddress
   { stakeAddressHashRaw    :: !ByteString        -- ^ 28-byte stake credential hash
   , stakeAddressView       :: !Text              -- ^ Bech32 representation
@@ -191,8 +187,7 @@ data StakeAddress = StakeAddress
   }
   deriving stock (Eq, Show)
 
--- | The @pool_hash@ table (dedup table).
--- One row per unique pool key hash.
+-- | Dedup table, one row per unique pool key hash.
 data PoolHash = PoolHash
   { poolHashHashRaw :: !ByteString  -- ^ Pool key hash (28 bytes)
   , poolHashView    :: !Text        -- ^ Bech32 representation
@@ -602,22 +597,23 @@ encodePoolHashCopy (PoolHashId pid) ph =
 -- ---------------------------------------------------------------------------
 -- * Internal encoding helpers
 -- ---------------------------------------------------------------------------
+--
+-- The COPY text spellings, in 'ByteString' form. The runtime path uses the
+-- 'Builder' versions in 'DbSync.Db.Loader.Encoder'; only the encoder tests
+-- call these.
 
--- | Encode an 'Int64' as a decimal ASCII string.
 encodeInt64 :: Int64 -> ByteString
 encodeInt64 = BS8.pack . show
 
--- | Encode a 'Word64' as a decimal ASCII string.
 encodeWord64 :: Word64 -> ByteString
 encodeWord64 = BS8.pack . show
 
--- | Encode a 'Bool' as @t@ or @f@ (PostgreSQL COPY boolean format).
+-- | @t@ or @f@.
 encodeBool :: Bool -> ByteString
 encodeBool True  = "t"
 encodeBool False = "f"
 
--- | Encode a 'ByteString' as a hex string with @\\x@ prefix
--- (PostgreSQL bytea hex format for COPY).
+-- | Hex with the @\\x@ prefix that bytea COPY expects.
 encodeHex :: ByteString -> ByteString
 encodeHex bs = "\\x" <> toHex bs
   where
@@ -636,26 +632,27 @@ encodeHex bs = "\\x" <> toHex bs
       | n < 10    = toEnum (n + fromEnum '0')
       | otherwise = toEnum (n - 10 + fromEnum 'a')
 
--- | Encode a 'UTCTime' as a PostgreSQL timestamp string.
--- Format: @YYYY-MM-DD HH:MM:SS@ (no timezone — PostgreSQL timestamp
--- without time zone).
+-- | @YYYY-MM-DD HH:MM:SS@, with no timezone.
 encodeUTCTime :: UTCTime -> ByteString
 encodeUTCTime = BS8.pack . formatTime defaultTimeLocale "%F %T"
 
 -- ---------------------------------------------------------------------------
 -- * Hasql encoders / decoders
 -- ---------------------------------------------------------------------------
+--
+-- A @\<row>Encoder@ and @\<row>Decoder@ pair omits the @id@ column. An
+-- @entity\<Row>Decoder@ reads @id@ first, so its column order matches
+-- @SELECT *@ on the table.
 
--- | 'UTCTime' \<-> @TIMESTAMP WITHOUT TIME ZONE@. Hasql's
--- 'D.timestamp' \/ 'E.timestamp' speak 'LocalTime'; the column is
--- naive UTC by convention so we shift through 'utc' on both sides.
+-- | 'UTCTime' \<-> @TIMESTAMP WITHOUT TIME ZONE@. Hasql's 'D.timestamp'
+-- and 'E.timestamp' speak 'LocalTime', and the column is naive UTC by
+-- convention, so both sides shift through 'utc'.
 utcTimeAsTimestampDecoder :: D.Value UTCTime
 utcTimeAsTimestampDecoder = localTimeToUTC utc <$> D.timestamp
 
 utcTimeAsTimestampEncoder :: E.Value UTCTime
 utcTimeAsTimestampEncoder = utcToLocalTime utc >$< E.timestamp
 
--- | Encoder for a 'Block', excluding the auto-generated @id@.
 blockEncoder :: E.Params Block
 blockEncoder = mconcat
   [ blockHash           >$< E.param (E.nonNullable E.bytea)
@@ -675,7 +672,6 @@ blockEncoder = mconcat
   , blockOpCertCounter  >$< E.param (E.nullable    $ fromIntegral >$< E.int8)
   ]
 
--- | Decoder for the data columns of a 'Block' (excluding @id@).
 blockDecoder :: D.Row Block
 blockDecoder = Block
   <$> D.column (D.nonNullable D.bytea)
@@ -694,14 +690,11 @@ blockDecoder = Block
   <*> D.column (D.nullable D.bytea)
   <*> D.column (D.nullable    $ fromIntegral <$> D.int8)
 
--- | Decoder for a full @block@ row, including @id@. Matches @SELECT *@
--- on 'blockTableDef'.
 entityBlockDecoder :: D.Row (BlockId, Block)
 entityBlockDecoder = (,)
   <$> idDecoder BlockId
   <*> blockDecoder
 
--- | Encoder for a 'Tx', excluding the auto-generated @id@.
 txEncoder :: E.Params Tx
 txEncoder = mconcat
   [ txHash             >$< E.param (E.nonNullable E.bytea)
@@ -718,7 +711,6 @@ txEncoder = mconcat
   , txTreasuryDonation >$< E.param (E.nonNullable dbLovelaceValueEncoder)
   ]
 
--- | Decoder for the data columns of a 'Tx' (excluding @id@).
 txDecoder :: D.Row Tx
 txDecoder = Tx
   <$> D.column (D.nonNullable D.bytea)
@@ -734,14 +726,11 @@ txDecoder = Tx
   <*> D.column (D.nonNullable $ fromIntegral <$> D.int8)
   <*> D.column (D.nonNullable dbLovelaceValueDecoder)
 
--- | Decoder for a full @tx@ row, including @id@. Matches @SELECT *@
--- on 'txTableDef'.
 entityTxDecoder :: D.Row (TxId, Tx)
 entityTxDecoder = (,)
   <$> idDecoder TxId
   <*> txDecoder
 
--- | Encoder for a 'SlotLeader' row, excluding the auto-generated @id@.
 slotLeaderEncoder :: E.Params SlotLeader
 slotLeaderEncoder = mconcat
   [ slotLeaderHash         >$< E.param (E.nonNullable E.bytea)
@@ -749,21 +738,17 @@ slotLeaderEncoder = mconcat
   , slotLeaderDescription  >$< E.param (E.nonNullable E.text)
   ]
 
--- | Decoder for the data columns of a 'SlotLeader' (excluding @id@).
 slotLeaderDecoder :: D.Row SlotLeader
 slotLeaderDecoder = SlotLeader
   <$> D.column (D.nonNullable D.bytea)
   <*> maybeIdDecoder PoolHashId
   <*> D.column (D.nonNullable D.text)
 
--- | Decoder for a full @slot_leader@ row, including @id@. Column
--- order matches @SELECT *@ on 'slotLeaderTableDef'.
 entitySlotLeaderDecoder :: D.Row (SlotLeaderId, SlotLeader)
 entitySlotLeaderDecoder = (,)
   <$> idDecoder SlotLeaderId
   <*> slotLeaderDecoder
 
--- | Encoder for a 'StakeAddress' row, excluding the @id@.
 stakeAddressEncoder :: E.Params StakeAddress
 stakeAddressEncoder = mconcat
   [ stakeAddressHashRaw    >$< E.param (E.nonNullable E.bytea)
@@ -771,35 +756,28 @@ stakeAddressEncoder = mconcat
   , stakeAddressScriptHash >$< E.param (E.nullable E.bytea)
   ]
 
--- | Decoder for a @stake_address@ row, excluding the @id@ column.
 stakeAddressDecoder :: D.Row StakeAddress
 stakeAddressDecoder = StakeAddress
   <$> D.column (D.nonNullable D.bytea)
   <*> D.column (D.nonNullable D.text)
   <*> D.column (D.nullable D.bytea)
 
--- | Decoder for a full @stake_address@ row, including @id@. Column
--- order matches @SELECT *@ on 'stakeAddressTableDef'.
 entityStakeAddressDecoder :: D.Row (StakeAddressId, StakeAddress)
 entityStakeAddressDecoder = (,)
   <$> idDecoder StakeAddressId
   <*> stakeAddressDecoder
 
--- | Encoder for a 'PoolHash' row, excluding the @id@.
 poolHashEncoder :: E.Params PoolHash
 poolHashEncoder = mconcat
   [ poolHashHashRaw >$< E.param (E.nonNullable E.bytea)
   , poolHashView    >$< E.param (E.nonNullable E.text)
   ]
 
--- | Decoder for a @pool_hash@ row, excluding the @id@ column.
 poolHashDecoder :: D.Row PoolHash
 poolHashDecoder = PoolHash
   <$> D.column (D.nonNullable D.bytea)
   <*> D.column (D.nonNullable D.text)
 
--- | Decoder for a full @pool_hash@ row, including @id@. Column
--- order matches @SELECT *@ on 'poolHashTableDef'.
 entityPoolHashDecoder :: D.Row (PoolHashId, PoolHash)
 entityPoolHashDecoder = (,)
   <$> idDecoder PoolHashId

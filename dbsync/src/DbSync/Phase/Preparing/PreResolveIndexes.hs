@@ -1,18 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Build the minimum index set the post-load UPDATEs need.
+-- | Build the minimum index set the post-load UPDATEs need. These
+-- run while the tables are still UNLOGGED, and deliberately not
+-- @CONCURRENTLY@: nothing else writes, so a one-pass build skips the
+-- WAL writes and the second scan.
 --
--- Runs at the start of 'DbSync.Phase.Preparing.Run.run' while
--- tables are still UNLOGGED. Non-@CONCURRENTLY@ on purpose: a
--- one-pass build avoids the WAL writes and second-pass scan that
--- @CONCURRENTLY@ would force on an UNLOGGED table with no concurrent
--- writers.
---
--- Everything built here is scaffolding for the resolve + backfill
--- UPDATEs: 'DbSync.Phase.Preparing.Run.run' drops the whole set
--- again before the UNLOGGED → LOGGED flip so the flip rewrites bare
--- heaps. The production index pass after the flip rebuilds the
--- shapes Follow needs under the same names.
+-- All of it is scaffolding.
+-- 'DbSync.Phase.Preparing.Run.run' drops the whole set before the
+-- UNLOGGED to LOGGED flip, and the production index pass rebuilds
+-- the shapes Follow needs under the same names.
 module DbSync.Phase.Preparing.PreResolveIndexes
   ( createPreResolveIndexes
   , createPostResolveIndexes
@@ -33,8 +29,8 @@ import DbSync.Db.Transaction (HasHasqlConnection (..))
 import DbSync.Phase.Preparing.Step (StepKind (..), step)
 import DbSync.Trace (HasTracer (..))
 
--- | Issue the pre-resolve DDL. Each index is logged as its own step
--- so an operator chasing a slow pass sees which build is in flight.
+-- | Each index logs as its own step, so an operator chasing a slow
+-- pass sees which build runs.
 createPreResolveIndexes
   :: (HasTracer env, HasHasqlConnection env, MonadReader env m, MonadUnliftIO m)
   => m ()

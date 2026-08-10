@@ -104,9 +104,9 @@ loopForever tracer component conn sleepMicros batchSize hooks =
       threadDelay sleepMicros
       runOneCycle tracer component conn batchSize hooks
 
--- | Run a single cycle: load pending refs, fetch each, persist the
--- outcome. Exposed so integration tests can drive the worker
--- deterministically without going through the sleeping loop.
+-- | One cycle: load pending refs, fetch each, persist the outcome.
+-- Exposed so integration tests can drive the worker without the
+-- sleeping loop.
 runOneCycle
   :: AppTracer
   -> Text

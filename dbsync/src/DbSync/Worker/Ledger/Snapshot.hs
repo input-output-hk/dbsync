@@ -5,29 +5,15 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
--- | Snapshot management: listing, writing, loading, deleting.
+-- | Snapshot listing, writing, loading and deletion.
 --
--- Sits on top of consensus's 'SnapshotManager' (@listSnapshots@,
--- @deleteSnapshotIfTemporary@, @takeSnapshot@). Every helper here adds
--- project-specific concerns: tracing, defensive deletion, the in-memory
--- buffer's edge-points contribution to 'listKnownSnapshots', and the
--- async writer thread that drains 'leSnapshotQueue'.
+-- Wraps consensus's 'SnapshotManager' and adds tracing, defensive
+-- deletion, the checkpoint buffer's edge points, and the async writer
+-- thread that drains 'leSnapshotQueue'.
 --
--- Snapshot loading is __not__ on the manager: the V2 backend provides
--- @newHandleFromSnapshot@ directly, surfaced via the 'leLoadSnapshot'
--- callback the boot flow wires up and bridged into a 'DbSyncStateRef'
--- here.
---
--- Two invariants are enforced here:
---
---   * In-flight handle safety — 'saveCurrentLedgerState' flips
---     @srCanClose@ to @False@ before enqueueing; 'snapshotWriteLoop'
---     flips it back after the write completes. The pruner in
---     'DbSync.Worker.Ledger.State' must not @close@ a handle while
---     @srCanClose@ is @False@.
---   * Defensive delete — 'safeDeleteSnapshot' tolerates LSM-orphan
---     failures (a snapshot directory on disk that the LSM session has
---     lost track of), adding a tracer call so the operator sees it.
+-- Loading is not on the manager: the V2 backend exposes
+-- @newHandleFromSnapshot@, which the boot flow wires up as the
+-- 'leLoadSnapshot' callback.
 module DbSync.Worker.Ledger.Snapshot
   ( -- * Listing
     listDiskSnapshots
@@ -99,20 +85,16 @@ import DbSync.Trace.Types (LogMsg (..), Severity (..))
 -- * Listing
 -- ---------------------------------------------------------------------------
 
--- | All on-disk snapshots known to the configured backend.
--- Newest-first by 'DiskSnapshot.dsNumber'.
+-- | On-disk snapshots known to the backend, newest first by 'dsNumber'.
 listDiskSnapshots :: LedgerM [DiskSnapshot]
 listDiskSnapshots = do
   env <- ask
   liftIO $ listSnapshots (leSnapshotManager env)
 
--- | The points represented by the in-memory 'LedgerDB' checkpoint
--- buffer. Genesis is filtered out because it isn't a useful rollback
--- target (re-derived from configuration).
---
--- Returns the \"edge\" points (newest + oldest of the buffer) rather
--- than every checkpoint — those are the only ones a rollback caller
--- can usefully target without first reaching deeper into the buffer.
+-- | The newest and oldest points of the 'LedgerDB' checkpoint buffer.
+-- Those are the only two a rollback caller can target without reaching
+-- deeper into the buffer. Genesis is dropped: configuration re-derives
+-- it, so it is not a useful rollback target.
 listMemorySnapshots :: LedgerM [CardanoPoint]
 listMemorySnapshots = do
   env <- ask
@@ -138,10 +120,9 @@ listMemorySnapshots = do
     notGenesis GenesisPoint    = False
     notGenesis (BlockPoint{}) = True
 
--- | Combined list of in-memory and on-disk snapshots, newest-slot
--- first. Used by the boot flow to decide which snapshot to resume
--- from and by the rollback path to decide whether the in-memory
--- buffer can serve a target.
+-- | Buffered and on-disk snapshots, newest slot first. The boot flow
+-- picks a resume anchor from this; the rollback path checks whether
+-- the checkpoint buffer can serve a target.
 listKnownSnapshots :: LedgerM [SnapshotPoint]
 listKnownSnapshots = do
   inMem  <- fmap InMemory <$> listMemorySnapshots
@@ -160,13 +141,12 @@ getSlotNoSnapshot = \case
 -- * Writing
 -- ---------------------------------------------------------------------------
 
--- | Enqueue a 'DbSyncStateRef' for the async snapshot writer to
--- persist to disk. Atomically flips @srCanClose@ to 'False' so the
--- LedgerDB pruner can't close the handle out from under the writer
--- — see invariant I3.
+-- | Enqueue a 'DbSyncStateRef' for the async snapshot writer.
 --
--- Retention is handled by the writer thread after each successful
--- write — see 'snapshotWriteLoop' and 'snapshotRetention'.
+-- Flips @srCanClose@ to 'False' in the same transaction as the
+-- enqueue, so the 'DbSync.Worker.Ledger.State' pruner cannot close the
+-- handle while the write is in flight. 'snapshotWriteLoop' flips it
+-- back. Retention runs there too, after each successful write.
 saveCurrentLedgerState :: DbSyncStateRef -> LedgerM ()
 saveCurrentLedgerState sref = do
   env <- ask
@@ -195,9 +175,8 @@ runLedgerStateWriteThread = \case
         throwIO e
   LedgerDisabled _nle -> idleForever
   where
-    -- 10-minute heartbeats, so a future maintainer who attaches a
-    -- profiler to a no-ledger run sees a clearly-named idle thread
-    -- rather than a tight busy loop.
+    -- Long heartbeats, so a profiler on a no-ledger run shows a named
+    -- idle thread instead of a busy loop.
     idleForever :: IO ()
     idleForever = forever $ threadDelay tenMinutesMicros
 
@@ -215,16 +194,14 @@ trySync action =
       Just _  -> Exception.throwIO e
       Nothing -> pure (Left e)
 
--- | The drain loop: read a 'DbSyncStateRef' off the queue, hand it
--- to the consensus 'SnapshotManager', and clear the @srCanClose@
--- flag so the pruner is free to close the handle.
+-- | The drain loop: read a 'DbSyncStateRef' off the queue, hand it to
+-- the 'SnapshotManager', then set @srCanClose@ so the pruner may close
+-- the handle.
 --
--- Each per-step failure is treated as recoverable: log Warning and
--- continue. The snapshot directory plus boot-time discovery is the
--- durable record, so a missed 'markSnapshotComplete' or 'trimSnapshots'
--- does not warrant taking the whole sync down. Asynchronous exceptions
--- still propagate (via 'trySync'), letting the 'runLedgerStateWriteThread'
--- wrapper report a clean shutdown.
+-- Every step failure is recoverable: log a warning and continue. The
+-- snapshot directory plus boot-time discovery is the durable record,
+-- so a missed 'markSnapshotComplete' or 'trimSnapshots' must not stop
+-- the sync. Asynchronous exceptions still propagate through 'trySync'.
 snapshotWriteLoop :: LedgerM ()
 snapshotWriteLoop = do
   env <- ask
@@ -304,14 +281,10 @@ snapshotWriteLoop = do
 -- ---------------------------------------------------------------------------
 
 -- | Load a 'DiskSnapshot' through the configured backend and bridge
--- the consensus 'StateRef' into our 'DbSyncStateRef' shape.
+-- the consensus 'StateRef' into a 'DbSyncStateRef'.
 --
--- The @epochBlockNo@ is conservatively set to 'ByronEpochBlockNo' on
--- the loaded ref. Callers that have a more precise idea (eg. derived
--- from the snapshot metadata or by inspecting the ledger state's tip
--- slot vs. the era boundaries) should patch it after the fact —
--- exposing a derive helper here would couple this module to the era
--- dispatcher and is left to the boot flow.
+-- The loaded ref gets a conservative 'ByronEpochBlockNo'. The boot
+-- flow owns the era dispatcher, so it patches the real value.
 loadSnapshotFromDisk
   :: DiskSnapshot
   -> LedgerM (Either Text DbSyncStateRef)
@@ -356,11 +329,8 @@ safeDeleteSnapshot ds = do
             )
 
 -- | Delete every disk snapshot strictly newer than the given slot.
--- Used by the rollback path and by the boot-flow resume-constraint
--- check.
---
--- Walks the snapshot list and applies 'safeDeleteSnapshot' to each
--- candidate, so a single failed delete doesn't abort the rest.
+-- Deletes go through 'safeDeleteSnapshot', so one failure does not
+-- abort the rest.
 deleteNewerSnapshots :: SlotNo -> LedgerM ()
 deleteNewerSnapshots (SlotNo s) = do
   snaps <- listDiskSnapshots

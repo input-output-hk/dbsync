@@ -99,8 +99,7 @@ type instance Key OffChainVoteFetchError     = OffChainVoteFetchErrorId
 -- * Schema types
 -- ---------------------------------------------------------------------------
 
--- | The @off_chain_vote_data@ table. One row per successful anchor
--- fetch; unique on @(hash, voting_anchor_id)@.
+-- | One row per successful anchor fetch; unique on @(hash, voting_anchor_id)@.
 --
 -- @is_valid@ encodes the parse outcome:
 --   * 'Just' 'True'  — JSON parsed and matched the CIP schema.
@@ -118,8 +117,7 @@ data OffChainVoteData = OffChainVoteData
   }
   deriving stock (Eq, Show)
 
--- | The @off_chain_vote_gov_action_data@ table. CIP-108 governance
--- proposal text fields. One row per parent vote-data row.
+-- | CIP-108 governance proposal text. One row per parent vote-data row.
 data OffChainVoteGovActionData = OffChainVoteGovActionData
   { offChainVoteGovActionDataOffChainVoteDataId :: !OffChainVoteDataId
   , offChainVoteGovActionDataTitle              :: !Text
@@ -129,8 +127,7 @@ data OffChainVoteGovActionData = OffChainVoteGovActionData
   }
   deriving stock (Eq, Show)
 
--- | The @off_chain_vote_drep_data@ table. CIP-119 DRep metadata
--- attached to a vote-data row.
+-- | CIP-119 DRep metadata for one vote-data row.
 data OffChainVoteDrepData = OffChainVoteDrepData
   { offChainVoteDrepDataOffChainVoteDataId :: !OffChainVoteDataId
   , offChainVoteDrepDataPaymentAddress     :: !(Maybe Text)
@@ -143,8 +140,7 @@ data OffChainVoteDrepData = OffChainVoteDrepData
   }
   deriving stock (Eq, Show)
 
--- | The @off_chain_vote_author@ table. Author signature attached to a
--- vote-data row.
+-- | One author signature on a vote-data row.
 data OffChainVoteAuthor = OffChainVoteAuthor
   { offChainVoteAuthorOffChainVoteDataId :: !OffChainVoteDataId
   , offChainVoteAuthorName               :: !(Maybe Text)
@@ -155,7 +151,7 @@ data OffChainVoteAuthor = OffChainVoteAuthor
   }
   deriving stock (Eq, Show)
 
--- | The @off_chain_vote_reference@ table. One row per referenced URI.
+-- | One row per referenced URI.
 data OffChainVoteReference = OffChainVoteReference
   { offChainVoteReferenceOffChainVoteDataId :: !OffChainVoteDataId
   , offChainVoteReferenceLabel              :: !Text
@@ -165,8 +161,7 @@ data OffChainVoteReference = OffChainVoteReference
   }
   deriving stock (Eq, Show)
 
--- | The @off_chain_vote_external_update@ table. One row per external
--- update link in the anchor document.
+-- | One row per external update link in the anchor document.
 data OffChainVoteExternalUpdate = OffChainVoteExternalUpdate
   { offChainVoteExternalUpdateOffChainVoteDataId :: !OffChainVoteDataId
   , offChainVoteExternalUpdateTitle              :: !Text
@@ -174,8 +169,7 @@ data OffChainVoteExternalUpdate = OffChainVoteExternalUpdate
   }
   deriving stock (Eq, Show)
 
--- | The @off_chain_vote_fetch_error@ table. One row per failed
--- attempt; unique on @(voting_anchor_id, retry_count)@.
+-- | One row per failed attempt; unique on @(voting_anchor_id, retry_count)@.
 data OffChainVoteFetchError = OffChainVoteFetchError
   { offChainVoteFetchErrorVotingAnchorId :: !VotingAnchorId
   , offChainVoteFetchErrorFetchError     :: !Text

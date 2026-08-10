@@ -1,7 +1,6 @@
--- | Configuration validation.
---
--- Validates a parsed 'SyncConfig' for internal consistency.
--- Collects ALL errors (not just the first) so the user can fix them in one pass.
+-- | Checks a parsed 'SyncConfig' for internal consistency. It collects
+-- every error, not just the first, so the operator fixes them in one
+-- pass.
 module DbSync.App.Config.Validation
   ( validateConfig
   ) where
@@ -17,7 +16,6 @@ import DbSync.App.Config.Types
   , UtxoOption (..)
   )
 
--- | Validate a parsed config; return every error found, or the valid config.
 validateConfig :: SyncConfig -> Either [ConfigError] SyncConfig
 validateConfig cfg =
   case errors of

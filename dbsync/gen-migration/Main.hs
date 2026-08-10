@@ -1,10 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Developer tool that emits SQL migration files for the dbsync schema.
---
--- @baseline@ writes the frozen v1 schema anchor; @generate@ renders a draft
--- migration from the typed schema diff. This tool never touches a database —
--- the boot-time runner applies the committed files.
+-- | Developer tool that emits SQL migration files for the dbsync
+-- schema. @baseline@ writes the frozen v1 anchor; @generate@ renders a
+-- draft from the typed schema diff. It never touches a database: the
+-- boot-time runner applies the committed files.
 module Main (main) where
 
 import Cardano.Prelude
@@ -85,8 +84,8 @@ writeBaseline dir = do
   TIO.writeFile path baselineSql
   TIO.putStrLn ("Wrote " <> T.pack path)
 
--- | The baseline reuses 'initSchemaStatements' over every known extractor's
--- tables, so it is byte-for-byte the DDL a fresh 'initSchema' would run.
+-- | Reuses 'initSchemaStatements' over every known extractor's tables,
+-- so the output matches a fresh 'initSchema' byte for byte.
 baselineSql :: Text
 baselineSql =
   baselineHeader

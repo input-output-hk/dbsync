@@ -42,8 +42,8 @@ import DbSync.Util (jsonValueContainsNul)
 -- * Extraction
 -- ---------------------------------------------------------------------------
 
--- | Project the metadata map out of an era's auxiliary data.
--- Strips the script payload that Allegra+ wrappers also carry.
+-- | Reads the metadata map out of an era's auxiliary data and drops
+-- the script payload that Allegra+ wrappers also carry.
 getMetadata :: EraTxAuxData era => TxAuxData era -> Map Word64 Metadatum
 getMetadata aux = aux ^. metadataTxAuxDataL
 
@@ -51,9 +51,8 @@ getMetadata aux = aux ^. metadataTxAuxDataL
 -- * Encoding helpers
 -- ---------------------------------------------------------------------------
 
--- | Re-encode a single @(key, value)@ as the bytes stored in
--- @tx_metadata.bytes@. Matches the original's
--- @serialiseTxMetadataToCbor (Map.singleton key value)@.
+-- | Re-encode a single @(key, value)@ as the bytes that
+-- @tx_metadata.bytes@ stores.
 serialiseSingleton :: Word64 -> Metadatum -> ByteString
 serialiseSingleton key value =
   serialize' shelleyProtVer (Map.singleton key value)
@@ -92,12 +91,11 @@ metadataValueToJson = go
 -- | Render a 'Metadatum' to the JSON text stored in
 -- @tx_metadata.json@, or 'Nothing' when PostgreSQL cannot store it.
 --
--- On-chain metadata does contain text with embedded NUL (@U+0000@) —
--- e.g. UTF-16 pasted into a metadata string — and PostgreSQL rejects
--- @\\u0000@ anywhere in a @jsonb@ value. The original db-sync stores
--- SQL @NULL@ in the @json@ column for those rows, keeping the raw
--- CBOR in @bytes@ as ground truth (see
--- IntersectMBO\/cardano-db-sync#297); we do the same.
+-- On-chain metadata does contain text with an embedded NUL
+-- (@U+0000@), for example UTF-16 pasted into a metadata string, and
+-- PostgreSQL rejects @\\u0000@ anywhere in a @jsonb@ value. Such rows
+-- get SQL @NULL@ in the @json@ column and keep the raw CBOR in
+-- @bytes@ as ground truth (see IntersectMBO\/cardano-db-sync#297).
 --
 -- 'Aeson.encode' yields valid UTF-8 by construction, so the
 -- 'Text.decodeUtf8'' fallback to 'Nothing' is defensive only.

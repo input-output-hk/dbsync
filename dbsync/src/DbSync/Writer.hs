@@ -1,18 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Writer interface for the extraction pipeline.
+-- | How extractors persist rows. 'IngestChainHistory' COPY-encodes
+-- through @putCopyData@ on per-table @libpq@ connections and commits
+-- per epoch; 'FollowingChainTip' INSERTs per record through @hasql@
+-- and commits per block, with rollback support.
 --
--- Two implementations exist, one per persisting phase:
---
--- * __IngestChainHistory__: COPY encoding via @putCopyData@ on
---   per-table @libpq@ connections, epoch-aligned commits.
--- * __FollowingChainTip__: per-record @INSERT@ via @hasql@,
---   per-block commits with rollback support.
---
--- Leaf-table writers take just the typed row — PostgreSQL allocates
--- the id on the backing identity sequence. FK-referenced writers
--- take an explicit @XId@ so sibling rows in the same block can use
--- it as a foreign key.
+-- A leaf-table writer takes the typed row alone, because PostgreSQL
+-- allocates the id on the identity sequence. An FK-referenced writer
+-- takes an explicit @XId@, so sibling rows in the same block use it
+-- as a foreign key.
 module DbSync.Writer
   ( -- * Types
     Writer (..)
@@ -91,16 +87,12 @@ import DbSync.Db.Schema.UTxO (TxOut, TxIn, CollateralTxIn, CollateralTxOut, Refe
 
 -- | How to persist extracted rows. Parameterised by effect monad @m@.
 data Writer m = Writer
-  { -- ---------------------------------------------------------------
-    -- Core tables
-    -- ---------------------------------------------------------------
+  { -- Core tables
     writeBlock      :: !(BlockId -> Block -> m ())
   , writeTx         :: !(TxId -> Tx -> m ())
   , writeSlotLeader :: !(SlotLeaderId -> SlotLeader -> m ())
 
-    -- ---------------------------------------------------------------
     -- UTxO tables
-    -- ---------------------------------------------------------------
   , writeAddress         :: !(AddressId -> Address -> m ())
   , writeTxOut           :: !(TxOutId -> TxOut -> m ())
   , writeTxIn            :: !(TxIn -> m ())
@@ -108,38 +100,28 @@ data Writer m = Writer
   , writeCollateralTxOut :: !(CollateralTxOutId -> CollateralTxOut -> m ())
   , writeReferenceTxIn   :: !(ReferenceTxIn -> m ())
 
-    -- ---------------------------------------------------------------
     -- Metadata tables
-    -- ---------------------------------------------------------------
   , writeTxMetadata :: !(TxMetadata -> m ())
 
-    -- ---------------------------------------------------------------
     -- MultiAsset tables
-    -- ---------------------------------------------------------------
   , writeMultiAsset :: !(MultiAssetId -> MultiAsset -> m ())
   , writeMaTxMint   :: !(MaTxMint -> m ())
   , writeMaTxOut    :: !(MaTxOut -> m ())
 
-    -- ---------------------------------------------------------------
     -- Stake delegation tables
-    -- ---------------------------------------------------------------
   , writeStakeAddress        :: !(StakeAddressId -> StakeAddress -> m ())
   , writeStakeRegistration   :: !(StakeRegistration -> m ())
   , writeStakeDeregistration :: !(StakeDeregistration -> m ())
   , writeDelegation          :: !(Delegation -> m ())
   , writeWithdrawal          :: !(Withdrawal -> m ())
 
-    -- ---------------------------------------------------------------
     -- Stake delegation (ledger-derived, IDENTITY leaves)
-    -- ---------------------------------------------------------------
   , writeReward             :: !(Reward -> m ())
   , writePotReward          :: !(PotReward -> m ())
   , writeEpochStake         :: !(EpochStake -> m ())
   , writeEpochStakeProgress :: !(EpochStakeProgress -> m ())
 
-    -- ---------------------------------------------------------------
     -- Pool tables
-    -- ---------------------------------------------------------------
   , writePoolHash        :: !(PoolHashId -> PoolHash -> m ())
   , writePoolUpdate      :: !(PoolUpdateId -> PoolUpdate -> m ())
   , writePoolMetadataRef :: !(PoolMetadataRefId -> PoolMetadataRef -> m ())
@@ -148,17 +130,13 @@ data Writer m = Writer
   , writePoolRelay       :: !(PoolRelay -> m ())
   , writePoolStat        :: !(PoolStat -> m ())
 
-    -- ---------------------------------------------------------------
     -- Off-chain pools (IDENTITY leaves)
-    -- ---------------------------------------------------------------
   , writeOffChainPoolData       :: !(OffChainPoolData -> m ())
   , writeOffChainPoolFetchError :: !(OffChainPoolFetchError -> m ())
   , writeDelistedPool           :: !(DelistedPool -> m ())
   , writeReservedPoolTicker     :: !(ReservedPoolTicker -> m ())
 
-    -- ---------------------------------------------------------------
     -- Off-chain votes (IDENTITY leaves)
-    -- ---------------------------------------------------------------
   , writeOffChainVoteData           :: !(OffChainVoteData -> m ())
   , writeOffChainVoteGovActionData  :: !(OffChainVoteGovActionData -> m ())
   , writeOffChainVoteDrepData       :: !(OffChainVoteDrepData -> m ())
@@ -167,19 +145,13 @@ data Writer m = Writer
   , writeOffChainVoteExternalUpdate :: !(OffChainVoteExternalUpdate -> m ())
   , writeOffChainVoteFetchError     :: !(OffChainVoteFetchError -> m ())
 
-    -- ---------------------------------------------------------------
     -- CBOR tables
-    -- ---------------------------------------------------------------
   , writeTxCbor :: !(TxCbor -> m ())
 
-    -- ---------------------------------------------------------------
     -- Epoch sync stats
-    -- ---------------------------------------------------------------
   , writeEpochSyncStats :: !(EpochSyncStatsId -> EpochSyncStats -> m ())
 
-    -- ---------------------------------------------------------------
     -- Epoch boundary tables
-    -- ---------------------------------------------------------------
   , writeAdaPots     :: !(AdaPots -> m ())
   , writeEpochParam  :: !(EpochParam -> m ())
   , writeEpochState  :: !(EpochState -> m ())
@@ -188,34 +160,26 @@ data Writer m = Writer
   , writeTreasury    :: !(Treasury -> m ())
   , writeReserve     :: !(Reserve -> m ())
 
-    -- ---------------------------------------------------------------
     -- Scripts / datums tables
-    -- ---------------------------------------------------------------
   , writeDatum           :: !(DatumId -> Datum -> m ())
   , writeScript          :: !(ScriptId -> Script -> m ())
   , writeRedeemer        :: !(RedeemerId -> Redeemer -> m ())
   , writeRedeemerData    :: !(RedeemerDataId -> RedeemerData -> m ())
   , writeExtraKeyWitness :: !(ExtraKeyWitness -> m ())
 
-    -- ---------------------------------------------------------------
     -- Governance — FK-referenced (counter-managed)
-    -- ---------------------------------------------------------------
   , writeGovActionProposal :: !(GovActionProposalId -> GovActionProposal -> m ())
   , writeParamProposal     :: !(ParamProposalId -> ParamProposal -> m ())
   , writeCommittee         :: !(CommitteeId -> Committee -> m ())
   , writeConstitution      :: !(ConstitutionId -> Constitution -> m ())
   , writeEventInfo         :: !(EventInfoId -> EventInfo -> m ())
 
-    -- ---------------------------------------------------------------
     -- Governance — dedup-backed
-    -- ---------------------------------------------------------------
   , writeDrepHash          :: !(DrepHashId -> DrepHash -> m ())
   , writeCommitteeHash     :: !(CommitteeHashId -> CommitteeHash -> m ())
   , writeVotingAnchor      :: !(VotingAnchorId -> VotingAnchor -> m ())
 
-    -- ---------------------------------------------------------------
     -- Governance — IDENTITY leaves
-    -- ---------------------------------------------------------------
   , writeDrepRegistration       :: !(DrepRegistration -> m ())
   , writeDrepDistr              :: !(DrepDistr -> m ())
   , writeDelegationVote         :: !(DelegationVote -> m ())
@@ -225,9 +189,7 @@ data Writer m = Writer
   , writeCommitteeRegistration  :: !(CommitteeRegistration -> m ())
   , writeCommitteeDeRegistration :: !(CommitteeDeRegistration -> m ())
 
-    -- ---------------------------------------------------------------
     -- Transaction control
-    -- ---------------------------------------------------------------
   , commit :: !(m ())
   }
 
@@ -235,9 +197,7 @@ data Writer m = Writer
 -- * Accessor class
 -- ---------------------------------------------------------------------------
 
--- | Access the (IO-effecting) writer from any environment.
---
--- See 'DbSync.Resolver.HasResolver' for the rationale on fixing the effect
--- monad to 'IO' at the env layer.
+-- | See 'DbSync.Resolver.HasResolver' for why the env layer fixes the
+-- effect monad to 'IO'.
 class HasWriter env where
   getWriter :: env -> Writer IO

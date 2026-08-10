@@ -1,10 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Byron block conversion.
---
--- Byron blocks have a completely different structure from Shelley+ blocks.
--- They use a different crypto library, have no VRF\/OpCert, and include
--- Epoch Boundary Blocks (EBBs) which have no slot number or transactions.
+-- | Byron block conversion. A Byron block has a different structure
+-- from a Shelley+ block: another crypto library, no VRF and no OpCert.
+-- The era also has Epoch Boundary Blocks, which carry no slot number
+-- and no transactions.
 module DbSync.Parser.Byron
   ( fromByronBlock
   ) where
@@ -40,8 +39,7 @@ import DbSync.Parser.Types
 -- * Top-level dispatch
 -- ---------------------------------------------------------------------------
 
--- | Convert a 'ByronBlock' into a 'GenericBlock'.
--- Dispatches between regular blocks and Epoch Boundary Blocks (EBBs).
+-- | Dispatches between a regular block and an Epoch Boundary Block.
 fromByronBlock :: SlotDetails -> ByronBlock -> GenericBlock
 fromByronBlock sd blk =
   case byronBlockRaw blk of
@@ -80,8 +78,8 @@ fromByronRegularBlock sd blk =
 -- * Epoch Boundary Block (EBB)
 -- ---------------------------------------------------------------------------
 
--- | EBBs are Byron-era artifacts with no transactions and no real slot number.
--- We use slot 0 as a placeholder and the epoch from the EBB header.
+-- | An EBB carries no transactions and no real slot number, so the row
+-- takes slot 0 as a placeholder and the epoch from the EBB header.
 fromByronEBB :: SlotDetails -> Byron.ABoundaryBlock ByteString -> GenericBlock
 fromByronEBB sd blk =
   GenericBlock
@@ -108,9 +106,8 @@ fromByronEBB sd blk =
 -- * Byron transaction extraction
 -- ---------------------------------------------------------------------------
 
--- | Convert a Byron 'TxAux' into a 'GenericTx'.
--- Fee is computed as @sum(inputs) - sum(outputs)@ but since we don't have
--- UTxO lookups during parsing, we set fee to 0 and compute it later.
+-- | The Byron fee is @sum(inputs) - sum(outputs)@, but parsing has no
+-- UTxO lookup, so the row takes fee 0 and a later pass computes it.
 fromByronTx :: Byron.ABlock ByteString -> Word64 -> Byron.TxAux -> GenericTx
 fromByronTx _parentBlk blockIndex txAux =
   let tx = Byron.taTx txAux
@@ -203,7 +200,8 @@ byronSlotLeaderHash =
     . Byron.headerGenesisKey
     . Byron.blockHeader
 
--- | Slot leader description for Byron blocks.
+-- | Unused. 'DbSync.Extractor.Core.mkSlotLeaderDesc' builds the
+-- description that reaches @slot_leader@.
 _byronSlotLeaderDesc :: Byron.ABlock ByteString -> Text
 _byronSlotLeaderDesc blk =
   "ByronGenesisKey-" <> Text.decodeUtf8 (Base16.encode (BS.take 8 (byronSlotLeaderHash blk)))

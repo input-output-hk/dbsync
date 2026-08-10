@@ -17,12 +17,12 @@
 -- (title / abstract / motivation / rationale). CIP-119 specialises it
 -- for DRep anchors (givenName / objectives / …).
 --
--- 'eitherDecodeOffChainVoteData' picks the specialised decoder based
--- on the on-chain 'AnchorType' and falls back to the minimal
--- CIP-100-only shape when the specialised parse fails. Conflicts
--- with the database row type of the same name are handled at use
--- sites via qualified imports (idiomatically @import qualified
--- DbSync.Worker.OffChain.Vote.Types as Vote@).
+-- 'eitherDecodeOffChainVoteData' picks the decoder from the on-chain
+-- 'AnchorType' and falls back to the minimal CIP-100 shape when the
+-- specialised parse fails.
+--
+-- The database row type shares this module's name, so import it as
+-- @import qualified DbSync.Worker.OffChain.Vote.Types as Vote@.
 module DbSync.Worker.OffChain.Vote.Types
   ( OffChainVoteData (..)
   , OffChainVoteDataTp (..)
@@ -114,8 +114,8 @@ getLanguage = \case
   OffChainVoteDataGa    b -> language (context b)
   OffChainVoteDataDr    b -> language (context b)
 
--- | Project any body variant onto the shared (references, comment,
--- external-updates) shape. The phantom tag is erased; 'Reference'
+-- | Reduce any body variant to the shared references, comment and
+-- external-updates shape. The phantom tag is erased, and 'Reference'
 -- lists merge cleanly because their structure is identical.
 getMinimalBody :: OffChainVoteData -> MinimalBody OtherOffChainData
 getMinimalBody = \case
@@ -248,8 +248,8 @@ data OtherOffChainData
 data GovernanceOffChainData
 data DrepOffChainData
 
--- | Associates each body variant with its allowed reference types
--- and a projection back to 'MinimalBody'.
+-- | Associates each body variant with its allowed reference types and
+-- a reduction back to 'MinimalBody'.
 class HasBody tp where
   type Body tp
   parseAuthors :: Object -> Parser [Author]

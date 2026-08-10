@@ -1,16 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
--- | Top-level orchestration body.
---
--- 'runApp' takes pre-parsed configuration ('AppArgs') and drives the
--- full sync lifecycle: schema check, boot decision, ledger
--- initialisation, Ingest → Prep → Follow handoff, and the receiver
--- / ledger-worker async tree.
---
--- The executable's @main@ is a thin shim that parses the CLI, reads
--- the on-disk files, then calls 'runApp'. The test harness builds
--- the same 'AppArgs' from a 'MockNode' and calls 'runApp' directly.
+-- | Top-level orchestration body. 'runApp' takes a pre-parsed
+-- 'AppArgs' and drives the whole sync lifecycle: schema check, boot
+-- decision, ledger init, the Ingest → Prep → Follow handoff, and the
+-- receiver / ledger-worker async tree.
 module DbSync.App.Run
   ( runApp
 
@@ -175,14 +169,12 @@ import DbSync.Trace.Types
   )
 import qualified DbSync.Phase.Ingest.Writer as IngestWriter
 
--- | Drive the full sync lifecycle from a pre-parsed 'AppArgs'.
---
--- Returns when 'aaShutdownSignal' fires (test path) or when a linked
--- async crashes and propagates out. The body is a fixed sequence of
--- setup steps followed by one of two terminal paths:
+-- | Returns when 'aaShutdownSignal' fires, or when a linked async
+-- crashes and propagates out. Setup steps run in a fixed order, then
+-- the boot decision picks one of two terminal paths:
 --
 --   * 'BootFollowRestart' → 'runBootFollowRestart' takes over and
---     never returns to runApp.
+--     never returns here.
 --   * 'BootFresh' / 'BootResume' → 'runIngestThenFollow' runs the
 --     Ingest → Prep → Follow pipeline.
 runApp :: AppTracer -> AppArgs -> IO ()
@@ -197,10 +189,9 @@ runApp tracer args = do
       network      = sgNetworkId (scConfig (gcShelley genesisCfg))
 
   -- Collect a real backtrace at each throw site. IPE frames need
-  -- -finfo-table-map (set in cabal.project); DbSync.Error.Render turns
-  -- the attached annotation into the crash log. The throwers capture
-  -- their own SrcInfo, so the HasCallStack annotation would only repeat
-  -- that one frozen frame — disable it and keep the IPE stack alone.
+  -- -finfo-table-map, set in cabal.project. The throwers capture their
+  -- own SrcInfo, so a HasCallStack annotation would only repeat that
+  -- one frozen frame; keep the IPE stack alone.
   setBacktraceMechanismState IPEBacktrace True
   setBacktraceMechanismState HasCallStackBacktrace False
 
@@ -215,8 +206,8 @@ runApp tracer args = do
   logInfoIO tracer "App" $ "Ledger state dir: " <> toS ledgerStateDir
   logInfoIO tracer "App" $ "Socket: " <> toS socketPath
 
-  -- 3. State-query interpreter handle. Tests pre-seed via 'aaStateQueryVar';
-  -- production starts empty and the receiver fills it from LocalStateQuery.
+  -- 3. State-query interpreter handle. Tests pre-seed it; production
+  -- starts empty and the receiver fills it from LocalStateQuery.
   stateQueryVar <- maybe (newStateQueryVar topLevelCfg) pure (aaStateQueryVar args)
 
   -- 4. Database connection settings from the pg-config file.
@@ -230,9 +221,9 @@ runApp tracer args = do
           , HasqlSettings.dbname (dcName dbCfg)
           ]
 
-  -- 5. Schema check + (re)init. 'freshInit' is 'True' when this run
-  -- created the schema (fresh DB or wipe + re-init); used below to
-  -- seed the sync-state row and to skip the pre-boot rollback check.
+  -- 5. Schema check and (re)init. 'freshInit' is 'True' when this run
+  -- created the schema. The steps below use it to seed the sync-state
+  -- row and to skip the pre-boot rollback check.
   let extractors       = ceExtractors coreEnv
       tableDefs        = concatMap pdTables extractors
       extractorNames   = map pdName extractors
@@ -243,12 +234,8 @@ runApp tracer args = do
     tracer ledgerEnabledCfg ledgerStateDir
     tableDefs extractorNames connStrTxt (aaResyncFromGenesis args)
 
-  -- 6. Open the consumer's control connection; seed @dbsync_sync_state@
-  -- on a fresh schema, then apply any schema migrations between the
-  -- database's recorded version and this binary's. The migration gate is
-  -- a no-op on a fresh schema and aborts on a newer database or uncovered
-  -- drift; the network gate aborts when the database was synced against a
-  -- different network than the configured genesis.
+  -- 6. Open the consumer's control connection, seed
+  -- @dbsync_sync_state@ on a fresh schema, then run the two gates.
   consumerCtrlConn <- openControlConnection hasqlSettings
   when freshInit $
     setupFreshSyncState
@@ -259,8 +246,7 @@ runApp tracer args = do
     tracer consumerCtrlConn schemaVersion declaredSchemaFingerprint extractorNames
   runNetworkGate tracer consumerCtrlConn networkMagic
 
-  -- 7. SystemStart + ledger subsystem (fingerprint check, LSM
-  -- session, snapshot manager).
+  -- 7. SystemStart and the ledger subsystem.
   let systemStart = SystemStart (sgSystemStart $ scConfig $ gcShelley genesisCfg)
       pinfo       = mkProtocolInfoCardano nodeCfg genesisCfg
       ledgerCfg   = scLedger validConfig
@@ -268,15 +254,15 @@ runApp tracer args = do
     tracer hasqlSettings coreEnv ledgerCfg ledgerStateDir
     genesisCfg pinfo systemStart network
 
-  -- 8. Apply any outstanding rollback request (CLI flag or on-DB
-  -- marker). Skipped after 'freshInit' — nothing's committed yet.
+  -- 8. Apply any outstanding rollback request. Skipped after
+  -- 'freshInit', because nothing is committed yet.
   unless freshInit $
     handlePreBootRollback
       tracer coreEnv consumerCtrlConn tableDefs hasLedgerEnv
       (aaRollbackToSlot args)
 
-  -- 9. Boot decision. 'decideBoot' still runs after a fresh seed so a
-  -- stale 'dbsync-ledger/' against an empty PG aborts with
+  -- 9. Boot decision. This still runs after a fresh seed, so a stale
+  -- 'dbsync-ledger/' against an empty PG aborts with
   -- 'BootSnapshotsWithoutPgState'.
   bootDecision <- do
     mRow <- runAppM consumerCtrlConn readSyncState
@@ -287,15 +273,13 @@ runApp tracer args = do
       Left bootErr -> abortBoot tracer bootErr
       Right d      -> pure d
 
-  -- 10. Open the shared LSM session and guarantee its release.
-  -- The bracket covers the boot dispatch and the Ingest pipeline
-  -- so a cancellation between 'openLsmSession' and the pipeline's
-  -- own 'finally' still releases the on-disk lock. The closer is
-  -- idempotent, so a later 'closeAndDeleteLsmSession' inside
-  -- 'runPrep' is harmless.
-  -- 'nullLsmSessionTracer': lsm-tree's internal events add nothing at
-  -- normal severities; swap in 'lsmSessionTracerFromApp' when
-  -- debugging the store itself.
+  -- 10. Open the shared LSM session and guarantee its release. The
+  -- bracket spans the boot dispatch and the Ingest pipeline, so a
+  -- cancellation between 'openLsmSession' and the pipeline's own
+  -- 'finally' still drops the on-disk lock. The closer is idempotent,
+  -- so the later 'closeAndDeleteLsmSession' in 'runPrep' is harmless.
+  -- Swap 'nullLsmSessionTracer' for 'lsmSessionTracerFromApp' to
+  -- debug the store itself.
   bracket
     (openLsmSession nullLsmSessionTracer ledgerStateDir)
     (\sess ->
@@ -309,11 +293,11 @@ runApp tracer args = do
       mIngestState <-
         case bootDecision of
           BootFresh -> do
-            -- A fresh boot on a schema we did not just create means the
-            -- prior leg crashed mid-Ingest before its first
+            -- A fresh boot on a schema this run did not create means
+            -- the prior leg crashed mid-Ingest, before its first
             -- epoch-boundary commit, so @last_committed_slot@ is NULL.
-            -- Orphan rows from that leg survive 'setupSchema' and would
-            -- collide with the genesis re-COPY; purge them first.
+            -- Orphan rows from that leg survive 'setupSchema' and
+            -- would collide with the genesis re-COPY. Purge them.
             unless freshInit $ do
               logInfoIO tracer "Boot"
                 "Fresh boot on a non-empty schema; purging orphan rows from an aborted pre-boundary leg"
@@ -342,9 +326,9 @@ runApp tracer args = do
 -- * Setup steps (in execution order)
 -- ---------------------------------------------------------------------------
 
--- | Run the schema-version gate: compare the database's applied version to
--- this binary's, apply the intervening migration files, and abort on a
--- database newer than the binary or on drift no migration covers.
+-- | Compare the database's applied schema version to this binary's and
+-- apply the intervening migration files. Aborts when the database is
+-- newer than the binary, or when no migration covers the drift.
 runMigrationGate
   :: AppTracer
   -> ControlConnection
@@ -366,11 +350,11 @@ runMigrationGate tracer ctrlConn target declaredFp extractors = do
     SchemaDriftUncovered stored declared ->
       abortBoot tracer (BootSchemaDriftUncovered stored declared)
 
--- | Run the network gate: abort when the database's recorded network
--- magic differs from the configured genesis. Quietly passes while the
--- sync-state row is missing — 'decideBoot' classifies that case.
--- Comparison happens in the 'Int64' domain of the stored column so a
--- tampered out-of-range value cannot alias into a match.
+-- | Abort when the database's recorded network magic differs from the
+-- configured genesis. Passes quietly while the sync-state row is
+-- missing, because 'decideBoot' classifies that case. The comparison
+-- runs in the 'Int64' domain of the stored column, so a tampered
+-- out-of-range value cannot alias into a match.
 runNetworkGate :: AppTracer -> ControlConnection -> NetworkMagic -> IO ()
 runNetworkGate tracer ctrlConn networkMagic = do
   mStored <- runAppM ctrlConn readNetwork
@@ -384,16 +368,12 @@ runNetworkGate tracer ctrlConn networkMagic = do
     "Network: " <> networkNameFromMagic networkMagic
       <> " (magic " <> show (unNetworkMagic networkMagic) <> ")"
 
--- | Step 5: dispatch the schema decision.
+-- | Classify the boot with 'decideSchemaAction' and run the matching
+-- effect: init, drop and init, no-op, or abort.
+-- @--resync-from-genesis@ also wipes the ledger state directory, so a
+-- stale on-disk ledger cannot attach to a freshly seeded PG.
 --
--- Classifies the boot via 'decideSchemaAction' and runs the
--- matching side-effect (init / drop+init / no-op / abort). The
--- ledger state directory is wiped on @--resync-from-genesis@ so a
--- stale on-disk ledger can't attach to a freshly-seeded PG.
---
--- Returns 'True' if this run (re)created the schema; the caller
--- uses that to drive sync-state seeding and to skip the pre-boot
--- rollback check.
+-- Returns 'True' when this run created the schema.
 setupSchema
   :: AppTracer
   -> Bool                         -- ^ @ledger.enabled@ from config
@@ -432,14 +412,13 @@ setupSchema tracer ledgerEnabledCfg ledgerStateDir
         logErrorIO tracer "App" $ "  - " <> renderSchemaMismatch err
       exitFailure
 
--- | Step 6: insert the initial @dbsync_sync_state@ row on a fresh
--- boot and warn the operator if @wal_level@ isn't tuned for
--- bulk-load.
+-- | Insert the initial @dbsync_sync_state@ row and warn when
+-- @wal_level@ is not tuned for bulk load.
 --
--- The WAL hint is best-effort — managed PG operators may not have
--- the privilege to change it. Production runs at @wal_level=minimal@
--- skip WAL entirely for the UNLOGGED → LOGGED flip in
--- 'PreparingForVolatileTail' for tables above @wal_skip_threshold@.
+-- The WAL hint is best-effort: a managed PG operator may lack the
+-- privilege to change it. At @wal_level=minimal@ the UNLOGGED →
+-- LOGGED flip in 'PreparingForVolatileTail' skips WAL entirely for
+-- tables above @wal_skip_threshold@.
 setupFreshSyncState
   :: AppTracer
   -> ControlConnection
@@ -469,19 +448,18 @@ setupFreshSyncState tracer ctrl connStrTxt schemaVersion fingerprint ledgerEnabl
       , "wal_level = replica. Acceptable on a one-time fresh sync."
       ]
 
--- | Step 7: build the 'HasLedgerEnv' for this run.
+-- | Build the 'HasLedgerEnv' for this run.
 --
--- Ledger off — returns 'LedgerDisabled' with the minimal env (just
--- enough to deserialise blocks).
+-- Ledger off: return 'LedgerDisabled' with the minimal env, which is
+-- enough to deserialise blocks.
 --
 -- Ledger on:
 --
---   1. Verify the fingerprint in the state directory matches this
---      chain's network magic + system start; abort on mismatch so
---      the operator doesn't silently corrupt PG by attaching a
---      different chain's ledger.
+--   1. Check that the fingerprint in the state directory matches this
+--      chain's network magic and system start. Abort on a mismatch,
+--      so attaching another chain's ledger cannot corrupt PG.
 --   2. Open the LSM session under @\<ledgerStateDir\>/dbsync-ledger@.
---   3. Stamp a fresh fingerprint when there was none on disk.
+--   3. Stamp a fresh fingerprint when the disk carried none.
 setupLedgerEnv
   :: AppTracer
   -> HasqlSettings.Settings
@@ -543,16 +521,15 @@ setupLedgerEnv tracer hasqlSettings coreEnv ledgerCfg
 -- | Run the Ingest → Prep → Follow pipeline for one boot.
 --
 --   1. Build the 'IngestEnv' from the resolved 'IngestBootState'.
---   2. Start the chainsync receiver async and run 'runConsumer'
---      until it exits at the rollback boundary.
---   3. Cancel the receiver, run 'PreparingForVolatileTail' in its
---      own connection, mark sync complete.
---   4. Flip to 'FollowingVolatileTail' and hand off to
---      'handoffToFollow'.
+--   2. Start the chainsync receiver async and run 'runConsumer' until
+--      it exits at the rollback boundary.
+--   3. Cancel the receiver, run 'PreparingForVolatileTail' on its own
+--      connection, and mark sync complete.
+--   4. Flip to 'FollowingVolatileTail' and call 'handoffToFollow'.
 --
--- Shutdown is layered so an exception at any step still releases
--- the loader stream, tx-out worker, dedup stores, UTxO store, and
--- both LSM sessions. The ledger worker + snapshot-writer asyncs
+-- Shutdown is layered, so an exception at any step still releases the
+-- loader stream, the tx-out worker, the dedup stores, the UTxO store,
+-- and both LSM sessions. The ledger worker and the snapshot writer
 -- stay alive across the Ingest → Prep transition and into Follow.
 runIngestThenFollow
   :: AppTracer
@@ -586,22 +563,19 @@ runIngestThenFollow
     , ibsAddressIdCounter    = initialAddressId
     } = do
     -- Resolver indexes on the still-UNLOGGED Ingest tables. Without
-    -- these the per-epoch bulk @UPDATE tx_out@ + @SELECT address@ in
-    -- 'DbSync.Worker.TxOut.Worker' hash-joins the full heap.
+    -- them the per-epoch bulk @UPDATE tx_out@ and @SELECT address@ in
+    -- 'DbSync.Worker.TxOut.Worker' hash-join the full heap.
     -- Idempotent.
     createIngestResolveIndexes tracer (unControlConnection consumerCtrlConn)
 
-    -- Allocate per-pipeline state. 'lsmSession' and 'dedupStores'
-    -- were opened by the caller.
+    -- Allocate per-pipeline state. The caller opened 'lsmSession' and
+    -- 'dedupStores'.
     extractStateRef  <- newIORef initialExtractState
     loaderStream     <- mkLoaderStream connStr tableDefs
-    -- 300 ≈ 3 consumer drain batches of headroom, enough to absorb
-    -- consumer boundary stalls without starving the receiver.
-    -- Deliberately not deeper: each slot can pin a fully-decoded
-    -- block (several hundred KB of heap for a dense Conway block),
-    -- and during bulk sync the consumer is the bottleneck so a deep
-    -- queue just sits full — at 500 that is a few hundred MB of
-    -- standing heap.
+    -- Cap 300: about three consumer drain batches of headroom, which
+    -- absorbs a consumer boundary stall without starving the receiver.
+    -- Not deeper, because each slot pins a fully-decoded block and the
+    -- consumer is the bulk-sync bottleneck, so a deep queue sits full.
     blockQueue       <- newTBQueueIO 300
     addrBuffer       <- newAddressBufferRef
     txOutWorker      <- mkTxOutWorker tracer hasqlSettings initialAddressId
@@ -646,10 +620,10 @@ runIngestThenFollow
           , ieLatestTipBlock          = latestTipBlock
           }
 
-    -- On a fresh sync the Byron genesis UTxO distribution is not a
-    -- chain block, so it must be written before the consumer applies
-    -- block 1 — both so that block's @previous_id@ resolves and so
-    -- later Byron txs spending genesis outputs can find their inputs.
+    -- The Byron genesis UTxO distribution is not a chain block, so it
+    -- must land before the consumer applies block 1. That makes block
+    -- 1's @previous_id@ resolve, and lets later Byron txs that spend
+    -- genesis outputs find their inputs.
     case (intersectReq, replayBoundary) of
       (IntersectGenesis, Nothing) ->
         runAppM ingestEnv (insertByronGenesisDist byronCfg)
@@ -657,22 +631,21 @@ runIngestThenFollow
 
     logInfoIO tracer "App" "Starting block ingestion..."
 
-    -- The consumer runs until it observes a block crossing the
-    -- rollback boundary (@nodeTip − k@). 'shutdownIngest' releases
-    -- the resources only the Ingest pipeline owns; the ledger
-    -- worker and snapshot writer (started by 'withLedgerThreads'
-    -- below) survive into Prep and Follow.
+    -- The consumer runs until a block crosses the rollback boundary
+    -- (@nodeTip − k@). 'shutdownIngest' releases only the resources
+    -- the Ingest pipeline owns; the ledger worker and snapshot writer
+    -- survive into Prep and Follow.
     let shutdownIngest             = closeIngestResources tracer loaderStream txOutWorker utxoStore dedupStores
         ingestAction               = runAppM ingestEnv runConsumer `finally` shutdownIngest
         shutdownPostIngest         = closePipelineResources tracer consumerCtrlConn lsmSession hasLedgerEnv mPoolWorker mVoteWorker
         runPrepAndMarkComplete     = runPrep tracer coreEnv hasqlSettings tableDefs lsmSession
 
     -- The receiver / consumer / ledger-worker tree:
-    --   * 'withLedgerThreads' spawns 'LedgerWorker' + snapshot writer.
-    --     They live across the Ingest → Prep → Follow boundary so the
-    --     in-RAM 'LedgerDB' keeps ticking while Prep runs.
-    --   * The innermost 'withAsync' is the chainsync receiver. We
-    --     cancel it before Prep so the consumer queue stops growing.
+    --   * 'withLedgerThreads' spawns the ledger worker and the
+    --     snapshot writer. They live across the Ingest → Prep → Follow
+    --     boundary, so the in-RAM 'LedgerDB' keeps ticking during Prep.
+    --   * The innermost 'withAsync' is the chainsync receiver. Cancel
+    --     it before Prep so the consumer queue stops growing.
     withIOManager (\iomgr ->
       withLedgerThreads hasLedgerEnv replayBoundary stateQueryVar $ do
           withAsync (runAppM ingestEnv $ connectToNode iomgr topLevelCfg networkMagic socketPath intersectReq) $ \nodeThread -> do
@@ -686,9 +659,9 @@ runIngestThenFollow
             topLevelCfg networkMagic socketPath mShutdown
       ) `finally` shutdownPostIngest
 
--- | Release the resources only 'IngestChainHistory' owns. Called by
--- the consumer's 'finally' so a mid-flight crash doesn't leak the
--- loader stream or the tx-out worker.
+-- | Release the resources only 'IngestChainHistory' owns. The
+-- consumer's 'finally' calls it, so a mid-flight crash cannot leak
+-- the loader stream or the tx-out worker.
 closeIngestResources
   :: AppTracer
   -> LoaderStream
@@ -718,8 +691,8 @@ closeIngestResources tracer loaderStream txOutWorker utxoStore dedupStores = do
       logErrorIO tracer "App" $ "Error closing dedup stores: " <> show e
 
 -- | Release pipeline-wide resources after the Follow loop exits.
--- Idempotent on the LSM session: 'runPrep' may have already
--- deleted it via 'closeAndDeleteLsmSession'.
+-- Idempotent on the LSM session, because 'runPrep' may have already
+-- deleted it.
 closePipelineResources
   :: AppTracer
   -> ControlConnection
@@ -759,8 +732,8 @@ closePipelineResources tracer consumerCtrlConn lsmSession hasLedgerEnv mPoolWork
     LedgerDisabled _ -> pure ()
 
 -- | Run 'PreparingForVolatileTail' against a fresh hasql connection
--- and flip @sync_complete@ true. Wipes the ingest LSM scratch
--- directory on success — Follow doesn't consult it.
+-- and set @sync_complete@. On success it wipes the ingest LSM scratch
+-- directory, which Follow never reads.
 runPrep
   :: AppTracer
   -> CoreEnv
@@ -781,19 +754,17 @@ runPrep tracer coreEnv hasqlSettings tableDefs lsmSession = do
 -- * Helpers
 -- ---------------------------------------------------------------------------
 
--- | In-process Ingest → Prep → Follow handoff.
+-- | In-process Ingest → Prep → Follow handoff, called once
+-- 'PreparingForVolatileTail' marked sync complete.
 --
--- Called after 'PreparingForVolatileTail' has marked sync complete.
--- Reads the just-written sync state, builds a 'ResumeContext', and
--- spawns a fresh chainsync receiver bound to a 'FollowEnv' that
--- reuses the Ingest receiver-side state (block queue, ledger queue,
--- control connection) via 'mkFollowEnvFromIngest'.
--- Any blocks the Ingest receiver queued past the rollback boundary
--- before being cancelled stay in the queue and are processed by the
--- Follow consumer.
+-- It reads the just-written sync state, builds a 'ResumeContext', and
+-- spawns a fresh chainsync receiver against a 'FollowEnv' that reuses
+-- the Ingest receiver state. Blocks the cancelled Ingest receiver
+-- queued past the rollback boundary stay in the queue, and the Follow
+-- consumer processes them.
 --
--- Returns when the shutdown signal fires (test path) or the Follow
--- loop / a linked async terminates.
+-- Returns when the shutdown signal fires, or when the Follow loop or
+-- a linked async ends.
 handoffToFollow
   :: IOManager
   -> IngestEnv
@@ -820,11 +791,11 @@ handoffToFollow
     logInfoIO tracer "App" $
       "Prep complete; handing off to FollowingChainTip " <> resumeDesc
     -- The Ingest receiver was cancelled before Prep ran. A new one
-    -- opens below and re-intersects from the latestPointRef the
-    -- previous receiver wrote. ChainSync will respond with a
-    -- protocol-mandated confirming MsgRollBackward to that point —
-    -- the receiver tags it 'confirming intersect; not propagated' and
-    -- does not enqueue a MsgRollback, so no DB rows are deleted.
+    -- opens below and re-intersects at the point the previous receiver
+    -- wrote. ChainSync answers with a protocol-mandated confirming
+    -- MsgRollBackward to that point. The receiver tags it as a
+    -- confirming intersect and enqueues no MsgRollback, so no rows are
+    -- deleted.
     logInfoIO tracer "App"
       "Reconnecting chainsync at post-Ingest position; the\
       \ \"Rollback to …\" line that follows is the protocol's\
@@ -832,10 +803,9 @@ handoffToFollow
       \ — no rows are deleted from PG."
 
     -- The Ingest receiver kept reading from the node while the
-    -- consumer was draining the rollback boundary; whatever it
-    -- queued past the consumer's exit is still in the block queue
-    -- and Follow's consumer will INSERT those first before the new
-    -- receiver's stream catches up.
+    -- consumer drained the rollback boundary. Whatever it queued past
+    -- the consumer's exit is still in the block queue, and Follow's
+    -- consumer INSERTs those before the new receiver's stream arrives.
     buffered <- atomically $ STM.lengthTBQueue (ieBlockQueue ie)
     when (buffered > 0) $
       logInfoIO tracer "App" $
@@ -846,11 +816,8 @@ handoffToFollow
     let rc = resumeContextFrom row Nothing
     intersectReq <- resolveIntersection tracer consumerCtrlConn rc
 
-    -- The receiver runs under 'followEnv' so its block queue /
-    -- rollback boundary refs are the same ones IngestEnv carried.
-    -- The Ingest receiver was cancelled before Prep ran;
-    -- 'runFollowSession' opens a fresh one starting at the
-    -- post-Ingest commit point.
+    -- The receiver runs under 'followEnv', so its block queue and
+    -- rollback-boundary refs are the ones 'IngestEnv' carried.
     let consumedTracking =
           if uoConsumedByTxId (exUtxo (scExtractors (ceConfig (ieCore ie))))
             then TrackConsumedBy

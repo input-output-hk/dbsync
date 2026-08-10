@@ -2,12 +2,9 @@
 
 -- | Schema initialisation and extractor presence checks.
 --
--- Creates database tables from 'TableDef' definitions using @psql@ and
--- provides the boot-time presence check that compares the enabled
--- extractors against the set recorded on the @dbsync_sync_state@ row.
---
--- During 'IngestChainHistory', this module is called once at startup
--- to create the UNLOGGED tables that COPY streams will write into.
+-- Boot calls this module once to create the UNLOGGED tables from their
+-- 'TableDef's through @psql@, and to compare the enabled extractors with
+-- the set recorded on the @dbsync_sync_state@ row.
 module DbSync.Db.Schema.Init
   (     -- * Schema lifecycle
     initSchema
@@ -71,22 +68,12 @@ import DbSync.Db.Sql (quoteIdent, quoteLiteral)
 
 -- | Observed state of the database schema, relative to the extractors the
 -- config enables.
---
--- Distinguishes the boot-time scenarios:
---
---   * 'SchemaFresh' — no @dbsync_sync_state@ table; this is a brand-new
---     database and the boot flow should run 'initSchema'.
---   * 'SchemaUnseeded' — the table exists but carries no @id = 1@ row; a
---     crash landed between schema creation and the seed write. The boot
---     flow skips 'initSchema' and 'decideBoot' aborts with a resync hint.
---   * 'SchemaMatches' — the enabled set and the recorded set are equal; the
---     boot flow should skip 'initSchema' and resume.
---   * 'SchemaMismatched' — the two sets differ in either direction; the boot
---     flow should abort and surface the discrepancies to the operator
---     (unless @--resync-from-genesis@ overrides).
 data SchemaState
   = SchemaFresh
+    -- ^ No @dbsync_sync_state@ table: a brand-new database.
   | SchemaUnseeded
+    -- ^ The table exists but carries no @id = 1@ row. A crash landed
+    -- between schema creation and the seed write.
   | SchemaMatches
   | SchemaMismatched !(NonEmpty SchemaMismatch)
   deriving stock (Eq, Show)
@@ -103,10 +90,9 @@ data SchemaMismatch
 data SchemaAction
   = -- | Schema already matches; do not touch DDL.
     ActionSkipInit
-  | -- | DB is empty; run 'initSchema' to create everything.
-    ActionRunInit
-  | -- | Operator forced a clean slate; drop everything (including
-    -- @dbsync_sync_state@) and re-run 'initSchema'.
+  | ActionRunInit
+  | -- | Drop everything, @dbsync_sync_state@ included, then re-run
+    -- 'initSchema'.
     ActionForceReinit
   | -- | Schema mismatch and no force flag; the operator must intervene.
     ActionAbort !(NonEmpty SchemaMismatch)
@@ -116,17 +102,13 @@ data SchemaAction
 -- * Schema lifecycle
 -- ---------------------------------------------------------------------------
 
--- | Initialise the database schema on a __fresh__ database by executing
--- 'initSchemaStatements' in order.
+-- | Run 'initSchemaStatements' in order.
 --
--- __Not idempotent__: this function expects the database to be empty.
--- Callers that want to re-run on a populated DB must call 'dropSchema'
--- first — the boot flow only does so when the operator explicitly passes
--- @--resync-from-genesis@.
+-- __Not idempotent__: the database must be empty. To re-run on a populated
+-- database, call 'dropSchema' first.
 --
--- 'DbSync.SyncState.Row.seedSyncState' is __not__ called here; seeding is
--- the caller's responsibility so that the @ledger_enabled@ flag and the
--- enabled-extractor set come from runtime configuration.
+-- The caller must also call 'DbSync.SyncState.Row.seedSyncState', because
+-- the @ledger_enabled@ flag and the extractor set come from runtime config.
 initSchema
   :: [TableDef]
   -> Text     -- ^ Connection string.
@@ -137,14 +119,14 @@ initSchema tableDefs connStr =
 -- | The ordered DDL 'initSchema' runs on a fresh database:
 --
 -- 1. the @dbsync_sync_state@ singleton metadata table;
--- 2. the @epoch_param_pending@ system table (always created; stays empty
---    when the ledger feature is disabled);
+-- 2. the @epoch_param_pending@ system table, which stays empty when the
+--    ledger feature is off;
 -- 3. all data tables from the 'TableDef's, as a single batch;
--- 4. the @epoch_current@ and @epoch@ views, when the @epoch@ extractor is
---    enabled (i.e. @epoch_finalized@ is among the data tables).
+-- 4. the @epoch_current@ and @epoch@ views, when @epoch_finalized@ is
+--    among the data tables.
 --
--- The migration baseline file is generated from this same list, so it
--- cannot drift from what 'initSchema' creates.
+-- The migration baseline file comes from this same list, so it cannot
+-- drift from what 'initSchema' creates.
 initSchemaStatements :: [TableDef] -> [Text]
 initSchemaStatements tableDefs =
   [ generateCreateTable syncStateTableDef
@@ -153,15 +135,12 @@ initSchemaStatements tableDefs =
   ]
     <> [createEpochViewsSql | any ((== epochFinalizedTableName) . tdName) tableDefs]
 
--- | Drop everything owned by this dbsync schema: the data tables, the
--- @dbsync_sync_state@ singleton, and the @epoch_param_pending@ system
--- table.
+-- | Drop the data tables, the @dbsync_sync_state@ singleton, and the
+-- @epoch_param_pending@ system table.
 --
--- This is the \"force re-sync\" / test-hygiene drop. The boot flow only
--- calls it when the operator opts in via @--resync-from-genesis@; matched
--- restarts must not invoke it (that would defeat the resume logic).
---
--- Safe to call on an empty database (every statement uses @IF EXISTS@).
+-- Only @--resync-from-genesis@ and test hygiene call this. A matched
+-- restart must not, because the drop defeats the resume logic. Every
+-- statement uses @IF EXISTS@, so an empty database is safe.
 dropSchema :: [TableDef] -> Text -> IO ()
 dropSchema tableDefs connStr = do
   -- Drop epoch views first; they reference @epoch_finalized@.
@@ -180,15 +159,14 @@ dropSchema tableDefs connStr = do
   execPsql connStr $
     "DROP TABLE IF EXISTS " <> quoteIdent epochParamPendingTableName <> " CASCADE;"
 
--- | Empty every data table and reset its identity sequences, leaving
--- the schema and the @dbsync_sync_state@ singleton in place.
+-- | Empty every data table and reset its identity sequences, but keep the
+-- schema and the @dbsync_sync_state@ singleton.
 --
--- The fresh-boot purge for a database that crashed mid-Ingest before
--- the first epoch-boundary commit: @last_committed_slot@ is still NULL
--- so the boot is classified fresh, but orphan rows from the aborted
--- leg survive and would collide with the genesis re-COPY. One
--- @TRUNCATE … RESTART IDENTITY CASCADE@ clears them and rewinds the
--- identity sequences so the re-COPY starts from id 1.
+-- This is the fresh-boot purge for a database that crashed mid-Ingest
+-- before the first epoch-boundary commit. @last_committed_slot@ is still
+-- NULL, so boot classifies the database as fresh, but orphan rows from
+-- the aborted leg survive and collide with the genesis re-COPY.
+-- @RESTART IDENTITY@ rewinds the sequences, so the re-COPY starts at 1.
 truncateDataTables :: [TableDef] -> Text -> IO ()
 truncateDataTables tableDefs connStr =
   unless (null names) $
@@ -204,21 +182,18 @@ prepareSchemaForFollowTip :: [TableDef] -> Text -> IO ()
 prepareSchemaForFollowTip tables connStr =
   for_ (prepareSchemaForFollowTipSql tables) (execPsql connStr)
 
--- | The DDL statements that 'prepareSchemaForFollowTip' would run,
--- as a flat list — for callers that want to send them via hasql
--- rather than @psql@. Includes only the UNLOGGED tables; tables
--- already LOGGED contribute nothing.
+-- | The DDL that 'prepareSchemaForFollowTip' runs, as a flat list, for
+-- callers that send it through hasql instead of @psql@. A LOGGED table
+-- contributes nothing.
 prepareSchemaForFollowTipSql :: [TableDef] -> [Text]
 prepareSchemaForFollowTipSql tables =
   concatMap perTableSchemaForFollowTipSql
     (filter ((== TableUnlogged) . tdMode) tables)
 
--- | Per-table flip statements: @SET LOGGED@, and (for non-identity
--- @id@ columns) @CREATE SEQUENCE@ + @ALTER … SET DEFAULT@. Tables
--- whose @id@ is declared @GENERATED BY DEFAULT AS IDENTITY@ already
--- have a PG-managed backing sequence; the sequence-attach DDL would
--- fail on them ("column id is an identity column"). The caller is
--- responsible for filtering on 'tdMode'.
+-- | Per-table flip statements: @SET LOGGED@, plus @CREATE SEQUENCE@ and
+-- @ALTER … SET DEFAULT@ for a non-identity @id@ column. An identity @id@
+-- already owns a PG-managed sequence, and the attach DDL fails on it with
+-- "column id is an identity column". The caller filters on 'tdMode'.
 perTableSchemaForFollowTipSql :: TableDef -> [Text]
 perTableSchemaForFollowTipSql td =
   let name = tdName td
@@ -227,7 +202,6 @@ perTableSchemaForFollowTipSql td =
            then []
            else [createIdSequenceSql name, attachIdDefaultSql name]
 
--- | @ALTER TABLE … SET LOGGED@ DDL for a single table.
 setLoggedSql :: Text -> Text
 setLoggedSql tableName =
   "ALTER TABLE " <> quoteIdent tableName <> " SET LOGGED"
@@ -253,9 +227,8 @@ attachIdDefaultSql tableName =
     , "'::regclass)"
     ]
 
--- | @ANALYZE@ on a single table. Used after the bulk pass to refresh
--- planner statistics that the new indexes and updated columns
--- invalidated.
+-- | Runs after the bulk pass, to refresh the planner statistics that the
+-- new indexes and the updated columns invalidated.
 analyzeSql :: Text -> Text
 analyzeSql tableName =
   "ANALYZE " <> quoteIdent tableName
@@ -264,16 +237,8 @@ analyzeSql tableName =
 -- * Extractor presence
 -- ---------------------------------------------------------------------------
 
--- | Inspect the database and classify the schema state against the
--- extractors the config enables.
---
--- Three-way probe over the @dbsync_sync_state@ singleton:
---
---   * table absent → 'SchemaFresh' (brand-new DB; run 'initSchema').
---   * table present but unseeded (no @id = 1@ row) → 'SchemaUnseeded':
---     a crash landed between schema creation and the seed write.
---   * table present and seeded → compare the recorded @extractors@
---     against @expectedNames@ via 'analyzeExtractorState'.
+-- | Probe the @dbsync_sync_state@ singleton and classify the schema state
+-- against the extractors the config enables.
 checkExtractorPresence :: [Text] -> Text -> IO SchemaState
 checkExtractorPresence expectedNames connStr = do
   tableExists <- queryPsql connStr $
@@ -297,20 +262,16 @@ checkExtractorPresence expectedNames connStr = do
 -- * Schema-state analysis (pure)
 -- ---------------------------------------------------------------------------
 
--- | Pure analysis of schema state given the extractors the code expects and
--- the names observed in the database.
+-- | Compare the extractors the config enables with the names the database
+-- records.
 --
--- @Nothing@ for the second argument means no enabled-extractor set was
--- recorded (a fresh DB). @Just names@ means a seeded @dbsync_sync_state@
--- row was found and @names@ are its recorded extractors.
---
--- The comparison is symmetric: only tables belonging to enabled extractors
--- are ever created, so a recorded extractor the config no longer enables
--- means the cleanup and rollback passes would skip tables that do exist,
--- leaving rows behind. Both directions are reported, missing first.
+-- The comparison runs in both directions, missing names first. Only an
+-- enabled extractor gets tables, so a recorded name the config dropped
+-- means the cleanup and rollback passes skip tables that do exist and
+-- leave rows behind.
 analyzeExtractorState
   :: [Text]         -- ^ Extractor names the config enables
-  -> Maybe [Text]   -- ^ Recorded extractor set; 'Nothing' = none recorded
+  -> Maybe [Text]   -- ^ Recorded extractor set; 'Nothing' = fresh database
   -> SchemaState
 analyzeExtractorState _ Nothing = SchemaFresh
 analyzeExtractorState expected (Just present) =
@@ -321,11 +282,8 @@ analyzeExtractorState expected (Just present) =
     missing    = map MissingExtractor    (filter (`notElem` present) expected)
     unexpected = map UnexpectedExtractor (filter (`notElem` expected) present)
 
--- | Decide what the boot flow should do, given the observed schema state and
--- the operator-supplied @--resync-from-genesis@ flag.
---
--- 'True' for @--resync-from-genesis@ short-circuits everything: the operator has
--- explicitly asked for a clean slate.
+-- | Decide what the boot flow does, given the schema state and the
+-- @--resync-from-genesis@ flag. 'True' short-circuits every other case.
 decideSchemaAction :: Bool -> SchemaState -> SchemaAction
 decideSchemaAction True  _                       = ActionForceReinit
 decideSchemaAction False SchemaMatches           = ActionSkipInit
@@ -333,8 +291,8 @@ decideSchemaAction False SchemaUnseeded          = ActionSkipInit
 decideSchemaAction False SchemaFresh             = ActionRunInit
 decideSchemaAction False (SchemaMismatched errs) = ActionAbort errs
 
--- | Render a single 'SchemaMismatch' as a human-readable line suitable for
--- logging. Stable wording so operators can grep for it.
+-- | Renders one log line. The wording stays stable, so operators can grep
+-- for it.
 renderSchemaMismatch :: SchemaMismatch -> Text
 renderSchemaMismatch = \case
   MissingExtractor name ->
@@ -362,19 +320,16 @@ execPsql connStr sql = do
       throwIO $ userError $
         "psql failed: " <> err <> "\nSQL: " <> T.unpack sql
 
--- | Probe @wal_level@ via @SHOW@. Returns the value as 'Text', e.g.
--- @"minimal"@, @"replica"@, or @"logical"@. Used at boot to warn
--- when the server isn't on @wal_level = minimal@ — at minimal,
--- @ALTER TABLE … SET LOGGED@ skips WAL for tables larger than
+-- | Returns @"minimal"@, @"replica"@, or @"logical"@. Boot warns when the
+-- server is not on @wal_level = minimal@: at minimal,
+-- @ALTER TABLE … SET LOGGED@ skips the WAL for tables larger than
 -- @wal_skip_threshold@.
 showWalLevel :: Text -> IO Text
 showWalLevel connStr =
   T.strip <$> queryPsql connStr "SHOW wal_level;"
 
--- | Run a query via @psql@ and return the output as 'Text'.
---
--- Uses @-t@ (tuples only, no header/footer), @-A@ (unaligned),
--- and @-F \"|\"@ (pipe field separator) for clean, parseable output.
+-- | Run a query through @psql@. The @-t@, @-A@ and @-F \"|\"@ flags give
+-- unaligned, pipe-separated output with no header or footer.
 queryPsql :: Text -> Text -> IO Text
 queryPsql connStr sql = do
   (exitCode, out, err) <- readProcessWithExitCode

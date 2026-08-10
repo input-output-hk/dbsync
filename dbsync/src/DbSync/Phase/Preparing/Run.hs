@@ -1,47 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | One-time post-load pass between 'IngestChainHistory' and
--- 'FollowingChainTip'.
---
--- The bulk-load phase leaves three things in a transitional state:
---
---   * Several FK columns are NULL because the rows they point at
---     hadn't been written yet at COPY time. The hash + index
---     pair on @tx_in@ / @collateral_tx_in@ / @reference_tx_in@
---     identifies the producing tx; @tx_out.consumed_by_tx_id@
---     similarly waits for its consumer.
---   * Three @tx@ columns (the phase-2 fee, the phase-2 deposit, and
---     the ledger-disabled valid-contract deposit) plus
---     @redeemer.script_hash@ for spend redeemers cannot be filled
---     from the body alone. The parser leaves them as a sentinel or
---     NULL.
---   * Tables are UNLOGGED with no sequences attached and only the
---     resolve-support indexes — the COPY pipeline ran flat-out.
---
--- 'run' walks all of that in a single pass. The order matters:
---
---   * The pre-resolve index build runs first so the resolve and
---     backfill UPDATEs use index lookups rather than hash-joining
---     the @tx@ and @tx_out@ heaps in their entirety.
---   * Foreign-key resolution comes before the backfill UPDATEs that
---     rely on @tx_in.tx_out_id@ being populated.
---   * Every index is dropped before the UNLOGGED → LOGGED flip.
---     @ALTER TABLE … SET LOGGED@ rewrites the heap /and rebuilds
---     every index on the table inside the ALTER/, so an index alive
---     at flip time is built twice. Bare heaps flip fastest, and the
---     rewrite compacts the dead tuples the backfill UPDATEs left
---     behind.
---   * The production index build runs after the flip, building each
---     Follow-facing index exactly once, fanned out per index across
---     the pool.
---   * The ownership foreign keys go on after that build and the final
---     ANALYZE, so each validation scan can probe the parent's PK index
---     and plan against current statistics.
---   * Sequence reset runs last: it needs the flip to have attached
---     the sequences and the PK indexes for the @MAX(id)@ lookups.
---
--- Every step is bracketed by the uniform @Starting | Completed@
--- log lines of 'DbSync.Phase.Preparing.Step', emitted at 'Info'.
+-- 'FollowingChainTip'. Ingest leaves NULL FK columns, sentinel @tx@
+-- columns, and UNLOGGED tables carrying only the resolve-support
+-- indexes. 'run' resolves, backfills and reshapes all of it in one
+-- ordered pass.
 module DbSync.Phase.Preparing.Run
   ( run
   ) where
@@ -90,8 +53,7 @@ import DbSync.Phase.Preparing.Tuning
 import DbSync.Trace (HasTracer (..))
 
 -- | Run the full post-load sequence against the env's connection.
---
--- See the module Haddock for the step ordering and rationale.
+-- Each step logs through 'DbSync.Phase.Preparing.Step'.
 run
   :: ( HasTracer env
      , HasHasqlConnection env
@@ -107,29 +69,26 @@ run
   -> [TableDef]
   -> m ()
 run connSettings tuning tables = step PhaseStep "post-load pass" $ do
-  -- Session-level GUCs (maintenance_work_mem,
-  -- max_parallel_maintenance_workers, synchronous_commit) applied
-  -- once at the top so every subsequent index build / ANALYZE on
-  -- the control connection picks them up. Pool backends get the
-  -- same GUCs via their initSession hook.
+  -- Set first, so every later index build and ANALYZE on the control
+  -- connection picks them up. Pool backends set the same GUCs in
+  -- their initSession hook.
   step TuningStep "session GUCs" $
     setPrepSessionGUCs tuning
 
-  -- Scaffolding for the resolves + backfills. The input-table
-  -- indexes that the CTAS rebuilds would drop are built afterwards
-  -- ('createPostResolveIndexes').
+  -- Scaffolding, so the resolve and backfill UPDATEs use index
+  -- lookups instead of hash-joining the whole @tx@ and @tx_out@ heaps.
   PreResolveIndexes.createPreResolveIndexes
 
   Resolve.resolveInputTxOutIds
 
+  -- The CTAS rebuild above drops the input-table indexes.
   PreResolveIndexes.createPostResolveIndexes
 
-  -- Refresh planner statistics for every table the backfills read.
-  -- Autovacuum runs on UNLOGGED tables but its last sample was
-  -- taken mid-ingest; without this pass the planner picks Nested
-  -- Loop plans whose outer-side estimate is off by orders of
-  -- magnitude. The three CTAS-rebuilt input tables are ANALYZEd
-  -- inside 'Resolve.resolveInputTxOutIds'.
+  -- Autovacuum samples UNLOGGED tables, but its last sample dates
+  -- from mid-ingest. Without fresh statistics the planner picks
+  -- Nested Loop plans on badly wrong estimates.
+  -- 'Resolve.resolveInputTxOutIds' ANALYZEs the input tables it
+  -- rebuilds.
   step AnalyzeStep "backfill input tables" $
     for_ (filter (hasTable . tdName) backfillAnalyzeTables) $ \td ->
       runDdl (analyzeSql (tdName td))
@@ -143,9 +102,10 @@ run connSettings tuning tables = step PhaseStep "post-load pass" $ do
   step CleanupStep "truncate epoch_param_pending"
     Backfill.truncateDepositPending
 
-  -- Everything after this point is schema shaping: no step below
-  -- reads via the scaffolding indexes, so they come off before the
-  -- flip pays to rebuild them inside each ALTER.
+  -- No step below reads through the scaffolding indexes. Drop them
+  -- before the flip: @ALTER TABLE … SET LOGGED@ rewrites the heap and
+  -- rebuilds every index on the table inside the ALTER, so an index
+  -- left alive gets built twice.
   step IndexStep "drop resolve-support indexes" $
     for_ resolveScaffoldingIndexNames (runDdl . dropIndexSql)
 
@@ -156,6 +116,7 @@ run connSettings tuning tables = step PhaseStep "post-load pass" $ do
           usePool ("flip " <> tdName td) $
             traverse_ Sess.script (perTableSchemaForFollowTipSql td)
 
+  -- After the flip, so each Follow-facing index builds exactly once.
   step IndexStep "production index build" $
     withPrepPool connSettings tuning (ptPoolSize tuning) $
       Indexes.createIndexes (ptPoolSize tuning) tables
@@ -170,12 +131,16 @@ run connSettings tuning tables = step PhaseStep "post-load pass" $ do
   step AnalyzeStep "all tables" $
     for_ tables $ \td -> runDdl (analyzeSql (tdName td))
 
+  -- After the index build and the ANALYZE, so each validation scan
+  -- probes the parent's PK index and plans on current statistics.
   step ConstraintStep "add ownership foreign keys" $
     Constraints.addConstraints tables
   step ConstraintStep "validate ownership foreign keys" $
     withPrepPool connSettings tuning (ptPoolSize tuning) $
       Constraints.validateConstraints (ptPoolSize tuning) tables
 
+  -- Last: the flip attaches the sequences, and @MAX(id)@ needs the PK
+  -- indexes.
   step SequenceStep "reset id sequences to MAX(id) + 1" $
     Sequences.resetSequences tables
   where
@@ -189,12 +154,9 @@ flipOrder =
   sortOn (Indexes.tableSizeRank . tdName)
     . filter ((== TableUnlogged) . tdMode)
 
--- | Tables the backfill UPDATEs read or write, minus the three
--- CTAS-rebuilt input tables (ANALYZEd right after their rebuild).
--- Listed once here so the ANALYZE pass and the backfill writers
--- agree on which tables need fresh statistics. Filtered against the
--- enabled set at the call site — a disabled extractor's tables were
--- never created.
+-- | Tables the backfill UPDATEs read or write, minus the CTAS-rebuilt
+-- input tables. The call site filters this against the enabled set,
+-- because a disabled extractor never creates its tables.
 backfillAnalyzeTables :: [TableDef]
 backfillAnalyzeTables =
   [ blockTableDef

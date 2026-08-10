@@ -69,18 +69,16 @@ import DbSync.Util (unitIntervalToRational)
 -- * Type
 -- ---------------------------------------------------------------------------
 
--- | A single protocol-parameter proposal, era-flattened.
+-- | A single protocol-parameter proposal, flattened across eras.
 --
--- Mirrors the original's
--- @Cardano.DbSync.Era.Shelley.Generic.ParamProposal.ParamProposal@
--- field-for-field. Most fields are 'Maybe' because a proposal only
--- carries the parameters it actually changes; per-era converters
--- below set entries to 'Nothing' for parameters that pre- or
--- post-date the proposing era.
+-- Most fields are 'Maybe', because a proposal carries only the
+-- parameters it changes. The per-era converters below also set
+-- 'Nothing' for a parameter that pre-dates or post-dates the proposing
+-- era.
 --
--- 'gppCostmdls' is retained as the ledger's @Map Language CostModel@
--- so the extractor can dedup-write the @cost_model@ row and resolve
--- the FK without re-walking the proposal.
+-- 'gppCostmdls' keeps the ledger's @Map Language CostModel@, so the
+-- extractor dedup-writes the @cost_model@ row and resolves the FK
+-- without walking the proposal again.
 data GenericParamProposal = GenericParamProposal
   { gppEpochNo                    :: !(Maybe Word64)
   , gppKey                        :: !(Maybe ByteString)
@@ -598,8 +596,8 @@ emptyProposal = GenericParamProposal
   , gppMinFeeRefScriptCostPerByte = Nothing
   }
 
--- | Project a 'Ledger.ProtVer' from a parameter update into the
--- @(major, minor)@ tuple stored on the row. Conway abandoned the
+-- | Reads a parameter update's 'Ledger.ProtVer' as the
+-- @(major, minor)@ pair the row stores. Conway dropped the
 -- protocol-version field, hence the 'ProtVerAtMost era 8' bound.
 protoVer
   :: (Core.EraPParams era, Core.ProtVerAtMost era 8)
@@ -614,14 +612,12 @@ protoVer pmap =
       , fromIntegral (Ledger.pvMinor pv)
       )
 
--- | Project the 'Ledger.Nonce' carried in extra-entropy parameter
--- updates into its raw 32-byte payload, or 'Nothing' for the
--- neutral nonce.
+-- | The raw 32-byte payload of an extra-entropy 'Ledger.Nonce', or
+-- 'Nothing' for the neutral nonce.
 nonceBytes :: Ledger.Nonce -> Maybe ByteString
 nonceBytes = \case
   Ledger.Nonce h      -> Just (Crypto.hashToBytes h)
   Ledger.NeutralNonce -> Nothing
 
--- | Serialise a key-hash to its raw bytes.
 unKeyHashRaw :: Ledger.KeyHash r -> ByteString
 unKeyHashRaw (Ledger.KeyHash h) = Crypto.hashToBytes h

@@ -1,13 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Off-chain pools extractor.
---
--- Owns the @off_chain_pool_data@, @off_chain_pool_fetch_error@,
--- @delisted_pool@, and @reserved_pool_ticker@ tables. The per-block
--- pass observes pool registrations that carry off-chain metadata
--- and notifies the worker queue via 'enqueuePoolMetaFetch'. Result
--- rows are written by 'DbSync.Worker.OffChain.Pool', not by this
--- extractor.
+-- | Owns @off_chain_pool_data@, @off_chain_pool_fetch_error@,
+-- @delisted_pool@ and @reserved_pool_ticker@. The per-block pass only
+-- reports pool registrations that carry off-chain metadata, through
+-- 'enqueuePoolMetaFetch'. 'DbSync.Worker.OffChain.Pool' writes the
+-- result rows.
 module DbSync.Extractor.OffChainPools
   ( offChainPoolsExtractor
   ) where

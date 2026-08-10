@@ -1,20 +1,15 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Per-epoch pool distribution projection.
+-- | Per-epoch pool distribution extractor. It owns @pool_stat@ and
+-- writes one row per @(pool, epoch)@ from the post-epoch ledger state.
+-- The row set unions the pools with active stake, the pools that made
+-- blocks in the previous epoch, and the pools in the DRep snapshot's
+-- SPO voting distribution. A missing entry writes zeros, so a
+-- registered but inactive pool still gets a row.
 --
--- Owns the @pool_stat@ table. One row per (pool, epoch); written
--- from the post-epoch ledger state at each boundary crossing. The
--- row set is the union of pools with active stake, pools that made
--- blocks in the previous epoch, and pools in the DRep snapshot's SPO
--- voting distribution — absent entries fill with zeros so
--- registered-but-inactive pools still get a row.
---
--- The per-block 'pdProcess' callback is a no-op; 'runPoolStatsBoundary'
--- is invoked by the consumer when an epoch crosses and the
--- LedgerWorker has produced the matching 'ApplyResult'.
---
--- When the ledger feature is off the consumer never calls
--- 'runPoolStatsBoundary' and the table stays empty.
+-- @pdProcess@ is a no-op: the consumer calls 'runPoolStatsBoundary' at
+-- an epoch crossing. With the ledger off it never calls it, and the
+-- table stays empty.
 module DbSync.Extractor.PoolStats
   ( poolStatsExtractor
   , runPoolStatsBoundary

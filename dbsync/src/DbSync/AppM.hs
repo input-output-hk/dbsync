@@ -32,11 +32,9 @@ import DbSync.Trace (HasTracer)
 import DbSync.Worker.Ledger.Types (LedgerEnv)
 import DbSync.Writer (HasWriter)
 
--- | The core application monad: @ReaderT env IO@.
 newtype AppM env a = AppM {unAppM :: ReaderT env IO a}
   deriving newtype (Functor, Applicative, Monad, MonadIO, MonadReader env, MonadUnliftIO)
 
--- | Run an 'AppM' action with the given environment.
 runAppM :: env -> AppM env a -> IO a
 runAppM env (AppM m) = runReaderT m env
 
@@ -57,7 +55,7 @@ type LedgerM = AppM LedgerEnv
 -- * Constraint synonyms
 -- ---------------------------------------------------------------------------
 
--- | Anything that needs an env-bound tracer plus 'MonadIO'.
+-- | An env-bound tracer plus 'MonadIO'.
 type LoggingM env m =
   (HasTracer env, MonadReader env m, MonadIO m)
 

@@ -33,19 +33,20 @@ import Options.Applicative
 -- * Types
 -- ---------------------------------------------------------------------------
 
--- | Parsed CLI arguments.
 data CliArgs = CliArgs
-  { caConfig          :: !FilePath  -- ^ Path to the dbsync config file (sync mode, ledger, extractors, logging)
-  , caPgConfig        :: !FilePath  -- ^ Path to the PostgreSQL connection file (host, port, name, user, password_file)
-  , caNodeConfig      :: !FilePath  -- ^ Path to the cardano-node config.json (genesis files resolve relative to it)
-  , caSocketPath      :: !FilePath  -- ^ Path to the cardano-node Unix socket
-  , caLedgerStateDir  :: !FilePath  -- ^ Parent directory under which the @dbsync-ledger/@
-                                    --   sub-directory is created (LSM session + snapshots)
-  , caResyncFromGenesis :: !Bool    -- ^ If 'True', wipe the schema + ledger state and re-sync from genesis
+  { caConfig          :: !FilePath  -- ^ The dbsync config file
+  , caPgConfig        :: !FilePath  -- ^ The PostgreSQL connection file
+  , caNodeConfig      :: !FilePath  -- ^ The cardano-node config.json; genesis
+                                    --   paths resolve relative to it
+  , caSocketPath      :: !FilePath  -- ^ The cardano-node Unix socket
+  , caLedgerStateDir  :: !FilePath  -- ^ Parent directory. @dbsync-ledger/@ is
+                                    --   created under it
+  , caResyncFromGenesis :: !Bool    -- ^ 'True' wipes the schema and the ledger
+                                    --   state, then re-syncs from genesis
   , caRollbackToSlot  :: !(Maybe Word64)
-    -- ^ Roll the database back to the nearest block at-or-after this
-    -- slot, then continue with normal boot. Pure recovery hatch — no
-    -- migration semantics. 'Nothing' is the normal case.
+    -- ^ Roll the database back to the nearest block at or after this
+    -- slot, then boot normally. A recovery hatch with no migration
+    -- semantics. 'Nothing' is the normal case.
   }
   deriving stock (Eq, Show)
 
@@ -53,7 +54,6 @@ data CliArgs = CliArgs
 -- * Parser
 -- ---------------------------------------------------------------------------
 
--- | Full parser with help text and program description.
 cliArgsParser :: ParserInfo CliArgs
 cliArgsParser =
   info
@@ -63,7 +63,6 @@ cliArgsParser =
         <> header "cardano-db-sync — blockchain data indexer"
     )
 
--- | The raw argument parser (without help/info wrapper).
 cliArgsP :: Parser CliArgs
 cliArgsP =
   CliArgs
@@ -110,6 +109,6 @@ cliArgsP =
           )
       )
 
--- | Parse CLI args from the process arguments. Exits on failure.
+-- | Exits on a parse failure.
 parseCliArgs :: IO CliArgs
 parseCliArgs = execParser cliArgsParser

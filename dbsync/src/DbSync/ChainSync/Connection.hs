@@ -128,28 +128,22 @@ data IntersectionRequirement
     -- ^ Fresh start. The receiver requests intersection at genesis;
     -- if the node also has nothing, it follows from origin.
   | IntersectAt ![CardanoPoint]
-    -- ^ Resume past a previous run. The receiver offers a list of
-    -- candidate points (newest-first) to the node, which picks
-    -- whichever is on its chain. The list is non-empty by
-    -- construction; an empty list would degenerate to genesis-only,
-    -- which the boot flow signals via 'IntersectGenesis' instead.
-    --
-    -- If the node can't intersect at /any/ candidate, the connection
-    -- fails fatally — the node's chain has diverged from every
-    -- snapshot we know about.
+    -- ^ Resume past a previous run. The receiver offers candidate
+    -- points newest-first and the node picks the one on its chain.
+    -- The list is non-empty by construction; the boot flow signals
+    -- the empty case with 'IntersectGenesis'. If no candidate
+    -- intersects, the connection fails fatally.
 
 -- ---------------------------------------------------------------------------
 -- * Network magic
 -- ---------------------------------------------------------------------------
 
--- | Extract the 'NetworkMagic' from a 'GenesisConfig'.
--- Comes from the Shelley genesis 'sgNetworkMagic' field.
 getNetworkMagic :: GenesisConfig -> NetworkMagic
 getNetworkMagic gc = NetworkMagic $ sgNetworkMagic (scConfig $ gcShelley gc)
 
--- | Human-readable label for the well-known network magics; any other
--- magic renders as @magic-\<N\>@. The magic is the identity — the name
--- exists for log lines and the @dbsync_sync_state.network_name@ column.
+-- | Label for the well-known network magics; anything else renders as
+-- @magic-\<N\>@. The magic is the identity. The name only feeds log
+-- lines and the @dbsync_sync_state.network_name@ column.
 networkNameFromMagic :: NetworkMagic -> Text
 networkNameFromMagic (NetworkMagic magic) = case magic of
   764824073 -> "mainnet"
@@ -162,15 +156,12 @@ networkNameFromMagic (NetworkMagic magic) = case magic of
 -- * Connection
 -- ---------------------------------------------------------------------------
 
--- | Connect to a cardano-node and run the ChainSync protocol.
+-- | Connect to a cardano-node and run the ChainSync protocol. Writes
+-- received blocks to the env's block queue and never returns; it
+-- reconnects on failure.
 --
--- Received blocks are written to the env's block queue. Blocks
--- indefinitely (reconnects on failure).
---
--- Polymorphic over the env so the same call drives Ingest and Follow.
--- Both 'IngestEnv' and 'FollowEnv' have 'HasTracer' and
--- 'HasReceiverChannels' instances, so the consumer-side env at each
--- phase boundary is the only thing that changes.
+-- Polymorphic over the env, so the same call drives Ingest and
+-- Follow: only the consumer-side env changes at a phase boundary.
 connectToNode
   :: ( MonadReader env m, MonadIO m
      , HasTracer env, HasReceiverChannels env
@@ -233,18 +224,13 @@ connectToNode iomgr topLevelCfg networkMagic socketPath intersect = do
         , stMuxBearerTracer = nullTracer
         }
 
--- | Map subscription events to appropriate log severity and message.
+-- | Map subscription events to a severity and message.
 --
--- Two startup-time connect failures get distinguished from genuine errors
--- so the operator can tell whether they're "still waiting for the node"
--- (benign) vs. "something is actually wrong" (worth investigating):
---
--- * Socket file does not exist yet (cardano-node hasn't bound the socket).
--- * Connection refused (socket exists but cardano-node isn't accepting).
---
--- Both demote to Info. The 'SubscriptionReconnect' event is also demoted
--- to Debug because it fires after every failure and is redundant given
--- the preceding error trace already explains what happened.
+-- Two startup-time connect failures demote to 'Info', so the operator
+-- can separate "still waiting for the node" from a real fault: the
+-- socket file is absent, or the socket refuses the connection.
+-- 'SubscriptionReconnect' demotes to 'Debug' because it fires after
+-- every failure and the preceding error trace already explains it.
 formatSubscriptionTrace :: SubscriptionTrace () -> LogMsg
 formatSubscriptionTrace ev = case ev of
   SubscriptionReconnect ->
@@ -267,12 +253,12 @@ classifyConnectError se = case fromException se :: Maybe IOError of
         Just "Cardano-node socket present but not accepting yet; retrying in 5s"
   _ -> Nothing
 
--- | Build the NodeToClient protocols bundle.
--- Only ChainSync is active — tx submission, state query, and tx monitor are null.
+-- | Build the NodeToClient protocols bundle. ChainSync and
+-- LocalStateQuery are live; tx submission and tx monitor are null.
 --
--- The @latestPointRef@ is read by 'blockFetchClient' on every
--- (re)connection, so a mid-run reconnect resumes at our current
--- position rather than the boot-time intersect.
+-- 'blockFetchClient' reads @latestPointRef@ on every (re)connection,
+-- so a mid-run reconnect resumes at the current position instead of
+-- the boot-time intersect.
 nodeProtocols
   :: AppTracer
   -> CodecConfig (CardanoBlock StandardCrypto)
@@ -334,25 +320,19 @@ nodeProtocols appTracer codecConfig blockQueue mLedgerQueue stateQueryVar latest
 -- * ChainSync pipelined client
 -- ---------------------------------------------------------------------------
 
--- | Mutable bookkeeping the chainsync callbacks share across a single
--- session. Created fresh inside 'blockFetchClient' on every
--- (re)connection so both fields reset when a new session starts.
---
--- Both fields here are read and written only by the receiver thread.
+-- | Per-session bookkeeping the chainsync callbacks share.
+-- 'blockFetchClient' builds a fresh one on every (re)connection, so
+-- both fields reset. Only the receiver thread touches them.
 data SessionState = SessionState
   { ssPostIntersect   :: !(IORef Bool)
-    -- ^ 'True' once the first 'MsgRollForward' of this session has
-    -- arrived. The node always sends a confirming 'MsgRollBackward'
-    -- to the chosen intersection point right after
-    -- 'MsgIntersectFound'; while this flag is 'False' the receiver
-    -- treats that rollback as a protocol artefact (not a real
-    -- reorg) and does not propagate it to downstream consumers.
+    -- ^ 'True' once this session's first 'MsgRollForward' arrives.
+    -- The node always sends a confirming 'MsgRollBackward' to the
+    -- chosen intersection point right after 'MsgIntersectFound';
+    -- while the flag is 'False' the receiver treats that rollback as
+    -- a protocol artefact and keeps it from downstream consumers.
   , ssBlocksLeftToLog :: !(IORef Int)
-    -- ^ How many forward blocks remain to log at 'Info' (counts
-    -- down from 'firstBlocksToLog'). Lets the operator confirm the
-    -- new session is producing on reconnect / handoff, where the
-    -- first block has a large BlockNo and the historical
-    -- "blockNo == 1" trigger never fires.
+    -- ^ Forward blocks still to log at 'Info', counting down from
+    -- 'firstBlocksToLog'.
   }
 
 newSessionState :: IO SessionState
@@ -361,38 +341,26 @@ newSessionState =
     <$> newIORef False
     <*> newIORef firstBlocksToLog
 
--- | How many forward blocks to log at 'Info' at the start of each
--- session. Three gives the operator a clear pulse-check (one to
--- prove the receiver is alive, two more to confirm it's not a
--- one-shot artefact) without flooding the log.
+-- | Forward blocks to log at 'Info' at the start of each session.
+-- Three prove the new session produces without flooding the log. A
+-- reconnect or phase handoff starts at a large BlockNo, so a
+-- "block 1" trigger would never fire there.
 firstBlocksToLog :: Int
 firstBlocksToLog = 3
 
--- | Pipelined ChainSync client that writes blocks to a TQueue.
+-- | Pipelined ChainSync client that writes blocks to the queues.
 --
--- The intersection point is chosen at every (re)connection:
+-- Each (re)connection picks its own intersection point. A point in
+-- @latestPointRef@ wins; otherwise the boot-time @intersect@ applies.
+-- Without the TVar-tracked point a mid-sync node restart would re-use
+-- the boot-time intersect — Origin on a fresh sync — so the node
+-- would roll the chain pointer back to genesis and the LedgerWorker
+-- would crash when the genesis block arrived over its slot-N state.
 --
---   * If @latestPointRef@ holds a point, the receiver intersects
---     there. This is the reconnection path: the node sends forward
---     from where we last were, after a benign confirming rollback to
---     the intersection point.
---   * Otherwise it falls back to the boot-time @intersect@: either
---     'IntersectGenesis' (first connection on a fresh DB) or
---     'IntersectAt' (resume from snapshot candidates).
---
--- Without the TVar-tracked latest point, a @cardano-node@ restart
--- mid-sync would re-use the boot-time intersect — for a fresh sync
--- that is Origin, so the node rolls our chain pointer back to
--- genesis and the LedgerWorker crashes when the genesis block
--- arrives over its slot-N state.
---
--- 'IntersectGenesis' tolerates a not-found response (used on a fresh
--- start when the node also has no chain yet). 'IntersectAt' and the
--- IORef-tracked resume both treat not-found as fatal: the node's
--- chain has diverged from every candidate point we offered.
---
--- When @mLedgerQueue@ is 'Just', each block is also enqueued on it
--- after the main queue write succeeds.
+-- 'IntersectGenesis' tolerates a not-found response, because a fresh
+-- start may meet a node that has no chain either. 'IntersectAt' and
+-- the tracked resume both treat not-found as fatal: the node's chain
+-- has diverged from every candidate point.
 blockFetchClient
   :: AppTracer
   -> TBQueue ChainSyncMsg                             -- ^ Main pipeline queue
@@ -410,8 +378,6 @@ blockFetchClient
        ()
 blockFetchClient appTracer blockQueue mLedgerQueue latestPointRef rollbackBoundary latestTipBlock kBlocks intersect =
   ChainSyncClientPipelined $ do
-    -- Per-session mutable bookkeeping. Bundled so callbacks pass one
-    -- record instead of N independent IORefs.
     ss <- newSessionState
     mLatest <- readTVarIO latestPointRef
     let (intersectPoints, isResume) = case mLatest of
@@ -432,9 +398,9 @@ blockFetchClient appTracer blockQueue mLedgerQueue latestPointRef rollbackBounda
       IntersectGenesis -> [genesisPoint]
       IntersectAt ps   -> ps
 
-    -- Log the chosen candidate so the operator can see which
-    -- snapshot point the node selected — useful when the candidate
-    -- list contains fallbacks beyond the newest snapshot.
+    -- Log the chosen candidate: the list can hold fallbacks older
+    -- than the newest snapshot, so the operator needs to see which
+    -- one the node selected.
     onIntersectFound ss chosen tip = do
       traceWith appTracer $ LogMsg Info "ChainSync"
         ("Intersected at " <> show chosen <> " (server tip " <> show tip <> ")")
@@ -462,9 +428,8 @@ blockFetchClient appTracer blockQueue mLedgerQueue latestPointRef rollbackBounda
                 <> "chain has diverged from every known snapshot. "
                 <> "Server tip: " <> show tip
 
-    -- Pipeline depth limits: start requesting at 10 in-flight,
-    -- cap at 50 in-flight. Balances throughput with memory/backpressure.
-    -- Unlimited (0/maxBound) causes memory growth and TCP backpressure.
+    -- Pipeline depth: request from 10 in-flight, cap at 50. An
+    -- unlimited depth grows memory and stalls TCP backpressure.
     policy :: MkPipelineDecision
     policy = pipelineDecisionLowHighMark 10 50
 
@@ -512,15 +477,11 @@ blockFetchClient appTracer blockQueue mLedgerQueue latestPointRef rollbackBounda
         { recvMsgRollForward = \blk tip -> do
             let bn = blockNo blk
                 blkSlot = blockSlot blk
-            -- The first three blocks of every session log at Info so
-            -- the operator can confirm the post-intersect stream is
-            -- producing — important on reconnect / handoff where the
-            -- first block has a large BlockNo that the historical
-            -- "block 1" trigger missed. No per-block Debug trace:
-            -- the message Text would be built (then dropped by the
-            -- phase filter) on every block of the bulk sync. The
-            -- counter is only touched on this thread, so the plain
-            -- read costs nothing once it reaches zero.
+            -- No per-block Debug trace here: the message Text would
+            -- be built, then dropped by the phase filter, for every
+            -- block of the bulk sync. Only this thread touches the
+            -- counter, so the plain read costs nothing once it hits
+            -- zero.
             remaining <- readIORef (ssBlocksLeftToLog ss)
             when (remaining > 0) $ do
               writeIORef (ssBlocksLeftToLog ss) (remaining - 1)
@@ -528,27 +489,25 @@ blockFetchClient appTracer blockQueue mLedgerQueue latestPointRef rollbackBounda
                 ( "First post-intersect block at slot " <> show blkSlot
                     <> ", block " <> show bn
                 )
-            -- Mark the post-intersect handshake as complete; any
-            -- subsequent rollback is a real chain reorganisation.
+            -- The handshake is complete; any later rollback is a real
+            -- chain reorganisation.
             atomicWriteIORef (ssPostIntersect ss) True
-            -- The rollback boundary moves with the node tip; publish
-            -- it before enqueuing so a slow consumer never sees a
-            -- block whose ancestor has already passed the boundary.
+            -- Publish the boundary before enqueuing, so a slow
+            -- consumer never sees a block whose ancestor has already
+            -- passed it.
             publishTipMarkers tip
             deliverForwardBlock blockQueue mLedgerQueue latestPointRef blk
             pure $ goTip ss mkDecision n (At bn) tip
         , recvMsgRollBackward = \point tip -> do
             -- The first MsgRollBackward after MsgIntersectFound is the
             -- node's confirming rollback to the chosen intersection
-            -- point — a protocol artefact, not a chain reorganisation.
-            -- Don't surface it to downstream consumers; just record
-            -- the position and continue.
+            -- point: a protocol artefact, not a reorganisation. Record
+            -- the position and continue without telling consumers.
             isConfirmingRollback <- atomicModifyIORef' (ssPostIntersect ss)
               (\seen -> (True, not seen))
-            -- Confirming rollbacks log at Debug (benign protocol
-            -- step; same severity as the regular per-block trace);
-            -- real chain reorgs log at Warning (downstream consumers
-            -- are about to see DELETEs).
+            -- A confirming rollback is benign, so it logs at Debug. A
+            -- real reorg logs at Warning: consumers are about to see
+            -- DELETEs.
             let sev = if isConfirmingRollback then Debug else Warning
                 logText
                   | isConfirmingRollback =
@@ -582,24 +541,21 @@ blockFetchClient appTracer blockQueue mLedgerQueue latestPointRef rollbackBounda
         writeTVar rollbackBoundary boundary
 
 -- | Hand one forward block to the consumer queues and record it as
--- the latest received point — all in a single STM transaction.
+-- the latest received point, in a single STM transaction.
 --
--- Atomicity is load-bearing, not style: the receiver is killed with
--- an async exception at the Ingest → Follow handoff (and on node
--- reconnects), and the ledger-queue write can block while the worker
--- is behind. With separate transactions a kill landing
--- after the main-queue write but before the point write leaves the
--- block queued yet unrecorded; the next session then re-requests it
--- and the Follow consumer applies it twice — the @tx@ unique
--- constraint aborts the app (the @block@ table has no unique
--- constraint to object sooner). In one transaction the kill either
--- lands before commit (nothing delivered, nothing recorded — the
--- next session re-fetches the block) or after (everything
--- consistent).
+-- The atomicity is load-bearing. An async exception kills the
+-- receiver at the Ingest → Follow handoff and on node reconnects, and
+-- the ledger-queue write can block behind a slow worker. In separate
+-- transactions a kill between the queue write and the point write
+-- leaves the block queued but unrecorded; the next session re-requests
+-- it and the Follow consumer applies it twice, which aborts the app on
+-- the @tx@ unique constraint. The @block@ table has no unique
+-- constraint to object sooner. In one transaction the kill lands
+-- either before the commit or after it, and both states are
+-- consistent.
 --
--- The transaction retries until every queue involved has space, so
--- backpressure into the receiver is preserved: it may not out-run
--- the slower of the two consumers.
+-- The transaction retries until every queue has space, so the
+-- receiver cannot out-run the slower consumer.
 deliverForwardBlock
   :: TBQueue ChainSyncMsg          -- ^ Main pipeline queue
   -> Maybe (TBQueue ChainSyncMsg)  -- ^ Ledger worker queue, when enabled
@@ -613,15 +569,13 @@ deliverForwardBlock blockQueue mLedgerQueue latestPointVar blk =
     for_ mLedgerQueue $ \ledgerQueue -> writeTBQueue ledgerQueue msg
     writeTVar latestPointVar (Just (blockPoint blk))
 
--- | Rollback counterpart of 'deliverForwardBlock': record the
--- rollback target as the latest received point and — for a real
--- chain reorganisation — enqueue the 'MsgRollback' marker on both
--- queues, in one STM transaction for the same kill-safety reason.
--- Losing the marker while still recording the point would leave
--- rolled-back rows in PG forever.
+-- | Rollback counterpart of 'deliverForwardBlock'. One transaction,
+-- for the same kill-safety reason: losing the 'MsgRollback' marker
+-- while still recording the point would leave rolled-back rows in PG
+-- forever.
 --
--- A confirming rollback (the protocol's echo of the chosen
--- intersection point) only moves the point; no marker is delivered.
+-- A confirming rollback echoes the chosen intersection point, so it
+-- only moves the point and delivers no marker.
 deliverRollback
   :: TBQueue ChainSyncMsg
   -> Maybe (TBQueue ChainSyncMsg)

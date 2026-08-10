@@ -1,18 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Schema, types, and hasql encoders\/decoders for the
--- @dbsync_sync_state@ singleton metadata table.
+-- | Schema, types, and hasql codecs for the @dbsync_sync_state@ singleton
+-- metadata table.
 --
--- This table is the one piece of state that survives a restart
--- regardless of ledger mode. It is LOGGED, never a COPY target, and
--- carries a single row pinned by @CHECK (id = 1)@.
---
--- Three writers, each touching a disjoint set of columns:
---
---   * Consumer ('commitEpoch') writes @last_committed_*@ and the
---     @*_id_counter@ columns.
---   * Snapshot writer writes @last_snapshot_slot@.
---   * Phase-transition flip writes @sync_complete@.
+-- The table is LOGGED, never a COPY target, and holds a single row pinned
+-- by @CHECK (id = 1)@. Three writers touch disjoint columns: the consumer
+-- writes @last_committed_*@ and the @*_id_counter@ columns, the snapshot
+-- writer writes @last_snapshot_slot@, and the phase flip writes
+-- @sync_complete@.
 module DbSync.Db.Schema.SyncState
   ( -- * Row type
     SyncStateRow (..)
@@ -84,11 +79,9 @@ import DbSync.Db.Schema.UTxO (collateralTxOutTableDef, txOutTableDef)
 -- * Row type
 -- ---------------------------------------------------------------------------
 
--- | A single row from the @dbsync_sync_state@ table.
---
--- Field order matches 'tdColumns' (skipping @id@ and @updated_at@,
--- which are managed by the table itself). The encoder, decoder, and
--- generated SQL below all rely on this ordering.
+-- | Field order matches 'tdColumns', minus the table-managed @id@ and
+-- @updated_at@. The encoder, the decoder, and the generated SQL all
+-- depend on this order.
 data SyncStateRow = SyncStateRow
   { ssrLastCommittedSlot             :: !(Maybe Word64)
   , ssrLastCommittedBlockNo          :: !(Maybe Word64)
@@ -396,17 +389,13 @@ syncStateRowEncoder =
   <> (fromIntegral . ssrSchemaVersionApplied       >$< E.param (E.nonNullable E.int4))
   <> (ssrLedgerEnabled                             >$< E.param (E.nonNullable E.bool))
 
--- | Decoder for a row produced by
--- 'DbSync.Db.Statement.SyncState.readSyncStateStmt'.
+-- | Pairs with 'DbSync.Db.Statement.SyncState.readSyncStateStmt'.
 --
--- Consumes every column of the table in 'tdColumns' order so the
--- statement can use a plain @SELECT *@. The leading @id@ and the
--- trailing @schema_fingerprint@ / @extractors@ / @network_magic@ /
--- @network_name@ / @updated_at@ are discarded — none belongs in
--- 'SyncStateRow' (the id is fixed at 1 by CHECK; the fingerprint and
--- extractor set are owned by the schema-version gate; the network
--- identity by the network gate; @updated_at@ is managed by the SET
--- clause).
+-- It consumes every column in 'tdColumns' order, so the statement can use
+-- a plain @SELECT *@. It discards the leading @id@ and the trailing
+-- @schema_fingerprint@, @extractors@, @network_magic@, @network_name@ and
+-- @updated_at@: the schema-version gate, the network gate and the @SET@
+-- clause own those, not 'SyncStateRow'.
 syncStateRowDecoder :: D.Row SyncStateRow
 syncStateRowDecoder =
        skipCol D.int2                                          -- id
@@ -446,8 +435,7 @@ syncStateRowDecoder =
     <* skipCol D.text                                          -- network_name
     <* skipCol D.timestamptz                                   -- updated_at
   where
-    -- Read a column at the current position and discard the value.
-    -- The result type doesn't matter; we only care about advancing
-    -- past the column in the row.
+    -- Advance past one column and discard the value; the type is
+    -- irrelevant.
     skipCol :: D.Value a -> D.Row a
     skipCol = D.column . D.nonNullable

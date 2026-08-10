@@ -1,19 +1,10 @@
--- | Timing helpers that wrap an action with start/end trace lines
--- bracketing wall-clock duration. 'timed' carries the row count
--- returned by the action; 'timed_' is for actions that don't.
+-- | Timing helpers that bracket an action with start and end trace
+-- lines. The @*IO@ siblings take the tracer explicitly, for boot code
+-- that has no env yet.
 --
--- Both emit at 'Info' so the per-step duration is visible at the
--- default log level — operators chasing a long-running phase always
--- want to know which sub-step is in flight, independent of whether
--- the watchdog / per-epoch diagnostics (which gate on 'Debug') are
--- enabled.
---
--- Each helper has two flavours:
---
---   * @withHeartbeat@ / @timedTrace@ / @timedTrace_@ — polymorphic
---     over an 'AppM env' that satisfies 'HasTracer'.
---   * @*IO@ siblings — take the tracer explicitly. For boot code
---     that hasn't built an env yet.
+-- All of them emit at 'Info'. An operator chasing a long phase must
+-- see which sub-step is in flight without raising the level to
+-- 'Debug'.
 module DbSync.Trace.Timing
   ( timedTrace
   , timedTrace_
@@ -43,8 +34,8 @@ import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 -- * Env-aware variants
 -- ---------------------------------------------------------------------------
 
--- | Run an action while a sidecar thread emits a heartbeat trace
--- every @intervalSeconds@. Each heartbeat appends elapsed wall-clock
+-- | Run an action while a sidecar thread emits a heartbeat every
+-- @intervalSeconds@. Each heartbeat appends the elapsed wall-clock,
 -- so a stalled operation reads as a stalled timer.
 withHeartbeat
   :: (HasTracer env, MonadReader env m, MonadUnliftIO m)
@@ -147,9 +138,8 @@ fmtDuration secs
       let t = round secs :: Int
       in show (t `div` 3600) <> "h " <> show ((t `mod` 3600) `div` 60) <> "m"
 
--- | Comma-separate a count so it reads at a glance. Polymorphic
--- over any 'Integral' so callers needn't convert between 'Int64' /
--- 'Word64' / etc.
+-- | Comma-separate a count. Polymorphic over 'Integral' so callers
+-- do not convert between 'Int64', 'Word64' and friends.
 fmtCount :: (Integral n, Show n) => n -> Text
 fmtCount n
   | n < 0     = "-" <> fmtCount (abs n)
@@ -167,8 +157,7 @@ fmtCount n
     chunksOf3 [] = []
     chunksOf3 xs = let (h, t) = splitAt 3 xs in h : chunksOf3 t
 
--- | Render a 'Double' with two decimal places, no scientific
--- notation. Used by percentage / rate displays in epoch summaries
--- and the replay-progress logger.
+-- | Render a 'Double' with two decimal places and no scientific
+-- notation.
 fmtF2 :: Double -> Text
 fmtF2 d = Text.pack (printf "%.2f" d)

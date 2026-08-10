@@ -1,26 +1,10 @@
--- | FollowingChainTip ID resolver.
+-- | FollowingChainTip id resolver. Per-extractor method bodies live
+-- in @Resolver\/\<extractor\>.hs@; this module composes them.
 --
--- Two implementations:
---
--- * 'mkFollowResolver' — every @assign*Id@ does a @nextval@
---   round-trip; every @resolve*@ does a @SELECT@ then a @nextval@
---   on miss. Used by the integration test suite.
---
--- * 'mkBufferedFollowResolver' — @assign*Id@ pops from a queue of
---   IDs pre-allocated in one pipeline at start of block;
---   @resolve*@ still SELECTs synchronously but checks a per-block
---   in-process map first (so a SELECT seeing a sibling's
---   not-yet-flushed INSERT still finds it). @resolveAddressId@
---   returns the id synchronously and queues the @address@ INSERT
---   (when new) on the shared 'WriteBuffer'; the caller then writes
---   the tx_out row with @address_id@ already populated. Used in
---   production.
---
--- Both share the same dedup contracts and the same FK invariants;
--- the diff test confirms identical rows in PG.
---
--- Per-extractor method bodies live in @Resolver\/\<extractor\>.hs@;
--- this module composes them.
+-- 'mkFollowResolver' makes one round-trip per id, which the
+-- integration tests want. Production uses
+-- 'mkBufferedFollowResolver'. Both keep the same dedup contracts and
+-- FK invariants, and the diff test confirms identical rows in PG.
 module DbSync.Phase.Following.Resolver
   ( ConsumedTracking (..)
   , mkFollowResolver
@@ -54,9 +38,8 @@ import DbSync.Resolver (IdResolver (..))
 -- * Direct resolver
 -- ---------------------------------------------------------------------------
 
--- | Build a direct (un-buffered) Follow resolver. Every assigner
--- does a @nextval@ round-trip; every dedup resolver does
--- @SELECT@ then @nextval@ on miss.
+-- | Every assigner makes a @nextval@ round-trip. Every dedup
+-- resolver runs a @SELECT@, then @nextval@ on a miss.
 mkFollowResolver :: Conn.Connection -> ConsumedTracking -> IO (IdResolver IO)
 mkFollowResolver conn consumedTracking = do
   lastBlock <- newIORef Nothing
@@ -133,22 +116,20 @@ mkFollowResolver conn consumedTracking = do
 -- * Buffered resolver
 -- ---------------------------------------------------------------------------
 
--- | Buffered Follow resolver. Same observable rows as
--- 'mkFollowResolver'; the difference is where the work lands:
+-- | Produces the same rows as 'mkFollowResolver'; only the placement
+-- of the work differs:
 --
---   * @assign*Id@ pops from per-sequence queues in 'PreAllocatedIds'
---     (zero round-trips).
---   * Dedup @resolve*@ checks the per-block cache first; on miss
---     does @SELECT@ then @nextval@. The corresponding INSERT is
---     queued via the 'Writer'; the per-block cache shadows the
---     not-yet-flushed row.
---   * @resolveAddressId@ resolves synchronously, queuing the
---     @address@ INSERT (when new) on the shared 'WriteBuffer'. The
---     extractor writes the tx_out row with @address_id@ filled in.
---   * @recordTxOutputs@ fills a block-local outputs map so a
---     same-block spend resolves its producer while the tx_out
---     INSERT is still unflushed; @recordConsumed@ queues the
---     consumed-by UPDATE behind it on the same pipeline.
+--   * @assign*Id@ pops a 'PreAllocatedIds' queue, with no round-trip.
+--   * Dedup @resolve*@ checks the per-block cache first, then falls
+--     back to @SELECT@ and @nextval@. The 'Writer' queues the INSERT,
+--     and the cache shadows the unflushed row.
+--   * @resolveAddressId@ returns the id at once and queues the
+--     @address@ INSERT on the 'WriteBuffer', so the extractor writes
+--     the tx_out row with @address_id@ already filled in.
+--   * @recordTxOutputs@ fills a block-local outputs map, so a
+--     same-block spend resolves its producer while the tx_out INSERT
+--     is still unflushed. @recordConsumed@ queues the consumed-by
+--     UPDATE behind it on the same pipeline.
 mkBufferedFollowResolver
   :: Conn.Connection
   -> PreAllocatedIds
@@ -160,8 +141,8 @@ mkBufferedFollowResolver conn preAlloc buf consumedTracking = do
   cache     <- newBlockDedupCache
   gov       <- Governance.newGovScratchpad
   pure IdResolver
-    { -- Core (block ID stays synchronous because resolvePrevBlock needs
-      -- the materialised value)
+    { -- Core. The block id stays synchronous, because resolvePrevBlock
+      -- needs the materialised value.
       assignBlockId     = Core.assignBlockIdFollow    conn lastBlock
     , assignTxId        = Core.assignTxIdBuf          preAlloc
     , resolveSlotLeader = Core.resolveSlotLeaderBuf   conn cache

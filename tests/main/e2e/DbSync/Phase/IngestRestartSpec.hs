@@ -24,7 +24,7 @@ import qualified Data.Text as T
 
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
-import DbSync.App.Config.Types (DbProfile (..), OptionFlag (..), SyncConfig (..))
+import DbSync.App.Config.Types (Extractors (..), OptionFlag (..), SyncConfig (..))
 import DbSync.App.Run (runApp)
 import DbSync.Db.Schema.EpochSyncStats (epochSyncStatsTableDef)
 import DbSync.Db.Schema.StakeDelegation (epochStakeTableDef)
@@ -135,8 +135,8 @@ spec = describe "IngestChainHistory restart" $ do
 -- on so it writes @epoch_stake@ / @reward@ / @pot_reward@.
 stakeLedgerConfig :: SyncConfig
 stakeLedgerConfig = ledgerEnabledTestConfig
-  { scDbProfile = (scDbProfile ledgerEnabledTestConfig)
-      { pcStakeDelegationLedger = OptionFlag True
+  { scExtractors = (scExtractors ledgerEnabledTestConfig)
+      { exStakeDelegationLedger = OptionFlag True
       }
   }
 

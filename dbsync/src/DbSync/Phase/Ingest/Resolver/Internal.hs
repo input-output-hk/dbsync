@@ -11,14 +11,13 @@ import Data.IORef (IORef, atomicModifyIORef')
 import DbSync.Extractor (ExtractState (..))
 import DbSync.Phase.Ingest.Counter (IdCounter, IdCounters, nextId)
 
--- | Atomically read the next id from the supplied counter field on
--- 'ExtractState', advance the counter, and wrap the raw 'Int64' in
--- the matching newtype constructor.
+-- | Read the next id from the counter field, advance it, and wrap
+-- the raw 'Int64' in the matching newtype.
 --
 -- The setter takes the existing 'IdCounters' first, then the new
--- 'IdCounter', so per-field setters read as
--- @\\counters newCounter -> counters { fieldName = newCounter }@
--- — matching the visual order of a record update at the call site.
+-- 'IdCounter', so a per-field setter reads as
+-- @\\counters newCounter -> counters { fieldName = newCounter }@,
+-- which matches a record update at the call site.
 allocateNextId
   :: IORef ExtractState
   -> (IdCounters -> IdCounter)                  -- ^ getter for the per-table counter

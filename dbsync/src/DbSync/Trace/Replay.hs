@@ -1,23 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Shared replay-progress state machine.
+-- | Pure state machine for the replay-progress log, shared by the
+-- Ingest and Follow resume paths.
 --
--- When a resume lands on a snapshot below @last_committed_slot@ the
--- in-RAM ledger has to replay every block in between before normal
--- processing can resume. During that window the consumer skips its
--- PG-write path (rows are already in PG) and the ledger worker
--- advances the ledger via the chainsync receiver\'s fan-out.
---
--- This module is the pure decision layer for the user-facing progress
--- log: a small state machine, advanced once per received block, that
--- decides when to emit \"applied @N@ blocks\" / \"replay complete\"
--- lines. Effects are pushed to the caller: the consumer mutates an
--- @IORef ReplayLogState@ and emits any indicated trace.
---
--- Used by both the Ingest 'BootResume' path (catching up from the
--- previous epoch boundary\'s snapshot) and the Follow restart path
--- (catching up from a snapshot that lagged the consumer\'s commits).
--- Identical log shape on both.
+-- A resume can land on a snapshot below @last_committed_slot@. The
+-- ledger then replays the blocks in between while the consumer skips
+-- its PG-write path, because those rows are already in PG. This
+-- module decides when that silent window emits a progress line.
 module DbSync.Trace.Replay
   ( -- * State
     ReplayLogState (..)
@@ -42,9 +31,7 @@ import Data.Time.Clock (UTCTime, NominalDiffTime, diffUTCTime)
 -- * State
 -- ---------------------------------------------------------------------------
 
--- | State machine driving the @LedgerReplay@ log channel during a
--- replay window. Surfaces liveness of an otherwise silent catch-up:
--- inside the window the consumer skips its normal per-block trace.
+-- | Drives the @LedgerReplay@ log channel across a replay window.
 data ReplayLogState
   = NoReplay
     -- ^ No replay configured, or the window has been exited.
@@ -88,10 +75,8 @@ data ReplayLog
 progressLogInterval :: NominalDiffTime
 progressLogInterval = 5
 
--- | Advance the replay-log state machine given the just-arrived
--- block\'s slot, the resume boundary (@'Nothing'@ = no replay) and
--- the current wall-clock time. Pure; the caller mutates the IORef
--- and emits any indicated trace.
+-- | Advance the state machine for one received block. A 'Nothing'
+-- boundary means no replay is configured.
 advanceReplay
   :: SlotNo
   -> Maybe SlotNo
@@ -114,9 +99,8 @@ advanceReplay slot (Just bs) now s =
                        }
              in ReplayAdvance (InReplay p) ReplayLogNothing
          | otherwise ->
-             -- First block already past the boundary — degenerate
-             -- replay window of zero blocks. Skip straight to
-             -- 'NoReplay' without firing any log.
+             -- First block is already past the boundary: a zero-block
+             -- window. Go straight to 'NoReplay' and log nothing.
              ReplayAdvance NoReplay ReplayLogNothing
        InReplay p
          | inReplay ->
@@ -136,10 +120,10 @@ advanceReplay slot (Just bs) now s =
 -- * Rendering helpers
 -- ---------------------------------------------------------------------------
 
--- | Render a slot-progress percentage of the form @\" [37%]\"@.
--- Empty string when bounds are missing or the window has zero
--- width. Uses /slot/ progress, not /block/ progress, since Cardano
--- slots can be empty so the total block count is unknown up front.
+-- | Render a progress percentage of the form @\" [37%]\"@, or the
+-- empty string when the bounds are missing or the window has zero
+-- width. Measures /slots/, not /blocks/: Cardano slots can be empty,
+-- so the total block count is unknown up front.
 renderReplayPercent :: Maybe SlotNo -> Maybe SlotNo -> SlotNo -> Text
 renderReplayPercent (Just (SlotNo start)) (Just (SlotNo endBound)) (SlotNo cur)
   | endBound > start =

@@ -27,9 +27,7 @@ prepGucSql memCap maxParallel asyncCommit = T.unlines
   , "SET synchronous_commit = " <> commitMode asyncCommit <> ";"
   ]
 
--- | @SET@ applied at Follow connection open. Field-by-field shape
--- mirrors 'prepGucSql' so future Follow knobs slot in without
--- changing the call shape.
+-- | @SET@ applied at Follow connection open.
 followGucSql
   :: Bool   -- ^ @True@ → @synchronous_commit = off@.
   -> Text

@@ -3,13 +3,11 @@
 
 -- | Schema types for pool-related tables.
 --
--- Tables in this module are owned by three different extractors:
---
---   * @pool@ extractor (block-extracted): @pool_update@,
---     @pool_metadata_ref@, @pool_owner@, @pool_retire@, @pool_relay@.
---   * @pool_stats@ extractor (ledger-derived, epoch-boundary): @pool_stat@.
---   * @off_chain_pools@ extractor (operator-managed via SMASH):
---     @delisted_pool@, @reserved_pool_ticker@.
+-- Three extractors own them. @pool@ owns the block-extracted
+-- @pool_update@, @pool_metadata_ref@, @pool_owner@, @pool_retire@ and
+-- @pool_relay@. @pool_stats@ owns the ledger-derived @pool_stat@.
+-- @off_chain_pools@ owns @delisted_pool@ and @reserved_pool_ticker@,
+-- which an operator maintains through SMASH.
 module DbSync.Db.Schema.Pool
   ( -- * Schema types
     PoolUpdate (..)
@@ -122,7 +120,6 @@ type instance Key ReservedPoolTicker = ReservedPoolTickerId
 -- * Schema types
 -- ---------------------------------------------------------------------------
 
--- | The @pool_update@ table.
 data PoolUpdate = PoolUpdate
   { poolUpdateHashId        :: !PoolHashId
   , poolUpdateCertIndex     :: !Word16
@@ -138,7 +135,6 @@ data PoolUpdate = PoolUpdate
   }
   deriving stock (Eq, Show)
 
--- | The @pool_metadata_ref@ table.
 data PoolMetadataRef = PoolMetadataRef
   { poolMetadataRefPoolId        :: !PoolHashId
   , poolMetadataRefUrl           :: !Text
@@ -147,14 +143,12 @@ data PoolMetadataRef = PoolMetadataRef
   }
   deriving stock (Eq, Show)
 
--- | The @pool_owner@ table.
 data PoolOwner = PoolOwner
   { poolOwnerAddrId       :: !StakeAddressId
   , poolOwnerPoolUpdateId :: !PoolUpdateId
   }
   deriving stock (Eq, Show)
 
--- | The @pool_retire@ table.
 data PoolRetire = PoolRetire
   { poolRetireHashId        :: !PoolHashId
   , poolRetireCertIndex     :: !Word16
@@ -163,7 +157,6 @@ data PoolRetire = PoolRetire
   }
   deriving stock (Eq, Show)
 
--- | The @pool_relay@ table.
 data PoolRelay = PoolRelay
   { poolRelayUpdateId   :: !PoolUpdateId
   , poolRelayIpv4       :: !(Maybe Text)
@@ -174,8 +167,7 @@ data PoolRelay = PoolRelay
   }
   deriving stock (Eq, Show)
 
--- | The @pool_stat@ table.
--- One row per (pool, epoch); written by the @pool_stats@ extractor
+-- | One row per (pool, epoch); written by the @pool_stats@ extractor
 -- from ledger state at each epoch boundary.
 data PoolStat = PoolStat
   { poolStatPoolHashId         :: !PoolHashId
@@ -187,14 +179,14 @@ data PoolStat = PoolStat
   }
   deriving stock (Eq, Show)
 
--- | The @delisted_pool@ table. Single column, unique on @hash_raw@.
+-- | Single column, unique on @hash_raw@.
 -- Maintained by SMASH; @off_chain_pools@ feature.
 newtype DelistedPool = DelistedPool
   { delistedPoolHashRaw :: ByteString
   }
   deriving stock (Eq, Show)
 
--- | The @reserved_pool_ticker@ table. Unique on @name@.
+-- | Unique on @name@.
 -- Maintained by SMASH; @off_chain_pools@ feature.
 data ReservedPoolTicker = ReservedPoolTicker
   { reservedPoolTickerName     :: !Text

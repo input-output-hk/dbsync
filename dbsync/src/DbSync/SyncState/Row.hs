@@ -1,12 +1,6 @@
 -- | Thin hasql wrapper around the @dbsync_sync_state@ singleton row.
---
--- Owns connection lifecycle and IO-level error mapping. The schema
--- type 'SyncStateRow', encoders\/decoders, and 'Statement' bindings
--- live in @dbsync-db@ and are re-exported here for convenience.
---
--- libpq handles the loader-stream transport in
--- 'DbSync.Db.Loader.Connection'; the control-plane path here goes
--- through hasql.
+-- Owns the control connection and maps IO-level errors. The schema
+-- type, codecs and 'Statement' bindings live in @dbsync-db@.
 module DbSync.SyncState.Row
   ( -- * Row type (re-export from dbsync-db)
     SyncStateRow (..)
@@ -147,7 +141,6 @@ newtype ControlConnection = ControlConnection
   { unControlConnection :: Conn.Connection
   }
 
--- | Access the control connection from env.
 class HasControlConnection env where
   getControlConnection :: env -> ControlConnection
 
@@ -156,8 +149,7 @@ class HasControlConnection env where
 instance HasControlConnection ControlConnection where
   getControlConnection = identity
 
--- | Open a fresh 'ControlConnection'. Throws 'AppDatabaseError' on
--- handshake failure.
+-- | Throws 'AppDatabaseError' on handshake failure.
 openControlConnection :: Settings.Settings -> IO ControlConnection
 openControlConnection settings = do
   result <- Conn.acquire settings
@@ -166,7 +158,6 @@ openControlConnection settings = do
       throwDb $ "Failed to open control connection: " <> show err
     Right c -> pure (ControlConnection c)
 
--- | Release the underlying hasql connection.
 closeControlConnection :: ControlConnection -> IO ()
 closeControlConnection = Conn.release . unControlConnection
 
@@ -188,8 +179,8 @@ readNetwork
 readNetwork = runCtrlStmt "readNetwork" () readNetworkStmt
 
 -- | Overwrite the consumer-owned columns of the singleton row.
--- Throws 'AppDatabaseError' if zero rows are affected (i.e. when
--- 'seedSyncState' was never called).
+-- Throws 'AppDatabaseError' when it affects zero rows, which means
+-- nobody called 'seedSyncState'.
 writeSyncState
   :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => SyncStateRow
@@ -198,8 +189,8 @@ writeSyncState row = do
   n <- runCtrlStmt "writeSyncState" row writeSyncStateStmt
   expectOneRowAffected "writeSyncState" n
 
--- | Insert the singleton row with sensible defaults. Idempotent
--- (@ON CONFLICT DO NOTHING@). Must be invoked once after
+-- | Insert the singleton row with defaults. Idempotent through
+-- @ON CONFLICT DO NOTHING@. Call this once, after
 -- 'DbSync.Db.Schema.Init.initSchema' creates the table.
 seedSyncState
   :: (HasControlConnection env, MonadReader env m, MonadIO m)
@@ -221,8 +212,6 @@ seedSyncState schemaVersion fingerprint ledgerEnabled extractorNames networkMagi
     )
     seedSyncStateStmt
 
--- | Record that a ledger snapshot at the given slot has been
--- successfully written.
 markSnapshotComplete
   :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => Word64
@@ -294,28 +283,24 @@ queryConstitutionByProposal
 queryConstitutionByProposal mProposalId =
   runCtrlStmt "queryConstitutionByProposal" mProposalId selectConstitutionByProposalStmt
 
--- | Set @gov_action_proposal.ratified_epoch@ on the given row.
 markGovActionRatified
   :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => Int64 -> Word64 -> m ()
 markGovActionRatified gid epoch =
   runCtrlStmt "markGovActionRatified" (gid, epoch) updateGovActionRatifiedStmt
 
--- | Set @gov_action_proposal.enacted_epoch@ on the given row.
 markGovActionEnacted
   :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => Int64 -> Word64 -> m ()
 markGovActionEnacted gid epoch =
   runCtrlStmt "markGovActionEnacted" (gid, epoch) updateGovActionEnactedStmt
 
--- | Set @gov_action_proposal.dropped_epoch@ on the given row.
 markGovActionDropped
   :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => Int64 -> Word64 -> m ()
 markGovActionDropped gid epoch =
   runCtrlStmt "markGovActionDropped" (gid, epoch) updateGovActionDroppedStmt
 
--- | Set @gov_action_proposal.expired_epoch@ on the given row.
 markGovActionExpired
   :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => Int64 -> Word64 -> m ()
@@ -326,20 +311,13 @@ markGovActionExpired gid epoch =
 -- * Dedup-store rebuild
 -- ---------------------------------------------------------------------------
 
--- | Rebuild the dedup stores from the rows already committed to
--- PostgreSQL. Each store's counter is left pointing at
--- @max(existingId) + 1@ so subsequent 'lookupOrInsert' allocations
--- don't collide.
+-- | Rebuild the dedup stores from the rows PostgreSQL already holds.
+-- Each store's counter ends at @max(existingId) + 1@, so a later
+-- 'lookupOrInsert' allocation cannot collide. A dedup table missing
+-- from the 'TableDef' list stays empty.
 --
--- The supplied 'TableDef' list determines which tables are queried —
--- a dedup table absent from the active schema (e.g. @script@) is
--- silently skipped, leaving its store empty.
---
--- The 'LsmSession' is needed by 'newStores' to materialise the
--- five LSM tables. Restart-resume callers should pass the same
--- session that the consumer will use; the saved snapshots (if any)
--- carry the table contents from a prior run, and the PG repopulate
--- pass below only bumps the counters.
+-- Pass the same 'LsmSession' the consumer will use: its snapshots
+-- carry the table contents, and this pass only bumps the counters.
 rebuildDedupMaps
   :: ( HasTracer env
      , HasControlConnection env
@@ -376,17 +354,16 @@ rebuildDedupMaps tableDefs lsmSession = do
     populateVotingAnchor (dstVotingAnchor stores)
   pure stores
 
--- | Page size for the boot-time dedup rebuild. Each page is read,
--- inserted into the LSM store, then released before the next, so peak
--- memory stays flat regardless of the table's size.
+-- | Rows per page in the boot-time dedup rebuild. 'cursorInsert'
+-- releases each page before it fetches the next, so peak memory stays
+-- flat whatever the table size.
 dedupPageSize :: Int64
 dedupPageSize = 50000
 
--- | Stream a whole dedup table through a server-side cursor, inserting
--- each fetched page before requesting the next. One sequential scan in
--- physical order — no @ORDER BY@ and no @id@ index — with at most one
--- page resident. The scan runs in a single transaction; boot is
--- single-threaded on the control connection, so holding it open is safe.
+-- | Stream a dedup table through a server-side cursor and insert each
+-- page before requesting the next. The scan runs in physical order,
+-- with no @ORDER BY@ and no @id@ index. Boot is single-threaded on
+-- the control connection, so holding one transaction open is safe.
 cursorInsert
   :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => Text                  -- ^ caller label for errors
@@ -413,8 +390,8 @@ cursorInsert callerName declareStmt fetchStmt insertRow = do
     Left err -> throwDb $ callerName <> ": " <> show err
     Right n -> pure n
 
--- | Cursor name for a table's dedup rebuild. Each rebuild runs in its
--- own transaction, so a per-table name never collides.
+-- | Each rebuild runs in its own transaction, so a per-table name
+-- never collides.
 dedupCursorName :: Text -> Text
 dedupCursorName tableName = "dedup_cur_" <> tableName
 
@@ -499,13 +476,11 @@ populateVotingAnchor store =
 -- * Resume-time cache populate
 -- ---------------------------------------------------------------------------
 
--- | Seed the in-process cost_model dedup cache from PG so a resumed
--- Ingest that re-encounters a known cost model finds the existing
--- row id rather than allocating a fresh one (and conflicting on the
--- UNIQUE(hash) at the LOGGED flip).
---
--- Skipped when @cost_model@ is absent from the active schema —
--- callers run this unconditionally; the empty result is harmless.
+-- | Seed the in-process cost_model dedup cache from PG. A resumed
+-- Ingest that meets a known cost model then finds the existing row
+-- id, instead of allocating a fresh one and conflicting on the
+-- UNIQUE(hash) at the LOGGED flip. Returns an empty map when
+-- @cost_model@ is absent from the active schema.
 populateCostModelCache
   :: ( HasTracer env
      , HasControlConnection env
@@ -532,9 +507,9 @@ populateCostModelCache tableDefs
         )
       pure cache
 
--- | Seed @(tx_hash, proposal_index) -> gov_action_proposal.id@ from PG
--- so vote rows landing in resumed blocks can resolve their proposal
--- targets without a SELECT round-trip.
+-- | Seed @(tx_hash, proposal_index) -> gov_action_proposal.id@ from
+-- PG, so vote rows in resumed blocks resolve their proposal target
+-- without a SELECT round-trip.
 populateGovActionProposalCache
   :: ( HasTracer env
      , HasControlConnection env
@@ -562,9 +537,8 @@ populateGovActionProposalCache tableDefs
         )
       pure cache
 
--- | Wrap one table's repopulation in start/end trace lines and time
--- the inner action. The returned row count from the action is
--- formatted into the completion line.
+-- | Wrap one table's repopulation in start and end trace lines. The
+-- action returns the row count for the completion line.
 timedRebuild
   :: (HasTracer env, MonadReader env m, MonadIO m)
   => Text -> m Int64 -> m ()
@@ -584,8 +558,7 @@ timedRebuild tableName action = do
 -- * Internal: statement runner
 -- ---------------------------------------------------------------------------
 
--- | Run a 'Stmt.Statement' against the env's control connection;
--- lift any 'SessionError' into 'AppDatabaseError'.
+-- | Lifts any 'SessionError' into 'AppDatabaseError'.
 runCtrlStmt
   :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => Text
@@ -599,8 +572,8 @@ runCtrlStmt callerName params stmt = do
     Left err -> throwDb $ callerName <> ": " <> show err
     Right r  -> pure r
 
--- | Throw a uniform diagnostic when an UPDATE\/INSERT didn't affect
--- exactly one row (the singleton-row invariant).
+-- | Enforce the singleton-row invariant: an UPDATE or INSERT must
+-- affect exactly one row.
 expectOneRowAffected
   :: MonadIO m => Text -> Int64 -> m ()
 expectOneRowAffected callerName = \case

@@ -3,14 +3,11 @@
 
 -- | Schema types for boundary-triggered tables beyond @ada_pots@.
 --
--- Two flavours of writer feed this module:
---
---   * 'epoch_boundary' extractor (ledger-only): @epoch_param@,
---     @epoch_state@, @cost_model@. Written once per epoch boundary
---     from 'ApplyResult.apNewEpoch' protocol-parameter data.
---   * 'stake_delegation' extractor (block-extracted, Shelley→Babbage):
---     @pot_transfer@, @treasury@, @reserve@. Written when an
---     @MIRCert@ appears in a transaction.
+-- The ledger-only @epoch_boundary@ extractor writes @epoch_param@,
+-- @epoch_state@ and @cost_model@ once per boundary, from
+-- 'ApplyResult.apNewEpoch'. The block-extracted @stake_delegation@
+-- extractor writes @pot_transfer@, @treasury@ and @reserve@ when a
+-- Shelley-to-Babbage transaction carries an @MIRCert@.
 module DbSync.Db.Schema.EpochBoundary
   ( -- * Schema types
     EpochParam (..)
@@ -119,13 +116,12 @@ type instance Key Reserve = ReserveId
 -- * Schema types
 -- ---------------------------------------------------------------------------
 
--- | The @epoch_param@ table — one row per epoch carrying the
--- consensus-level protocol parameters in effect for that epoch.
+-- | One row per epoch, carrying the protocol parameters in effect for
+-- that epoch.
 --
--- 53 columns. Most Conway-era fields are nullable because they have
--- no Shelley\/Allegra\/Mary equivalent. @cost_model_id@ is a
--- nullable FK to 'CostModel' (the Alonzo cost-models become
--- available from Alonzo onwards).
+-- Most Conway-era fields are nullable, because they have no Shelley,
+-- Allegra or Mary equivalent. @cost_model_id@ is a nullable FK to
+-- 'CostModel': cost models start at Alonzo.
 data EpochParam = EpochParam
   { epochParamEpochNo                    :: !Word64
   , epochParamMinFeeA                    :: !Word64
@@ -184,11 +180,9 @@ data EpochParam = EpochParam
   }
   deriving stock (Eq, Show)
 
--- | The @epoch_state@ table — Conway-era governance snapshot at
--- each epoch boundary. All three FK columns are nullable: the
--- snapshot may reference the latest enacted committee \/
--- no-confidence \/ constitution rows (or 'Nothing' if none has been
--- enacted yet).
+-- | The Conway-era governance snapshot at one epoch boundary. Each FK
+-- points at the latest enacted committee, no-confidence or constitution
+-- row. 'Nothing' means nothing of that kind is enacted yet.
 data EpochState = EpochState
   { epochStateCommitteeId    :: !(Maybe CommitteeId)
   , epochStateNoConfidenceId :: !(Maybe GovActionProposalId)
@@ -197,20 +191,17 @@ data EpochState = EpochState
   }
   deriving stock (Eq, Show)
 
--- | The @cost_model@ table — Plutus cost model JSON keyed by its
--- canonical hash. Multiple @epoch_param@ \/ @param_proposal@ rows
--- can reference the same cost model so callers dedup on @hash@
--- before writing.
+-- | Plutus cost model JSON, keyed by its canonical hash. Many
+-- @epoch_param@ and @param_proposal@ rows can reference one cost model,
+-- so the caller dedups on @hash@ before it writes.
 data CostModel = CostModel
   { costModelCosts :: !Text       -- ^ JSONB body
   , costModelHash  :: !ByteString -- ^ 32-byte Blake2b hash of the canonical CBOR
   }
   deriving stock (Eq, Show)
 
--- | The @pot_transfer@ table — one row per pot-to-pot MIR
--- certificate (Shelley→Babbage). Carries both deltas signed via
--- 'DbInt65' because each row represents a transfer in one
--- direction.
+-- | One row per pot-to-pot MIR certificate (Shelley to Babbage). Each row
+-- is a transfer in one direction, so both deltas are signed 'DbInt65'.
 data PotTransfer = PotTransfer
   { potTransferCertIndex :: !Word16
   , potTransferTreasury  :: !DbInt65
@@ -219,8 +210,8 @@ data PotTransfer = PotTransfer
   }
   deriving stock (Eq, Show)
 
--- | The @treasury@ table — one row per stake address that
--- receives a treasury MIR payout in a given transaction.
+-- | One row per stake address that receives a treasury MIR payout in one
+-- transaction.
 data Treasury = Treasury
   { treasuryAddrId    :: !StakeAddressId
   , treasuryCertIndex :: !Word16
@@ -229,8 +220,8 @@ data Treasury = Treasury
   }
   deriving stock (Eq, Show)
 
--- | The @reserve@ table — one row per stake address that receives
--- a reserves MIR payout in a given transaction.
+-- | One row per stake address that receives a reserves MIR payout in one
+-- transaction.
 data Reserve = Reserve
   { reserveAddrId    :: !StakeAddressId
   , reserveCertIndex :: !Word16
@@ -243,12 +234,11 @@ data Reserve = Reserve
 -- * Table definitions
 -- ---------------------------------------------------------------------------
 
--- | 53-column @epoch_param@. Rational parameters ride @numeric@
--- columns. Conway-era fields (committee thresholds, gov-action
--- params) are all nullable.
+-- | Rational parameters use @numeric@ columns. Every Conway-era field —
+-- committee thresholds, gov-action params — is nullable.
 --
--- UNIQUE on @epoch_no@: one row per epoch. A rollback re-crossing
--- the boundary refreshes the row (including @block_id@) via upsert.
+-- UNIQUE on @epoch_no@ gives one row per epoch. A rollback that re-crosses
+-- the boundary upserts the row, @block_id@ included.
 epochParamTableDef :: TableDef
 epochParamTableDef = TableDef
   { tdName    = "epoch_param"
@@ -321,9 +311,9 @@ epochParamTableDef = TableDef
       ]
   }
 
--- | 4-column @epoch_state@. All three FK columns are nullable; the
--- writer sets them based on what governance state is enacted at
--- the boundary. UNIQUE on @epoch_no@: one row per epoch.
+-- | All three FK columns are nullable. The writer sets them from the
+-- governance state enacted at the boundary. UNIQUE on @epoch_no@ gives
+-- one row per epoch.
 epochStateTableDef :: TableDef
 epochStateTableDef = TableDef
   { tdName    = "epoch_state"
@@ -344,8 +334,8 @@ epochStateTableDef = TableDef
   , tdParentRefs       = []
   }
 
--- | 3-column @cost_model@. @costs@ is JSONB; PostgreSQL parses it
--- on insert from the COPY text. UNIQUE on @hash@ — the dedup key.
+-- | @costs@ is a JSONB column, and PostgreSQL parses it on insert from
+-- the COPY text. @hash@ is the dedup key, so it carries the UNIQUE.
 costModelTableDef :: TableDef
 costModelTableDef = TableDef
   { tdName    = "cost_model"
@@ -364,7 +354,7 @@ costModelTableDef = TableDef
   , tdParentRefs       = []
   }
 
--- | 5-column @pot_transfer@. UNIQUE on @(tx_id, cert_index)@.
+-- | UNIQUE on @(tx_id, cert_index)@.
 potTransferTableDef :: TableDef
 potTransferTableDef = TableDef
   { tdName    = "pot_transfer"
@@ -387,7 +377,7 @@ potTransferTableDef = TableDef
       ]
   }
 
--- | 5-column @treasury@. UNIQUE on @(addr_id, tx_id)@.
+-- | UNIQUE on @(addr_id, tx_id)@.
 treasuryTableDef :: TableDef
 treasuryTableDef = TableDef
   { tdName    = "treasury"
@@ -410,7 +400,7 @@ treasuryTableDef = TableDef
       ]
   }
 
--- | 5-column @reserve@. UNIQUE on @(addr_id, tx_id)@.
+-- | UNIQUE on @(addr_id, tx_id)@.
 reserveTableDef :: TableDef
 reserveTableDef = TableDef
   { tdName    = "reserve"

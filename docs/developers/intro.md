@@ -9,7 +9,7 @@ sidebar_position: 1
 
 dbsync follows a running Cardano node over a node-to-client (n2c) Unix
 socket and projects on-chain data into a PostgreSQL schema you control
-table by table via **profiles**.
+table by table through the config's `extractors` block.
 
 This section is for contributors working on dbsync itself — writing
 extractors, extending the schema, evolving the phase machinery, or
@@ -18,10 +18,10 @@ node, head to the [Users section](/users/intro) instead.
 
 ## The shape
 
-The hot path has four logical stages plus a phase-specific writer that
-swaps between bulk-load and chain-tip following. The COPY path drives the
-catch-up; the hasql path drives steady state. Both are in play across the
-lifetime of a sync.
+The hot path has four logical stages: receiver, parser, extractors, and a
+phase-specific writer. The writer is what swaps between bulk-load and
+chain-tip following. The COPY path drives the catch-up; the hasql path
+drives steady state. Both are in play across the lifetime of a sync.
 
 ```mermaid
 flowchart TD
@@ -54,10 +54,13 @@ fetcher, tx-out worker), boot decisions, threading — is
 dbsync moves through four phases as it catches up to the chain tip and
 stays there:
 
-`IngestChainHistory → PreparingForVolatileTail → FollowingVolatileTail ⇄ FollowingChainTip`
+`IngestChainHistory → PreparingForVolatileTail → FollowingVolatileTail → FollowingChainTip`
 
-The pipeline shape above is identical across the run; only the writer
-changes between phases, along with how row IDs are obtained.
+The last arrow is one-way. Only a `MsgRollback` returns the phase to
+`FollowingVolatileTail`, and that path runs a full DELETE cascade.
+
+The pipeline shape above is identical across the run. Only the writer
+changes between phases, along with how row ids are obtained.
 [Sync phases](phases/overview) covers the state machine and the
 transitions.
 
@@ -68,7 +71,7 @@ transitions.
 - **[Repository layout](repository-layout)** — annotated module map of the
   workspace.
 - **[Sync phases](phases/overview)** — the four-phase state machine.
-- **[Extractors](extractors/anatomy)** — how projections work and how to
+- **[Extractors](extractors/anatomy)** — how extractors work and how to
   add one.
 - **[Schema layer](schema-layer)** — DDL generation, COPY encoders, hasql
   statements.

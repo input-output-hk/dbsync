@@ -20,9 +20,9 @@ import DbSync.Db.Statement.Transaction (beginSql, commitSql, rollbackSql)
 class HasHasqlConnection env where
   getHasqlConnection :: env -> Conn.Connection
 
--- | Self-instance so boot-time / test code can drive
+-- | Self-instance so boot and test code can run
 -- 'HasHasqlConnection'-polymorphic helpers via @runAppM conn ...@
--- without building a phase env.
+-- without a phase env.
 instance HasHasqlConnection Conn.Connection where
   getHasqlConnection = identity
 
@@ -37,9 +37,8 @@ withTransaction action = do
   conn <- asks getHasqlConnection
   withTransactionOn conn action
 
--- | As 'withTransaction' but takes the connection explicitly. Used
--- by call sites that don't (yet) have a 'HasHasqlConnection' env in
--- scope.
+-- | As 'withTransaction', but for call sites with no
+-- 'HasHasqlConnection' env in scope.
 withTransactionOn
   :: MonadUnliftIO m
   => Conn.Connection

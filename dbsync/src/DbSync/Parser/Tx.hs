@@ -158,9 +158,7 @@ import DbSync.Parser.Types
 -- * Shared helpers
 -- ---------------------------------------------------------------------------
 
--- | Transaction hash as raw bytes.
---
--- In cardano-node 10.7.1 the @Tx@ / @TxBody@ type families gained a @TxLevel@
+-- | In cardano-node 10.7.1 the @Tx@ / @TxBody@ type families gained a @TxLevel@
 -- parameter (e.g. @Core.Tx Core.TopTx era@).  Helpers stay polymorphic in the
 -- level variable @l@ so they work for both top-level and (future) inner
 -- transactions.  Top-level entry points (@fromShelleyTx@ etc.) use
@@ -174,21 +172,18 @@ txHashId = Crypto.hashToBytes . extractHash . txSafeHash
 txSafeHash :: Core.EraTx era => Core.Tx l era -> SafeHash EraIndependentTxBody
 txSafeHash tx = Core.hashAnnotated (tx ^. Core.bodyTxL)
 
--- | Transaction size in bytes.
 getTxSize :: Core.EraTx era => Core.Tx l era -> Word64
 getTxSize tx = fromIntegral $ tx ^. Core.sizeTxF
 
--- | Raw CBOR bytes of the full transaction (for tx_cbor table).
+-- | Feeds the @tx_cbor@ table.
 getTxCborBytes :: (Core.EraTx era, Typeable l) => Core.Tx l era -> ByteString
 getTxCborBytes = toStrictBytes . serialize'
   where
     toStrictBytes = toS
 
--- | Extract inputs from a transaction body.
 mkTxIn :: Core.EraTxBody era => Core.TxBody l era -> [GenericTxIn]
 mkTxIn txBody = map fromTxIn $ toList $ txBody ^. Core.inputsTxBodyL
 
--- | Convert a single ledger TxIn.
 fromTxIn :: Ledger.TxIn -> GenericTxIn
 fromTxIn (Ledger.TxIn (Ledger.TxId txid) (TxIx ix)) =
   GenericTxIn
@@ -197,7 +192,7 @@ fromTxIn (Ledger.TxIn (Ledger.TxId txid) (TxIx ix)) =
     , txInRedeemerIx = Nothing
     }
 
--- | Extract outputs from a Shelley/Allegra body (Coin-only, no multi-assets).
+-- | Shelley and Allegra outputs are Coin-only, with no multi-assets.
 mkTxOutCoin ::
   forall l era.
   (Core.EraTxBody era, Core.Value era ~ Coin) =>
@@ -219,7 +214,7 @@ mkTxOutCoin txBody = zipWith fromCoinTxOut [0 ..] $ toList (txBody ^. Core.outpu
         , txOutMultiAssets  = []
         }
 
--- | Extract outputs from a Mary+ body (with multi-asset values).
+-- | Mary+ outputs carry multi-asset values.
 --
 -- The datum extractor varies by era: Mary uses @\\_ -> (Nothing, Nothing)@,
 -- Alonzo uses 'getAlonzoDatum', Babbage+ uses 'getBabbageDatum'. It
@@ -261,7 +256,6 @@ mkMaryTxOut datum refScript idx txOut =
     , txOutMultiAssets = flattenMultiAsset multiAsset
     }
 
--- | Extract withdrawals. Uses 'EraTxBody' constraint which works across all eras.
 mkTxWithdrawals :: Core.EraTxBody era => Core.TxBody l era -> [GenericTxWithdrawal]
 mkTxWithdrawals bd =
   map fromWithdrawal $ Map.toList $ Ledger.unWithdrawals $ bd ^. Core.withdrawalsTxBodyL
@@ -273,8 +267,7 @@ mkTxWithdrawals bd =
         , txwRedeemerIx    = Nothing
         }
 
--- | Extract certificates from a Shelley-Babbage era tx body.
--- These eras share the ShelleyTxCert certificate type.
+-- | The Shelley to Babbage eras share the ShelleyTxCert type.
 mkTxCertificatesShelleyEra :: Core.EraTxBody era => (Core.TxCert era -> CertAction) -> Core.TxBody l era -> [GenericTxCertificate]
 mkTxCertificatesShelleyEra convert bd =
   zipWith toCert [0 ..] $ toList (bd ^. Core.certsTxBodyL)
@@ -286,9 +279,7 @@ mkTxCertificatesShelleyEra convert bd =
         , txCertRedeemerIx = Nothing
         }
 
--- | Convert a ShelleyTxCert (any Shelley-Babbage era) to CertAction.
---
--- Genesis-key delegation certs are pre-Shelley housekeeping with no
+-- | Genesis-key delegation certs are pre-Shelley housekeeping with no
 -- downstream consumer; the parser collapses them into 'CertOther'
 -- and the downstream extractors ignore them.
 shelleyCertToAction
@@ -325,16 +316,13 @@ mirCertAction mc =
     deltaCoinToInteger :: DeltaCoin -> Integer
     deltaCoinToInteger (DeltaCoin i) = i
 
--- | Convert a ConwayTxCert to CertAction.
 conwayCertToAction :: ConwayTxCert era -> CertAction
 conwayCertToAction = \case
   ConwayTxCertDeleg deleg -> conwayDelegAction deleg
   ConwayTxCertPool pool   -> poolCertAction pool
   ConwayTxCertGov gov     -> conwayGovAction gov
 
--- | Convert a DijkstraTxCert to CertAction.
---
--- Dijkstra ships its own 'DijkstraTxCert' wrapper but the delegation
+-- | Dijkstra ships its own 'DijkstraTxCert' wrapper but the delegation
 -- and governance payloads are byte-identical to Conway's. We funnel
 -- both into the same 'CertAction' so downstream extractors stay
 -- era-agnostic.
@@ -344,9 +332,7 @@ dijkstraCertToAction = \case
   DijkstraTxCertPool pool   -> poolCertAction pool
   DijkstraTxCertGov gov     -> conwayGovAction gov
 
--- | Convert Dijkstra delegation cert subtypes.
---
--- Dijkstra renamed Conway's @ConwayRegCert@ / @ConwayUnRegCert@ to
+-- | Dijkstra renamed Conway's @ConwayRegCert@ / @ConwayUnRegCert@ to
 -- @DijkstraRegCert@ / @DijkstraUnRegCert@, which are now mandatory-
 -- deposit (no @StrictMaybe@). Otherwise structurally identical.
 dijkstraDelegAction :: DijkstraDelegCert -> CertAction
@@ -373,7 +359,6 @@ dijkstraDelegAction = \case
     DelegStakeVote poolHash drep ->
       CertConwayDelegStakeVote (credToCredHash cred) (keyHashToBytes poolHash) (drepToIdent drep) (Just $ coinToWord64 deposit)
 
--- | Convert Shelley delegation cert subtypes.
 shelleyDelegAction :: ShelleyDelegCert -> CertAction
 shelleyDelegAction = \case
   ShelleyRegCert cred   -> CertStakeRegistration (credToCredHash cred) Nothing
@@ -381,7 +366,6 @@ shelleyDelegAction = \case
   ShelleyDelegCert cred poolHash ->
     CertDelegation (credToCredHash cred) (keyHashToBytes poolHash)
 
--- | Convert Conway delegation cert subtypes.
 conwayDelegAction :: ConwayDelegCert -> CertAction
 conwayDelegAction = \case
   ConwayRegCert cred mDeposit ->
@@ -408,7 +392,6 @@ conwayDelegAction = \case
       -- deposit signals the stake-registration half so it is not lost.
       CertConwayDelegStakeVote (credToCredHash cred) (keyHashToBytes poolHash) (drepToIdent drep) (Just $ coinToWord64 mDeposit)
 
--- | Convert Conway governance cert subtypes.
 conwayGovAction :: ConwayGovCert -> CertAction
 conwayGovAction = \case
   ConwayRegDRep cred coin mAnchor ->
@@ -422,7 +405,7 @@ conwayGovAction = \case
   ConwayUpdateDRep cred mAnchor ->
     CertDRepUpdate (credToCredHash cred) (anchorData <$> strictMaybeToMaybe mAnchor)
 
--- | Project a ledger 'Ledger.DRep' into our three-way 'DRepIdent'.
+-- | Maps a ledger 'Ledger.DRep' onto the three-way 'DRepIdent'.
 drepToIdent :: Ledger.DRep -> DRepIdent
 drepToIdent = \case
   Ledger.DRepCredential cred    -> DRepCred (credToCredHash cred)
@@ -436,7 +419,7 @@ anchorData a = AnchorData
   , adHash = Crypto.hashToBytes (extractHash (anchorDataHash a))
   }
 
--- | Convert a pool certificate (shared between Shelley and Conway).
+-- | Shelley and Conway share this certificate shape.
 poolCertAction :: Core.PoolCert -> CertAction
 poolCertAction = \case
   Core.RegPool params ->
@@ -444,7 +427,6 @@ poolCertAction = \case
   Core.RetirePool poolHash epochNo ->
     CertPoolRetirement (keyHashToBytes poolHash) (unEpochNo epochNo)
 
--- | Extract pool registration data from StakePoolParams.
 poolParamsToData :: PoolP.StakePoolParams -> PoolRegistrationData
 poolParamsToData pp = PoolRegistrationData
   { prdPoolHash    = keyHashToBytes (PoolP.sppId pp)
@@ -458,7 +440,6 @@ poolParamsToData pp = PoolRegistrationData
   , prdMetadata    = poolMetadataToData <$> strictMaybeToMaybe (PoolP.sppMetadata pp)
   }
 
--- | Convert a pool relay to our generic type.
 relayToData :: PoolP.StakePoolRelay -> PoolRelayData
 relayToData = \case
   PoolP.SingleHostAddr mPort mIpv4 mIpv6 ->
@@ -473,9 +454,7 @@ relayToData = \case
   PoolP.MultiHostName name ->
     PoolRelayDnsSrv (dnsToText name)
 
--- | Convert pool metadata to (URL, hash).
---
--- In cardano-node 10.7.1, @PoolP.pmHash@ now returns @ByteArray@ rather
+-- | In cardano-node 10.7.1, @PoolP.pmHash@ now returns @ByteArray@ rather
 -- than a bare @ByteString@, so we wrap the conversion in a local
 -- @byteArrayToSBS@ helper.
 poolMetadataToData :: PoolP.PoolMetadata -> (Text, ByteString)
@@ -499,12 +478,10 @@ credToCredHash (Ledger.ScriptHashObj (Core.ScriptHash h)) =
 credBytes :: Ledger.Credential kr -> ByteString
 credBytes = chHash . credToCredHash
 
--- | Serialise a KeyHash to raw bytes.
 keyHashToBytes :: Ledger.KeyHash r -> ByteString
 keyHashToBytes (Ledger.KeyHash h) = Crypto.hashToBytes h
 
--- | Project the era-specific auxiliary data, if present.
--- Per-era 'from*Metadata' helpers consume this to recover the
+-- | The per-era 'from*Metadata' helpers read this to recover the
 -- @Map Word64 Metadatum@.
 getTxAuxData :: Core.EraTx era => Core.Tx l era -> Maybe (Core.TxAuxData era)
 getTxAuxData tx = strictMaybeToMaybe (tx ^. Core.auxDataTxL)
@@ -518,7 +495,6 @@ getInterval txBody =
   where
     interval = txBody ^. vldtTxBodyL
 
--- | Sum of output values.
 sumOutputValues :: [GenericTxOut] -> Word64
 sumOutputValues = sum . map txOutValue
 
@@ -527,7 +503,6 @@ totalCollateral :: Core.BabbageEraTxBody era => Core.TxBody Core.TopTx era -> Wo
 totalCollateral txBody =
   maybe 0 (fromIntegral . unCoin) (strictMaybeToMaybe (txBody ^. Core.totalCollateralTxBodyL))
 
--- | Extract minting from a Mary+ body as flat list.
 getMint :: MaryEraTxBody era => Core.TxBody l era -> [(ByteString, ByteString, Integer)]
 getMint txBody = flattenMultiAsset (txBody ^. mintTxBodyL)
 
@@ -542,7 +517,7 @@ flattenMultiAsset (MultiAsset m) =
     policyIdBytes (PolicyID (Core.ScriptHash h)) = Crypto.hashToBytes h
     assetNameBytes' (AssetName sbs) = SBS.fromShort sbs
 
--- | Extract collateral inputs (Alonzo+ eras).
+-- | Alonzo+ eras only.
 --
 -- 'collateralInputsTxBodyL' only exists for top-level transactions, so this
 -- helper specialises to @Core.TopTx@ rather than being polymorphic in the
@@ -550,7 +525,7 @@ flattenMultiAsset (MultiAsset m) =
 mkCollTxIn :: AlonzoEraTxBody era => Core.TxBody Core.TopTx era -> [GenericTxIn]
 mkCollTxIn txBody = map fromTxIn $ toList $ txBody ^. collateralInputsTxBodyL
 
--- | Extract reference inputs (Babbage+ eras).
+-- | Babbage+ eras only.
 mkRefTxIn :: BabbageEraTxBody era => Core.TxBody Core.TopTx era -> [GenericTxIn]
 mkRefTxIn txBody = map fromTxIn $ toList $ txBody ^. referenceInputsTxBodyL
 
@@ -575,9 +550,9 @@ getPlutusScriptSizesSum tx =
       Alonzo.PlutusScript ps  ->
         Just $ fromIntegral $ SBS.length $ Alonzo.unPlutusBinary $ Alonzo.plutusScriptBinary ps
 
--- | Datum projection for an Alonzo TxOut: the @(data_hash, inline)@
--- pair. Alonzo outputs only ever carry hashes, never inline datums, so
--- the second component is always 'Nothing'.
+-- | The @(data_hash, inline)@ pair of an Alonzo TxOut. An Alonzo
+-- output carries a hash and never an inline datum, so the second
+-- component is always 'Nothing'.
 getAlonzoDatum
   :: ( Alonzo.AlonzoEraTxOut era
      , Core.TxOut era ~ Alonzo.AlonzoTxOut era
@@ -588,10 +563,10 @@ getAlonzoDatum txOut =
     Nothing -> (Nothing, Nothing)
     Just dh -> (Just (Crypto.hashToBytes (extractHash dh)), Nothing)
 
--- | Datum projection for a Babbage+ TxOut: the @(data_hash, inline)@
--- pair. A hash-only output yields just the hash; an inline datum yields
--- both the hash and the 'GenericTxDatum' (CBOR + JSON) so the UTxO
--- extractor can write the deduplicated @datum@ row and the FK.
+-- | The @(data_hash, inline)@ pair of a Babbage+ TxOut. A hash-only
+-- output gives just the hash. An inline datum gives the hash and the
+-- 'GenericTxDatum' (CBOR plus JSON), so the UTxO extractor writes the
+-- deduplicated @datum@ row and the FK.
 getBabbageDatum
   :: ( Core.BabbageEraTxOut era
      , Core.TxOut era ~ Babbage.BabbageTxOut era
@@ -639,8 +614,7 @@ scriptHashBytes (Core.ScriptHash h) = Crypto.hashToBytes h
 dataHashBytes :: Core.SafeHash Core.EraIndependentData -> ByteString
 dataHashBytes = Crypto.hashToBytes . extractHash
 
--- | Extract the Shelley-era native scripts (witness set only;
--- Shelley aux data carries no scripts).
+-- | Witness set only: Shelley aux data carries no scripts.
 shelleyScripts
   :: Core.Tx Core.TopTx ShelleyEra -> [GenericTxScript]
 shelleyScripts tx =
@@ -655,7 +629,7 @@ shelleyScripts tx =
       , gtsSerialisedSize = Nothing
       }
 
--- | Extract Allegra/Mary-era timelock scripts from witness set and
+-- | Allegra and Mary timelock scripts, from the witness set and the
 -- aux data.
 timelockScripts
   :: forall era.
@@ -689,8 +663,8 @@ timelockScripts tx =
         indexed (Allegra.AllegraTxAuxData _ scrs) =
           [ (Core.hashScript @era s, s) | s <- toList scrs ]
 
--- | Extract scripts (native and Plutus) from the witness set and
--- auxiliary data. The caller supplies the Plutus-version mapping
+-- | Native and Plutus scripts, from the witness set and the auxiliary
+-- data. The caller supplies the Plutus-version mapping
 -- so the same body works for Alonzo, Babbage, and Conway.
 alonzoEraScripts
   :: forall era.
@@ -835,7 +809,7 @@ dijkstraPlutusType = \case
   DijkstraPlutusV3 _ -> PlutusV3
   DijkstraPlutusV4 _ -> PlutusV4
 
--- | Extract Plutus datum witnesses (Alonzo+).
+-- | Alonzo+ eras only.
 witnessDatums
   :: forall era l.
      ( Alonzo.AlonzoEraScript era
@@ -854,14 +828,13 @@ witnessDatums tx =
       , gtdValue = Just (ScriptData.plutusDataToJson d)
       }
 
--- | Extract Plutus redeemer witnesses (Alonzo+).
+-- | Alonzo+ eras only.
 --
--- The per-era purpose projection returns @(tag, index)@ so the
--- enum and the index come from the same constructor match. The
--- item projection recovers the witnessed script hash from the
--- pointer resolved against the tx body; a dangling pointer (the
--- ledger validates redeemer sets only for phase-2-valid txs)
--- leaves the hash 'Nothing'.
+-- The per-era purpose helper returns @(tag, index)@, so the enum and
+-- the index come from one constructor match. The item helper recovers
+-- the witnessed script hash from the pointer, resolved against the tx
+-- body. A dangling pointer leaves the hash 'Nothing', because the
+-- ledger validates redeemer sets only for phase-2-valid txs.
 witnessRedeemers
   :: forall era l.
      ( Alonzo.AlonzoEraTxWits era
@@ -1386,10 +1359,9 @@ fromDijkstraTx (blkIndex, tx) =
 -- * Governance extraction (Conway+)
 -- ---------------------------------------------------------------------------
 
--- | Build the list of 'GenericParamProposal' rows from a Shelley-Babbage
--- tx body's 'Shelley.updateTxBodyL' lens, using the supplied per-era
--- converter. Conway+ has no 'updateTxBodyL' so the field stays @[]@ for
--- those eras.
+-- | Reads a Shelley-Babbage tx body's 'Shelley.updateTxBodyL' lens
+-- through the supplied per-era converter. Conway+ has no
+-- 'updateTxBodyL', so the field stays @[]@ there.
 mkParamProposalsUpdate
   :: Shelley.ShelleyEraTxBody era
   => (EpochNo -> Shelley.ProposedPPUpdates era -> [PP.GenericParamProposal])
@@ -1400,9 +1372,8 @@ mkParamProposalsUpdate convert txBody =
     Nothing -> []
     Just (Shelley.Update pp epoch) -> convert epoch pp
 
--- | Extract the proposals from a Conway-era tx body. Dijkstra mirrors
--- this shape once the @DijkstraTxBody@ proposal lens lands; for now
--- 'fromDijkstraTx' emits @[]@ directly.
+-- | Dijkstra takes this same shape once the @DijkstraTxBody@ proposal
+-- lens lands upstream; until then 'fromDijkstraTx' emits @[]@.
 conwayProposals
   :: Core.TxBody Core.TopTx ConwayEra
   -> [GenericGovActionProposal]
@@ -1437,9 +1408,8 @@ conwayProposals txBody =
         nulPlaceholder = Aeson.object
           [ ("error", Aeson.String "Gov action description contains a Unicode NUL (\\u0000), which PostgreSQL cannot store.") ]
 
--- | Project a Conway-era 'GovAction' into our 'GenericGovAction' ADT.
--- Conway's @ParameterChange@ embeds a 'PParamsUpdate ConwayEra' that
--- we flatten via 'PP.convertConwayParamProposal'.
+-- | Conway's @ParameterChange@ embeds a 'PParamsUpdate ConwayEra',
+-- which 'PP.convertConwayParamProposal' flattens.
 convertGovAction :: GovAction ConwayEra -> GenericGovAction
 convertGovAction = \case
   ParameterChange prev pparams scriptH ->
@@ -1477,12 +1447,10 @@ convertGovAction = \case
         (constitution ^. constitutionGuardrailsScriptHashL))
   InfoAction -> GovInfoAction
 
--- | Unwrap a 'GovPurposeId' to our 'GovActionRef'.
 govPurposeRef :: GovPurposeId p -> GovActionRef
 govPurposeRef (GovPurposeId gaid) = govActionRef gaid
 
--- | Project a 'GovActionId' (the ledger's @(tx-id, index)@ pair) into our
--- 'GovActionRef'.
+-- | A 'GovActionId' is the ledger's @(tx-id, index)@ pair.
 govActionRef :: GovActionId -> GovActionRef
 govActionRef (GovActionId (Ledger.TxId txid) (GovActionIx ix)) =
   GovActionRef
@@ -1490,15 +1458,14 @@ govActionRef (GovActionId (Ledger.TxId txid) (GovActionIx ix)) =
     , garIndex  = fromIntegral ix
     }
 
--- | Extract the votes from a Conway-era tx body. The voter-by-voter
--- map is flattened into one 'GenericVotingProcedure' per
--- @(voter, gov-action)@ pair, with 'gvpTxIndex' counting from zero
--- within each voter's slice. Vote redeemers point at voters, so the
--- position from the vote-redeemer map lands on every row of the
--- voter's slice.
+-- | Flattens the voter-by-voter map into one
+-- 'GenericVotingProcedure' per @(voter, gov-action)@ pair.
+-- 'gvpTxIndex' counts from zero inside each voter's slice. A vote
+-- redeemer points at a voter, so its position lands on every row of
+-- that voter's slice.
 --
--- Dijkstra mirrors this shape once the @DijkstraTxBody@ voting lens
--- lands; for now 'fromDijkstraTx' emits @[]@ directly.
+-- Dijkstra takes this same shape once the @DijkstraTxBody@ voting lens
+-- lands upstream; until then 'fromDijkstraTx' emits @[]@.
 conwayVotingProcedures
   :: Core.TxBody Core.TopTx ConwayEra
   -> Map Word32 Word64
@@ -1527,9 +1494,8 @@ conwayVotingProcedures txBody voteRedeemers =
         , gvpRedeemerIx  = redeemerIx
         }
 
--- | Project a ledger 'Voter' into our 'GenericVoter' ADT. The
--- committee arm carries the @has_script@ flag so the dedup pass
--- writes a single @committee_hash@ row per @(raw, has_script)@.
+-- | The committee arm carries the @has_script@ flag, so the dedup
+-- pass writes one @committee_hash@ row per @(raw, has_script)@.
 convertVoter :: Voter -> GenericVoter
 convertVoter = \case
   DRepVoter cred       -> VoterDRep (credToDRep cred)

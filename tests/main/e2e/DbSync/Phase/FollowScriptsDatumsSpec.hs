@@ -50,7 +50,7 @@ import qualified Cardano.Mock.Forging.Types as Mock
 import DbSync.App.Config.Types
   ( SyncConfig (..)
   , OptionFlag (..)
-  , DbProfile (..)
+  , Extractors (..)
   )
 import DbSync.Db.Schema.Core (blockTableDef, txTableDef)
 import DbSync.Db.Schema.MultiAsset (maTxMintTableDef)
@@ -468,15 +468,15 @@ spec = describe "Follow scripts/datums writes" $ do
           fkRows `shouldBe` "0"
 
 -- ---------------------------------------------------------------------------
--- * Profile
+-- * Config
 -- ---------------------------------------------------------------------------
 
--- | 'ledgerEnabledTestConfig' with @pcScriptsDatums@ flipped on.
+-- | 'ledgerEnabledTestConfig' with @exScriptsDatums@ flipped on.
 scriptsDatumsTestProfile :: SyncConfig
 scriptsDatumsTestProfile =
   ledgerEnabledTestConfig
-    { scDbProfile = (scDbProfile ledgerEnabledTestConfig)
-        { pcScriptsDatums = OptionFlag True
+    { scExtractors = (scExtractors ledgerEnabledTestConfig)
+        { exScriptsDatums = OptionFlag True
         }
     }
 

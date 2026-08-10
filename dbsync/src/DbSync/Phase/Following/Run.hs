@@ -3,17 +3,13 @@
 {-# LANGUAGE NumericUnderscores #-}
 
 -- | The Follow loop: per-block INSERT against PG with rollback
--- support. Drives both the 'FollowingVolatileTail' and
--- 'FollowingChainTip' phases; the only behavioural difference is
--- the phase tag itself, which flips between the two as the consumer
--- catches up with or falls behind the receiver.
---
--- The loop reads one 'ChainSyncMsg' at a time from 'feBlockQueue'
+-- support. It reads one 'ChainSyncMsg' at a time from 'feBlockQueue'
 -- and either applies a forward block in its own PG transaction, or
--- runs the rollback cascade for a 'MsgRollback' marker. Between
--- messages the loop also fires an idle heartbeat every
--- 'idleHeartbeatMicros' microseconds while in 'FollowingChainTip',
--- so a quiet chain doesn't look like a stalled app at Info level.
+-- runs the rollback cascade for a 'MsgRollback' marker.
+--
+-- The loop drives both 'FollowingVolatileTail' and
+-- 'FollowingChainTip'. Only the phase tag differs, and it flips as
+-- the consumer catches up with or falls behind the receiver.
 module DbSync.Phase.Following.Run
   ( run
   , shouldFlipToTip
@@ -51,7 +47,7 @@ import DbSync.Db.Statement.Transaction (beginSql, commitSql, rollbackSql)
 import DbSync.App.Config.Types
   ( SyncConfig (..)
   , OptionFlag (..)
-  , DbProfile (..)
+  , Extractors (..)
   , UtxoOption (..)
   )
 import DbSync.App.Env (CoreEnv (..), FollowEnv (..), HasConfig (..), HasNetwork)
@@ -95,30 +91,26 @@ import DbSync.Error (AppError (..), BlockAnnotation (..))
 import DbSync.Trace.Timing (fmtCount, fmtDuration, fmtF2)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 
--- | Cadence for the periodic Follow-loop progress log while in
--- 'FollowingVolatileTail'. In 'FollowingChainTip' the loop logs every
--- applied block instead so the operator has per-block visibility at
--- mainnet's ~20 s/block cadence.
+-- | Cadence for the periodic progress log in
+-- 'FollowingVolatileTail'. 'FollowingChainTip' logs every applied
+-- block instead.
 logEveryNBlocks :: Word64
 logEveryNBlocks = 100
 
--- | Maximum quiet period before the Follow loop emits a
--- "still at tip" heartbeat. Only fires in 'FollowingChainTip'; in
--- 'FollowingVolatileTail' the windowed summary covers visibility.
--- 30 s gives the operator a clear stall signal without flooding logs
--- during normal block gaps (mainnet caps at ~40 s on a missed-slot
--- pair).
+-- | Longest quiet period before the loop emits a "still at tip"
+-- heartbeat. Only 'FollowingChainTip' fires it; the windowed summary
+-- covers visibility in 'FollowingVolatileTail'.
 idleHeartbeatMicros :: Int
 idleHeartbeatMicros = 30_000_000
 
--- | State carried across forward blocks. Drives the windowed log
--- cadence, the per-block delta at tip, the idle-heartbeat
--- "N ago" suffix, and the per-epoch counters consumed by the
--- boundary @epoch_sync_stats@ write.
+-- | State carried across forward blocks. It drives the windowed log
+-- cadence, the per-block delta at tip, the idle-heartbeat suffix, and
+-- the per-epoch counters for the @epoch_sync_stats@ write.
 data FollowProgress = FollowProgress
   { fpWindowStart      :: !UTCTime
     -- ^ When the current 'logEveryNBlocks' window opened.
   , fpBlocksThisWindow :: !Word64
+    -- ^ Forward blocks applied since the window opened.
   , fpLastEpoch        :: !(Maybe Word64)
     -- ^ 'Nothing' before the first block lands.
   , fpLastBlockAt      :: !(Maybe UTCTime)
@@ -132,14 +124,11 @@ data FollowProgress = FollowProgress
     -- ^ Forward blocks observed in the current epoch.
   }
 
--- | Drain the chainsync queue forever.
---
--- Each 'MsgForward' is parsed, extracted, and applied to PG inside a
--- single @BEGIN@/@COMMIT@ envelope that also advances
--- @dbsync_sync_state.last_committed_slot@ — so a crash between blocks
--- never leaves rows in PG past the recorded position. 'MsgRollback'
--- runs the cascade and updates the same sync-state columns to the
--- target slot.
+-- | Drain the chainsync queue forever. One @BEGIN@/@COMMIT@ envelope
+-- covers each 'MsgForward' and also advances
+-- @dbsync_sync_state.last_committed_slot@, so a crash between blocks
+-- never leaves rows past the recorded position. 'MsgRollback' runs
+-- the cascade and moves the same columns to the target slot.
 run :: FollowM ()
 run = do
   FollowEnv{feCore, feBlockQueue, feReplayBootSlot, feHasqlConnection} <- ask
@@ -165,20 +154,16 @@ run = do
     , fpEpochStart       = startedAt
     , fpEpochBlocks      = 0
     }
-  -- Seed the replay-progress state machine. Inert ('NoReplay')
-  -- when there's no replay window, primed ('ReplayPending') when
-  -- there is.
   replayRef <- liftIO $ newIORef $ case feReplayBootSlot of
     Just _  -> ReplayPending
     Nothing -> NoReplay
-  -- Monotonic delivery guard: block number of the last block this
-  -- consumer applied to PG. The receiver's delivery contract is
-  -- at-least-once across session boundaries (handoff, node
-  -- reconnect), so a non-advancing forward is a re-delivered block
-  -- that must be dropped, not re-inserted — the @block@ table has no
-  -- unique constraint, and the @tx@ one aborts the whole app.
-  -- Reset by 'processRollback': post-rollback forwards legitimately
-  -- carry lower block numbers.
+  -- Monotonic delivery guard holding the last block number this
+  -- consumer applied. The receiver delivers at-least-once across
+  -- session boundaries, so a forward that does not advance is a
+  -- re-delivery. It must go, not insert again: @block@ carries no
+  -- unique constraint, and a @tx@ conflict aborts the app.
+  -- 'processRollback' resets it, because post-rollback forwards
+  -- legitimately carry lower block numbers.
   lastAppliedRef <- liftIO $ newIORef Nothing
   forever $ do
     mMsg <- liftIO $
@@ -193,11 +178,10 @@ run = do
         processRollback progressRef lastAppliedRef point
       Nothing -> emitIdleHeartbeat progressRef
 
--- | 'True' when this forward block is at or below the last applied
--- block number — a re-delivered block the consumer must not apply
--- again. Logs at 'Warning': with atomic receiver-side delivery this
--- should never fire, so an occurrence is worth an operator's
--- attention even though it is handled.
+-- | 'True' when this forward block sits at or below the last applied
+-- block number, which makes it a re-delivery. It logs at 'Warning':
+-- atomic receiver-side delivery should never trigger this, so an
+-- occurrence deserves attention even though the loop handles it.
 dropRedeliveredForward
   :: AppTracer
   -> CurrentPhase
@@ -217,11 +201,9 @@ dropRedeliveredForward tracer phaseRef lastAppliedRef blk = do
       pure True
     _ -> pure False
 
--- | Read the next message from the queue, or fall through with
--- 'Nothing' after the heartbeat timer expires. Only fires the timer
--- branch while the current phase is 'FollowingChainTip'; in any
--- other phase this behaves like a plain 'readTBQueue' (windowed
--- summaries cover visibility there).
+-- | Read the next message, or return 'Nothing' when the heartbeat
+-- timer expires. The timer branch only fires in 'FollowingChainTip';
+-- any other phase behaves like a plain 'readTBQueue'.
 waitForMsgOrHeartbeat
   :: STM.TBQueue ChainSyncMsg
   -> CurrentPhase
@@ -240,34 +222,22 @@ waitForMsgOrHeartbeat q phaseRef micros = do
       unless expired STM.retry
       pure Nothing
 
--- | Render the current phase as the log-component string.
 readPhaseComponent :: CurrentPhase -> IO Text
 readPhaseComponent = fmap renderPhase . readCurrentPhase
 
--- | Apply one forward block.
+-- | Apply one forward block, in one of two regimes.
 --
--- Two regimes:
+-- Inside the replay window — 'feReplayBootSlot' set and
+-- @slot <= bootSlot@ — PG already holds the block and the ledger
+-- worker re-applies it through the receiver fan-out. The consumer
+-- only advances the replay state machine and the phase-flip
+-- predicate.
 --
---   * Replay window ('feReplayBootSlot' set, @slot <= bootSlot@) —
---     the block is already in PG and the ledger worker is
---     re-applying it via the receiver fan-out. The consumer just
---     advances the replay-progress state machine and runs the
---     phase-flip predicate.
---
---   * Normal — apply the block inside one PG transaction:
---
---       1. Count the IDs the extractors will need
---          ('countAssignableIds') and allocate them in a single
---          libpq pipeline ('allocateAllIds').
---       2. Run extractors with a buffered resolver + writer. Dedup
---          resolves still hit PG synchronously (one SELECT plus a
---          possible @nextval@ on miss) but consult a per-block dedup
---          cache so siblings find each other. INSERTs land on a
---          single 'WriteBuffer'.
---       3. BEGIN, pipeline-flush the writes plus the
---          @last_committed_*@ UPDATE, COMMIT. The three Sessions are
---          inlined here so the 'onException' rolls back cleanly
---          without masking the original exception.
+-- Otherwise the block goes to PG in one transaction: count and
+-- allocate the ids, run the extractors against a buffered resolver
+-- and writer, then flush the buffer with the @last_committed_*@
+-- UPDATE. Dedup resolves still hit PG synchronously, but a per-block
+-- cache lets siblings find each other.
 processForward
   :: IORef FollowProgress
   -> IORef ReplayLogState
@@ -289,10 +259,9 @@ processForward progressRef replayRef lastAppliedRef cardanoBlock = do
   liftIO $ advanceAndLogReplay tracer replayRef feReplayStartSlot feReplayBootSlot slot
   case feReplayBootSlot of
     Just bootSlot | slot <= bootSlot -> do
-      -- Replay window: PG already has the row and the ledger worker
-      -- re-applies the block. Skip the INSERT + sync_state advance.
-      -- The worker still enqueues a per-block ApplyResult for the
-      -- replayed block; drain and discard so the queue stays empty.
+      -- Skip the INSERT and the sync_state advance. The worker still
+      -- enqueues a per-block ApplyResult for the replayed block, so
+      -- drain and discard it to keep the queue empty.
       liftIO $ void $ takeBlockLedgerData feHasLedgerEnv
       maybeFlipToTip slot (blockNo cardanoBlock)
     _ -> do
@@ -303,7 +272,7 @@ processForward progressRef replayRef lastAppliedRef cardanoBlock = do
           epochViewOn = any ((== tdName epochFinalizedTableDef) . tdName)
                             (concatMap pdTables (ceExtractors feCore))
           consumedTracking =
-            if uoConsumedByTxId (pcUtxo (scDbProfile (getConfig env)))
+            if uoConsumedByTxId (exUtxo (scExtractors (getConfig env)))
               then TrackConsumedBy
               else SkipConsumedBy
           !genBlock = parseBlock cborEnabled sd cardanoBlock
@@ -355,15 +324,14 @@ processForward progressRef replayRef lastAppliedRef cardanoBlock = do
       maybeFlipToTip (blkSlotNo genBlock) (blkBlockNo genBlock)
       maybeLogProgress progressRef now genBlock
 
--- | Drain the ledger worker's next boundary 'ApplyResult' and run
--- the governance and epoch-boundary extractors against it. No-op
--- when the ledger feature is disabled or no block has yet been
--- extracted.
+-- | Drain the ledger worker's next boundary 'ApplyResult' and run the
+-- boundary extractors against it. Does nothing when the ledger
+-- feature is off, or when no block has arrived yet.
 --
--- Governance runs first when enabled: it publishes the enacted
+-- Governance runs first: it publishes the enacted
 -- @(committee, no_confidence, constitution)@ id triple onto the
--- resolver's scratchpad so 'runEpochBoundary' picks it up when it
--- constructs the next @epoch_state@ row.
+-- resolver's scratchpad, and 'runEpochBoundary' reads it when it
+-- builds the next @epoch_state@ row.
 runFollowBoundary
   :: ( HasResolver env
      , HasWriter env
@@ -380,19 +348,19 @@ runFollowBoundary = \case
     applyResult  <- liftIO $ readBoundaryApplyResult lenv
     resolver     <- asks getResolver
     mBlockId     <- liftIO $ lookupLastBlockId resolver
-    governanceOn <- asks (prEnabled . pcGovernance . scDbProfile . getConfig)
-    poolStatsOn  <- asks (prEnabled . pcPoolStats  . scDbProfile . getConfig)
-    sdlOn        <- asks (prEnabled . pcStakeDelegationLedger . scDbProfile . getConfig)
+    governanceOn <- asks (prEnabled . exGovernance . scExtractors . getConfig)
+    poolStatsOn  <- asks (prEnabled . exPoolStats  . scExtractors . getConfig)
+    sdlOn        <- asks (prEnabled . exStakeDelegationLedger . scExtractors . getConfig)
     for_ mBlockId $ \blockId -> do
       when governanceOn $ runGovernanceBoundary applyResult blockId
       runEpochBoundary applyResult blockId
       when poolStatsOn  $ runPoolStatsBoundary governanceOn applyResult blockId
       when sdlOn        $ runStakeDelegationLedgerBoundary applyResult blockId
 
--- | Step the replay-progress state machine for this block and emit
--- any indicated trace. A no-op outside the replay window (the
--- machine is 'NoReplay'); inside the window, fires periodic progress
--- lines and one completion line on the first post-window block.
+-- | Step the replay-progress state machine and emit any trace it
+-- indicates. Outside the replay window the machine is 'NoReplay' and
+-- this does nothing. Inside, it emits periodic progress lines, then
+-- one completion line on the first block past the window.
 advanceAndLogReplay
   :: AppTracer
   -> IORef ReplayLogState
@@ -421,10 +389,10 @@ advanceAndLogReplay tracer replayRef mReplayStart mReplayBoot slot = do
           <> "s, resuming Follow PG writes at slot "
           <> show (unSlotNo slot)
 
--- | Wrap one block's worth of pipelined writes in a PG
--- @BEGIN@/@COMMIT@ envelope. A flush failure triggers a best-effort
--- ROLLBACK so the open transaction doesn't leak, but the original
--- exception still propagates.
+-- | Wrap one block's pipelined writes in a @BEGIN@/@COMMIT@
+-- envelope. A flush failure runs a best-effort ROLLBACK so the open
+-- transaction does not leak, and the original exception still
+-- propagates.
 runFollowBlockTx :: Conn.Connection -> Pipeline.Pipeline () -> IO ()
 runFollowBlockTx conn flush = do
   useConn "Following.BEGIN" conn (Sess.script beginSql)
@@ -432,8 +400,8 @@ runFollowBlockTx conn flush = do
     `onException` rollbackQuiet conn
   useConn "Following.COMMIT" conn (Sess.script commitSql)
 
--- | Best-effort ROLLBACK. Swallows its own errors so a failed
--- rollback doesn't mask the original exception that triggered it.
+-- | Swallows its own errors, so a failed rollback cannot mask the
+-- original exception.
 rollbackQuiet :: Conn.Connection -> IO ()
 rollbackQuiet conn =
   void (Conn.use conn (Sess.script rollbackSql))
@@ -444,12 +412,12 @@ rollbackQuiet conn =
 tipFollowMargin :: Word64
 tipFollowMargin = 1
 
--- | Pure predicate driving the 'FollowingVolatileTail' ->
--- 'FollowingChainTip' transition. Lifted out of 'maybeFlipToTip' so
--- the wiring can be unit-tested directly.
+-- | Pure predicate for the 'FollowingVolatileTail' ->
+-- 'FollowingChainTip' transition, split out of 'maybeFlipToTip' so a
+-- unit test can drive it.
 --
--- 'Nothing' means the receiver has not yet observed a server tip
--- (no roll message has arrived); there is nothing to flip against.
+-- A 'Nothing' tip means the receiver saw no server tip yet, so there
+-- is nothing to flip against.
 shouldFlipToTip
   :: Bool          -- ^ inside the replay window
   -> SyncPhase     -- ^ current phase
@@ -463,12 +431,11 @@ shouldFlipToTip inReplay phase mTip (BlockNo applied) =
          Just (BlockNo t) -> applied + tipFollowMargin >= t
          Nothing          -> False
 
--- | Flip the phase from 'FollowingVolatileTail' to
--- 'FollowingChainTip' once 'shouldFlipToTip' agrees. One-way: a
--- subsequent 'MsgRollback' is the only path back.
+-- | Flip the phase once 'shouldFlipToTip' agrees. The flip is
+-- one-way: only a later 'MsgRollback' goes back.
 --
--- Suppressed inside the replay window: the skip-only consumer
--- outpaces the receiver, so the predicate fires spuriously.
+-- The replay window suppresses it, because the skip-only consumer
+-- outpaces the receiver and the predicate would fire wrongly.
 maybeFlipToTip :: SlotNo -> BlockNo -> FollowM ()
 maybeFlipToTip appliedSlot appliedBlock = do
   FollowEnv{feCore, feLatestTipBlock, feReplayBootSlot} <- ask
@@ -512,17 +479,13 @@ writeFollowEpochSyncStats phase snap prev now = do
       , epochSyncStatsPhase           = renderPhase phase
       }
 
--- | Update the progress counter for this block, then emit either:
+-- | Update the progress counters for this block, then emit one Info
+-- line per applied block in 'FollowingChainTip', or the windowed
+-- summary in any other phase. The window closes after
+-- 'logEveryNBlocks' blocks or on an epoch crossing.
 --
---   * one Info line per applied block when in 'FollowingChainTip' —
---     at mainnet's ~20 s/block cadence this is roughly one log per
---     20 s; or
---   * the windowed summary when 'logEveryNBlocks' blocks have been
---     applied or a new epoch has crossed (other phases). Per-block
---     spam isn't useful while still catching up.
---
--- Also rolls the per-epoch counters forward (reset at each boundary
--- crossing) for the next @epoch_sync_stats@ row.
+-- This also rolls the per-epoch counters forward for the next
+-- @epoch_sync_stats@ row, resetting them at each crossing.
 maybeLogProgress :: IORef FollowProgress -> UTCTime -> GenericBlock -> FollowM ()
 maybeLogProgress progressRef now gb = do
   FollowEnv{feCore, feBlockQueue} <- ask
@@ -579,17 +542,17 @@ maybeLogProgress progressRef now gb = do
                 ]
           traceWith tracer $ LogMsg Info component msg
 
--- | Render the "+T since prev" suffix used on the per-block
--- 'FollowingChainTip' log. Empty on the first block (no previous)
--- so the line stays compact.
+-- | Render the "+T since prev" suffix for the per-block
+-- 'FollowingChainTip' log. The first block has no previous time, so
+-- the suffix is empty.
 renderSinceLast :: UTCTime -> Maybe UTCTime -> Text
 renderSinceLast now = \case
   Nothing -> ""
   Just t  -> " (+" <> fmtDuration (realToFrac (diffUTCTime now t)) <> " since prev)"
 
--- | Emit the idle "still at tip" heartbeat. Fired from the main
--- loop's heartbeat branch; the wait function gates on phase so this
--- is only reachable in 'FollowingChainTip'.
+-- | Emit the idle "still at tip" heartbeat.
+-- 'waitForMsgOrHeartbeat' gates on phase, so only
+-- 'FollowingChainTip' reaches this.
 emitIdleHeartbeat :: IORef FollowProgress -> FollowM ()
 emitIdleHeartbeat progressRef = do
   FollowEnv{feCore, feBlockQueue} <- ask
@@ -609,21 +572,17 @@ emitIdleHeartbeat progressRef = do
           _ -> "still at tip, no blocks applied yet, queue=" <> show qLen
     traceWith tracer $ LogMsg Info component body
 
--- | Compact rate formatter: more precision at low rates so a slow
--- sync doesn't read as "0 blk/s", less precision once the rate is
--- big enough that decimals are noise.
+-- | Compact rate formatter. Low rates keep more precision, so a slow
+-- sync does not read as "0 blk/s".
 fmtRate :: Double -> Text
 fmtRate r
   | r < 10    = toS (showFFloat (Just 2) r "")
   | r < 1000  = toS (showFFloat (Just 1) r "")
   | otherwise = toS (showFFloat (Just 0) r "")
 
--- | Apply one rollback marker.
---
--- Drops the phase back to 'FollowingVolatileTail' before the
--- cascade so the log identifies the run as catching up again.
--- The cascade itself DELETEs every row past the target block and
--- advances @last_committed_*@ to match, all in one PG transaction.
+-- | Apply one rollback marker. The phase drops back to
+-- 'FollowingVolatileTail' before the cascade, so the log shows the
+-- run catching up again.
 processRollback
   :: IORef FollowProgress
   -> IORef (Maybe BlockNo)   -- ^ re-delivery guard; reset by the rollback
@@ -644,11 +603,10 @@ processRollback progressRef lastAppliedRef point = do
   -- below the last applied one; disarm the re-delivery guard until
   -- the next forward block re-seeds it.
   liftIO $ writeIORef lastAppliedRef Nothing
-  -- The cascade may have deleted past an epoch boundary; re-seed the
-  -- previous-epoch marker from PG so the next forward block neither
-  -- fires a spurious boundary drain (which would block on an empty
-  -- queue) nor misses the real re-crossing when the chain advances
-  -- over the boundary again.
+  -- The cascade can delete past an epoch boundary. Re-seed the
+  -- previous-epoch marker from PG, so the next forward block neither
+  -- fires a spurious boundary drain, which would block on an empty
+  -- queue, nor misses the real re-crossing.
   mDbEpoch <- useConn "Phase.Following.Run" feHasqlConnection
     (Sess.statement () queryLatestEpochNoStmt)
   liftIO $ modifyIORef' progressRef $ \p -> p { fpLastEpoch = mDbEpoch }
@@ -663,9 +621,9 @@ rollbackMaxAttempts = 3
 rollbackBaseDelayMicros :: Int
 rollbackBaseDelayMicros = 250_000
 
--- | Run the rollback cascade, retrying a few times on
--- 'AppDatabaseError'. Lets a transient PG-side glitch (e.g. EINTR
--- surfaced as @XX000 internal_error@) ride out without crashing.
+-- | Run the rollback cascade, and retry on 'AppDatabaseError'. A
+-- transient PG glitch, such as EINTR surfaced as
+-- @XX000 internal_error@, then rides out without a crash.
 rollbackWithRetry :: [TableDef] -> CardanoPoint -> FollowM ()
 rollbackWithRetry tableDefs point = go 1
   where

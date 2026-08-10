@@ -18,7 +18,7 @@ import qualified Data.Text as T
 
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
-import DbSync.App.Config.Types (DbProfile (..), OptionFlag (..), SyncConfig (..))
+import DbSync.App.Config.Types (Extractors (..), OptionFlag (..), SyncConfig (..))
 import DbSync.Db.Schema.EpochBoundary (epochParamTableDef, epochStateTableDef)
 import DbSync.Db.Schema.Governance
   ( committeeMemberTableDef
@@ -95,13 +95,13 @@ spec = describe "Governance genesis snapshot" $ do
 -- * Helpers
 -- ---------------------------------------------------------------------------
 
--- | 'ledgerEnabledTestConfig' with @pcGovernance@ flipped on so the
+-- | 'ledgerEnabledTestConfig' with @exGovernance@ flipped on so the
 -- governance boundary (and its genesis seeding) runs.
 governanceTestProfile :: SyncConfig
 governanceTestProfile =
   ledgerEnabledTestConfig
-    { scDbProfile = (scDbProfile ledgerEnabledTestConfig)
-        { pcGovernance = OptionFlag True
+    { scExtractors = (scExtractors ledgerEnabledTestConfig)
+        { exGovernance = OptionFlag True
         }
     }
 

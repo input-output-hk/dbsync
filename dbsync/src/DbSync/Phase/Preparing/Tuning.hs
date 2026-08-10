@@ -1,18 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Per-connection knobs the post-load pass leans on.
+-- | Per-connection knobs for the post-load pass.
 --
--- 'Phase.Preparing.Run.run' opens one dedicated control connection
--- for the duration of the pass. Applying these GUCs once at the top
--- of the run makes every subsequent index build, ANALYZE, and
--- @ALTER SET LOGGED@ run with the same tuning, without the noise of
--- per-statement @SET LOCAL@.
---
--- Why @SET@, not @SET LOCAL@: @SET LOCAL@ scopes to the current
--- transaction, and each step in 'Phase.Preparing.Run.run' goes
--- through its own implicit transaction. Session-scoped @SET@
--- persists for the connection's lifetime, which exactly matches the
--- pass.
+-- These use session-scoped @SET@, not @SET LOCAL@: each step in
+-- 'Phase.Preparing.Run.run' runs in its own implicit transaction,
+-- which @SET LOCAL@ would scope to. A session @SET@ lasts for the
+-- connection's lifetime, and that matches the pass.
 module DbSync.Phase.Preparing.Tuning
   ( PrepTuning (..)
   , defaultPrepTuning
@@ -28,35 +21,28 @@ import DbSync.Db.Run (useConn)
 import DbSync.Db.Statement.Tuning (prepGucSql)
 import DbSync.Db.Transaction (HasHasqlConnection (..))
 
--- | Tuning applied at the start of the post-load pass. Defaults are
--- sized for the 4-core / 16 GB target deployment; tests or operators
--- on different hardware override via 'defaultPrepTuning' record
--- updates.
+-- | Tuning applied at the start of the post-load pass. Operators on
+-- other hardware override 'defaultPrepTuning' by record update.
 data PrepTuning = PrepTuning
-  { -- | Per-backend RAM cap for sort / index-build buffers. Larger
-    -- values cut external-sort I/O for big B-tree builds. Sized
-    -- against total RAM minus shared_buffers and OS page cache.
+  { -- | Per-backend RAM cap for sort and index-build buffers. Larger
+    -- values cut external-sort I/O on big B-tree builds.
     ptMaintenanceWorkMem     :: !Text
-    -- | Upper bound on parallel workers @CREATE INDEX@ and
-    -- @VACUUM@ may launch. Silently capped by the server's
-    -- @max_parallel_workers@; setting higher than core count is
-    -- waste.
+    -- | Upper bound on the parallel workers @CREATE INDEX@ and
+    -- @VACUUM@ launch. The server's @max_parallel_workers@ caps this
+    -- silently. A value above the core count wastes workers.
   , ptMaxParallelMaintenance :: !Int
-    -- | @True@ → @synchronous_commit = off@ for the Prep session.
-    -- Prep is idempotent on crash (Ingest's @sync_state@ still says
-    -- not-complete until 'markSyncComplete' fires), so a lost
-    -- commit just re-runs the pass.
+    -- | @True@ sets @synchronous_commit = off@ for the Prep session.
+    -- Prep is idempotent on crash — @sync_state@ stays
+    -- not-complete until 'markSyncComplete' fires — so a lost commit
+    -- only re-runs the pass.
   , ptAsyncCommit            :: !Bool
-    -- | Backend count for the parallel-capable Prep steps
-    -- (@ALTER … SET LOGGED@ flip and @CREATE INDEX@ build). Matches
-    -- the 4-core target; tune down on smaller boxes.
+    -- | Backend count for the parallel Prep steps: the
+    -- @ALTER … SET LOGGED@ flip and the @CREATE INDEX@ build.
   , ptPoolSize               :: !Int
   }
   deriving stock (Eq, Show)
 
--- | Defaults for a 4-core / 16 GB box: 2 GB maintenance_work_mem
--- alongside a typical shared_buffers leaves room for one Prep backend
--- plus the cardano-node IPC traffic.
+-- | Defaults for the 4-core / 16 GB target box.
 defaultPrepTuning :: PrepTuning
 defaultPrepTuning = PrepTuning
   { ptMaintenanceWorkMem     = "2GB"
@@ -65,17 +51,13 @@ defaultPrepTuning = PrepTuning
   , ptPoolSize               = 4
   }
 
--- | The GUC-application step as a 'Sess.Session'. Used both by the
--- single-connection path (via 'setPrepSessionGUCs') and by the
--- 'Hasql.Pool' @initSession@ hook so every pool backend boots with
--- the same tuning.
+-- | Both 'setPrepSessionGUCs' and the 'Hasql.Pool' @initSession@
+-- hook run this, so every pool backend boots with the same tuning.
 prepSessionGUCsSession :: PrepTuning -> Sess.Session ()
 prepSessionGUCsSession t = Sess.script (gucSql t)
 
--- | Issue the @SET@ statements that bring the env's connection up
--- to the requested 'PrepTuning'. Surfaces driver failures as
--- 'AppDatabaseError' — these are unconditionally valid GUCs, so a
--- failure here points at a connection-level problem.
+-- | Raises 'AppDatabaseError' on failure. These GUCs are always
+-- valid, so a failure here points at the connection.
 setPrepSessionGUCs
   :: (HasHasqlConnection env, MonadReader env m, MonadIO m)
   => PrepTuning -> m ()

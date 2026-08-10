@@ -1,13 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | UTxO extractor.
+-- | Writes transaction outputs and inputs into @tx_out@, @tx_in@,
+-- @collateral_tx_in@ and @reference_tx_in@.
 --
--- Extracts transaction outputs and inputs into @tx_out@, @tx_in@,
--- @collateral_tx_in@, and @reference_tx_in@ tables.
---
--- During 'IngestChainHistory', @tx_in.tx_out_id@ is NULL — only
--- the spent tx hash and output index are stored. The FK is resolved
--- post-load via a SQL join in 'PreparingForVolatileTail'.
+-- 'IngestChainHistory' leaves @tx_in.tx_out_id@ NULL and stores only
+-- the spent tx hash and output index. A SQL join in
+-- 'PreparingForVolatileTail' resolves the FK after the load.
 module DbSync.Extractor.UTxO
   ( utxoExtractor
 
@@ -160,10 +158,10 @@ processUTxO ctx = do
     -- cache lookup's full result.
     producerTxIdFrom = fmap (\(producerTxId, _, _) -> producerTxId)
 
--- | In Follow, resolve @address_id@ synchronously so the (collateral_)tx_out
--- row carries the FK from the start. In Ingest, return 'Nothing' — the row
--- is written with @address_id = NULL@ and the async worker fills it via a
--- bulk UPDATE an epoch later.
+-- | Follow resolves @address_id@ at once, so the @tx_out@ or
+-- @collateral_tx_out@ row carries the FK from the start. Ingest gives
+-- 'Nothing': the row goes in with @address_id = NULL@, and the async
+-- worker fills it with a bulk UPDATE an epoch later.
 followAddressId
   :: MonadIO m
   => SyncPhase -> IdResolver IO -> ByteString -> Maybe StakeAddressId -> m (Maybe AddressId)
@@ -195,7 +193,6 @@ mkTxOut txId addrId mStakeId mInlineId mRefScriptId gout = TxOut
   , txOutConsumedByTxId    = Nothing  -- resolved post-load
   }
 
--- | Build the deduplicated @datum@ row for an inline datum.
 mkDatum :: TxId -> GenericTxDatum -> Datum
 mkDatum txId gtd = Datum
   { datumHash  = gtdHash gtd
@@ -204,9 +201,8 @@ mkDatum txId gtd = Datum
   , datumBytes = gtdBytes gtd
   }
 
--- | Build a @tx_in@ row. The @tx_out_id@ argument is 'Just' when the
--- cache resolved the producer and 'Nothing' otherwise — the post-load
--- resolve fills the residual NULLs.
+-- | The @tx_out_id@ argument is 'Just' when the cache resolved the
+-- producer. The post-load resolve fills the remaining NULLs.
 mkTxIn :: TxId -> GenericTxIn -> Maybe TxId -> Maybe RedeemerId -> TxIn
 mkTxIn txId gin mTxOutId mRedeemerId = TxIn
   { txInTxInId     = txId
@@ -247,9 +243,9 @@ mkCollateralTxOut txId addrId mStakeId mInlineId mRefScriptId gout = CollateralT
   , collateralTxOutStakeAddressId    = mStakeId
   , collateralTxOutValue             = DbLovelace (G.txOutValue gout)
   , collateralTxOutDataHash          = G.txOutDataHash gout
-    -- The collateral-return output cannot carry multi-assets, but
-    -- the original schema records a textual rendering of whatever
-    -- the body declared. Failed txs always produce @[]@ here.
+    -- A collateral-return output cannot carry multi-assets, but the
+    -- column holds a textual rendering of whatever the body declared.
+    -- A failed tx always gives @[]@ here.
   , collateralTxOutMultiAssetsDescr  = show (G.txOutMultiAssets gout)
   , collateralTxOutInlineDatumId     = mInlineId
   , collateralTxOutReferenceScriptId = mRefScriptId
@@ -259,12 +255,11 @@ mkCollateralTxOut txId addrId mStakeId mInlineId mRefScriptId gout = CollateralT
 -- * Helpers
 -- ---------------------------------------------------------------------------
 
--- | Extract the inline stake credential from a Shelley address.
---
--- Returns 'Just' for base addresses (header types @0x00@\/@0x10@\/@0x20@\/@0x30@,
--- per CIP-19) where bytes 30-57 carry the stake key or script hash. Header
--- bit @0x20@ marks the stake credential as a script. Pointer, enterprise,
--- reward, and Byron addresses have no inline cred and yield 'Nothing'.
+-- | Returns 'Just' for a base address, where CIP-19 header types
+-- @0x00@, @0x10@, @0x20@ and @0x30@ put the stake key or script hash
+-- in bytes 30-57. Header bit @0x20@ marks that credential as a script.
+-- Pointer, enterprise, reward and Byron addresses carry no inline
+-- credential, so they give 'Nothing'.
 extractStakeCred :: ByteString -> Maybe CredHash
 extractStakeCred bs =
   case BS.uncons bs of

@@ -19,7 +19,7 @@ import DbSync.App.Config.Types
   , LoggingConfig (..)
   , MetricsConfig (..)
   , OptionFlag (..)
-  , DbProfile (..)
+  , Extractors (..)
   , SyncConfig (..)
   , SyncMode (..)
   , SyncSettings (..)
@@ -43,11 +43,11 @@ spec = describe "DbSync.App.Config.Types" $ do
           -- Ledger
           lcEnabled (scLedger cfg) `shouldBe` True
 
-          -- db_profile: every key listed in the fixture is on, the rest are off.
-          uoEnabled (pcUtxo (scDbProfile cfg))            `shouldBe` True
-          prEnabled (pcEpochBoundary (scDbProfile cfg))   `shouldBe` True
-          prEnabled (pcCbor (scDbProfile cfg))            `shouldBe` False  -- omitted
-          prEnabled (pcCurrentState (scDbProfile cfg))    `shouldBe` False  -- omitted
+          -- extractors: every key listed in the fixture is on, the rest are off.
+          uoEnabled (exUtxo (scExtractors cfg))            `shouldBe` True
+          prEnabled (exEpochBoundary (scExtractors cfg))   `shouldBe` True
+          prEnabled (exCbor (scExtractors cfg))            `shouldBe` False  -- omitted
+          prEnabled (exCurrentState (scExtractors cfg))    `shouldBe` False  -- omitted
 
           -- Metrics
           mcPrometheusPort (scMetrics cfg) `shouldBe` 8080
@@ -78,28 +78,28 @@ spec = describe "DbSync.App.Config.Types" $ do
 
           -- All optional extractors default to OFF (opt-in semantics).
           -- The unconditional 'core' extractor isn't represented in
-          -- DbProfile — it's added by buildExtractors regardless.
-          uoEnabled (pcUtxo (scDbProfile cfg))            `shouldBe` False
+          -- Extractors — it's added by buildExtractors regardless.
+          uoEnabled (exUtxo (scExtractors cfg))            `shouldBe` False
           -- Per-utxo defaults — opt-in extractor, but back-pointer
           -- on by default once enabled, tx_in populated, archive.
-          uoConsumedByTxId (pcUtxo (scDbProfile cfg))     `shouldBe` True
-          uoTxIn (pcUtxo (scDbProfile cfg))               `shouldBe` True
-          uoStrategy (pcUtxo (scDbProfile cfg))           `shouldBe` StrategyArchive
-          prEnabled (pcMultiAsset (scDbProfile cfg))      `shouldBe` False
-          prEnabled (pcMetadata (scDbProfile cfg))        `shouldBe` False
-          prEnabled (pcStakeDelegation (scDbProfile cfg)) `shouldBe` False
-          prEnabled (pcStakeDelegationLedger (scDbProfile cfg)) `shouldBe` False
-          prEnabled (pcPool (scDbProfile cfg))            `shouldBe` False
-          prEnabled (pcScriptsDatums (scDbProfile cfg))   `shouldBe` False
-          prEnabled (pcGovernance (scDbProfile cfg))      `shouldBe` False
-          prEnabled (pcCbor (scDbProfile cfg))            `shouldBe` False
-          prEnabled (pcEpochSyncStats (scDbProfile cfg))  `shouldBe` False
-          prEnabled (pcEpochBoundary (scDbProfile cfg))   `shouldBe` False
-          prEnabled (pcPoolStats (scDbProfile cfg))       `shouldBe` False
+          uoConsumedByTxId (exUtxo (scExtractors cfg))     `shouldBe` True
+          uoTxIn (exUtxo (scExtractors cfg))               `shouldBe` True
+          uoStrategy (exUtxo (scExtractors cfg))           `shouldBe` StrategyArchive
+          prEnabled (exMultiAsset (scExtractors cfg))      `shouldBe` False
+          prEnabled (exMetadata (scExtractors cfg))        `shouldBe` False
+          prEnabled (exStakeDelegation (scExtractors cfg)) `shouldBe` False
+          prEnabled (exStakeDelegationLedger (scExtractors cfg)) `shouldBe` False
+          prEnabled (exPool (scExtractors cfg))            `shouldBe` False
+          prEnabled (exScriptsDatums (scExtractors cfg))   `shouldBe` False
+          prEnabled (exGovernance (scExtractors cfg))      `shouldBe` False
+          prEnabled (exCbor (scExtractors cfg))            `shouldBe` False
+          prEnabled (exEpochSyncStats (scExtractors cfg))  `shouldBe` False
+          prEnabled (exEpochBoundary (scExtractors cfg))   `shouldBe` False
+          prEnabled (exPoolStats (scExtractors cfg))       `shouldBe` False
           -- 'epoch' is the sole opt-out: defaults to true when the
-          -- profile omits the key.
-          prEnabled (pcEpoch (scDbProfile cfg))           `shouldBe` True
-          prEnabled (pcCurrentState (scDbProfile cfg))    `shouldBe` False
+          -- config omits the key.
+          prEnabled (exEpoch (scExtractors cfg))           `shouldBe` True
+          prEnabled (exCurrentState (scExtractors cfg))    `shouldBe` False
 
   describe "parseConfig (override-options.json)" $ do
     it "enables only the listed options; everything else stays off" $ do
@@ -108,31 +108,31 @@ spec = describe "DbSync.App.Config.Types" $ do
         Left err -> panic $ "Parse failed: " <> show err
         Right cfg -> do
           -- Listed in fixture
-          prEnabled (pcMetadata (scDbProfile cfg))        `shouldBe` True
-          prEnabled (pcStakeDelegation (scDbProfile cfg)) `shouldBe` True
+          prEnabled (exMetadata (scExtractors cfg))        `shouldBe` True
+          prEnabled (exStakeDelegation (scExtractors cfg)) `shouldBe` True
           -- Not listed → off (opt-in)
-          uoEnabled (pcUtxo (scDbProfile cfg))            `shouldBe` False
-          prEnabled (pcGovernance (scDbProfile cfg))      `shouldBe` False
-          prEnabled (pcPool (scDbProfile cfg))            `shouldBe` False
+          uoEnabled (exUtxo (scExtractors cfg))            `shouldBe` False
+          prEnabled (exGovernance (scExtractors cfg))      `shouldBe` False
+          prEnabled (exPool (scExtractors cfg))            `shouldBe` False
 
-  describe "pcEpoch opt-out semantics" $ do
-    it "defaults to true when db_profile omits 'epoch'" $ do
+  describe "exEpoch opt-out semantics" $ do
+    it "defaults to true when extractors omits 'epoch'" $ do
       result <- parseConfig "fixtures/full-config.json"
       case result of
         Left err  -> panic $ "Parse failed: " <> show err
-        Right cfg -> prEnabled (pcEpoch (scDbProfile cfg)) `shouldBe` True
+        Right cfg -> prEnabled (exEpoch (scExtractors cfg)) `shouldBe` True
 
-    it "defaults to true on a config with no db_profile block at all" $ do
+    it "defaults to true on a config with no extractors block at all" $ do
       result <- parseConfig "fixtures/minimal-config.json"
       case result of
         Left err  -> panic $ "Parse failed: " <> show err
-        Right cfg -> prEnabled (pcEpoch (scDbProfile cfg)) `shouldBe` True
+        Right cfg -> prEnabled (exEpoch (scExtractors cfg)) `shouldBe` True
 
     it "accepts 'epoch': false explicitly" $ do
       result <- parseConfig "fixtures/epoch-disabled.json"
       case result of
         Left err  -> panic $ "Parse failed: " <> show err
-        Right cfg -> prEnabled (pcEpoch (scDbProfile cfg)) `shouldBe` False
+        Right cfg -> prEnabled (exEpoch (scExtractors cfg)) `shouldBe` False
 
   describe "parseConfig (ingest-mode.json)" $ do
     it "parses ingest sync mode" $ do

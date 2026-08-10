@@ -54,7 +54,6 @@ type instance Key TxMetadata = TxMetadataId
 -- * Schema types
 -- ---------------------------------------------------------------------------
 
--- | The @tx_metadata@ table.
 data TxMetadata = TxMetadata
   { txMetadataKey   :: !DbWord64         -- ^ Metadata key (integer)
   , txMetadataJson  :: !(Maybe Text)     -- ^ JSON representation (nullable)
@@ -146,6 +145,10 @@ encodeTxMetadataCopy md =
 -- ---------------------------------------------------------------------------
 -- * Hasql encoders / decoders
 -- ---------------------------------------------------------------------------
+--
+-- A @\<row>Encoder@ and @\<row>Decoder@ pair omits the @id@ column. An
+-- @entity\<Row>Decoder@ reads @id@ first, so its column order matches
+-- @SELECT *@ on the table.
 
 -- | The @json@ column is @jsonb@. We round-trip via UTF-8 bytes through
 -- 'E.jsonbBytes' / 'D.jsonbBytes'. The Haskell-side representation stays
@@ -165,8 +168,7 @@ jsonbTextDecoder = D.jsonbBytes $ \bs ->
     Right t -> Right t
     Left  e -> Left (show e)
 
--- | Encoder for a 'TxMetadata', excluding the auto-generated @id@.
--- Field order matches the column order in 'txMetadataTableDef'.
+-- | Field order matches the column order in 'txMetadataTableDef'.
 txMetadataEncoder :: E.Params TxMetadata
 txMetadataEncoder = mconcat
   [ txMetadataKey      >$< E.param (E.nonNullable dbWord64ValueEncoder)
@@ -175,7 +177,6 @@ txMetadataEncoder = mconcat
   , txMetadataTxId     >$< idEncoder getTxId
   ]
 
--- | Decoder for the data columns of a 'TxMetadata' (excluding @id@).
 txMetadataDecoder :: D.Row TxMetadata
 txMetadataDecoder = TxMetadata
   <$> D.column (D.nonNullable dbWord64ValueDecoder)
@@ -183,7 +184,6 @@ txMetadataDecoder = TxMetadata
   <*> D.column (D.nonNullable D.bytea)
   <*> idDecoder TxId
 
--- | Decoder for a full @tx_metadata@ row, including @id@.
 entityTxMetadataDecoder :: D.Row (TxMetadataId, TxMetadata)
 entityTxMetadataDecoder = (,)
   <$> idDecoder TxMetadataId

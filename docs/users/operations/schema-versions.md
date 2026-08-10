@@ -11,7 +11,7 @@ fingerprint**, and a record of **which extractors built it**. dbsync
 checks that stamp on every boot so a binary never runs against a
 database whose shape it doesn't understand. This page explains what is
 recorded, how the boot check behaves, and what to do when an upgrade or
-profile change trips it.
+change to the extractor set trips it.
 
 :::note How the stamp is used
 On every boot dbsync checks the stamp and acts on it. It **applies** any
@@ -19,9 +19,9 @@ pending schema migrations automatically, in a single transaction, to
 bring a behind database up to the version this binary targets. If the
 database was built by a *newer* binary, or its shape has drifted with no
 migration to cover it, dbsync **refuses to start** rather than risk
-damage. Adding or removing an extractor (a profile change) is a separate
-matter and still needs a re-sync — see
-[Changing a profile](#changing-a-profile).
+damage. Adding or removing an extractor is a separate matter and still
+needs a re-sync — see
+[Changing the extractor set](#changing-the-extractor-set).
 :::
 
 ## What gets recorded
@@ -45,31 +45,36 @@ for the boot check — a `text[]` of the enabled extractor names:
 
 ## The boot check
 
-On startup, dbsync compares the extractors your profile enables against
-the set recorded on `dbsync_sync_state` and picks one of three paths:
+On startup, dbsync compares the extractors your config enables against
+the set recorded on `dbsync_sync_state`. **The two sets must be
+identical.**
 
 | Observed state | What dbsync does |
 |---|---|
 | No `dbsync_sync_state` table (empty database) | Treats it as a fresh database and creates the schema. |
-| Every enabled extractor is present | Skips init and resumes normally. |
-| An enabled extractor is missing | **Refuses to start** and prints which extractors are missing. |
+| The two sets match exactly | Skips init and resumes normally. |
+| An enabled extractor is missing from the database | **Refuses to start** and names it. |
+| The database holds an extractor your config omits | **Refuses to start** and names it. |
 
-The third case is the one you'll see after an upgrade or profile change.
-The message names the exact problem:
+The message names the exact problem and the direction:
 
 ```
 Schema mismatch — refusing to start. Use --resync-from-genesis to wipe and re-sync.
-  - Extractor 'governance' is enabled in the profile but missing from the database.
+  - Extractor 'governance' is enabled in the config but missing from the database.
 ```
 
-Read the message — it tells you which extractor is enabled in your
-profile but was never built into this database.
+```
+Schema mismatch — refusing to start. Use --resync-from-genesis to wipe and re-sync.
+  - Extractor 'cbor' is recorded in the database but not enabled in the config.
+```
 
-:::tip Removing an extractor is safe
-Extractors recorded in the database but **not** in your current profile
-are ignored — you can drop an extractor from your profile and keep
-running against the same database without a re-sync. Only *adding* an
-extractor (or any other shape change) needs a rebuild.
+:::warning Removing an extractor is not safe
+The check is symmetric. Dropping an extractor from your config aborts
+the boot, exactly as adding one does. dbsync has no "ignore the extra
+tables" mode.
+
+Both directions need a re-sync. See
+[Changing the extractor set](#changing-the-extractor-set).
 :::
 
 ## Upgrading dbsync
@@ -94,24 +99,23 @@ dbsync refuses to start in two cases instead:
   migration to cover it. This points to a mis-packaged or hand-edited
   build; the message prints the stored and expected fingerprints.
 
-Some changes still imply a re-sync even with migrations in place —
-notably enabling a new extractor (a [profile change](#changing-a-profile))
-or a change to data derived from ledger state, which dbsync cannot
-backfill from the database alone.
+Two changes still need a re-sync even with migrations in place:
+changing the [extractor set](#changing-the-extractor-set), and a
+change to data derived from ledger state. dbsync cannot backfill
+either from the database alone.
 
 Always read the release notes for an upgrade to know what it carries.
 
-## Changing a profile
+## Changing the extractor set
 
-Adding an extractor changes the set of tables the database needs. On the
-next boot the new extractor's tables are absent, the presence check
-fails, and dbsync refuses to start. This is the same
-[profile immutability](../profiles/overview#profile-immutability) rule
-seen from the schema side: a database is fixed to the profile that built
-it.
+Adding an extractor changes the set of tables the database needs.
+Removing one leaves tables the config no longer accounts for. Either
+way the boot check fails and dbsync refuses to start. This is the
+[`extractors` is fixed per database](../config/overview#extractors-is-fixed-per-database)
+rule seen from the schema side.
 
-The fix is a re-sync with the new profile in place. The cleanest way is
-the `--resync-from-genesis` flag, which drops the schema, wipes the
+The fix is a re-sync with the new extractor set in place. The cleanest
+way is `--resync-from-genesis`, which drops the schema, wipes the
 on-disk ledger state, and rebuilds from genesis in a single boot:
 
 ```bash

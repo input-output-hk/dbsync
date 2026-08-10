@@ -9,13 +9,13 @@ sidebar_position: 3
 If none of the [presets](presets) fits exactly, build your own. The
 easiest path is to copy the closest preset and trim it down.
 
-## The `db_profile` reference
+## The `extractors` reference
 
 Every key is opt-in. Omitting a key means disabled.
 
 ```json
 {
-  "db_profile": {
+  "extractors": {
     "utxo": {
       "enabled": true,
       "consumed_by_tx_id": true,
@@ -50,10 +50,14 @@ Outputs, inputs, addresses, collateral, reference inputs.
 
 | Field | Default | Notes |
 |---|---|---|
-| `enabled` | `false` | Master switch. `false` leaves `tx_out`, `tx_in`, `ma_tx_out` empty. |
-| `consumed_by_tx_id` | `true` | Populate `tx_out.consumed_by_tx_id` — the back-pointer from a UTxO to the tx that spent it. |
-| `tx_in` | `true` | Write `tx_in` rows. `false` is reserved (an alternate backfill path via `consumed_by_tx_id` is planned but not landed); currently the validator rejects `false`. |
-| `strategy` | `"archive"` | What `tx_out` ultimately contains. `archive` keeps every output ever produced; `prune` and `from_ledger` are reserved and currently rejected by the validator. |
+| `enabled` | `false` | Master switch. `false` leaves `tx_out`, `tx_in`, and `ma_tx_out` empty. |
+| `consumed_by_tx_id` | `true` | Write `tx_out.consumed_by_tx_id`, the back-pointer from a UTxO to the transaction that spent it. |
+| `tx_in` | `true` | Write `tx_in` rows. The parser rejects `false`. |
+| `strategy` | `"archive"` | `archive` keeps every output ever produced. The parser rejects `prune` and `from_ledger`. |
+
+The parser, not the validator, rejects the reserved values. dbsync
+therefore fails while reading the file, before any dependency check
+runs.
 
 Either `"utxo": true` (shorthand for the defaults with `enabled: true`)
 or the full object form is accepted.
@@ -130,9 +134,12 @@ Requires `governance`.
 
 ### `cbor`
 
-Raw transaction CBOR bytes in `tx_cbor`. Useful for consumers that
-need to re-serialise or replay txs. Large (~tx-body bytes per tx) —
-opt in only when you need it. No dependencies.
+Raw transaction CBOR bytes in `tx_cbor`. Enable it only if your
+consumers re-serialise or replay transactions.
+
+This is the largest single extractor by a wide margin — it stores the
+whole transaction body for every transaction on the chain. No
+dependencies.
 
 ### `epoch_sync_stats`
 
@@ -158,7 +165,11 @@ rollback. Default: enabled.
 ### `current_state`
 
 :::caution Reserved
-Will cover per-pool / per-account snapshot tables. Currently a stub.
+This will cover per-pool and per-account snapshot tables. It is a stub
+today and writes nothing.
+
+It still requires `ledger.enabled = true`. The validator rejects the
+config if you enable it without the ledger.
 :::
 
 ## The other sections
@@ -173,14 +184,13 @@ connection file](../running#the-postgresql-connection-file).
 "sync": { "mode": "auto" }
 ```
 
-Three values:
+:::caution Reserved
+dbsync parses this section and then ignores it. No production code
+reads `sync.mode`. The boot path always decides the phase from the
+database state.
 
-- `auto` — detect the boot mode from the database state and ledger
-  snapshots. Use this in production.
-- `ingest` — force `IngestChainHistory`. Diagnostic; refuses to run
-  if `sync_complete` is true.
-- `follow` — force `FollowingVolatileTail`. Diagnostic; assumes the
-  database is already populated.
+Leave it at `auto`, or omit the section.
+:::
 
 ### `ledger`
 
@@ -188,19 +198,23 @@ Three values:
 "ledger": { "enabled": true }
 ```
 
-When enabled, dbsync applies blocks to an in-RAM ledger state to
-produce reward, deposit, and protocol-parameter data. Adds roughly
-8 GB to the steady-state RAM footprint and ~11 GB to disk at mainnet
-tip (the LSM-backed on-disk UTxO set).
+When enabled, dbsync replays every block through a ledger state to
+produce reward, deposit, and protocol-parameter data.
 
-Without ledger, the schema is created but `ada_pots`, `epoch_param`,
-`epoch_state`, `reward`, `pot_reward`, `epoch_stake` etc. stay empty.
+The LedgerDB is an LSM-tree **on disk**, under `--ledger-state-dir`,
+not an in-memory structure. It still holds caches and a checkpoint
+buffer in RAM, and the replay is the largest RAM consumer in a dbsync
+run.
 
-`backend` accepts only `"lsm"` (the on-disk backend); an `"inmemory"`
-backend was considered but isn't supported. `snapshot_near_tip_epoch`
-defaults to 580 — past that epoch the ledger writes a snapshot every
-epoch boundary. The default works for mainnet and you shouldn't need
-to change it.
+Without the ledger, dbsync creates the schema but `ada_pots`,
+`epoch_param`, `epoch_state`, `reward`, `pot_reward`, and
+`epoch_stake` stay empty.
+
+| Field | Default | Notes |
+|---|---|---|
+| `enabled` | `false` | |
+| `backend` | `"lsm"` | The only accepted value. |
+| `snapshot_near_tip_epoch` | `580` | Past this epoch, the ledger writes a snapshot at every epoch boundary. The default suits mainnet. |
 
 ### `metrics`
 
@@ -208,20 +222,29 @@ to change it.
 "metrics": { "prometheus_port": 8080 }
 ```
 
-The Prometheus endpoint isn't wired up yet — see
-[Metrics](../operations/metrics). The field is honoured by the config
-parser but no server listens on the port today.
+:::caution Reserved
+dbsync parses this section and then ignores it. No server listens on
+the port. See [Metrics](../operations/metrics).
+:::
 
 ### `logging`
 
 ```json
-"logging": { "level": "info", "format": "text" }
+"logging": { "level": "info" }
 ```
 
 | Field | Values | Notes |
 |---|---|---|
-| `level` | `error` / `warn` / `info` / `debug` / `trace` | `info` is the production default; `debug` adds per-phase timing and step-by-step Prep logs. |
-| `format` | `text` / `json` | `text` is human-readable; `json` produces structured one-line-per-event log records. |
+| `level` | `error` / `warning` / `info` / `debug` | `info` is the production default. `debug` adds per-block progress and receiver traces. |
+| `format` | `text` / `json` | Parsed but ignored. dbsync always writes text. |
+
+:::caution A bad `level` is not an error
+`level` accepts only the four values above. dbsync silently falls back
+to `info` on anything else, so a typo makes your logs quieter, not
+louder.
+
+There is no `trace` level.
+:::
 
 ## Tips
 
@@ -232,13 +255,10 @@ to what you actually want, and you won't accidentally drop a
 shared-dedup dependency the validator would otherwise reject.
 :::
 
-- Leave `epoch_sync_stats` enabled unless you have a specific
-  reason not to — every preset turns it on and the cost is
-  negligible.
-- Don't enable a reserved option expecting tables to appear. The
-  validator accepts them so future releases can wire them up without
-  a config-shape break, but today they're no-ops.
-- The config travels across environments: same JSON in dev,
-  staging, prod. Connection details come from the pg-config file and
-  operational paths (socket, ledger state) from the CLI, so the same
-  JSON works against any node setup.
+- Leave `epoch_sync_stats` enabled. Every preset turns it on, the cost
+  is negligible, and it is the only per-epoch record you get.
+- Do not enable a reserved option and expect tables to appear.
+  `current_state` writes nothing today.
+- The same config travels across environments. Connection details come
+  from the pg-config file and operational paths come from the CLI, so
+  one JSON file works against any node setup.

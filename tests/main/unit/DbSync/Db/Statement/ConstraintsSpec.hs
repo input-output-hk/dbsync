@@ -80,7 +80,7 @@ spec = describe "parentRefConstraints" $ do
           \ \"child_parent_id_fkey\";"
         ]
 
-  -- A profile that leaves an extractor off never created its tables, so
+  -- A config that leaves an extractor off never created its tables, so
   -- an edge into one has to be dropped rather than fail the DDL.
   it "skips edges whose parent table is absent" $
     map csName (parentRefConstraints [parent, orphanChild])

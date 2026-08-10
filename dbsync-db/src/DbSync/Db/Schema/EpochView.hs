@@ -1,23 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 
--- | Schema for the @epoch_finalized@ table plus the @epoch_current@
--- and @epoch@ views.
+-- | Schema for the @epoch_finalized@ table plus the @epoch_current@ and
+-- @epoch@ views.
 --
--- The public @epoch@ series is assembled from:
---
---   * @epoch_finalized@ — a LOGGED table holding every epoch except
---     the current one. Populated by SQL @INSERT … SELECT@ at end of
---     Ingest (backfill) and at each Follow boundary; pruned by
---     @DELETE WHERE no >= target_epoch@ on rollback.
---   * @epoch_current@ — a VIEW that aggregates the active epoch's
---     blocks live.
---   * @epoch@ — a VIEW that UNIONs the two above so downstream
---     consumers see the full series.
---
--- @epoch_finalized.id@ is synthesised as @(epoch_no + 1)@ rather
--- than auto-incremented; @UNIQUE (no)@ makes the boundary insert
--- idempotent via @ON CONFLICT (no) DO UPDATE@.
+-- @epoch_finalized@ holds every completed epoch, @epoch_current@
+-- aggregates the active one live, and @epoch@ unions the two into the
+-- public series. @epoch_finalized.id@ is @(epoch_no + 1)@, not an
+-- auto-increment.
 module DbSync.Db.Schema.EpochView
   ( -- * Schema type
     EpochFinalized (..)
@@ -78,8 +68,8 @@ type instance Key EpochFinalized = EpochId
 -- * Schema type
 -- ---------------------------------------------------------------------------
 
--- | One finalised epoch's aggregate. Holds only completed epochs; the
--- active epoch comes from the @epoch_current@ view.
+-- | One completed epoch's aggregate. The active epoch comes from the
+-- @epoch_current@ view instead.
 data EpochFinalized = EpochFinalized
   { epochFinalizedOutSum    :: !Word128
   , epochFinalizedFees      :: !DbLovelace
@@ -98,10 +88,10 @@ data EpochFinalized = EpochFinalized
 epochFinalizedTableName :: Text
 epochFinalizedTableName = "epoch_finalized"
 
--- | LOGGED from creation: the table is populated by direct SQL,
--- never by the COPY pipeline, so it skips the UNLOGGED → LOGGED
--- flip in @PreparingForVolatileTail@. PK on @id@, UNIQUE on @no@
--- so the boundary append can use @ON CONFLICT (no) DO UPDATE@.
+-- | LOGGED from creation, because direct SQL populates this table and the
+-- COPY pipeline never touches it. It therefore skips the UNLOGGED →
+-- LOGGED flip in @PreparingForVolatileTail@. @UNIQUE (no)@ lets the
+-- boundary append use @ON CONFLICT (no) DO UPDATE@.
 epochFinalizedTableDef :: TableDef
 epochFinalizedTableDef = TableDef
   { tdName    = epochFinalizedTableName
@@ -179,9 +169,8 @@ epochViewColumnRecords =
 -- * COPY encoding (symmetry only)
 -- ---------------------------------------------------------------------------
 
--- | Encode an 'EpochFinalized' row for COPY. The runtime path
--- populates the table by SQL, so this is only used by tests that
--- want to round-trip the encoder.
+-- | Only the encoder round-trip tests call this. The runtime populates
+-- the table by SQL.
 encodeEpochFinalizedCopy :: EpochId -> EpochFinalized -> ByteString
 encodeEpochFinalizedCopy eid ef =
   buildCopyRow
@@ -209,16 +198,13 @@ epochViewName = "epoch"
 -- * View DDL
 -- ---------------------------------------------------------------------------
 
--- | @CREATE VIEW@ DDL for @epoch_current@ followed by @epoch@.
+-- | @CREATE VIEW@ DDL for @epoch_current@, then @epoch@.
 --
--- @epoch_current@ aggregates the un-finalised epoch live from
--- @block@ + @tx@. The @NOT EXISTS@ guard skips any epoch already in
--- @epoch_finalized@ — without it the union would double-count, and a
--- per-row check (rather than @> MAX(no)@) also tolerates a
+-- @epoch_current@ aggregates the un-finalised epoch live from @block@ and
+-- @tx@. The @NOT EXISTS@ guard skips any epoch that @epoch_finalized@
+-- already holds, because the @UNION ALL@ in @epoch@ would double-count it.
+-- A per-row check, rather than @> MAX(no)@, also tolerates a
 -- non-contiguous finalised set.
---
--- @epoch@ is a plain @UNION ALL@ of the two so the public-facing
--- @epoch@ name exposes the full series to consumers.
 createEpochViewsSql :: Text
 createEpochViewsSql = T.unlines
   [ "CREATE VIEW " <> epochCurrentViewName <> " AS"
@@ -260,9 +246,8 @@ createEpochViewsSql = T.unlines
     projection = T.intercalate ", "
       [ idCol, outSum, fees, txCount, blkCount, noCol, startTime, endTime ]
 
--- | @DROP VIEW@ DDL emitted before the underlying table's @DROP
--- TABLE@. Order matters: @epoch@ depends on @epoch_current@ /
--- @epoch_finalized@, so it has to go first.
+-- | Runs before the table's @DROP TABLE@. Order matters: @epoch@ depends
+-- on @epoch_current@ and @epoch_finalized@, so @epoch@ goes first.
 dropEpochViewsSql :: Text
 dropEpochViewsSql = T.unlines
   [ "DROP VIEW IF EXISTS " <> epochViewName <> ";"

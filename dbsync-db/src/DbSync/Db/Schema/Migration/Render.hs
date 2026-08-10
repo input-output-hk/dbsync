@@ -2,11 +2,9 @@
 
 -- | Render a 'SchemaChange' as the DDL that applies it.
 --
--- 'AddTable' reuses 'generateCreateTable' and 'AddColumn' reuses the
--- same column formatter as @CREATE TABLE@, so a migration's column
--- matches the create path. 'AmbiguousChange' renders as a SQL comment
--- (@-- TODO (manual): …@) so a generated draft surfaces it without
--- being runnable as-is.
+-- 'AddTable' and 'AddColumn' reuse the @CREATE TABLE@ formatters, so a
+-- migrated column matches the created one. 'AmbiguousChange' renders as a
+-- SQL comment, which surfaces it in a draft without being runnable.
 module DbSync.Db.Schema.Migration.Render
   ( renderChange
   ) where

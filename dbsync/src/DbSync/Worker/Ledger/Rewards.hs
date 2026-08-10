@@ -1,11 +1,8 @@
 -- | Era-agnostic reward value types.
 --
--- The era-collapsed shapes produced by the per-era converters: a
--- 'Reward' here is a plain @(source, pool, amount)@ triple, not the
--- era-specific @Cardano.Ledger.Reward@. Extractors and the event
--- pipeline consume these without caring which era produced them.
--- 'RewardSource' is re-exported from 'DbSync.Db.Types' so the worker
--- and the schema share one canonical enum.
+-- A 'Reward' is a plain @(source, pool, amount)@ triple, not the
+-- era-specific @Cardano.Ledger.Reward@. 'RewardSource' comes from
+-- 'DbSync.Db.Types' so the worker and the schema share one enum.
 module DbSync.Worker.Ledger.Rewards
   ( -- * Reward source tag
     RewardSource (..)
@@ -35,10 +32,7 @@ import DbSync.Worker.Ledger.Keys (PoolKeyHash, StakeCred)
 -- * Reward values
 -- ---------------------------------------------------------------------------
 
--- | A single reward entry: amount, earning pool, and origin.
---
--- Era-collapsed: this is the same record regardless of whether the
--- reward was produced in Shelley, Alonzo, or Conway.
+-- | One reward entry. The same record in every era.
 data Reward = Reward
   { rewardSource :: !RewardSource
   , rewardPool   :: !PoolKeyHash
@@ -55,9 +49,8 @@ newtype Rewards = Rewards
   }
   deriving stock (Eq, Show)
 
--- | A pot-sourced payment — reserves \/ treasury \/ refund. Carries
--- a 'Coin' (raw ledger value) rather than the 'Word64' used by
--- 'Reward'.
+-- | A pot-sourced payment: reserves, treasury or refund. Carries a
+-- raw ledger 'Coin', not the 'Word64' that 'Reward' uses.
 data PotReward = PotReward
   { prSource :: !RewardSource
   , prAmount :: !Coin
@@ -93,16 +86,13 @@ instance NFData PotRewards where
 -- * Helpers
 -- ---------------------------------------------------------------------------
 
--- | Total number of 'Reward' entries across all stake credentials.
+-- | Total 'Reward' entries across all stake credentials.
 rewardsCount :: Rewards -> Int
 rewardsCount = sum . map Set.size . Map.elems . unRewards
 
--- | Map a @cardano-ledger@ 'Ledger.RewardType' onto our 'RewardSource'.
---
--- Leader and member rewards are the only two shapes the ledger emits
--- through its reward events; reserves \/ treasury \/ refund sources
--- appear via different code paths (MIR, deposit refunds, etc.) and
--- are constructed directly there.
+-- | Leader and member are the only two shapes the ledger emits through
+-- its reward events. Reserves, treasury and refund sources arrive on
+-- other paths (MIR, deposit refunds) and are built there.
 rewardTypeToSource :: Ledger.RewardType -> RewardSource
 rewardTypeToSource = \case
   Ledger.LeaderReward -> RwdLeader

@@ -1,14 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Stake delegation extractor.
+-- | Writes stake registrations, deregistrations, delegations and
+-- withdrawals, plus the MIR-derived pot rows.
 --
--- Extracts stake registrations, deregistrations, delegations, and
--- withdrawals into their respective tables. Also maintains the
--- @stake_address@ dedup table.
---
--- Pool hash references created by delegation certificates are also
--- written to @pool_hash@ if encountered for the first time (since
--- the Pool extractor may not have seen them yet).
+-- A delegation certificate can name a pool the Pool extractor has not
+-- seen yet, so this extractor writes @pool_hash@ and @stake_address@
+-- rows too, through the shared dedup helpers.
 module DbSync.Extractor.StakeDelegation
   ( stakeDelegationExtractor
   ) where

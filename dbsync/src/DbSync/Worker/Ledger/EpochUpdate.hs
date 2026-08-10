@@ -1,10 +1,7 @@
 -- | Era-agnostic per-epoch update and new-epoch summary.
 --
--- 'NewEpoch' is emitted once per epoch boundary during
--- 'IngestChainHistory': it carries the ada-pots snapshot, the
--- protocol-parameter update, and (from Conway on) the DRep / gov-state
--- snapshot. 'EpochUpdate' is the parameters-only subset every era
--- produces.
+-- 'NewEpoch' arrives once per epoch boundary. 'EpochUpdate' is the
+-- parameters-only subset that every era produces.
 module DbSync.Worker.Ledger.EpochUpdate
   ( NewEpoch (..)
   , EpochUpdate (..)
@@ -75,7 +72,6 @@ instance NFData NewEpoch where
 -- * Projections
 -- ---------------------------------------------------------------------------
 
--- | Pull the current 'EpochUpdate' out of the ledger state.
 epochUpdate :: ExtLedgerState (CardanoBlock StandardCrypto) mk -> EpochUpdate
 epochUpdate lstate =
   EpochUpdate
@@ -83,8 +79,8 @@ epochUpdate lstate =
     , euNonce       = extractEpochNonce lstate
     }
 
--- | Extract the per-epoch VRF nonce from the header state, routing
--- through the right protocol (TPraos vs Praos) for each era.
+-- | Per-epoch VRF nonce from the header state. Each era routes through
+-- either TPraos or Praos.
 extractEpochNonce :: ExtLedgerState (CardanoBlock StandardCrypto) mk -> Ledger.Nonce
 extractEpochNonce extLedgerState =
   case Consensus.headerStateChainDep (headerState extLedgerState) of

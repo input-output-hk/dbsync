@@ -1,14 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Pool extractor.
+-- | Writes pool registrations, retirements, metadata references,
+-- owners and relays. It also writes @pool_hash@ rows through the
+-- shared dedup helper, though the core extractor owns that table.
 --
--- Extracts pool registrations, retirements, metadata references,
--- owners, and relays into their respective tables. Also maintains
--- the @pool_hash@ dedup table.
---
--- Depends on the StakeDelegation extractor for @stake_address@
--- resolution (pool reward addresses and owner addresses are
--- resolved as stake addresses).
+-- Pool reward addresses and owner addresses resolve as stake
+-- addresses, through the same @stake_address@ dedup path.
 module DbSync.Extractor.Pool
   ( poolExtractor
   ) where
@@ -72,9 +69,8 @@ processPool ctx = do
   writer   <- asks getWriter
   let gb      = bcGenBlock ctx
       epochNo = unEpochNo (blkEpochNo gb)
-      -- Worker-supplied protocol param when ledger ON; 'Nothing'
-      -- otherwise — pool_update.deposit stays NULL to match the
-      -- original schema's behaviour for ledger-disabled runs.
+      -- The worker supplies this protocol param when the ledger is on.
+      -- Otherwise @pool_update.deposit@ stays NULL.
       mPoolDeposit = blockPoolDeposit (bcLedgerData ctx)
       -- Pools already registered in the ledger before this block.
       registeredPools = blockRegisteredPools (bcLedgerData ctx)
@@ -177,8 +173,8 @@ processPool ctx = do
 -- * Helpers
 -- ---------------------------------------------------------------------------
 
--- | Build a 'PoolRelay' from relay data. Each variant only fills the
--- fields it carries; everything else defaults to 'Nothing'.
+-- | Each relay variant fills only the fields it carries; the rest stay
+-- 'Nothing'.
 mkPoolRelay :: PoolUpdateId -> PoolRelayData -> PoolRelay
 mkPoolRelay puId = \case
   PoolRelaySingleAddr mPort mIpv4 mIpv6 ->

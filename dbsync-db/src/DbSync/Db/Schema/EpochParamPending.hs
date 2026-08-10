@@ -1,20 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Per-epoch protocol-parameter snapshot, written by the ledger
--- worker during 'IngestChainHistory' and consumed by
--- 'PreparingForVolatileTail' to backfill @pool_update.deposit@ (first
--- registrations) and @stake_registration.deposit@ (Shelley-Babbage
--- rows whose cert carries no inline deposit).
+-- | Per-epoch protocol-parameter snapshot. The ledger worker writes it
+-- during 'IngestChainHistory', and 'PreparingForVolatileTail' reads it to
+-- backfill @pool_update.deposit@ and @stake_registration.deposit@.
 --
--- The table is LOGGED: a crash must not truncate it, because the
--- consumer advances @dbsync_sync_state.last_committed_slot@ only after
--- the epoch's params are committed here, and losing them would leave
--- those deposit columns permanently NULL after resume.
---
--- One row per epoch, keyed on @epoch_no@; INSERT uses
--- @ON CONFLICT DO NOTHING@ so a re-flush after a partial crash is a
--- no-op. Truncated at the end of 'PreparingForVolatileTail' once the
--- backfill UPDATEs have run.
+-- The table is LOGGED, because a crash must not truncate it: the consumer
+-- advances @dbsync_sync_state.last_committed_slot@ only after it commits
+-- the epoch's params here, so a loss leaves those deposit columns NULL
+-- for good after a resume.
 module DbSync.Db.Schema.EpochParamPending
   ( -- * Schema type
     EpochParamPending (..)
@@ -48,8 +41,11 @@ import DbSync.Db.Types (DbLovelace)
 -- | One epoch's protocol-param deposit values.
 data EpochParamPending = EpochParamPending
   { eppEpochNo         :: !Word64
+      -- ^ Unused. The insert statement takes three parallel arrays.
   , eppStakeKeyDeposit :: !DbLovelace
+      -- ^ Unused. The insert statement takes three parallel arrays.
   , eppPoolDeposit     :: !DbLovelace
+      -- ^ Unused. The insert statement takes three parallel arrays.
   }
   deriving stock (Eq, Show)
 

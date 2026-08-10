@@ -1,17 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Epoch-boundary projection.
+-- | Owns the boundary-triggered tables @ada_pots@, @epoch_param@,
+-- @epoch_state@ and @cost_model@. @pdProcess@ is a no-op: the consumer
+-- calls 'runEpochBoundary' when it sees an epoch transition and the
+-- LedgerWorker has produced the matching 'ApplyResult'.
 --
--- Owns the boundary-triggered tables: @ada_pots@, @epoch_param@,
--- @epoch_state@, @cost_model@. The per-block 'pdProcess' callback
--- is a no-op; 'runEpochBoundary' is invoked by the consumer when
--- it detects an epoch transition and the LedgerWorker has produced
--- the matching 'ApplyResult'.
---
--- When the ledger feature is off the consumer never calls
--- 'runEpochBoundary' and these tables stay empty. The schemas are
--- created unconditionally so operators can flip the ledger flag
--- without re-syncing.
+-- With the ledger off, the consumer never calls 'runEpochBoundary' and
+-- these tables stay empty. The schema still creates them, so an
+-- operator can turn the ledger on without a re-sync.
 module DbSync.Extractor.EpochBoundary
   ( -- * Extractor registration
     epochBoundaryExtractor
@@ -75,11 +71,6 @@ import DbSync.Writer (HasWriter (..), Writer (..))
 -- * Extractor registration
 -- ---------------------------------------------------------------------------
 
--- | The EpochBoundary extractor.
---
--- Registers the four boundary-triggered tables. The per-block
--- 'pdProcess' is a no-op; 'runEpochBoundary' is the entry point
--- the consumer calls when an epoch crosses.
 epochBoundaryExtractor :: ExtractorDef
 epochBoundaryExtractor = ExtractorDef
   { pdName    = "epoch_boundary"
@@ -96,25 +87,22 @@ epochBoundaryExtractor = ExtractorDef
 -- * Boundary handler
 -- ---------------------------------------------------------------------------
 
--- | Run the epoch-boundary writes for a single transition.
+-- | Run the epoch-boundary writes for one transition. A populated
+-- @bndNewEpoch@ dispatches to the per-table writers:
 --
--- Dispatches to four per-table writers when 'apNewEpoch' is
--- populated:
---
---   * @ada_pots@ — when the ledger reported pots data for the
---     boundary (always from Shelley onward, never from Byron).
---   * @cost_model@ — when the protocol parameters carry Plutus
---     cost models (Alonzo onward); deduped by Blake2b hash of the
+--   * @ada_pots@ — when the ledger reports pots data, which it does
+--     from Shelley onward and never from Byron.
+--   * @cost_model@ — when the protocol parameters carry Plutus cost
+--     models (Alonzo onward). Dedup keys on the Blake2b hash of the
 --     canonical CBOR encoding.
 --   * @epoch_param@ — every Shelley-onward boundary.
---   * @epoch_state@ — every Conway-onward boundary (the enacted
---     governance snapshot). The three governance FK columns are
---     written 'Nothing' until the governance boundary pass resolves
---     committee \/ no-confidence \/ constitution IDs. Pre-Conway
---     boundaries emit no row.
+--   * @epoch_state@ — every Conway-onward boundary. The three
+--     governance FK columns stay 'Nothing' until the governance
+--     boundary pass resolves them. A pre-Conway boundary writes no
+--     row.
 --
--- Idempotency is the caller's responsibility — invoking this twice
--- for the same boundary writes duplicate rows.
+-- The caller owns idempotency: two calls for one boundary write
+-- duplicate rows.
 runEpochBoundary
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
   => BoundaryApplyData
@@ -133,8 +121,7 @@ runEpochBoundary applyResult blockId =
 -- * AdaPots
 -- ---------------------------------------------------------------------------
 
--- | Build and dispatch the 'AdaPots' row for the boundary, if the
--- ledger reported any pots data.
+-- | Writes nothing when the ledger reports no pots data.
 writeBoundaryAdaPots
   :: (HasWriter env, MonadReader env m, MonadIO m)
   => BoundaryApplyData
@@ -148,17 +135,14 @@ writeBoundaryAdaPots applyResult newEpoch blockId =
       writer <- asks getWriter
       liftIO $ writeAdaPots writer (mkAdaPotsRow applyResult newEpoch blockId pots)
 
--- | Build an 'AdaPots' record from the boundary's
--- 'Shelley.AdaPots' value.
+-- | The deposit pots (stake, drep, proposal) come from
+-- 'Shelley.obligationsPot'; they are not fields on 'Shelley.AdaPots'
+-- itself.
 --
--- The deposit pots (stake, drep, proposal) come from
--- 'Shelley.obligationsPot' — they are not direct fields on
--- 'Shelley.AdaPots' itself.
---
--- @utxo@ is taken /verbatim/ from the supplied pots — the caller
--- (the LedgerWorker via 'DbSync.Worker.Ledger.State.applyBlock') has
--- already applied the @fixUTxOPots@ correction so that the sum of
--- pots equals @maxLovelaceSupply@.
+-- @utxo@ is taken /verbatim/ from the supplied pots. The caller, the
+-- LedgerWorker in 'DbSync.Worker.Ledger.State.applyBlock', already
+-- applied the @fixUTxOPots@ correction, so the pots sum to
+-- @maxLovelaceSupply@.
 mkAdaPotsRow
   :: BoundaryApplyData
   -> Generic.NewEpoch
@@ -188,9 +172,8 @@ mkAdaPotsRow applyResult newEpoch blockId pots =
 -- * Protocol parameters and epoch state
 -- ---------------------------------------------------------------------------
 
--- | Build and dispatch the cost_model and epoch_param rows for the
--- boundary. No-op if the ledger emitted no protocol params (Byron
--- boundaries).
+-- | Writes the @cost_model@ and @epoch_param@ rows. A Byron boundary
+-- carries no protocol params, so it writes nothing.
 writeBoundaryProtoParams
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
   => Generic.NewEpoch
@@ -225,9 +208,8 @@ writeBoundaryEpochState newEpoch = do
   liftIO $ writeEpochState writer
     (mkEpochStateRow epoch mCommitteeId mNoConfId mConstId)
 
--- | Dedup-write a cost_model row. Returns the (possibly already
--- existing) row id when cost models are present in the protocol
--- params, 'Nothing' for pre-Alonzo eras.
+-- | Returns the row id, new or existing, when the protocol params
+-- carry cost models. 'Nothing' for a pre-Alonzo era.
 writeBoundaryCostModel
   :: MonadIO m
   => IdResolver IO
@@ -245,7 +227,6 @@ writeBoundaryCostModel resolver writer (Just cms) = do
 -- * Row builders
 -- ---------------------------------------------------------------------------
 
--- | Map a 'ProtoParams' snapshot to the 53-column 'EpochParam' row.
 mkEpochParamRow
   :: Proto.ProtoParams
   -> Word64
@@ -342,9 +323,9 @@ mkEpochParamRow pp epoch blockId nonce mCostModelId =
     , epochParamMinFeeRefScriptCostPerByte = Proto.ppMinFeeRefScriptCostPerByte pp
     }
 
--- | Build the 'EpochState' row. The three FK columns come from
--- 'readEnactedEpochStateIds' on the resolver, which the governance
--- boundary handler refreshes from @apGovActionState@.
+-- | The three FK columns come from 'readEnactedEpochStateIds' on the
+-- resolver, which the governance boundary handler refreshes from
+-- @bndGovActionState@.
 mkEpochStateRow
   :: Word64
   -> Maybe Int64     -- ^ committee.id
@@ -358,17 +339,15 @@ mkEpochStateRow epoch mCommitteeId mNoConfId mConstitutionId = EpochState
   , epochStateEpochNo        = epoch
   }
 
--- | Build the 'CostModel' row from a Plutus cost-model map. The
--- @costs@ column is the canonical JSON encoding; @hash@ is the
--- Blake2b_256 of the CBOR-serialised 'CostModels' wrapper — same
--- bytes as the dedup key.
+-- | The @costs@ column takes the canonical JSON encoding. The @hash@
+-- column takes the Blake2b_256 of the CBOR-serialised 'CostModels'
+-- wrapper, which is also the dedup key.
 mkCostModelRow :: Map Language Alonzo.CostModel -> CostModel
 mkCostModelRow cms = CostModel
   { costModelCosts = Text.decodeUtf8 . LBS.toStrict $ Aeson.encode cms
   , costModelHash  = hashCostModels cms
   }
 
--- | Blake2b_256 of the CBOR-encoded 'CostModels' newtype.
 hashCostModels :: Map Language Alonzo.CostModel -> ByteString
 hashCostModels =
   Crypto.abstractHashToBytes . Crypto.serializeCborHash . mkCostModels

@@ -27,7 +27,7 @@ import Data.IORef (IORef, newIORef, readIORef)
 
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
-import DbSync.App.Config.Types (DbProfile (..), OptionFlag (..), SyncConfig (..))
+import DbSync.App.Config.Types (Extractors (..), OptionFlag (..), SyncConfig (..))
 import DbSync.Db.Schema.Address (addressTableDef)
 import DbSync.Db.Schema.Core (blockTableDef, slotLeaderTableDef, txTableDef)
 import DbSync.Db.Schema.Core (poolHashTableDef, stakeAddressTableDef)
@@ -103,7 +103,7 @@ preservedTables = map tdName
 data SnapshotRequirement = RequireSnapshot | RequireNoSnapshot
 
 runRestartScenario :: SyncConfig -> SnapshotRequirement -> IO ()
-runRestartScenario profile snapReq =
+runRestartScenario cfg snapReq =
   withMockNode conwayConfigDir $ \mn ->
     withTempDir "dbsync-test-restart" $ \ledgerDir -> do
       tracer <- quietTracer
@@ -115,7 +115,7 @@ runRestartScenario profile snapReq =
       -- and giving the snapshot writer something to persist.
       _ <- forgeAndPushBlocks mn 200
 
-      preCounts <- withAppSession tracer profile mn ledgerDir $ \_ -> do
+      preCounts <- withAppSession tracer cfg mn ledgerDir $ \_ -> do
         waitForSyncComplete 60
         forgeAndWaitForBlocks mn 60 260 60
         traverse countRows preservedTables
@@ -131,7 +131,7 @@ runRestartScenario profile snapReq =
           entries <- listLedgerSnapshots ledgerDir
           entries `shouldSatisfy` (not . null)
 
-      withAppSessionResume tracer profile mn ledgerDir $ \_ ->
+      withAppSessionResume tracer cfg mn ledgerDir $ \_ ->
         verifyResume mn preCounts blocksBefore
 
 verifyResume :: MockNode -> [Int] -> Int -> IO ()
@@ -283,8 +283,8 @@ runEpochRegressionScenario =
 -- on so it writes @epoch_stake@ / @reward@ / @pot_reward@.
 stakeLedgerConfig :: SyncConfig
 stakeLedgerConfig = ledgerEnabledTestConfig
-  { scDbProfile = (scDbProfile ledgerEnabledTestConfig)
-      { pcStakeDelegationLedger = OptionFlag True
+  { scExtractors = (scExtractors ledgerEnabledTestConfig)
+      { exStakeDelegationLedger = OptionFlag True
       }
   }
 

@@ -1,13 +1,9 @@
--- | Ingest-phase ID resolver.
+-- | Ingest-phase id resolver. It assigns ids from the LSM-backed
+-- 'DedupStores' and the 'IORef'-backed 'IdCounters', so the hot path
+-- makes no database query.
 --
--- Uses 'DedupStores' (LSM-backed) and 'IdCounters' ('IORef'-backed)
--- to assign IDs during 'IngestChainHistory'. No live database
--- queries on the hot path; dedup state lives in the shared
--- 'LsmSession' and counter state in an 'IORef' on 'ExtractState'.
---
--- This module is a thin composer: every method body lives in
--- @Resolver\/\<extractor\>.hs@ next door. 'mkIngestResolver' wires
--- them into a single 'IdResolver' record.
+-- Every method body lives in @Resolver\/\<extractor\>.hs@;
+-- 'mkIngestResolver' wires them into one 'IdResolver'.
 module DbSync.Phase.Ingest.Resolver
   ( mkIngestResolver
   ) where

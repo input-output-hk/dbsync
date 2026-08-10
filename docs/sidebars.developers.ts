@@ -33,6 +33,7 @@ const sidebars: SidebarsConfig = {
     'memory-and-strictness',
     'error-handling',
     'testing',
+    'db-compare',
     'repository-layout',
     'contributing',
   ],

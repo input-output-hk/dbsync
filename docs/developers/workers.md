@@ -13,8 +13,8 @@ slows nothing on the consumer thread.
 Three subsystems, each with its own module root under
 `DbSync.Worker.*`:
 
-- **Ledger Worker** — applies blocks to an in-RAM `LedgerDB` to produce
-  per-block and per-epoch ledger-derived state.
+- **Ledger Worker** — replays blocks through the on-disk `LedgerDB` to
+  produce per-block and per-epoch ledger-derived state.
 - **TxOut Worker** — drains per-epoch buffers from Ingest's main loop and
   back-fills FK columns the COPY path couldn't.
 - **OffChain Fetcher** — background HTTP fetchers for pool and
@@ -26,9 +26,9 @@ Three subsystems, each with its own module root under
 Lives under [`DbSync.Worker.Ledger.*`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/Worker/Ledger/Worker.hs).
 
 :::info Optional
-Enabled by `ledger.enabled = true` in the profile. The ledger-
-disabled path allocates none of the worker's state — no second
-block queue, no snapshot writer, no `BlockLedgerData` wiring.
+Enabled by `ledger.enabled = true` in the config. The ledger-disabled
+path allocates none of the worker's state: no second block queue, no
+snapshot writer, no `BlockLedgerData` wiring.
 :::
 
 ### What it does
@@ -37,20 +37,21 @@ When enabled, the worker runs on its own thread and consumes a dedicated
 copy of the chainsync block stream (the receiver fans `MsgForward` into a
 second `TBQueue` when ledger is on). For each block it:
 
-1. Applies the block to the in-memory `LedgerDB`.
-2. Writes the resulting `ApplyResult` into a shared `TVar` the rest of
-   the app reads from.
-3. Signals epoch boundaries via a separate `TMVar` so the consumer can
-   coordinate per-epoch work.
+1. Applies the block to the `LedgerDB`.
+2. Publishes the resulting `ApplyResult` for the consumer to read.
+3. Publishes boundary results onto `leBoundaryApplyResults`, a `TBQueue`
+   bounded at 4, which the epoch-boundary handler drains through
+   `readBoundaryApplyResult`.
 
 A second async — the **snapshot writer** — persists `LedgerDB` snapshots
-to disk so a restart can resume without replaying from genesis.
+to disk so a restart resumes without replaying from genesis.
 
 ### LSM backing
 
 The `LedgerDB` is the V2 design from `ouroboros-consensus:lsm`: an
-LSM-tree-backed on-disk UTxO set with in-memory caches for recent
-blocks. Snapshots are written incrementally — the in-memory state and
+LSM-tree-backed **on-disk** UTxO set with in-memory caches for recent
+blocks. Only a small checkpoint buffer is in RAM — 100 entries in Follow,
+2 during Ingest. Snapshots are written incrementally — the in-memory state and
 the on-disk state advance together rather than dumping a full ledger
 state on each snapshot. This is the same `lsm-tree` library dbsync uses
 for its own [Ingest scratch state](phases/ingest#lsm-backed-scratch-state);
@@ -63,21 +64,23 @@ separate from the Ingest scratch session at
 
 ### What it produces
 
-Per-block:
+Per block, as the fields of `LedgerOutputs`:
 
-- The block's **deposits map** — per-tx deposit amounts indexed by tx
-  hash. Only populated for txs with stake registrations, pool
-  registrations, or governance certs.
-- Protocol-param **stake-key deposit** and **pool deposit** as of the
-  block (extracted from the ledger PParams).
+| Field | Contents |
+|---|---|
+| `loDepositsMap` | Per-tx deposit amounts, keyed by tx-body hash. Populated only for txs with stake registrations, pool registrations, or governance certificates. |
+| `loStakeKeyDeposit` / `loPoolDeposit` | Protocol-param deposits as of this block. |
+| `loPrices` | Plutus execution prices. `Nothing` pre-Alonzo. Drives `redeemer.fee`. |
+| `loStakeSlice` | One slice of the "mark" stake distribution. The distribution is produced **per block, in slices**, not once per epoch. |
+| `loRegisteredPools` | Pool hashes already registered, which decides the `pool_update.active_epoch_no` offset. |
+| `loGovExpiresAfter` | Governance-action lifetime in epochs. `Nothing` outside Conway. |
+| `loCommitteeMembers` | The resolved committee per committee-updating proposal in this block. |
 
-Per-epoch:
+Per epoch, delivered over the boundary queue:
 
-- **Rewards** — full per-account rewards snapshot at the boundary.
+- **Rewards** — the full per-account rewards snapshot at the boundary.
 - **ada_pots** — the four canonical Cardano pots.
 - **EpochParam** — the protocol parameters in effect for the epoch.
-- **StakeDistribution** — the stake distribution that drives leader
-  election.
 
 ### How it reaches extractors
 
@@ -102,25 +105,38 @@ processing. Protocol-param deposits additionally accumulate into
 [`PreparingForVolatileTail`](phases/preparing) backfills the affected
 columns once Ingest exits.
 
+### It does write to PG
+
+The worker is not purely a producer. It owns a control connection and
+writes to `dbsync_sync_state` on it:
+
+- `markSnapshotComplete` after every successful snapshot, which sets
+  `last_snapshot_slot`.
+- `writePendingRollbackSlot` when a rollback goes deeper than its buffer.
+
 ### Lifecycle across phases
 
-The ledger worker + snapshot-writer asyncs stay alive across the entire
-Ingest → Prep → Follow span. Their in-memory state keeps ticking through
-Prep even though Prep itself doesn't touch the LedgerDB. On a clean
-shutdown the worker drains its queue and writes a final snapshot; the
-fingerprint file in the state directory pins the snapshot to this
-chain's network magic + system start so a future boot refuses to attach
-the wrong chain's ledger.
+The ledger worker and snapshot-writer asyncs stay alive across the whole
+Ingest → Prep → Follow span. The LedgerDB keeps ticking through Prep even
+though Prep never touches it.
+
+On a clean shutdown the worker drains its queue and writes a final
+snapshot. The fingerprint file in the state directory pins that snapshot
+to this chain's network magic and system start, so a later boot refuses
+to attach the wrong chain's ledger.
 
 ### Rollback
 
-Rollbacks within the in-memory volatile buffer (the last ~100 blocks)
-are handled by walking the buffer back to the target.
+For a rollback inside the in-memory buffer — roughly the last 100 blocks
+— the worker walks the buffer back to the target.
 
-:::caution Deeper rollbacks
-A rollback past the in-memory buffer panics with an
-operator-actionable message. The recovery path is to restart dbsync
-so the disk snapshot can be reloaded at the rollback point.
+:::note Deeper rollbacks recover on restart
+The worker does **not** panic. It writes the target to
+`dbsync_sync_state.pending_rollback_slot`, logs at `Error`, and throws an
+`AppLedgerError`.
+
+Restarting dbsync replays the rollback from a disk snapshot
+automatically. The operator does nothing beyond the restart.
 :::
 
 ## TxOut Worker
@@ -146,11 +162,13 @@ Two per-epoch buffers accumulate the inputs:
 
 At each Ingest epoch boundary, the consumer hands the buffers to the
 worker as a `TxOutJob` and resets them. The worker drains the job on its
-own dedicated PG connection: bulk-deduplicates the addresses (a single
-`SELECT … WHERE hash IN (…)` round-trip), inserts the new ones, and runs
-the back-fill UPDATEs. The four hook calls run in sequence on that
-connection, so the worker cannot deadlock against itself on overlapping
-`tx_out` rows.
+own dedicated PG connection: it bulk-deduplicates the addresses in one
+round-trip, inserts the new ones, then runs the back-fill UPDATEs. The
+four hook calls run in sequence on that connection, so the worker cannot
+deadlock against itself on overlapping `tx_out` rows.
+
+The dedup round-trip is a JOIN over `unnest($1)` matching on both the
+hashed and the raw address, not an `IN (…)` list.
 
 ### Back-pressure
 
@@ -177,7 +195,9 @@ PG connection and its own HTTP connection pool.
 
 ### What they do
 
-The two workers share a generic loop (`OffChainWorker`). Each cycle:
+Both workers share one loop — `loopForever` / `runOneCycle` — and plug
+their domain-specific behaviour in through an `OffChainHooks` record.
+`OffChainWorker` is the handle, not the loop. Each cycle:
 
 1. Loads a batch of pending refs from PG — anchors observed by the
    `off_chain_pools` / `off_chain_votes` extractors, plus earlier

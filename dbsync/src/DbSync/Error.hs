@@ -3,9 +3,10 @@
 -- | Application-wide error type with source-location tracking.
 --
 -- Every 'AppError' constructor carries 'SrcInfo'. Errors propagate
--- through 'AppM' via 'throwIO' — there is no 'ExceptT' in the stack.
--- Prefer the per-kind throwers over 'throwAppError' for readability;
--- use 'rethrowAs' at boundaries with third-party libraries.
+-- through 'AppM' via 'throwIO'; there is no 'ExceptT' in the stack.
+-- Prefer the per-kind throwers over 'throwAppError'. At a boundary
+-- with a third-party library use 'rethrowAs'; never rethrow a bare
+-- 'SomeException'.
 module DbSync.Error
   ( -- * Types
     AppError (..)
@@ -62,8 +63,7 @@ instance Exception AppError
 -- ---------------------------------------------------------------------------
 
 -- | Attached with 'Control.Exception.annotateIO' around per-block
--- processing so a crash names the block in flight. Rendered by
--- "DbSync.Error.Render".
+-- processing, so a crash names the block in flight.
 data BlockAnnotation = BlockAnnotation
   { baSlot    :: !Word64
   , baBlockNo :: !Word64
@@ -121,9 +121,9 @@ throwInternal msg = withFrozenCallStack (throwAppError AppInternalError msg)
 -- * Wrapping foreign exceptions
 -- ---------------------------------------------------------------------------
 
--- | Run @action@; rethrow any synchronous 'SomeException' as the
--- chosen 'AppError' kind, prepending @context@ to the original
--- exception's display string. Async exceptions propagate untouched.
+-- | Run @action@ and rethrow any synchronous 'SomeException' as the
+-- chosen 'AppError' kind, with @context@ prepended to the original
+-- display string. Async exceptions propagate untouched.
 rethrowAs
   :: (HasCallStack, MonadUnliftIO m)
   => (SrcInfo -> Text -> AppError)

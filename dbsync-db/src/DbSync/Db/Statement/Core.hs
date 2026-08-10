@@ -1,16 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Hasql 'Statement' bindings for the @core@ extractor tables:
--- @block@, @tx@, @slot_leader@, @stake_address@, @pool_hash@.
+-- | Hasql 'Statement' bindings for the @core@ extractor tables.
 --
--- @stake_address@ is dedup-keyed on @hash_raw@ (the 29-byte serialised
--- reward address); @pool_hash@ is dedup-keyed on @hash_raw@ (the
--- 28-byte pool key hash).
+-- @stake_address@ dedups on the 29-byte serialised reward address and
+-- @pool_hash@ dedups on the 28-byte pool key hash, both in @hash_raw@.
 --
--- Used during 'FollowingChainTip' and 'PreparingForVolatileTail';
--- 'IngestChainHistory' writes via COPY instead. The @Row@-suffixed
--- inserts take a caller-chosen id allocated via the matching
--- @next…IdStmt@; the unsuffixed inserts let PostgreSQL pick the id.
+-- 'FollowingChainTip' and 'PreparingForVolatileTail' use these;
+-- 'IngestChainHistory' writes through COPY instead. A @Row@-suffixed
+-- insert takes a caller-chosen id from the matching @next…IdStmt@; an
+-- unsuffixed insert lets PostgreSQL pick the id.
 module DbSync.Db.Statement.Core
   ( -- * block
     insertBlockStmt

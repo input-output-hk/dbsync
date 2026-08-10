@@ -15,11 +15,9 @@ import Cardano.Prelude
 import DbSync.Db.Schema.Types (TableColumn (..), TableDef (..))
 import DbSync.Db.Sql (quoteIdent)
 
--- | Quoted table name.
 table :: TableDef -> Text
 table = quoteIdent . tdName
 
--- | Quoted column name.
 col :: TableColumn -> Text
 col = quoteIdent . tcName
 

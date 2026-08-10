@@ -42,15 +42,11 @@ use.
 
 ## Faster rebuilds
 
-The repository ships a `cabal.project.local` that's tracked
-intentionally — keep your local overrides out of it. For per-developer
-overrides, create `cabal.project.local.local` and add to
-`.git/info/exclude`.
-
-Useful overrides:
+Put local overrides in `cabal.project.local`. It is git-ignored, so
+your changes stay out of the repository.
 
 ```cabal
--- cabal.project.local.local
+-- cabal.project.local
 program-options
   ghc-options:
     -j
@@ -75,16 +71,18 @@ ensure `pkg-config --libs snappy` returns successfully.
 `liburing-dev` (Debian/Ubuntu) or `liburing-devel` (Fedora) is missing.
 
 :::caution Old kernels
-Kernels older than 5.1 don't support `io_uring` at all. If you're on
-one, the `+serialblockio` workaround is to manually add the flag in
-`cabal.project.local.local`:
+Kernels older than 5.1 do not support `io_uring`. `cabal.project`
+selects the `+serialblockio` fallback automatically on non-Linux
+targets only, so on Linux you must set it yourself in
+`cabal.project.local`:
 
 ```cabal
 package blockio
   flags: +serialblockio
 ```
 
-This works but the LedgerDB will be noticeably slower.
+This builds and runs correctly, but the LSM stores and the LedgerDB
+are slower.
 :::
 
 **`unknown package: cardano-ledger-conway-1.17.3`**
@@ -101,7 +99,7 @@ cabal --project-file=cabal.project.profiling build dbsync
 ```
 
 The `scripts/profile-dbsync.sh` helper runs the resulting binary with
-the right RTS flags for heap / cost-centre profiles. See the script
+the right RTS flags for heap and cost-centre profiles. See the script
 header for the per-mode walkthrough — useful when investigating
 memory or performance regressions.
 

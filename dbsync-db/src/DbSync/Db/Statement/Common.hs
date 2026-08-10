@@ -47,7 +47,6 @@ import DbSync.Db.Sql (quoteIdent)
 -- * ID allocation
 -- ---------------------------------------------------------------------------
 
--- | @SELECT nextval('<table>_id_seq')@ returning a typed id.
 nextIdStmt :: TableDef -> (Int64 -> a) -> Stmt.Statement () a
 nextIdStmt td ctor =
   Stmt.preparable
@@ -220,8 +219,8 @@ rebuildTableScript td overrides fromSql
 -- * Lookups
 -- ---------------------------------------------------------------------------
 
--- | Column naming conventions for 'queryIdByColumnStmt'. Closed set;
--- add a constructor here when a new convention lands.
+-- | The closed set of column naming conventions 'queryIdByColumnStmt'
+-- accepts.
 data LookupColumn
   = ByHash      -- ^ @hash@ (block, tx, slot_leader).
   | ByHashRaw   -- ^ @hash_raw@ (pool_hash, stake_address).
@@ -232,7 +231,6 @@ lookupColumnName = \case
   ByHash    -> "hash"
   ByHashRaw -> "hash_raw"
 
--- | @SELECT id FROM <table> WHERE <column> = $1@ for a 'ByteString' key.
 queryIdByColumnStmt
   :: TableDef
   -> LookupColumn
@@ -270,10 +268,8 @@ word64Param = fromIntegral >$< E.param (E.nonNullable E.int8)
 -- * Array parameter helpers
 -- ---------------------------------------------------------------------------
 
--- | A @<type>[]@ array of non-null values.
 arrayParam :: E.Value a -> E.Params [a]
 arrayParam v = E.param (E.nonNullable (E.foldableArray (E.nonNullable v)))
 
--- | A @<type>[]@ array of nullable values.
 nullArrayParam :: E.Value a -> E.Params [Maybe a]
 nullArrayParam v = E.param (E.nonNullable (E.foldableArray (E.nullable v)))

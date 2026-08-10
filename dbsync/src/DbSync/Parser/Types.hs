@@ -1,16 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Generic block and transaction types.
---
--- These types are the era-independent representation of blocks and transactions.
--- Era-specific converters (fromShelleyBlock, fromConwayBlock, etc.) produce
--- these types from raw cardano-ledger types. Adapted from the original
--- project's @Cardano.DbSync.Era.Shelley.Generic@ module hierarchy
--- (here flattened into "DbSync.Parser.Types" plus the projection modules
--- under "DbSync.Ledger").
---
--- All fields match the original @cardano-db-sync@ Generic types, ensuring
--- full schema parity with the existing database.
+-- | Era-independent block and transaction types. The per-era
+-- converters (@fromShelleyBlock@, @fromConwayBlock@, and so on) build
+-- them from raw cardano-ledger types.
 module DbSync.Parser.Types
   ( -- * Generic block / tx types
     GenericBlock (..)
@@ -67,17 +59,14 @@ import DbSync.Parser.ParamProposal (GenericParamProposal)
 -- * Cardano point alias
 -- ---------------------------------------------------------------------------
 
--- | A point on the Cardano blockchain.
---
--- Defined here (rather than in 'DbSync.ChainSync.Connection') so that low-level
--- types — 'DbSync.Worker.Ledger.Types', 'DbSync.Worker.Ledger.Snapshot', etc. — can refer
--- to it without pulling in the entire ChainSync wiring (which itself
--- depends on 'DbSync.App.Env').
+-- | A point on the chain. It lives here, not in
+-- 'DbSync.ChainSync.Connection', so that low-level types such as
+-- 'DbSync.Worker.Ledger.Types' can name it without pulling in the
+-- ChainSync wiring, which depends on 'DbSync.App.Env'.
 type CardanoPoint = Point (CardanoBlock StandardCrypto)
 
 -- * Types
 
--- | Supported blockchain eras.
 data BlockEra
   = Byron
   | Shelley
@@ -111,13 +100,6 @@ classifyEra = \case
   Conway   -> StandardSlices
   Dijkstra -> StandardSlices
 
--- | Era-independent block representation.
--- Produced by era-specific converters from cardano-ledger types.
---
--- Fields match the original project's
--- @Cardano.DbSync.Era.Shelley.Generic.Block@ plus @SlotDetails@ fields
--- (@blkEpochSlotNo@, @blkTime@) that the original computes separately
--- but we fold in during parsing.
 data GenericBlock = GenericBlock
   { blkEra           :: !BlockEra
   , blkHash          :: !ByteString       -- ^ 32-byte block header hash
@@ -139,11 +121,7 @@ data GenericBlock = GenericBlock
   }
   deriving stock (Show)
 
--- | Era-independent transaction representation.
--- Contains all data extractable from a transaction across all eras.
--- Fields match the original project's
--- @Cardano.DbSync.Era.Shelley.Generic.Tx@ ensuring full schema parity
--- with the @tx@ database table.
+-- | Everything the extractors read from a transaction, in any era.
 data GenericTx = GenericTx
   { txHash              :: !ByteString     -- ^ 32-byte transaction hash
   , txBlockIndex        :: !Word64         -- ^ Index within the block (word31type in DB)
@@ -249,7 +227,6 @@ data GenericTxRedeemer = GenericTxRedeemer
   }
   deriving stock (Eq, Show)
 
--- | A transaction input reference.
 data GenericTxIn = GenericTxIn
   { txInHash       :: !ByteString  -- ^ Hash of the transaction being spent
   , txInIndex      :: !Word16      -- ^ Output index being spent
@@ -259,7 +236,6 @@ data GenericTxIn = GenericTxIn
   }
   deriving stock (Eq, Show)
 
--- | A transaction output.
 data GenericTxOut = GenericTxOut
   { txOutIndex       :: !Word16
   , txOutAddressRaw  :: !ByteString   -- ^ Raw address bytes
@@ -297,10 +273,8 @@ rewardAddrCredHash bs = case BS.uncons bs of
   Just (header, cred) -> CredHash cred (header .&. 0x10 /= 0)
   Nothing             -> CredHash bs False
 
--- | A certificate within a transaction.
---
--- Carries structured certificate data so extractors can dispatch on
--- the certificate kind without re-deserializing CBOR.
+-- | Structured certificate data, so an extractor dispatches on the
+-- certificate kind without deserialising the CBOR again.
 data GenericTxCertificate = GenericTxCertificate
   { txCertIndex      :: !Word16
   , txCertAction     :: !CertAction
@@ -310,11 +284,9 @@ data GenericTxCertificate = GenericTxCertificate
   }
   deriving stock (Show)
 
--- | Discriminated union of all certificate kinds across eras.
---
--- Stake-related certs are consumed by the StakeDelegation extractor.
--- Pool-related certs are consumed by the Pool extractor.
--- Governance certs are consumed by the Governance extractor (future).
+-- | Every certificate kind, across all eras. The StakeDelegation
+-- extractor reads the stake certs, the Pool extractor reads the pool
+-- certs, and the Governance extractor reads the governance certs.
 data CertAction
   -- Stake delegation certificates (Shelley+)
   = CertStakeRegistration
@@ -480,7 +452,6 @@ data GenericVoter
       -- ^ 28-byte committee hot-key credential plus @has_script@ flag.
   deriving stock (Eq, Show)
 
--- | A single vote cast by a 'GenericVoter' on a governance action.
 data GenericVotingProcedure = GenericVotingProcedure
   { gvpTxIndex     :: !Word16
   , gvpVoter       :: !GenericVoter
@@ -497,7 +468,6 @@ data GenericVotingProcedure = GenericVotingProcedure
 
 -- ---------------------------------------------------------------------------
 
--- | Pool registration data extracted from a @PoolRegistration@ certificate.
 data PoolRegistrationData = PoolRegistrationData
   { prdPoolHash    :: !ByteString          -- ^ Pool key hash (28 bytes)
   , prdVrfKeyHash  :: !ByteString          -- ^ VRF verification key hash (32 bytes)
@@ -512,7 +482,6 @@ data PoolRegistrationData = PoolRegistrationData
   }
   deriving stock (Show)
 
--- | Pool relay information from a pool registration certificate.
 data PoolRelayData
   = PoolRelaySingleAddr
       !(Maybe Word16)          -- ^ Port
@@ -525,7 +494,6 @@ data PoolRelayData
       !Text                    -- ^ DNS SRV record name
   deriving stock (Show)
 
--- | A withdrawal within a transaction.
 data GenericTxWithdrawal = GenericTxWithdrawal
   { txwRewardAddress :: !ByteString  -- ^ Serialised reward account (29 bytes)
   , txwAmount        :: !Word64      -- ^ Amount in Lovelace

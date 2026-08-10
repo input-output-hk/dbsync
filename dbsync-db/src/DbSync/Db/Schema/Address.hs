@@ -3,13 +3,9 @@
 
 -- | Schema for the @address@ dedup table.
 --
--- Addresses are normalised: each unique raw payment-address byte-string
--- gets a single row that @tx_out.address_id@ references, avoiding
--- duplication across outputs.
---
--- Owned by the @utxo@ extractor — every @tx_out@ depends on an
--- @address@ row, so the two tables must be populated by the same
--- extractor.
+-- Each unique raw payment-address byte string gets one row, which
+-- @tx_out.address_id@ references. The @utxo@ extractor owns the table,
+-- because every @tx_out@ depends on an @address@ row.
 module DbSync.Db.Schema.Address
   ( -- * Schema types
     Address (..)
@@ -71,7 +67,7 @@ type instance Key Address = AddressId
 -- * Schema types
 -- ---------------------------------------------------------------------------
 
--- | The @address@ table. Unique on @raw@.
+-- | Unique on @raw@.
 data Address = Address
   { addressAddress        :: !Text                 -- ^ Bech32 / Byron base58 form
   , addressRaw            :: !ByteString           -- ^ Raw address bytes (the dedup key)

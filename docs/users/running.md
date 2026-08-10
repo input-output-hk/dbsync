@@ -19,7 +19,7 @@ Before launching dbsync:
   [pg-config file](#the-postgresql-connection-file) exist.
 - [ ] The `dbsync-ledger/` directory's parent (the `--ledger-state-dir`
   argument) is writable.
-- [ ] You've picked a [config](profiles/overview).
+- [ ] You've picked a [config](config/overview).
 
 ## CLI
 
@@ -36,7 +36,7 @@ dbsync \
 
 | Flag | Required | Description |
 |---|---|---|
-| `--config` | yes | Path to your [dbsync config JSON](profiles/overview) — sync mode, ledger, `db_profile`, logging. |
+| `--config` | yes | Path to your [dbsync config JSON](config/overview) — sync mode, ledger, `extractors`, logging. |
 | `--pg-config` | yes | Path to the [PostgreSQL connection file](#the-postgresql-connection-file). |
 | `--node-config` | yes | Path to the `cardano-node` `config.json` (the one from the Cardano book). Genesis files are resolved relative to it. |
 | `--socket-path` | yes | Path to the `cardano-node` Unix socket. Same value you pass to the node's `--socket-path`. |
@@ -135,61 +135,73 @@ What you'll see in the log:
 2. **`IngestChainHistory`** — per-epoch summary lines as bulk-load
    progresses. On mainnet this is the longest phase (hours, not
    minutes).
-3. **`PreparingForVolatileTail`** — a few minutes of CTAS rebuilds,
-   index builds, the LOGGED flip, and `ANALYZE`. Outer markers only
-   at `info`; raise to `debug` for per-step timing.
+3. **`PreparingForVolatileTail`** — CTAS rebuilds, index builds,
+   foreign-key creation, the LOGGED flip, and `ANALYZE`. Every step
+   logs its start, its completion, and its duration at `info`. A long
+   step also logs a progress line each minute.
 4. **`FollowingVolatileTail` → `FollowingChainTip`** — per-block log
    lines. Once the consumer catches up with the receiver, the phase
    tag flips to `FollowingChainTip` and the loop emits a `"still at
    tip"` heartbeat every 30 seconds when no new block has arrived.
 
-Catching up against mainnet on a 4-core / 16 GB target with
-`everything-no-ledger` is typically under a day; the smaller profiles
-are proportionally faster. With ledger enabled (`everything`) expect
-the ledger replay to add several hours on top.
+How long the catch-up takes depends on the chain, the hardware, and
+the extractors you enable. Ingest is the longest phase. Enabling
+`ledger` adds a full ledger replay on top.
 
 ## Stopping
 
-`SIGINT` (Ctrl-C) is safe — the orchestrator's shutdown bracket
-cancels the receiver, drains the writer, writes a final ledger
-snapshot if enabled, and exits cleanly. The on-disk state is left in
-a resumable shape regardless of which phase you stop in.
+**Stop dbsync with Ctrl-C (`SIGINT`).** The GHC runtime turns `SIGINT`
+into an exception. The shutdown bracket then runs: it cancels the
+receiver, drains the writer, writes a final ledger snapshot if the
+ledger is enabled, and exits. The on-disk state stays resumable in
+every phase.
 
-`SIGTERM` is also handled.
+:::danger `SIGTERM` and `SIGKILL` are not safe
+dbsync installs no signal handlers. `SIGTERM` therefore keeps its
+default behaviour and kills the process immediately. The shutdown
+bracket does not run, so `SIGTERM` behaves exactly like `SIGKILL`.
 
-:::caution `SIGKILL`
-`SIGKILL` doesn't give the shutdown bracket a chance to run. The
-next boot will discover any stale state (rows past
-`last_committed_slot`, partial snapshots) and clean it up
-automatically — but you'll lose any work in the last in-flight epoch
-or block. Use `SIGTERM` or Ctrl-C unless the process is genuinely
-stuck.
+Do not use `kill` or `systemctl stop` without configuring the unit to
+send `SIGINT`. For systemd, set `KillSignal=SIGINT`.
 :::
+
+If dbsync dies without running the shutdown bracket, you do not lose
+the database. The next boot finds the stale state — rows past
+`last_committed_slot`, and partial snapshots — and cleans it up. You
+lose only the work in the epoch or block that was in flight.
 
 ## Environment
 
-dbsync reads no environment variables of its own. Standard PostgreSQL
-environment variables (`PGHOST`, `PGUSER`, ...) are *not* consulted —
-the connection comes exclusively from the `--pg-config` file.
+dbsync itself reads no environment variables.
+
+Its `psql` sub-processes do. dbsync shells out to `psql` to create and
+drop the schema, and those calls inherit `PGHOST`, `PGPORT`, `PGUSER`,
+and `PGPASSWORD` from the environment. The `host` and `port` in the
+`--pg-config` file do **not** apply to them.
+
+:::caution
+Set the libpq environment variables to match your `--pg-config` file,
+or unset them. If they disagree, dbsync creates the schema in one
+database and writes rows to another.
+:::
 
 ## Logs
 
-Logs go to stderr. Format follows the config's `logging.format`:
+dbsync writes logs to stderr, one line per event, in the shape
+`[severity] component: message`.
 
-- `text` — human-readable, one line per event, `[severity] component:
-  message` shape.
-- `json` — one JSON object per event, suitable for piping into
-  Loki / fluent-bit / etc.
+`logging.level` selects the volume. At `info` you get phase
+transitions, per-step Prep progress, epoch summaries, and warnings. At
+`debug` you also get per-block progress and receiver / tx-out-worker
+traces.
 
-At `info` you get phase transitions, epoch summaries, restart-relevant
-events, and warnings. At `debug` you also get per-step Prep timings,
-per-block progress, and verbose receiver / tx-out-worker traces.
+:::note
+`logging.format` accepts `text` and `json`, but dbsync only emits
+text today. Setting `json` changes nothing.
 
-:::tip
-`logging.level = "trace"` adds per-row diagnostics. It's invaluable
-for investigating a specific extractor's behaviour, but the volume
-is large — switch back to `info` or `debug` once you've gathered
-what you need.
+`logging.level` accepts `debug`, `info`, `warning`, and `error`. Any
+other value falls back to `info` without an error, so a typo makes
+your logs quieter, not louder.
 :::
 
 ## Next

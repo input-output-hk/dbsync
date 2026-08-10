@@ -2,21 +2,11 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
--- | Background thread that drains the ledger queue.
+-- | Background thread that drains 'leLedgerQueue'.
 --
--- Reads 'ChainSyncMsg' values off 'leLedgerQueue':
---
---   * 'MsgForward' — apply the block via 'applyBlockAndSnapshot', write
---     the latest 'ApplyResult' into @leLatestApplyResult@, and signal
---     epoch boundaries via 'leEpochReady'.
---   * 'MsgRollback' — call 'loadLedgerAtPoint' to walk the in-memory
---     buffer back to the target. Rollbacks deeper than the buffer
---     (~100 blocks) panic with an operator-actionable message; recovery
---     is to restart dbsync so the disk snapshot reloads at the point.
---
--- 'runLedgerWorkerWith' separates the queue-draining loop from the
--- LSM-backed apply call so tests can drive it with stub hooks;
--- 'runLedgerWorker' wires in 'realWorkerHooks'.
+-- 'MsgForward' applies the block through 'applyBlockAndSnapshot'.
+-- 'MsgRollback' walks the checkpoint buffer back with
+-- 'loadLedgerAtPoint'; see 'handleRollback' for the deep-rollback case.
 module DbSync.Worker.Ledger.Worker
   ( -- * Entry points
     runLedgerWorker
@@ -72,24 +62,16 @@ import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 -- * Hooks
 -- ---------------------------------------------------------------------------
 
--- | The per-block operations the worker performs, factored out so
--- tests can stub them without an LSM session. The production loop
--- ('runLedgerWorker') wraps these in a 'ChainSyncMsg' dispatcher
--- that also handles 'MsgRollback'.
---
--- Polymorphic in @blk@ so test stubs can use simpler types.
+-- | The per-block operations the worker performs, factored out so tests
+-- can stub them without an LSM session. Polymorphic in @blk@ so a stub
+-- can use a simpler type.
 data WorkerHooks blk = WorkerHooks
   { whGetSlotDetails   :: !(blk -> IO SlotDetails)
   , whApplyAndSnapshot :: !(blk -> SlotDetails -> IO ApplyResult)
   }
 
--- | Build the production hook set from a 'LedgerEnv', a
--- 'StateQueryVar', and the optional resume replay boundary.
---
--- 'applyBlockAndSnapshot' receives the live 'SyncPhase' on every
--- apply so the orchestrator can flip the snapshot cadence (Ingest =
--- every 10 epochs, Follow = every epoch) just by transitioning the
--- phase.
+-- | 'applyBlockAndSnapshot' takes the live 'SyncPhase' on every apply,
+-- so a phase transition alone flips the snapshot cadence.
 realWorkerHooks
   :: LedgerEnv
   -> StateQueryVar
@@ -113,13 +95,10 @@ realWorkerHooks env sqv mReplayBoundary =
 -- * Entry points
 -- ---------------------------------------------------------------------------
 
--- | Production worker entry point. Drains 'leLedgerQueue' and
--- dispatches each message: 'MsgForward' goes through the block
--- hooks; 'MsgRollback' walks the in-memory buffer via
--- 'loadLedgerAtPoint'.
+-- | Production worker entry point.
 --
--- 'StateQueryVar' lives on 'IngestEnv' rather than 'LedgerEnv', so
--- the caller pairs them up and invokes
+-- 'StateQueryVar' lives on 'IngestEnv', not 'LedgerEnv', so the caller
+-- pairs them and calls
 -- @runAppM env (runLedgerWorker mReplayBoundary sqv)@.
 runLedgerWorker
   :: Maybe SlotNo
@@ -129,9 +108,8 @@ runLedgerWorker mReplayBoundary sqv = do
   env <- ask
   liftIO $ chainSyncWorkerLoop env (realWorkerHooks env sqv mReplayBoundary)
 
--- | Production loop: build per-message handlers from the LSM-backed
--- 'LedgerEnv' and the block 'WorkerHooks', then drain the queue via
--- the generic 'chainSyncDispatchLoop'.
+-- | Build the per-message handlers, then drain the queue through
+-- 'chainSyncDispatchLoop'.
 chainSyncWorkerLoop
   :: LedgerEnv
   -> WorkerHooks (CardanoBlock StandardCrypto)
@@ -145,8 +123,8 @@ chainSyncWorkerLoop env hooks = do
     (handleRollback env)
     (leLedgerQueue env)
 
--- | Production forward handler: apply the block, signal epoch
--- boundaries, and clear any pending epoch-wait flag.
+-- | Production forward handler. Applies the block; the two TMVar
+-- writes feed 'leEpochReady' \/ 'leEpochWait', which nothing reads.
 applyForward
   :: LedgerEnv
   -> WorkerHooks (CardanoBlock StandardCrypto)
@@ -163,12 +141,13 @@ applyForward env hooks blk = do
   _ <- atomically $ Strict.tryReadTMVar (leEpochWait env)
   pure ()
 
--- | Production rollback handler. Walks the in-memory buffer back to
--- the target on the common shallow case; on a deeper rollback the
--- buffer can't reach the target, so we persist the target on
--- @dbsync_sync_state.pending_rollback_slot@ and exit. The next boot
--- sees the marker and runs the cascade + snapshot cleanup from a
--- usable on-disk snapshot.
+-- | Walks the checkpoint buffer back to the target on the common
+-- shallow case.
+--
+-- A deeper rollback is out of the buffer's reach, so this records the
+-- target on @dbsync_sync_state.pending_rollback_slot@ and exits. The
+-- next boot reads the marker and runs the cascade and snapshot cleanup
+-- from a usable on-disk snapshot.
 handleRollback :: LedgerEnv -> CardanoPoint -> IO ()
 handleRollback env p = do
   result <- runAppM env (loadLedgerAtPoint p)
@@ -196,12 +175,11 @@ handleRollback env p = do
           <> "recorded in dbsync_sync_state.pending_rollback_slot; "
           <> "the next dbsync restart will replay it from a disk snapshot"
 
--- | Generic ChainSyncMsg dispatch loop. Production wires real
--- handlers ('applyForward', 'handleRollback') around this; tests
--- pass stubs to exercise the dispatch without an LSM session.
+-- | 'ChainSyncMsg' dispatch loop. Tests pass stub handlers to exercise
+-- the dispatch without an LSM session.
 --
--- Crashes are logged at 'Error' severity (when a tracer is supplied)
--- and re-thrown so the supervising 'Async' propagates the failure.
+-- A crash logs at 'Error' and re-throws, so the supervising 'Async'
+-- propagates the failure.
 chainSyncDispatchLoop
   :: Maybe AppTracer
   -> (CardanoBlock StandardCrypto -> IO ())
@@ -219,14 +197,8 @@ chainSyncDispatchLoop mTracer forwardH rollbackH queue =
         MsgForward  blk -> forwardH blk
         MsgRollback p   -> rollbackH p
 
--- | Generic worker loop, parameterised by the per-block hooks. Used
--- by tests to inject a fake apply hook and exercise the coordination
--- primitives without an LSM session.
---
--- Any exception thrown by the loop is logged (when a tracer is
--- supplied) at 'Error' severity and re-thrown so the supervising
--- 'Async' propagates the failure. Tests pass 'Nothing' to keep the
--- output quiet.
+-- | Worker loop parameterised by the per-block hooks. Tests inject a
+-- fake apply hook and pass 'Nothing' for the tracer to stay quiet.
 runLedgerWorkerWith
   :: Maybe AppTracer
   -> WorkerHooks blk
@@ -244,25 +216,22 @@ runLedgerWorkerWith mTracer hooks queue epochReady epochWait =
       sd  <- whGetSlotDetails hooks blk
       result <- whApplyAndSnapshot hooks blk sd
 
-      -- Signal epoch boundary if the apply call detected one.
+      -- Both TMVars are vestigial: nothing reads 'epochReady' and
+      -- nothing writes 'epochWait'. Kept non-blocking so neither can
+      -- stall the worker.
       case apNewEpoch result of
         SMaybe.Just ne -> do
-          -- 'tryPutTMVar': non-blocking, so the worker doesn't stall
-          -- when the main thread hasn't drained a previous signal yet.
           _ <- atomically $ Strict.tryPutTMVar epochReady (Generic.neEpoch ne)
           pure ()
         SMaybe.Nothing -> pure ()
 
-      -- 'epochWait' is the transition signal — non-blocking here.
       _ <- atomically $ Strict.tryReadTMVar epochWait
       pure ()
 {-# SCC runLedgerWorkerWith #-}
 
--- | Run the ledger worker + snapshot-writer asyncs for the duration
--- of the inner action. No-op when the ledger feature is disabled.
---
--- Cancellation propagates to both async children when the inner
--- action exits or raises.
+-- | Run the ledger worker and snapshot-writer asyncs around the inner
+-- action, and cancel both when it exits or raises. A no-op when the
+-- ledger feature is disabled.
 withLedgerThreads
   :: HasLedgerEnv
   -> Maybe SlotNo

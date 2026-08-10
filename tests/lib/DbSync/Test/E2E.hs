@@ -106,9 +106,9 @@ withAppSession
   -> FilePath
   -> (Async () -> IO a)
   -> IO a
-withAppSession tracer profile mn ledgerDir body = do
+withAppSession tracer cfg mn ledgerDir body = do
   clearSyncCompleteFlag
-  runApp' mkAppArgsFromMockNode tracer profile mn ledgerDir body
+  runApp' mkAppArgsFromMockNode tracer cfg mn ledgerDir body
 
 -- | Same as 'withAppSession' but with @aaResyncFromGenesis = False@.
 -- Does not clear any state — resume mode relies on the existing
@@ -137,6 +137,11 @@ clearSyncCompleteFlag =
 -- | Shared bracket body used by 'withAppSession' /
 -- 'withAppSessionResume'. The only piece that varies is the
 -- 'AppArgs' builder.
+--
+-- A failing @body@ fires the shutdown signal too and bounds the wait
+-- on 'runApp'. Without that, 'withAsync' cleanup cancels an app that
+-- expects its signal and blocks there indefinitely, so the spec
+-- hangs instead of reporting the assertion that failed.
 runApp'
   :: (SyncConfig -> MockNode -> FilePath -> Maybe (IO ()) -> AppArgs)
   -> AppTracer
@@ -145,12 +150,12 @@ runApp'
   -> FilePath
   -> (Async () -> IO a)
   -> IO a
-runApp' mkArgs tracer profile mn ledgerDir body = do
+runApp' mkArgs tracer cfg mn ledgerDir body = do
   (fire, waitSig) <- newShutdown
-  let args = mkArgs profile mn ledgerDir (Just waitSig)
+  let args = mkArgs cfg mn ledgerDir (Just waitSig)
   withAsync (runApp tracer args) $ \app -> do
     link app
-    a <- body app
+    a <- body app `onException` (fire >> void (timeout shutdownTimeoutMicros (wait app)))
     fire
     awaitShutdown "runApp" app
     pure a
@@ -159,15 +164,18 @@ runApp' mkArgs tracer profile mn ledgerDir body = do
 -- * Wait helpers
 -- ---------------------------------------------------------------------------
 
--- | Wait at most 30 s for an 'Async' to terminate. Panics on
--- timeout. Use after firing the shutdown signal that the async is
--- racing against.
+-- | Wait at most 'shutdownTimeoutMicros' for an 'Async' to
+-- terminate. Panics on timeout. Use after firing the shutdown signal
+-- that the async is racing against.
 awaitShutdown :: Text -> Async () -> IO ()
 awaitShutdown name app = do
-  mResult <- timeout 30_000_000 (wait app)
+  mResult <- timeout shutdownTimeoutMicros (wait app)
   case mResult of
     Just () -> pure ()
     Nothing -> panic $ name <> " did not return within 30s of shutdown signal"
+
+shutdownTimeoutMicros :: Int
+shutdownTimeoutMicros = 30_000_000
 
 -- | 'True' when @dbsync_sync_state.sync_complete@ reads @t@. Swallows
 -- any DB error and returns 'False', so the predicate composes with

@@ -104,7 +104,7 @@ epochKeyedTables =
   ]
 
 -- | Natural-key groups holding more than one row, summed across every
--- 'epochKeyedTables' member present in the schema (profiles disable
+-- 'epochKeyedTables' member present in the schema (configs disable
 -- some extractors, so a missing table counts as clean).
 duplicateEpochRowGroupCount :: IO Int
 duplicateEpochRowGroupCount = do
@@ -130,7 +130,7 @@ duplicateEpochRowGroupCount = do
 -- the wrong spender, and a marked output that no @tx_in@ row claims.
 -- The producer is located through @tx.hash@ so rows whose
 -- @tx_in.tx_out_id@ is still unresolved are covered too. Only valid
--- for profiles with @utxo.consumed_by_tx_id@ enabled.
+-- for configs with @utxo.consumed_by_tx_id@ enabled.
 consumedByDriftCount :: IO Int
 consumedByDriftCount = do
   present <- tablePresent txIn

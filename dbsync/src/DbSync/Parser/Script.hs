@@ -29,7 +29,6 @@ import Data.Aeson ((.=))
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Text.Encoding as Text
 
--- | Render a Shelley @MultiSig@ script as canonical JSON text.
 multiSigToJson
   :: (Shelley.ShelleyEraScript era, Core.NativeScript era ~ Shelley.MultiSig era)
   => Shelley.MultiSig era -> Text
@@ -48,7 +47,6 @@ multiSigToJson = renderJson . multiSigValue
         atLeastJson m (multiSigValue <$> toList scripts)
       _ -> Aeson.Null
 
--- | Render an Allegra+ @Timelock@ script as canonical JSON text.
 timelockToJson
   :: (Allegra.AllegraEraScript era, Core.NativeScript era ~ Allegra.Timelock era)
   => Allegra.Timelock era -> Text

@@ -1,12 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
 
--- | Block processing pipeline.
---
--- Pre-assigns shared IDs (BlockId, TxId, TxOutId, RedeemerId) centrally,
--- builds a 'BlockContext', then runs all enabled extractors. Works identically
--- in both 'IngestChainHistory' and 'FollowingChainTip' — only the
--- 'IdResolver' and 'Writer' implementations carried by the env differ.
+-- | Assigns the shared ids centrally, builds a 'BlockContext', then
+-- runs every enabled extractor. 'IngestChainHistory' and
+-- 'FollowingChainTip' behave the same here; only the 'IdResolver' and
+-- 'Writer' the env carries differ.
 module DbSync.Extractor.Pipeline
   ( -- * Processing
     processBlock
@@ -41,15 +39,10 @@ import DbSync.Writer (HasWriter (..))
 -- * Processing
 -- ---------------------------------------------------------------------------
 
--- | Process a single 'GenericBlock' through all enabled extractors.
---
--- 1. Pre-assigns shared IDs: BlockId, SlotLeaderId, per-tx TxId,
---    per-output TxOutId, per-redeemer RedeemerId.
--- 2. Builds a 'BlockContext' containing these IDs.
--- 3. Calls each extractor's 'pdProcess' with the context.
---
--- Extractors are independent — they consume the pre-assigned IDs
--- without depending on each other's execution order.
+-- | Assigns 'BlockId', 'SlotLeaderId', per-tx 'TxId', per-output
+-- 'TxOutId' and per-redeemer 'RedeemerId', puts them on a
+-- 'BlockContext', then calls each extractor's 'pdProcess'. Extractors
+-- read these ids, so none of them depends on the execution order.
 processBlock
   :: ( MonadReader env m
      , HasResolver env
@@ -137,13 +130,11 @@ processBlock block = do
   when (redeemersOn && utxoEnabled extractors && not (null blockRedeemerIds)) $
     liftIO $ fillSpendScriptHashes resolver blockRedeemerIds
 
--- | Resolve the slot leader's pool hash for Shelley+ blocks.
---
--- Byron blocks delegate slot leadership through genesis keys (not pool
--- keys) and EBBs carry a synthetic null leader, so both produce
--- 'Nothing'. For everything else we query (without inserting) the
--- registered pool hashes: a genesis-key delegate misses and stays
--- 'Nothing', so it is never given a fabricated pool_hash row.
+-- | Byron blocks delegate slot leadership through genesis keys, not
+-- pool keys, and EBBs carry a synthetic null leader, so both give
+-- 'Nothing'. Every other block queries the registered pool hashes
+-- without inserting: a genesis-key delegate misses and stays
+-- 'Nothing', so it never gets a fabricated @pool_hash@ row.
 resolveSlotLeaderPoolHash
   :: (HasResolver env, MonadReader env m, MonadIO m)
   => GenericBlock -> m (Maybe PoolHashId)
@@ -153,11 +144,10 @@ resolveSlotLeaderPoolHash block
       resolver <- asks getResolver
       liftIO $ resolvePoolHashQuery resolver (blkSlotLeader block)
 
--- | Pre-resolve the @stake_address@ FK for one tx output.
---
--- Lives here (rather than in the UTxO extractor) so the @utxo@ and
--- @stake_delegation@ extractors stay textually independent — the
--- pipeline is the only place that calls into both.
+-- | Pre-resolve the @stake_address@ FK for one tx output. It lives
+-- here, not in the UTxO extractor, so the @utxo@ and
+-- @stake_delegation@ extractors stay independent; the pipeline is the
+-- only caller of both.
 resolveOutStakeId
   :: ( HasResolver env
      , HasWriter env

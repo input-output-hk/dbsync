@@ -1,10 +1,8 @@
 -- | Schema-version gate and migration runner.
 --
--- The database records the schema version it was built at in
--- @dbsync_sync_state.schema_version_applied@. 'decideMigrations' compares
--- that to the version the binary declares and classifies the gap;
--- 'runMigrations' applies the embedded migration files for the intervening
--- versions and re-stamps the row in a single transaction.
+-- @dbsync_sync_state.schema_version_applied@ records the version the
+-- database was built at. 'runMigrations' applies the embedded files for
+-- the intervening versions and re-stamps the row in one transaction.
 module DbSync.Db.Schema.Migration
   ( MigrationOutcome (..)
   , decideMigrations

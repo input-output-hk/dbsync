@@ -20,9 +20,9 @@ const sidebars: SidebarsConfig = {
       label: 'Configuration',
       collapsed: false,
       items: [
-        'profiles/overview',
-        'profiles/presets',
-        'profiles/custom',
+        'config/overview',
+        'config/presets',
+        'config/custom',
       ],
     },
     'running',

@@ -1,29 +1,15 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
--- | Background worker that handles the post-COPY FK fills on the
--- UTxO-feature tables. Drains per-epoch buffers produced by the main
--- extractor thread and writes @address@ rows, @tx_out.address_id@,
--- @collateral_tx_out.address_id@, and (when the feature is on)
--- @tx_out.consumed_by_tx_id@ to PostgreSQL.
+-- | Background worker for the post-COPY FK fills on the UTxO tables.
 --
--- One worker per writable table, on its own dedicated PG connection.
--- The four hook calls run in sequence on that connection, so the
--- worker cannot deadlock against itself on overlapping @tx_out@ rows
--- even when the same row gets both @address_id@ and
--- @consumed_by_tx_id@ writes in one epoch.
+-- It drains the per-epoch buffers that the extractor thread fills, then
+-- writes @address@ rows, @tx_out.address_id@,
+-- @collateral_tx_out.address_id@ and @tx_out.consumed_by_tx_id@.
 --
--- Lifecycle:
---
---   1. 'mkTxOutWorker' allocates the queue and an 'Async' running
---      the loop on a dedicated PG connection.
---   2. The consumer calls 'enqueueTxOutJob' at each epoch boundary;
---      back-pressure stops the main pipeline if the worker falls
---      more than 'txOutWorkerQueueBound' epochs behind.
---   3. 'awaitTxOutDrained' blocks until every queued job has been
---      processed — used at the 'IngestChainHistory' \/
---      'PreparingForVolatileTail' transition.
---   4. 'closeTxOutWorker' cancels the worker thread and releases
---      the PG connection.
+-- The worker owns one PG connection and runs its hooks in sequence on
+-- it. It therefore cannot deadlock against itself when one @tx_out@
+-- row takes both an @address_id@ and a @consumed_by_tx_id@ write in
+-- the same epoch.
 module DbSync.Worker.TxOut.Worker
   ( -- * Types
     TxOutWorker
@@ -109,8 +95,7 @@ import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 -- | One epoch's worth of post-COPY UTxO work.
 --
 -- 'tjConsumedBy' is 'Nothing' when the @utxo.consumed_by_tx_id@
--- feature flag is off; the worker then skips the corresponding
--- bulk UPDATE.
+-- feature is off. The worker then skips that bulk UPDATE.
 data TxOutJob = TxOutJob
   { tjEpoch      :: !EpochNo
   , tjAddress    :: !EpochAddressBuffer
@@ -126,12 +111,10 @@ data TxOutWorker = TxOutWorker
     -- decrements after each job; 'awaitTxOutDrained' waits for it
     -- to reach 0.
   , twIdCounter :: !(IORef Int64)
-    -- ^ Source of truth for the next @address.id@ to assign during
-    -- 'IngestChainHistory'. PG sequences are not created until
-    -- 'PreparingForVolatileTail' (see 'DbSync.Db.Schema.Init'), so the
-    -- worker allocates IDs in-process and 'mkBoundarySyncStateRow'
-    -- persists the next-to-assign value into 'ssrAddressIdCounter'
-    -- so a crash + resume can pick up where the worker left off.
+    -- ^ Next @address.id@ to assign. 'DbSync.Db.Schema.Init' creates
+    -- the PG sequences only at 'PreparingForVolatileTail', so the
+    -- worker allocates ids in-process. 'mkBoundarySyncStateRow' saves
+    -- the value to 'ssrAddressIdCounter' so a resume continues from it.
   , twAsync     :: !(Async ())
   , twConn      :: !Conn.Connection
   }
@@ -145,37 +128,30 @@ txOutWorkerQueueBound = 4
 -- * Hooks
 -- ---------------------------------------------------------------------------
 
--- | Side-effect operations the worker performs per job, factored
--- out so tests can stub them with in-memory equivalents.
+-- | Per-job side effects, factored out so tests can stub them.
 --
--- The bulk shape lets one epoch's worth of work fold into a constant
--- number of PG round-trips (one bulk SELECT, one bulk INSERT, one
--- bulk UPDATE per child table) instead of one round-trip per row.
+-- The bulk shape folds one epoch of work into a constant number of PG
+-- round-trips instead of one round-trip per row.
 data TxOutHooks = TxOutHooks
   { thBulkResolveAddresses
       :: !([(ShortByteString, Maybe StakeAddressId)] -> IO (Map ShortByteString AddressId))
-    -- ^ Return the canonical 'AddressId' for every input raw:
-    -- existing rows are looked up; missing rows are allocated from
-    -- the in-process counter and inserted in bulk.
+    -- ^ Return the 'AddressId' for every input raw. It looks up
+    -- existing rows and bulk-inserts missing ones, with ids from the
+    -- in-process counter.
   , thBulkUpdateTxOut
       :: !([(TxOutId, AddressId)] -> IO ())
-    -- ^ Fill in @tx_out.address_id@ for each @(tx_out.id, address.id)@
-    -- pair in one statement.
+    -- ^ Fill @tx_out.address_id@ in one statement.
   , thBulkUpdateCollateral
       :: !([(CollateralTxOutId, AddressId)] -> IO ())
     -- ^ Same as 'thBulkUpdateTxOut' for @collateral_tx_out@.
   , thBulkUpdateConsumedBy
       :: !([(TxOutId, TxId)] -> IO ())
-    -- ^ Fill in @tx_out.consumed_by_tx_id@ for each
-    -- @(producer_tx_out_id, consumer_tx_id)@ pair. No-op when the
-    -- consumed-by feature is off (worker is handed
-    -- @tjConsumedBy = Nothing@ and the hook is never called).
+    -- ^ Fill @tx_out.consumed_by_tx_id@ for each
+    -- @(producer_tx_out_id, consumer_tx_id)@ pair.
   }
 
--- | Production hook set, talking to PG via the worker's dedicated
--- connection. The @IORef Int64@ is the in-process source of truth
--- for the next @address.id@ to assign during 'IngestChainHistory' —
--- PG sequences don't exist yet at this phase.
+-- | Production hooks, on the worker's dedicated connection. The
+-- 'IORef' is the 'twIdCounter' address-id source.
 realTxOutHooks :: Conn.Connection -> IORef Int64 -> TxOutHooks
 realTxOutHooks conn idRef = TxOutHooks
   { thBulkResolveAddresses = resolveBulk conn idRef
@@ -196,12 +172,10 @@ realTxOutHooks conn idRef = TxOutHooks
         in run conn (outIds, consumerIds) bulkUpdateConsumedByTxIdStmt
   }
 
--- | Look up existing addresses, allocate ids for the missing ones,
--- bulk-insert the new rows, and return the full @raw -> AddressId@
--- map covering every input entry.
+-- | Return the @raw -> AddressId@ map for every input entry.
 --
 -- 1 or 2 PG round-trips: always a bulk SELECT, plus one bulk INSERT
--- when there are any new addresses to add.
+-- when there are new addresses to add.
 resolveBulk
   :: Conn.Connection
   -> IORef Int64
@@ -266,7 +240,6 @@ mkTxOutWorker tracer settings initialAddressId = do
     , twConn      = conn
     }
 
--- | Cancel the worker and close its PG connection.
 closeTxOutWorker :: TxOutWorker -> IO ()
 closeTxOutWorker tw = do
   cancel (twAsync tw)
@@ -276,8 +249,8 @@ closeTxOutWorker tw = do
 -- * Job submission
 -- ---------------------------------------------------------------------------
 
--- | Push a job onto the queue. Blocks if the queue is full
--- (back-pressure: main pipeline waits for the worker to catch up).
+-- | Push a job onto the queue. Blocks while the queue is full, which
+-- makes the main pipeline wait for the worker to catch up.
 enqueueTxOutJob :: TxOutWorker -> TxOutJob -> IO ()
 enqueueTxOutJob tw job = atomically $ do
   STM.modifyTVar' (twInFlight tw) (+ 1)
@@ -314,9 +287,7 @@ txOutWorkerDepths tw = STM.atomically $ do
 -- * Worker loop
 -- ---------------------------------------------------------------------------
 
--- | Generic worker loop, parameterised by the per-job hooks. The
--- production path uses 'realTxOutHooks'; tests inject in-memory
--- equivalents.
+-- | Worker loop, parameterised by the per-job hooks.
 runTxOutWorkerWith
   :: Maybe AppTracer
   -> TxOutHooks
@@ -336,16 +307,8 @@ runTxOutWorkerWith mTracer hooks queue inFlight =
         traceWith tracer $ LogMsg Info "TxOutWorker"
           ("resolved epoch " <> show (unEpochNo (tjEpoch job)))
 
--- | Resolve one epoch's buffers in (up to) four bulk statements:
---
---   1. 'thBulkResolveAddresses' returns the @raw -> AddressId@ map
---      for every unique raw in the address buffer (existing +
---      freshly allocated\/inserted).
---   2. One bulk UPDATE fills @tx_out.address_id@ for every
---      @(tx_out_id, raw)@ pair.
---   3. One bulk UPDATE fills @collateral_tx_out.address_id@.
---   4. When 'tjConsumedBy' is 'Just', one bulk UPDATE fills
---      @tx_out.consumed_by_tx_id@ from the producer/consumer pairs.
+-- | Resolve one epoch's buffers: one address resolve, then up to three
+-- bulk UPDATEs.
 processTxOutJob :: Maybe AppTracer -> TxOutHooks -> TxOutJob -> IO ()
 processTxOutJob mTracer hooks job = do
   let addr      = tjAddress job
@@ -378,11 +341,11 @@ processTxOutJob mTracer hooks job = do
     probeStep mTracer epoch "updateConsumedBy" $
       thBulkUpdateConsumedBy hooks consumedPairs
 
--- | Bracket a per-job step with RTS allocation / live-heap counters
--- and emit a Debug line. No-op without a tracer; the line is dropped
--- unless the backend min-severity is Debug. Also a no-op when the
--- process runs without @+RTS -T@ (e.g. the in-process e2e test
--- binary) — 'getRTSStats' throws there, and this worker thread is
+-- | Bracket a per-job step with RTS allocation and live-heap counters,
+-- then emit a Debug line.
+--
+-- This is a no-op without @+RTS -T@, as in the in-process e2e test
+-- binary. 'getRTSStats' throws there, and this worker thread is
 -- linked, so an unguarded call tears the whole pipeline down.
 probeStep :: Maybe AppTracer -> EpochNo -> Text -> IO a -> IO a
 probeStep Nothing _ _ act = act

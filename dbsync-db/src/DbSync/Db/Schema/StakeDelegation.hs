@@ -1,17 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 
--- | Schema types for the StakeDelegation extractor tables.
+-- | Schema types for the stake-delegation tables.
 --
--- Two extractors share this module:
---
---   * @stake_delegation@ (block-extracted): @stake_registration@,
---     @stake_deregistration@, @delegation@, @withdrawal@.
---   * @stake_delegation_ledger@ (ledger-derived): @reward@,
---     @pot_reward@, @epoch_stake@, @epoch_stake_progress@.
---
--- Schema modules group by domain; extractor ownership picks tables
--- via 'DbSync.Extractor.pdTables'.
+-- Two extractors share this module. @stake_delegation@ owns the
+-- block-extracted @stake_registration@, @stake_deregistration@,
+-- @delegation@ and @withdrawal@. @stake_delegation_ledger@ owns the
+-- ledger-derived @reward@, @pot_reward@, @epoch_stake@ and
+-- @epoch_stake_progress@. A schema module groups by domain;
+-- 'DbSync.Extractor.pdTables' picks the tables per extractor.
 module DbSync.Db.Schema.StakeDelegation
   ( -- * Schema types
     StakeRegistration (..)
@@ -128,7 +125,6 @@ type instance Key EpochStakeProgress = EpochStakeProgressId
 -- * Schema types
 -- ---------------------------------------------------------------------------
 
--- | The @stake_registration@ table.
 data StakeRegistration = StakeRegistration
   { stakeRegistrationAddrId    :: !StakeAddressId
   , stakeRegistrationCertIndex :: !Word16
@@ -138,7 +134,6 @@ data StakeRegistration = StakeRegistration
   }
   deriving stock (Eq, Show)
 
--- | The @stake_deregistration@ table.
 data StakeDeregistration = StakeDeregistration
   { stakeDeregistrationAddrId     :: !StakeAddressId
   , stakeDeregistrationCertIndex  :: !Word16
@@ -148,7 +143,6 @@ data StakeDeregistration = StakeDeregistration
   }
   deriving stock (Eq, Show)
 
--- | The @delegation@ table.
 data Delegation = Delegation
   { delegationAddrId        :: !StakeAddressId
   , delegationCertIndex     :: !Word16
@@ -160,7 +154,6 @@ data Delegation = Delegation
   }
   deriving stock (Eq, Show)
 
--- | The @withdrawal@ table.
 data Withdrawal = Withdrawal
   { withdrawalAddrId     :: !StakeAddressId
   , withdrawalTxId       :: !TxId
@@ -169,12 +162,13 @@ data Withdrawal = Withdrawal
   }
   deriving stock (Eq, Show)
 
--- | The @reward@ table. Sourced from the ledger state, never from
--- block extraction. Each row is one reward earned by a stake address
--- in a specific epoch from a specific source (leader, member,
--- reserves, treasury, refund). @earned_epoch@ is computed by
--- PostgreSQL via @GENERATED ALWAYS AS (...) STORED@; the field is
--- present here for SELECT decoding but is omitted from COPY rows.
+-- | One reward that a stake address earned in one epoch from one source:
+-- leader, member, reserves, treasury or refund. The rows come from the
+-- ledger state, never from block extraction.
+--
+-- PostgreSQL computes @earned_epoch@ through
+-- @GENERATED ALWAYS AS (...) STORED@. The field exists here for SELECT
+-- decoding, and the COPY row omits it.
 data Reward = Reward
   { rewardAddrId         :: !StakeAddressId
   , rewardType           :: !RewardSource
@@ -185,11 +179,10 @@ data Reward = Reward
   }
   deriving stock (Eq, Show)
 
--- | The @pot_reward@ table. Holds rewards paid out from a protocol
--- pot (reserves \/ treasury): MIR distributions (Shelley→Babbage),
--- gov-action deposit refunds, and treasury withdrawal payouts
--- (Conway+). Distinct from 'Reward' which is for pool-block-production
--- rewards. Same generated @earned_epoch@ pattern as 'Reward'.
+-- | Rewards paid out from a protocol pot, reserves or treasury: MIR
+-- distributions (Shelley to Babbage), gov-action deposit refunds, and
+-- Conway+ treasury withdrawal payouts. 'Reward' covers pool block
+-- production instead. @earned_epoch@ is generated, as in 'Reward'.
 data PotReward = PotReward
   { potRewardAddrId         :: !StakeAddressId
   , potRewardType           :: !RewardSource
@@ -199,10 +192,9 @@ data PotReward = PotReward
   }
   deriving stock (Eq, Show)
 
--- | The @epoch_stake@ table. Active stake distribution per
--- (stake address, pool, epoch). Unique on @(addr_id, pool_id,
--- epoch_no)@ — the constraint is added during
--- @PreparingForVolatileTail@, not at @CREATE TABLE@ time.
+-- | Active stake distribution per (stake address, pool, epoch).
+-- @PreparingForVolatileTail@ adds the @(addr_id, pool_id, epoch_no)@
+-- unique constraint; @CREATE TABLE@ does not.
 data EpochStake = EpochStake
   { epochStakeAddrId  :: !StakeAddressId
   , epochStakePoolId  :: !PoolHashId
@@ -211,9 +203,8 @@ data EpochStake = EpochStake
   }
   deriving stock (Eq, Show)
 
--- | The @epoch_stake_progress@ table. One row per epoch tracking
--- whether the ledger worker has finished writing the matching
--- @epoch_stake@ rows. Unique on @epoch_no@.
+-- | One row per epoch. It records whether the ledger worker finished the
+-- matching @epoch_stake@ rows. Unique on @epoch_no@.
 data EpochStakeProgress = EpochStakeProgress
   { epochStakeProgressEpochNo   :: !Word64
   , epochStakeProgressCompleted :: !Bool
@@ -383,9 +374,8 @@ potRewardTableDef = TableDef
   , tdParentRefs = []
   }
 
--- | The @epoch_stake@ table. The triple (addr_id, pool_id,
--- epoch_no) is unique; the constraint is added during
--- @PreparingForVolatileTail@, not at @CREATE TABLE@ time.
+-- | @PreparingForVolatileTail@ adds the @(addr_id, pool_id, epoch_no)@
+-- unique constraint; @CREATE TABLE@ does not.
 --
 -- IDENTITY leaf: nothing FKs into @epoch_stake@.
 epochStakeTableDef :: TableDef
@@ -408,7 +398,7 @@ epochStakeTableDef = TableDef
   , tdParentRefs = []
   }
 
--- | The @epoch_stake_progress@ table. Unique on @epoch_no@.
+-- | Unique on @epoch_no@.
 --
 -- IDENTITY leaf: nothing FKs into @epoch_stake_progress@.
 epochStakeProgressTableDef :: TableDef
@@ -736,11 +726,10 @@ encodeWithdrawalCopy w =
     , bInt64 . getRedeemerId <$> withdrawalRedeemerId w
     ]
 
--- | COPY row for @reward@. The id is allocated by PostgreSQL from
--- the IDENTITY sequence, and @earned_epoch@ is computed via the
--- @GENERATED ALWAYS AS (...) STORED@ expression; the COPY column
--- list (built by 'DbSync.Db.Loader.Connection.buildColumnList')
--- excludes both.
+-- | PostgreSQL allocates @id@ from the IDENTITY sequence and computes
+-- @earned_epoch@ from its @GENERATED ALWAYS AS (...) STORED@ expression.
+-- 'DbSync.Db.Loader.Connection.buildColumnList' drops both from the COPY
+-- column list.
 encodeRewardCopy :: Reward -> ByteString
 encodeRewardCopy r =
   buildCopyRow

@@ -95,16 +95,12 @@ type instance Key ReferenceTxIn = ReferenceTxInId
 -- * Schema types
 -- ---------------------------------------------------------------------------
 
--- | The @tx_out@ table.
---
--- Address columns are normalised into the @address@ dedup table;
+-- | The @address@ dedup table holds the address columns, and
 -- @txOutAddressId@ is the FK into it.
 --
--- The FK is permanently nullable: 'Nothing' for rows whose owning
--- epoch hasn't been processed by the 'AddressResolver' worker yet,
--- 'Just' once the worker fills it in. The column stays @NULL@-able
--- across all phases, keeping the on-disk shape stable for downstream
--- consumers.
+-- That FK stays nullable in every phase, which keeps the on-disk shape
+-- stable for downstream consumers. 'Nothing' means the 'AddressResolver'
+-- worker has not yet processed the owning epoch.
 data TxOut = TxOut
   { txOutTxId              :: !TxId             -- ^ FK to tx
   , txOutIndex             :: !Word64           -- ^ Output index within the transaction
@@ -118,8 +114,7 @@ data TxOut = TxOut
   }
   deriving stock (Eq, Show)
 
--- | The @tx_in@ table.
--- During 'IngestChainHistory', @txInTxOutId@ is 'Nothing'. The hash
+-- | During 'IngestChainHistory', @txInTxOutId@ is 'Nothing'. The hash
 -- and index are stored for post-load resolution.
 data TxIn = TxIn
   { txInTxInId      :: !TxId             -- ^ The spending transaction
@@ -130,7 +125,6 @@ data TxIn = TxIn
   }
   deriving stock (Eq, Show)
 
--- | The @collateral_tx_in@ table.
 data CollateralTxIn = CollateralTxIn
   { collateralTxInTxInId     :: !TxId
   , collateralTxInTxOutId    :: !(Maybe TxId)
@@ -139,7 +133,6 @@ data CollateralTxIn = CollateralTxIn
   }
   deriving stock (Eq, Show)
 
--- | The @reference_tx_in@ table.
 data ReferenceTxIn = ReferenceTxIn
   { referenceTxInTxInId     :: !TxId
   , referenceTxInTxOutId    :: !(Maybe TxId)
@@ -148,14 +141,14 @@ data ReferenceTxIn = ReferenceTxIn
   }
   deriving stock (Eq, Show)
 
--- | The @collateral_tx_out@ table — the optional collateral-return
--- output of a Babbage+ phase-2 failed transaction. Schema mirrors
--- the @tx_out@ shape with one addition: @multi_assets_descr@ is a
--- textual dump of the multi-asset map, not normalised on this table.
+-- | The optional collateral-return output of a Babbage+ phase-2 failed
+-- transaction. The shape mirrors @tx_out@, plus @multi_assets_descr@: a
+-- textual dump of the multi-asset map, which this table does not
+-- normalise.
 --
--- @collateralTxOutAddressId@ follows the same lifecycle as
--- 'TxOut.txOutAddressId': permanently nullable, filled in by the
--- 'AddressResolver' worker an epoch after the row is written.
+-- @collateralTxOutAddressId@ has the same lifecycle as
+-- 'TxOut.txOutAddressId'. It stays nullable, and the 'AddressResolver'
+-- worker fills it in an epoch after the write.
 data CollateralTxOut = CollateralTxOut
   { collateralTxOutTxId               :: !TxId
   , collateralTxOutIndex              :: !Word64
@@ -557,9 +550,12 @@ encodeCollateralTxOutCopy (CollateralTxOutId rid) co =
 -- ---------------------------------------------------------------------------
 -- * Hasql encoders / decoders
 -- ---------------------------------------------------------------------------
+--
+-- A @\<row>Encoder@ and @\<row>Decoder@ pair omits the @id@ column. An
+-- @entity\<Row>Decoder@ reads @id@ first, so its column order matches
+-- @SELECT *@ on the table.
 
--- | Encoder for a 'TxOut', excluding the auto-generated @id@.
--- Field order matches the column order in 'txOutTableDef'.
+-- | Field order matches the column order in 'txOutTableDef'.
 txOutEncoder :: E.Params TxOut
 txOutEncoder = mconcat
   [ txOutTxId             >$< idEncoder      getTxId
@@ -573,7 +569,6 @@ txOutEncoder = mconcat
   , txOutConsumedByTxId   >$< maybeIdEncoder getTxId
   ]
 
--- | Decoder for the data columns of a 'TxOut' (excluding @id@).
 txOutDecoder :: D.Row TxOut
 txOutDecoder = TxOut
   <$> idDecoder TxId
@@ -586,13 +581,11 @@ txOutDecoder = TxOut
   <*> maybeIdDecoder ScriptId
   <*> maybeIdDecoder TxId
 
--- | Decoder for a full @tx_out@ row, including @id@.
 entityTxOutDecoder :: D.Row (TxOutId, TxOut)
 entityTxOutDecoder = (,)
   <$> idDecoder TxOutId
   <*> txOutDecoder
 
--- | Encoder for a 'TxIn', excluding the auto-generated @id@.
 txInEncoder :: E.Params TxIn
 txInEncoder = mconcat
   [ txInTxInId     >$< idEncoder      getTxId
@@ -602,7 +595,6 @@ txInEncoder = mconcat
   , txInRedeemerId >$< maybeIdEncoder getRedeemerId
   ]
 
--- | Decoder for the data columns of a 'TxIn' (excluding @id@).
 txInDecoder :: D.Row TxIn
 txInDecoder = TxIn
   <$> idDecoder TxId
@@ -611,13 +603,11 @@ txInDecoder = TxIn
   <*> D.column (D.nonNullable D.bytea)
   <*> maybeIdDecoder RedeemerId
 
--- | Decoder for a full @tx_in@ row, including @id@.
 entityTxInDecoder :: D.Row (TxInId, TxIn)
 entityTxInDecoder = (,)
   <$> idDecoder TxInId
   <*> txInDecoder
 
--- | Encoder for a 'CollateralTxIn', excluding the auto-generated @id@.
 collateralTxInEncoder :: E.Params CollateralTxIn
 collateralTxInEncoder = mconcat
   [ collateralTxInTxInId     >$< idEncoder      getTxId
@@ -626,7 +616,6 @@ collateralTxInEncoder = mconcat
   , collateralTxInTxOutHash  >$< E.param (E.nonNullable E.bytea)
   ]
 
--- | Decoder for the data columns of a 'CollateralTxIn' (excluding @id@).
 collateralTxInDecoder :: D.Row CollateralTxIn
 collateralTxInDecoder = CollateralTxIn
   <$> idDecoder TxId
@@ -634,13 +623,11 @@ collateralTxInDecoder = CollateralTxIn
   <*> D.column (D.nonNullable $ fromIntegral <$> D.int8)
   <*> D.column (D.nonNullable D.bytea)
 
--- | Decoder for a full @collateral_tx_in@ row, including @id@.
 entityCollateralTxInDecoder :: D.Row (CollateralTxInId, CollateralTxIn)
 entityCollateralTxInDecoder = (,)
   <$> idDecoder CollateralTxInId
   <*> collateralTxInDecoder
 
--- | Encoder for a 'ReferenceTxIn', excluding the auto-generated @id@.
 referenceTxInEncoder :: E.Params ReferenceTxIn
 referenceTxInEncoder = mconcat
   [ referenceTxInTxInId     >$< idEncoder      getTxId
@@ -649,7 +636,6 @@ referenceTxInEncoder = mconcat
   , referenceTxInTxOutHash  >$< E.param (E.nonNullable E.bytea)
   ]
 
--- | Decoder for the data columns of a 'ReferenceTxIn' (excluding @id@).
 referenceTxInDecoder :: D.Row ReferenceTxIn
 referenceTxInDecoder = ReferenceTxIn
   <$> idDecoder TxId
@@ -657,13 +643,11 @@ referenceTxInDecoder = ReferenceTxIn
   <*> D.column (D.nonNullable $ fromIntegral <$> D.int8)
   <*> D.column (D.nonNullable D.bytea)
 
--- | Decoder for a full @reference_tx_in@ row, including @id@.
 entityReferenceTxInDecoder :: D.Row (ReferenceTxInId, ReferenceTxIn)
 entityReferenceTxInDecoder = (,)
   <$> idDecoder ReferenceTxInId
   <*> referenceTxInDecoder
 
--- | Encoder for a 'CollateralTxOut', excluding the auto-generated @id@.
 collateralTxOutEncoder :: E.Params CollateralTxOut
 collateralTxOutEncoder = mconcat
   [ collateralTxOutTxId              >$< idEncoder      getTxId

@@ -35,7 +35,7 @@ type ProcessBlockFn =
   => BlockContext -> m ()
 ```
 
-Three fields, no surprises. `pdName` is the profile key that enables
+Three fields, no surprises. `pdName` is the `extractors` key that enables
 the extractor; `pdTables` is the canonical schema for the tables it
 owns; `pdProcess` is the per-block body.
 
@@ -115,7 +115,7 @@ pattern-match this; extractors that don't (`utxo`, `metadata`,
 `pdTables` is a list of `TableDef`s the extractor owns. The schema
 layer ([`dbsync-db`](../schema-layer)) generates `CREATE TABLE` DDL
 from each one at boot. Tables an extractor doesn't claim never get
-created — disabling an extractor at the profile level skips both the
+created — disabling an extractor in the config skips both the
 work and the schema.
 
 Dependencies between extractors aren't declared on `ExtractorDef`.
@@ -137,17 +137,20 @@ over every declared table detects drift at boot. See
 
 ## Shared dedup helpers
 
-A handful of tables — `pool_hash`, `stake_address`, `multi_asset` —
-can be touched by multiple extractors. The first sighting must insert,
-subsequent sightings must reuse the same ID. The dedup helpers in
+Several tables can be touched by more than one extractor. The first
+sighting must insert; every later sighting must reuse the same ID.
 [`DbSync.Extractor.SharedDedup`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/Extractor/SharedDedup.hs)
-wrap that pattern: look up via the resolver, write the row if it's
-new, return the ID.
+wraps that pattern: look up via the resolver, write the row if it is new,
+return the ID.
 
-The same helper works in both phases because the underlying
-`resolvePoolHash` / `resolveStakeAddress` / `resolveMultiAsset`
-methods on `IdResolver` are phase-implemented (LSM dedup map in
-Ingest, `SELECT … WHERE hash = ?` in Follow).
+It exposes thirteen helpers, covering `pool_hash`, `stake_address`,
+stake credentials, `multi_asset`, `datum`, `script`, tx scripts,
+`redeemer_data`, `drep_hash`, abstract DReps, `committee_hash`,
+`voting_anchor`, and `cost_model`.
+
+The same helper works in both phases, because the underlying
+`IdResolver` methods are phase-implemented: an LSM dedup map in Ingest,
+`SELECT … WHERE hash = ?` in Follow.
 
 ## Registration
 
@@ -155,30 +158,34 @@ Extractors are wired up in
 [`DbSync.App.Setup.buildExtractors`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/App/Setup.hs)
 by name. The `core` extractor is unconditional and leads the list;
 the rest are resolved from a `(name, enabled?)` table built from the
-config's `db_profile` against the registry in
+config's `extractors` against the registry in
 [`DbSync.Extractor.Registry`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/Extractor/Registry.hs).
 A name with no implementation (today only `current_state`) resolves to
 a no-op stub, so enabling it is accepted but writes nothing.
 
-The list order is the fixed declaration order in `allKnownExtractors`,
-arranged so shared-dedup producers (e.g. `stake_delegation`) precede
-their consumers (`pool`). Dependency validation happens separately, in
-the config validator.
+The runtime order is the declaration order of `optionalExtractors` in
+`DbSync.App.Setup`, arranged so shared-dedup producers such as
+`stake_delegation` precede their consumers such as `pool`. Dependency
+validation happens separately, in the config validator.
 
 ## Non-block-driven extractors
 
-Two extractors have a no-op `pdProcess`:
+Four extractors have a no-op `pdProcess`:
 
 - **`epoch_boundary`** owns `ada_pots`, `epoch_param`, `epoch_state`,
-  `cost_model`. These are populated by `runEpochBoundary`
+  and `cost_model`. `runEpochBoundary`
   ([`DbSync.Extractor.EpochBoundary`](https://github.com/input-output-hk/dbsync/blob/main/dbsync/src/DbSync/Extractor/EpochBoundary.hs))
-  which the consumer calls at each epoch boundary with the matching
-  ledger output. Per-block work is none.
-- **`epoch`** owns `epoch_finalized` plus the `epoch` / `epoch_current`
-  views. The table is filled by SQL hooks at three points (Ingest
-  backfill, Follow boundary, Follow rollback) rather than from any
-  per-block path. The extractor exists so the schema gets created
-  when the option is on.
+  fills them, called by the consumer at each epoch boundary with the
+  matching ledger output.
+- **`pool_stats`** owns `pool_stat`, also filled at the epoch boundary
+  from the ledger's SPO voting distribution.
+- **`epoch_sync_stats`** owns `epoch_sync_stats`, written by the
+  boundary handler in both Ingest and Follow.
+- **`epoch`** owns `epoch_finalized` plus the `epoch` and
+  `epoch_current` views. SQL hooks fill the table at three points —
+  Ingest backfill, Follow boundary, Follow rollback — rather than from
+  any per-block path. The extractor exists so the schema gets created
+  when the key is on.
 
 :::note
 Registering them as extractors keeps schema creation uniform —

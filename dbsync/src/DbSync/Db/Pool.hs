@@ -1,9 +1,6 @@
 -- | Bracketed 'Hasql.Pool.Pool' opener for the parallel Prep steps,
--- plus the 'PoolM' monad the bracketed action runs in.
---
--- Inside the bracket the pool is read from env (via 'HasPool'), not
--- threaded through every 'usePool' call. Tracing also delegates
--- through the env so per-table log lines work the same as outside.
+-- plus the 'PoolM' monad the bracketed action runs in. Inside the
+-- bracket both the pool and the tracer come from env.
 module DbSync.Db.Pool
   ( -- * Pool env + monad
     PoolEnv (..)
@@ -41,12 +38,10 @@ import DbSync.Phase.Preparing.Tuning
 import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Types (AppTracer)
 
--- | Access a 'Hasql.Pool.Pool' from env.
 class HasPool env where
   getPool :: env -> Pool.Pool
 
--- | Reader env inside a 'withPrepPool' bracket: just the pool plus
--- whatever the caller needs for logging.
+-- | Reader env inside a 'withPrepPool' bracket.
 data PoolEnv = PoolEnv
   { pePool   :: !Pool.Pool
   , peTracer :: !AppTracer
@@ -58,12 +53,11 @@ instance HasPool PoolEnv where
 instance HasTracer PoolEnv where
   getTracer = peTracer
 
--- | The monad inside a 'withPrepPool' bracket.
 type PoolM = AppM PoolEnv
 
--- | Acquire a pool, run @action@ in 'PoolM' with the pool bound on
--- env, release the pool on exit. Each backend boots with the
--- 'PrepTuning' GUCs applied via @initSession@.
+-- | Acquire a pool, run @action@ in 'PoolM', release the pool on
+-- exit. Each backend boots with the 'PrepTuning' GUCs applied through
+-- @initSession@.
 withPrepPool
   :: (HasTracer env, MonadReader env m, MonadIO m)
   => ConnSettings.Settings
@@ -78,8 +72,8 @@ withPrepPool connSettings tuning poolSize action = do
   tracer <- asks getTracer
   liftIO (withPrepPoolIO tracer connSettings tuning poolSize action)
 
--- | As 'withPrepPool' but takes the tracer explicitly. Used by call
--- sites that don't (yet) carry a 'HasTracer' env.
+-- | As 'withPrepPool', but for call sites that carry no 'HasTracer'
+-- env.
 withPrepPoolIO
   :: AppTracer
   -> ConnSettings.Settings
@@ -99,12 +93,11 @@ withPrepPoolIO tracer connSettings tuning poolSize action =
       ]
 
 -- | Pool acquisition timeout for Prep. The hasql-pool default of 10s
--- is sized for user-facing request paths where a hung pool is worse
--- than failing fast. Prep is batch DDL: with ~30 UNLOGGED tables
--- fanning out to a 4-backend pool, a small table queued behind a
--- multi-minute @tx_out@ flip easily waits longer than 10s. Pick a
--- value that won't realistically trip on a mainnet-shaped Prep but
--- still surfaces a genuine deadlock.
+-- suits user-facing request paths, where a hung pool is worse than
+-- failing fast. Prep is batch DDL instead: every enabled table fans
+-- out to a 4-backend pool, so a small table queued behind the
+-- @tx_out@ flip waits far longer than 10s. This value must not trip
+-- on a healthy Prep, but must still surface a genuine deadlock.
 prepAcquisitionTimeout :: DiffTime
 prepAcquisitionTimeout = 6 * 3600  -- 6 hours
 
@@ -123,11 +116,10 @@ usePool ctx session = do
 -- | Run one action per item on exactly @n@ worker threads that pop
 -- items in list order.
 --
--- Unlike a plain @forConcurrently_@ over the whole list, this keeps
--- the caller's priority order (front of the list starts first) and
--- avoids parking one blocked thread per item on the pool's
--- acquisition queue. Sized to the pool so every worker holds a
--- backend whenever work remains.
+-- A plain @forConcurrently_@ over the whole list loses the caller's
+-- priority order and parks one blocked thread per item on the pool's
+-- acquisition queue. Size @n@ to the pool, so every worker holds a
+-- backend while work remains.
 forPooled_ :: MonadUnliftIO m => Int -> [a] -> (a -> m ()) -> m ()
 forPooled_ n items run = do
   queue <- liftIO (newIORef items)

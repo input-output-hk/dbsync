@@ -1,8 +1,6 @@
--- | Application entry point.
---
--- Orchestrates the full db-sync lifecycle: environment setup,
--- startup logging, phase detection, and phase transitions
--- (Ingest -> Preparing -> Following).
+-- | Boot-time construction: the shared 'CoreEnv', the enabled
+-- extractor list, the startup log lines, and the off-chain workers.
+-- 'DbSync.App.Run' drives the lifecycle itself.
 module DbSync.App.Setup
   ( -- * Environment construction
     buildCoreEnv
@@ -35,7 +33,7 @@ import DbSync.App.Config.Types
   ( LoggingConfig (..)
   , NodeConfig
   , OptionFlag (..)
-  , DbProfile (..)
+  , Extractors (..)
   , SyncConfig (..)
   , UtxoOption (..)
   )
@@ -68,15 +66,14 @@ import DbSync.Worker.OffChain.Vote
 -- * Environment construction
 -- ---------------------------------------------------------------------------
 
--- | Build the shared core environment from parsed configs.
+-- | Build the shared core environment from the parsed configs.
 --
--- The phase holder is seeded with 'IngestChainHistory'; the
--- orchestrator in 'DbSync.App.Run' overwrites it immediately after
--- the boot decision so the displayed value is correct from the
--- first subsystem log onwards.
+-- The phase holder starts at 'IngestChainHistory'. The orchestrator
+-- overwrites it right after the boot decision, so the displayed value
+-- is correct from the first subsystem log onwards.
 buildCoreEnv :: AppTracer -> SyncConfig -> NodeConfig -> Network -> IO CoreEnv
 buildCoreEnv tracer syncCfg nodeCfg network = do
-  extractors <- case buildExtractors (scDbProfile syncCfg) of
+  extractors <- case buildExtractors (scExtractors syncCfg) of
     Left err  -> throwInternal err
     Right xs  -> pure xs
   curPhase <- newCurrentPhase IngestChainHistory
@@ -92,18 +89,17 @@ buildCoreEnv tracer syncCfg nodeCfg network = do
     , ceSecurityParam = cardanoSecurityParam
     }
 
--- | Build the list of enabled extractors from config, in declaration
+-- | Build the enabled extractor list from the config, in declaration
 -- order.
 --
--- 'coreExtractor' is unconditional — every other extractor's tables
--- reference its block / tx / slot_leader rows — and so leads the list.
--- Optional extractors come from @db_profile@ and are resolved against
--- 'allKnownExtractors'; a name with no implementation yet (e.g.
--- @current_state@) gets a no-op stub so its enablement is still
--- recorded and the schema reflects it once the work lands.
+-- 'coreExtractor' leads the list and is unconditional, because every
+-- other extractor's tables reference its block, tx, and slot_leader
+-- rows. The @extractors@ block supplies the rest, resolved against
+-- 'allKnownExtractors'. A name with no implementation gets a no-op
+-- stub, so the schema still records that the operator enabled it.
 --
--- Returns 'Either' for call-site symmetry, though construction cannot fail.
-buildExtractors :: DbProfile -> Either Text [ExtractorDef]
+-- Returns 'Either' for call-site symmetry; construction cannot fail.
+buildExtractors :: Extractors -> Either Text [ExtractorDef]
 buildExtractors pc =
   Right (coreExtractor : mapMaybe mkProj optionalExtractors)
   where
@@ -112,8 +108,6 @@ buildExtractors pc =
       | enabled   = Just (resolveExtractor name)
       | otherwise = Nothing
 
-    -- | Resolve a named extractor to its real implementation, or a stub
-    -- if it isn't implemented yet.
     resolveExtractor :: Text -> ExtractorDef
     resolveExtractor name =
       Map.findWithDefault (stubExtractor name) name knownByName
@@ -121,26 +115,26 @@ buildExtractors pc =
     knownByName :: Map.Map Text ExtractorDef
     knownByName = Map.fromList [(pdName e, e) | e <- allKnownExtractors]
 
-    -- | (extractor name, enabled?). 'utxo' reads from the structured
-    -- 'UtxoOption'; the rest read the flat 'OptionFlag' bool.
+    -- (extractor name, enabled?). 'utxo' reads the structured
+    -- 'UtxoOption'; the rest read the flat 'OptionFlag'.
     optionalExtractors :: [(Text, Bool)]
     optionalExtractors =
-      [ ("utxo",                    uoEnabled (pcUtxo pc))
-      , ("multi_asset",             prEnabled (pcMultiAsset pc))
-      , ("metadata",                prEnabled (pcMetadata pc))
-      , ("stake_delegation",        prEnabled (pcStakeDelegation pc))
-      , ("stake_delegation_ledger", prEnabled (pcStakeDelegationLedger pc))
-      , ("pool",                    prEnabled (pcPool pc))
-      , ("scripts_datums",          prEnabled (pcScriptsDatums pc))
-      , ("governance",              prEnabled (pcGovernance pc))
-      , ("cbor",                    prEnabled (pcCbor pc))
-      , ("epoch_sync_stats",        prEnabled (pcEpochSyncStats pc))
-      , ("epoch_boundary",          prEnabled (pcEpochBoundary pc))
-      , ("pool_stats",              prEnabled (pcPoolStats pc))
-      , ("epoch",                   prEnabled (pcEpoch pc))
-      , ("current_state",           prEnabled (pcCurrentState pc))
-      , ("off_chain_pools",         prEnabled (pcOffChainPools pc))
-      , ("off_chain_votes",         prEnabled (pcOffChainVotes pc))
+      [ ("utxo",                    uoEnabled (exUtxo pc))
+      , ("multi_asset",             prEnabled (exMultiAsset pc))
+      , ("metadata",                prEnabled (exMetadata pc))
+      , ("stake_delegation",        prEnabled (exStakeDelegation pc))
+      , ("stake_delegation_ledger", prEnabled (exStakeDelegationLedger pc))
+      , ("pool",                    prEnabled (exPool pc))
+      , ("scripts_datums",          prEnabled (exScriptsDatums pc))
+      , ("governance",              prEnabled (exGovernance pc))
+      , ("cbor",                    prEnabled (exCbor pc))
+      , ("epoch_sync_stats",        prEnabled (exEpochSyncStats pc))
+      , ("epoch_boundary",          prEnabled (exEpochBoundary pc))
+      , ("pool_stats",              prEnabled (exPoolStats pc))
+      , ("epoch",                   prEnabled (exEpoch pc))
+      , ("current_state",           prEnabled (exCurrentState pc))
+      , ("off_chain_pools",         prEnabled (exOffChainPools pc))
+      , ("off_chain_votes",         prEnabled (exOffChainVotes pc))
       ]
 
 -- | Placeholder extractor — name only, no real extraction logic yet.
@@ -155,9 +149,9 @@ stubExtractor name = ExtractorDef
 placeholderMetrics :: Metrics
 placeholderMetrics = Metrics 0 0 0 0 0 0 0 0 0
 
--- | Cardano protocol security parameter @k@. Mainnet and every
--- public testnet have used 2160 since Shelley; the value is part of
--- the protocol parameters and a change would be a hard fork.
+-- | Cardano protocol security parameter @k@. Mainnet and every public
+-- testnet have used 2160 since Shelley. It is a protocol parameter,
+-- so a change needs a hard fork.
 cardanoSecurityParam :: Word64
 cardanoSecurityParam = 2160
 
@@ -165,9 +159,8 @@ cardanoSecurityParam = 2160
 -- * Startup
 -- ---------------------------------------------------------------------------
 
--- | Log startup information: version, enabled extractors, config summary.
---
--- Called once at the very start before phase detection.
+-- | Log the binary identity and the enabled extractors. Runs once, at
+-- the very start.
 runStartup :: CoreM ()
 runStartup = do
   tracer     <- asks ceTracer
@@ -175,9 +168,9 @@ runStartup = do
   let projNames = map pdName extractors
       projCount = length projNames
 
-  -- Identify the running binary by its link mtime, read at runtime
-  -- so it cannot disagree with the file actually executing; lets any
-  -- saved log answer which build produced it.
+  -- Identify the running binary by its link mtime, read at runtime so
+  -- it cannot disagree with the file that is executing. Any saved log
+  -- then names the build that produced it.
   binaryLine <- liftIO $ do
     exePath <- getExecutablePath
     eTime   <- try (getModificationTime exePath)
@@ -193,7 +186,6 @@ runStartup = do
       <> showExtractorList projNames
     )
 
--- | Format a list of extractor names for logging.
 showExtractorList :: [Text] -> Text
 showExtractorList = mconcat . intersperse ", "
 
@@ -201,16 +193,16 @@ showExtractorList = mconcat . intersperse ", "
 -- * Worker setup
 -- ---------------------------------------------------------------------------
 
--- | Spawn the off-chain pool worker iff @off_chain_pools@ is enabled.
--- Each worker owns its own 'Http.Manager' so the per-worker HTTP
--- connection pool is isolated from the rest of the process.
+-- | Spawn the off-chain pool worker only when @off_chain_pools@ is
+-- enabled. The worker owns its 'Http.Manager', which isolates its HTTP
+-- connection pool from the rest of the process.
 setupOffChainPoolWorker
   :: AppTracer
   -> HasqlSettings.Settings
-  -> DbProfile
+  -> Extractors
   -> IO (Maybe OffChainPoolWorker)
 setupOffChainPoolWorker tracer hasqlSettings opts
-  | prEnabled (pcOffChainPools opts) = do
+  | prEnabled (exOffChainPools opts) = do
       manager <- newRestrictedManager
       Just <$>
         mkOffChainPoolWorker
@@ -220,14 +212,15 @@ setupOffChainPoolWorker tracer hasqlSettings opts
           (httpPoolFetcher manager)
   | otherwise = pure Nothing
 
--- | Spawn the off-chain vote worker iff @off_chain_votes@ is enabled.
+-- | Spawn the off-chain vote worker only when @off_chain_votes@ is
+-- enabled.
 setupOffChainVoteWorker
   :: AppTracer
   -> HasqlSettings.Settings
-  -> DbProfile
+  -> Extractors
   -> IO (Maybe OffChainVoteWorker)
 setupOffChainVoteWorker tracer hasqlSettings opts
-  | prEnabled (pcOffChainVotes opts) = do
+  | prEnabled (exOffChainVotes opts) = do
       manager <- newRestrictedManager
       let cfg = defaultOffChainVoteConfig
       Just <$>

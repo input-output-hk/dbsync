@@ -4,20 +4,12 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 
--- | Post-Byron block-level converters and shared helpers.
---
--- All post-Byron eras (Shelley through Dijkstra) use the consensus
--- 'ShelleyBlock' wrapper. Each @from*Block@ function converts an
--- era-specific block into our era-independent 'GenericBlock'.
---
--- The block-level converters are intentionally thin — they delegate to
--- shared helpers for header extraction and differ only in:
---
---   1. The 'BlockEra' tag
---   2. TPraos vs Praos helpers for VRF\/OpCert\/ProtVer
---   3. Which @from*Tx@ function is mapped over transactions (currently stubbed)
---
--- __First pass:__ @blkTxs = []@ — transaction extraction wired in Steps 6+7.
+-- | Post-Byron block converters and their shared helpers. Every era
+-- from Shelley to Dijkstra uses the consensus 'ShelleyBlock' wrapper,
+-- so each @from*Block@ stays thin and calls the shared header
+-- helpers. They differ in three points only: the 'BlockEra' tag, the
+-- TPraos or Praos helpers for VRF, OpCert and ProtVer, and which
+-- @from*Tx@ they map over the transactions.
 module DbSync.Parser.Block
   ( -- * Block converters (Shelley+ eras)
     fromShelleyBlock
@@ -193,40 +185,37 @@ mkShelleyBlockPraos era txConvert sd blk =
 -- * Shared block helpers (protocol-agnostic)
 -- ---------------------------------------------------------------------------
 
--- | Extract the block header from a 'ShelleyBlock'.
 blockHeader :: ShelleyBlock p era -> ShelleyProtocolHeader p
 blockHeader = Ledger.blockHeader . Consensus.shelleyBlockRaw
 
--- | Block header hash as raw bytes (32 bytes).
+-- | 32 raw bytes.
 blockHash :: ShelleyBlock p era -> ByteString
 blockHash =
   Crypto.hashToBytes
     . Consensus.unShelleyHash
     . Consensus.shelleyBlockHeaderHash
 
--- | Previous block hash as raw bytes.
--- Returns empty 'ByteString' for the first block after genesis.
+-- | 32 raw bytes, or an empty 'ByteString' for the first block
+-- after genesis.
 blockPrevHash :: ProtocolHeaderSupportsEnvelope p => ShelleyBlock p era -> ByteString
 blockPrevHash blk =
   case pHeaderPrevHash (blockHeader blk) of
     TPraos.GenesisHash                      -> BS.empty
     TPraos.BlockHash (TPraos.HashHeader h)  -> Crypto.hashToBytes h
 
--- | Block issuer as raw 28-byte key hash.
--- The original returns 'KeyHash BlockIssuer'; we pre-serialize to 'ByteString'.
+-- | The issuer's 28-byte key hash, serialised here rather than kept
+-- as a 'KeyHash'.
 blockIssuerRaw :: ShelleyProtocol p => ShelleyBlock p era -> ByteString
 blockIssuerRaw = Crypto.hashToBytes . unKeyHash . hashKey . pHeaderIssuer . blockHeader
 
--- | Block number (from header).
 blockNumber :: ShelleyProtocol p => ShelleyBlock p era -> BlockNo
 blockNumber = pHeaderBlock . blockHeader
 
--- | Block size in bytes.
+-- | Size in bytes.
 blockSize :: ProtocolHeaderSupportsEnvelope p => ShelleyBlock p era -> Word64
 blockSize = fromIntegral . pHeaderBlockSize . blockHeader
 
--- | Extract indexed transactions from the block body.
--- Returns @[(blockIndex, tx)]@ where @blockIndex@ is 0-based.
+-- | Returns @[(blockIndex, tx)]@ with a 0-based @blockIndex@.
 getTxs :: forall p era. Ledger.EraBlockBody era => ShelleyBlock p era -> [(Word64, Ledger.Tx Ledger.TopTx era)]
 getTxs blk = zip [0 ..] $ toList (Ledger.blockBody (Consensus.shelleyBlockRaw blk) ^. Ledger.txSeqBlockBodyL)
 
@@ -234,24 +223,18 @@ getTxs blk = zip [0 ..] $ toList (Ledger.blockBody (Consensus.shelleyBlockRaw bl
 -- * TPraos-specific helpers (Shelley, Allegra, Mary, Alonzo)
 -- ---------------------------------------------------------------------------
 
--- | VRF verification key as text (hex-encoded).
--- TODO: Switch to proper Bech32 encoding with @vrf_vk@ human-readable prefix.
 blockVrfKeyViewTPraos :: ShelleyBlock (TPraos StandardCrypto) era -> Text
 blockVrfKeyViewTPraos = vrfKeyToText . TPraos.bheaderVrfVk . TPraos.bhbody . blockHeader
 
--- | Operational certificate hot key as raw bytes.
 blockOpCertRawTPraos :: ShelleyBlock (TPraos StandardCrypto) era -> ByteString
 blockOpCertRawTPraos = KES.rawSerialiseVerKeyKES . TPraos.ocertVkHot . blockOpCertTPraos
 
--- | Operational certificate counter.
 blockOpCertCounterTPraos :: ShelleyBlock (TPraos StandardCrypto) era -> Word64
 blockOpCertCounterTPraos = TPraos.ocertN . blockOpCertTPraos
 
--- | Full OCert from TPraos header.
 blockOpCertTPraos :: ShelleyBlock (TPraos StandardCrypto) era -> TPraos.OCert StandardCrypto
 blockOpCertTPraos = TPraos.bheaderOCert . TPraos.bhbody . blockHeader
 
--- | Protocol version from TPraos header.
 blockProtoVersionTPraos :: ShelleyBlock (TPraos StandardCrypto) era -> Ledger.ProtVer
 blockProtoVersionTPraos = TPraos.bprotver . TPraos.bhbody . blockHeader
 
@@ -259,28 +242,21 @@ blockProtoVersionTPraos = TPraos.bprotver . TPraos.bhbody . blockHeader
 -- * Praos-specific helpers (Babbage, Conway, Dijkstra)
 -- ---------------------------------------------------------------------------
 
--- | VRF verification key as text (hex-encoded).
--- TODO: Switch to proper Bech32 encoding with @vrf_vk@ human-readable prefix.
 blockVrfKeyViewPraos :: ShelleyBlock (Praos StandardCrypto) era -> Text
 blockVrfKeyViewPraos = vrfKeyToText . Praos.hbVrfVk . getHeaderBodyPraos . blockHeader
 
--- | Operational certificate hot key as raw bytes.
 blockOpCertRawPraos :: ShelleyBlock (Praos StandardCrypto) era -> ByteString
 blockOpCertRawPraos = KES.rawSerialiseVerKeyKES . TPraos.ocertVkHot . blockOpCertPraos
 
--- | Operational certificate counter.
 blockOpCertCounterPraos :: ShelleyBlock (Praos StandardCrypto) era -> Word64
 blockOpCertCounterPraos = TPraos.ocertN . blockOpCertPraos
 
--- | Full OCert from Praos header.
 blockOpCertPraos :: ShelleyBlock (Praos StandardCrypto) era -> TPraos.OCert StandardCrypto
 blockOpCertPraos = Praos.hbOCert . getHeaderBodyPraos . blockHeader
 
--- | Protocol version from Praos header.
 blockProtoVersionPraos :: ShelleyBlock (Praos StandardCrypto) era -> Ledger.ProtVer
 blockProtoVersionPraos = Praos.hbProtVer . getHeaderBodyPraos . blockHeader
 
--- | Extract the Praos header body.
 getHeaderBodyPraos :: Praos.Header StandardCrypto -> Praos.HeaderBody StandardCrypto
 getHeaderBodyPraos (Praos.Header hdrBody _) = hdrBody
 
@@ -288,13 +264,12 @@ getHeaderBodyPraos (Praos.Header hdrBody _) = hdrBody
 -- * Internal utilities
 -- ---------------------------------------------------------------------------
 
--- | Split a 'ProtVer' into @(major, minor)@ as 'Word16' values.
 splitProtoVer :: Ledger.ProtVer -> (Word16, Word16)
 splitProtoVer pv =
   ( fromIntegral (Ledger.getVersion (Ledger.pvMajor pv) :: Word64)
   , fromIntegral (Ledger.pvMinor pv :: Natural)
   )
 
--- | Serialise a VRF verification key as Bech32 with HRP @vrf_vk@.
+-- | Bech32 with the @vrf_vk@ HRP.
 vrfKeyToText :: VerKeyVRF (VRF StandardCrypto) -> Text
 vrfKeyToText = serialiseVrfVkToBech32 . rawSerialiseVerKeyVRF

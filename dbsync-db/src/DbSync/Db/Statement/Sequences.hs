@@ -2,17 +2,9 @@
 
 -- | DDL builders for the sequence-reset pass.
 --
--- Before 'FollowingChainTip' takes over from Ingest, each table's
--- @id@ sequence is advanced to @MAX(id) + 1@ so the next Follow
--- allocation does not collide with Ingest-loaded rows. The output is
---
--- > SELECT setval(pg_get_serial_sequence('<table>', 'id'),
--- >               COALESCE((SELECT MAX(id) FROM <table>), 0) + 1,
--- >               false);
---
--- @false@ for @is_called@ means the next @nextval@ returns exactly
--- the supplied value, so @+ 1@ is correct for both empty and
--- non-empty tables.
+-- Before 'FollowingChainTip' takes over, each table's @id@ sequence
+-- advances to @MAX(id) + 1@, so the next Follow allocation does not
+-- collide with an Ingest-loaded row.
 module DbSync.Db.Statement.Sequences
   ( resetSequenceSql
   , resetSequenceStmt
@@ -27,6 +19,8 @@ import qualified Hasql.Statement as Stmt
 
 import DbSync.Db.Sql (quoteIdent, quoteLiteral)
 
+-- | @false@ for @is_called@ makes the next @nextval@ return the supplied
+-- value exactly, so @+ 1@ is correct for an empty and a populated table.
 resetSequenceSql :: Text -> Text
 resetSequenceSql tableName =
   T.unwords

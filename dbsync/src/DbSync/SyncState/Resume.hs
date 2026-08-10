@@ -1,50 +1,9 @@
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings  #-}
 
--- | Resume-time row cleanup.
---
--- Two boot scenarios use different strategies:
---
---   * 'IngestResume' — full cleanup. The COPY writer commits at
---     epoch boundaries and the @*_id_counter@ snapshot in
---     'SyncStateRow' lags by one epoch, so rows can sit past both
---     'ssrLastCommittedSlot' and the recorded counters. Each table
---     is pruned by whichever chain anchor it carries: @slot_no@,
---     @block_id@, or a FK to @tx@ / @tx_out@ (joined back to
---     @block.slot_no@). Identity-leaf fact tables — @tx_metadata@,
---     the @*_tx_in@ family, @ma_tx_out@, etc. — have no id counter,
---     so the FK pass is the only thing that reaches them.
---     Counter-tracked tables also get the counter pass as a
---     belt-and-braces guard, which is a no-op once the slot pass
---     has finished.
---
---   * 'FollowRestart' — Follow's per-block transaction is atomic, so
---     for slot/block/FK-anchored tables no orphan rows past the
---     recorded slot are possible. The ledger-derived epoch-keyed
---     tables (@epoch_stake@, @reward@, …) still need the epoch pass,
---     because their rows carry no slot. Counter columns are stale on
---     this path because 'writeSyncStateSlotStmt' deliberately doesn't
---     touch them — running the counter DELETE would wipe legitimate
---     rows that fact-table FKs reference.
---
--- == The epoch pass
---
--- Blocks at or below @last_committed_slot@ are never re-processed:
--- the chainsync intersection sits at the loaded ledger snapshot and
--- everything up to the committed slot is replayed with PG writes and
--- boundary payloads suppressed. So the epoch pass must keep every row
--- an already-committed block produced, and delete exactly those a
--- re-processed block will emit again. Which epochs those are depends
--- on the table's 'EpochAnchor', not on the cutoff epoch alone.
---
--- == Progress logging
---
--- Each DELETE that actually removed rows emits one log line on
--- completion: @name [✓] (rows, dur)@. Zero-row tables stay silent
--- so a 'FollowRestart' cleanup (where almost every DELETE is a
--- no-op) doesn't spam the log. A 5-second heartbeat fires while
--- any single DELETE is in flight so the long ones (typically
--- @tx_out@ and @ma_tx_out@) still report liveness.
+-- | Resume-time row cleanup. Delete the rows that sit past the
+-- recorded @last_committed_slot@, so a restart can re-process the
+-- blocks above it. 'CleanupMode' selects which passes run.
 module DbSync.SyncState.Resume
   ( CleanupMode (..)
   , deleteRowsPastSlot
@@ -95,19 +54,20 @@ import DbSync.Trace (HasTracer (..))
 import DbSync.Trace.Timing (fmtCount, fmtDuration, withHeartbeatIO)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 
--- | Which boot scenario the cleanup is running under. See module Haddock.
+-- | Which boot scenario the cleanup runs under.
 data CleanupMode
   = IngestResume
-    -- ^ Full cleanup against both the @last_committed_slot@ and the
-    -- 'SyncStateRow' counters.
+    -- ^ Run every pass. The COPY writer commits at epoch boundaries
+    -- and the 'SyncStateRow' counters lag by one epoch, so rows can
+    -- sit past both the committed slot and the counters.
   | FollowRestart
-    -- ^ Skip the counter DELETE; the counter columns are stale on
-    -- this path and the DELETE would wipe live rows.
+    -- ^ Skip the counter pass. Follow commits one block per
+    -- transaction, so no anchored table holds rows past the committed
+    -- slot, and 'writeSyncStateSlotStmt' leaves the counters stale —
+    -- the counter DELETE would wipe live rows.
   deriving stock (Eq, Show)
 
--- | Delete every row past the row's @last_committed_slot@ across the
--- given tables. Returns the total number of rows deleted. No-op when
--- the row reports no committed progress.
+-- | No-op when the row reports no committed progress.
 deleteRowsPastSlot
   :: ( HasTracer env
      , HasControlConnection env
@@ -225,9 +185,11 @@ runByCounter tracer unanchored rowSnapshot acc (td, counter) = do
         accIn
 
 -- | Resolve the cutoff slot to its epoch, then trim each epoch-keyed
--- table by its own anchor. A cutoff slot with no epoch-carrying block
--- at or below it means the chain hasn't reached the first epoch these
--- tables describe, so there is nothing to trim.
+-- table by its own 'EpochAnchor'. The pass must keep every row an
+-- already-committed block produced, and delete only the rows a
+-- re-processed block emits again; the anchor decides which epochs
+-- those are. A cutoff slot with no epoch-carrying block below it means
+-- the chain never reached these tables, so nothing needs a trim.
 trimByEpoch
   :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => AppTracer
@@ -253,8 +215,8 @@ runByAnchor tracer cutoffEpoch acc (td, c, anchor) =
     (runStmt tracer cutoffEpoch (deleteEpochRowsStmt anchor c) (tdName td))
     acc
 
--- | Run one table's DELETE, time it, and emit @name [✓] (rows, dur)@
--- if it removed anything. Zero-row deletes are silent.
+-- | Run one table's DELETE and time it. A zero-row delete stays
+-- silent, so a 'FollowRestart' cleanup does not spam the log.
 stepTable
   :: MonadIO m
   => AppTracer
@@ -276,9 +238,8 @@ stepTable tracer tableName action acc = do
         <> ")"
   pure (acc + rows)
 
--- | Compact integer rendering for the per-table line — @1234@ →
--- @1.2K@, @6_500_000@ → @6.5M@. Distinct from 'fmtCount' (which
--- produces @6,500,000@).
+-- | Compact integer rendering: @1234@ → @1.2K@, @6500000@ → @6.5M@.
+-- 'fmtCount' renders the same number as @6,500,000@.
 fmtCountCompact :: Int64 -> Text
 fmtCountCompact n
   | n < 1_000          = T.pack (show n)
@@ -290,22 +251,19 @@ fmtCountCompact n
 -- Per-table classification
 -- ---------------------------------------------------------------------------
 
--- | Per-table classification: at most one slot/block strategy plus
--- an optional counter strategy. The two axes are orthogonal — a
--- table can have both (e.g. @block@ has @slot_no@ and a counter on
--- 'SyncStateRow'), and the counter pass then acts as a redundant
--- guard.
+-- | At most one slot/block strategy plus an optional counter
+-- strategy. The two axes are orthogonal: @block@ carries both a
+-- @slot_no@ and a counter, and the counter pass then only guards.
 data CleanupShape = CleanupShape
   { csSlotBlock :: !(Maybe SlotBlockShape)
   , csIdCounter :: !(Maybe (SyncStateRow -> Int64))
   }
 
--- | How a table reaches the cutoff slot. Mutually exclusive, checked
--- in order: a direct @slot_no@, a @block_id@ FK, a FK to @tx@ /
--- @tx_out@ joined back to @block@, then the table's registered
--- 'EpochAnchor'. The slot/block/FK anchors are exact, so a table that
--- carries one is trimmed through it even when it also has an epoch
--- column. The 'Text' on the FK variants is the table's FK column.
+-- | How a table reaches the cutoff slot. 'classify' checks these in
+-- constructor order and takes the first match. The slot, block and FK
+-- anchors are exact, so a table that carries one uses it even when it
+-- also has an epoch column. The 'Text' on the FK variants names the
+-- table's own FK column.
 data SlotBlockShape
   = HasSlotNo
   | HasBlockId
@@ -336,9 +294,8 @@ classify td = CleanupShape
 -- Internal IO
 -- ---------------------------------------------------------------------------
 
--- | Run a 'Stmt.Statement' against the env's control connection,
--- wrapping it in a 5-second heartbeat so a slow statement still emits
--- progress while it runs.
+-- | Run one statement on the control connection under a 5-second
+-- heartbeat, so a slow DELETE still reports liveness.
 runStmt
   :: (HasControlConnection env, MonadReader env m, MonadIO m)
   => AppTracer

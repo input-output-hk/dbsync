@@ -1,14 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | EpochSyncStats extractor.
---
--- Owns the @epoch_sync_stats@ table for tracking sync performance
--- metrics at each epoch boundary. This extractor has a no-op
--- 'pdProcess' — the Consumer writes epoch stats directly via
--- the Writer at epoch boundary commit time.
---
--- Defining it as an extractor ensures the table schema is
--- created alongside all other extractor tables.
+-- | Owns the @epoch_sync_stats@ table, which records sync performance
+-- at each epoch boundary. @pdProcess@ is a no-op: the Consumer writes
+-- the stats through the Writer when it commits the boundary.
 module DbSync.Extractor.EpochSyncStats
   ( epochSyncStatsExtractor
   ) where

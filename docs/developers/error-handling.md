@@ -1,9 +1,10 @@
 ---
 id: error-handling
-title: Error Handling
+title: Error handling
+sidebar_position: 10
 ---
 
-# Error Handling
+# Error handling
 
 How errors are represented, thrown, propagated, and rendered in dbsync,
 and the discipline that keeps a crash log readable. The conventions here
@@ -221,11 +222,11 @@ surfaces rather than the propagation wrapper, then lays out the block
 context, the IPE backtrace, and any `WhileHandling` cause:
 
 ```text
-[2026-06-24 10:15:03.842 UTC] [Error] TxOutWorker: crashed: database error at dbsync/src/DbSync/SyncState/Row.hs:210 (advanceSyncState): connection reset by peer
+[2026-06-24 10:15:03.842 UTC] [Error] TxOutWorker: crashed: database error at dbsync/src/DbSync/SyncState/Row.hs:199 (writeSyncState): connection reset by peer
     while processing block 11542891 (slot 134092310, hash a1b2c3d4e5f60718…)
     IPE backtrace:
-      DbSync.SyncState.Row.advanceSyncState (dbsync/src/DbSync/SyncState/Row.hs:(205,3)-(212,44))
-      DbSync.Phase.Following.Run.flushAndAdvance (dbsync/src/DbSync/Phase/Following/Run.hs:(331,7)-(348,30))
+      DbSync.SyncState.Row.writeSyncState (dbsync/src/DbSync/SyncState/Row.hs:(197,1)-(199,44))
+      DbSync.Phase.Following.Run.processForward (dbsync/src/DbSync/Phase/Following/Run.hs:(277,1)-(350,30))
 ```
 
 The one-line summary (`renderAppError`) is `<kind> at <file>:<line>

@@ -1,11 +1,9 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeApplications #-}
 
--- | Genesis configuration reading.
---
--- Reads the four era genesis files (Byron, Shelley, Alonzo, Conway),
--- verifies their hashes, and builds the 'TopLevelConfig' needed for
--- ChainSync codecs to deserialize blocks from the node.
+-- | Reads the four era genesis files, verifies their hashes, and
+-- builds the 'TopLevelConfig' the ChainSync codecs need to
+-- deserialise blocks.
 module DbSync.App.Config.Genesis
   ( -- * Types
     GenesisConfig (..)
@@ -63,7 +61,6 @@ import DbSync.App.Config.Types
 -- * Types
 -- ---------------------------------------------------------------------------
 
--- | Combined genesis configuration for all eras.
 data GenesisConfig = GenesisCardano
   { gcByron   :: !Byron.Config
   , gcShelley :: !ShelleyConfig
@@ -71,7 +68,7 @@ data GenesisConfig = GenesisCardano
   , gcConway  :: !ConwayGenesis
   }
 
--- | Shelley genesis config with its hash (needed for PRAOS nonce).
+-- | The hash seeds the PRAOS initial nonce.
 data ShelleyConfig = ShelleyConfig
   { scConfig     :: !ShelleyGenesis
   , scGenesisHash :: !(Crypto.Hash Crypto.Blake2b_256 ByteString)
@@ -81,7 +78,6 @@ data ShelleyConfig = ShelleyConfig
 -- * Reading
 -- ---------------------------------------------------------------------------
 
--- | Read all four genesis files and combine into a 'GenesisConfig'.
 readCardanoGenesisConfig
   :: NodeConfig
   -> FilePath       -- ^ Directory containing the genesis files
@@ -97,13 +93,11 @@ readCardanoGenesisConfig nc genesisDir = runExceptT $
 -- * Building consensus config
 -- ---------------------------------------------------------------------------
 
--- | Build the 'TopLevelConfig' from genesis data.
--- This gives us the codecs needed for ChainSync deserialization.
+-- | Carries the codecs ChainSync needs to deserialise blocks.
 mkTopLevelConfig :: NodeConfig -> GenesisConfig -> TopLevelConfig (CardanoBlock StandardCrypto)
 mkTopLevelConfig nc gc = Consensus.pInfoConfig $ mkProtocolInfoCardano nc gc
 
--- | Build the 'ProtocolInfo' from genesis data, with no leader
--- credentials. This is the production sync-only path.
+-- | The production sync-only path: no leader credentials.
 mkProtocolInfoCardano
   :: NodeConfig
   -> GenesisConfig
@@ -112,10 +106,8 @@ mkProtocolInfoCardano nc gc =
   fst (second (\f -> f (nullTracer :: Tracer IO KESAgentClientTrace)) $
     protocolInfoCardano (cardanoProtocolParams nc gc []))
 
--- | Build the 'ProtocolInfo' /and/ resolve the matching
--- 'BlockForging' actions, given a list of Shelley leader
--- credentials. Test-only; production sync uses the
--- credential-free 'mkProtocolInfoCardano'.
+-- | Test-only. Also resolves the 'BlockForging' actions for the given
+-- Shelley leader credentials.
 mkProtocolInfoCardanoForging
   :: NodeConfig
   -> GenesisConfig
@@ -131,9 +123,8 @@ mkProtocolInfoCardanoForging nc gc creds = do
   forgings <- traverse mkBlockForging mkForgingActions
   pure (pinfo, forgings)
 
--- | Shared 'CardanoProtocolParams' construction. The credentials
--- argument distinguishes the sync-only path (empty) from the
--- forging-test path (populated).
+-- | An empty credentials list gives the sync-only path; a populated
+-- one gives the forging-test path.
 cardanoProtocolParams
   :: NodeConfig
   -> GenesisConfig
@@ -169,8 +160,8 @@ cardanoProtocolParams nc gc creds =
 -- * Internal: per-era genesis readers
 -- ---------------------------------------------------------------------------
 
--- | Byron is special — it parses its own hash via 'decodeAbstractHash'
--- and goes through 'Byron.mkConfigFromFile', not a plain JSON decode.
+-- | Byron parses its own hash with 'decodeAbstractHash' and goes
+-- through 'Byron.mkConfigFromFile', not a plain JSON decode.
 readByronGenesis :: NodeConfig -> FilePath -> ExceptT ConfigError IO Byron.Config
 readByronGenesis nc genesisDir = do
   let file = genesisDir </> ncByronGenesisFile nc
@@ -182,8 +173,8 @@ readByronGenesis nc genesisDir = do
   firstExceptT (\e -> ConfigParseError $ "Byron genesis error in " <> toS file <> ": " <> show e)
     $ Byron.mkConfigFromFile requiresMagic file genHash
 
--- | Read Shelley genesis. The file contents are hashed (Blake2b_256)
--- and the digest seeds the PRAOS initial nonce.
+-- | Blake2b_256-hashes the file contents; the digest seeds the PRAOS
+-- initial nonce.
 readShelleyGenesis :: NodeConfig -> FilePath -> ExceptT ConfigError IO ShelleyConfig
 readShelleyGenesis nc genesisDir = do
   let file = genesisDir </> ncShelleyGenesisFile nc
@@ -192,14 +183,14 @@ readShelleyGenesis nc genesisDir = do
   genesis <- decodeJsonOrError "Shelley" file content
   pure $ ShelleyConfig genesis genesisHash
 
--- | Read Alonzo genesis — plain JSON decode, no hash required.
+-- | Plain JSON decode; no hash required.
 readAlonzoGenesis :: NodeConfig -> FilePath -> ExceptT ConfigError IO AlonzoGenesis
 readAlonzoGenesis nc genesisDir = do
   let file = genesisDir </> ncAlonzoGenesisFile nc
   content <- readFileOrError "Alonzo" file
   decodeJsonOrError "Alonzo" file content
 
--- | Read Conway genesis — plain JSON decode, no hash required.
+-- | Plain JSON decode; no hash required.
 readConwayGenesis :: NodeConfig -> FilePath -> ExceptT ConfigError IO ConwayGenesis
 readConwayGenesis nc genesisDir = do
   let file = genesisDir </> ncConwayGenesisFile nc
@@ -210,14 +201,12 @@ readConwayGenesis nc genesisDir = do
 -- * Internal: helpers
 -- ---------------------------------------------------------------------------
 
--- | Read a file, wrapping IO errors in 'ConfigError'.
 readFileOrError :: Text -> FilePath -> ExceptT ConfigError IO ByteString
 readFileOrError eraName file =
   handleIOExceptT
     (\e -> ConfigParseError $ eraName <> " genesis read error (" <> toS file <> "): " <> show e)
     (BS.readFile file)
 
--- | JSON-decode a ByteString, wrapping decode errors in 'ConfigError'.
 decodeJsonOrError :: (Aeson.FromJSON a) => Text -> FilePath -> ByteString -> ExceptT ConfigError IO a
 decodeJsonOrError eraName file content =
   firstExceptT
@@ -225,14 +214,12 @@ decodeJsonOrError eraName file content =
     . hoistEither
     $ Aeson.eitherDecodeStrict' content
 
--- | Convert our 'NetworkMagicConfig' to cardano-crypto's 'RequiresNetworkMagic'.
 toRequiresNetworkMagic :: NetworkMagicConfig -> Crypto.Legacy.RequiresNetworkMagic
 toRequiresNetworkMagic RequiresNoMagic = Crypto.Legacy.RequiresNoMagic
 toRequiresNetworkMagic RequiresMagic   = Crypto.Legacy.RequiresMagic
 
--- | Map our optional hard fork epoch fields to consensus 'CardanoHardForkTrigger' types.
--- On mainnet (all Nothing), every trigger defaults to 'AtDefaultVersion'.
--- On testnets, specific epochs can be set.
+-- | On mainnet every field is 'Nothing', so every trigger falls back
+-- to 'CardanoTriggerHardForkAtDefaultVersion'. Testnets set epochs.
 mkHardForkTriggers :: NodeConfig -> Consensus.CardanoHardForkTriggers
 mkHardForkTriggers nc =
   Consensus.CardanoHardForkTriggers'
@@ -249,10 +236,8 @@ mkHardForkTriggers nc =
     toTrigger Nothing      = CardanoTriggerHardForkAtDefaultVersion
     toTrigger (Just epoch) = CardanoTriggerHardForkAtEpoch (EpochNo epoch)
 
--- | Wrap the Shelley genesis hash as the PRAOS initial nonce.
 shelleyPraosNonce :: Crypto.Hash Crypto.Blake2b_256 ByteString -> Nonce
 shelleyPraosNonce hsh = Nonce (Crypto.castHash hsh)
 
--- | Byron software version required by protocol params.
 mkByronSoftwareVersion :: Byron.Update.SoftwareVersion
 mkByronSoftwareVersion = Byron.Update.SoftwareVersion (Byron.Update.ApplicationName "cardano-sl") 1

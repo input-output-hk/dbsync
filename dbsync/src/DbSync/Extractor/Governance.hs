@@ -2,33 +2,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
--- | Conway-era governance extractor.
+-- | Conway-era governance extractor: certificates, proposals, votes,
+-- and the boundary-driven @drep_distr@ rows.
 --
--- Owns 16 tables across three sub-groups:
---
---   * Cert-driven: @drep_hash@, @drep_registration@,
---     @delegation_vote@, @committee_hash@, @committee_registration@,
---     @committee_de_registration@.
---   * Proposal-driven: @voting_anchor@, @gov_action_proposal@,
---     @param_proposal@, @voting_procedure@, @treasury_withdrawal@,
---     @constitution@, @committee@, @committee_member@.
---   * Ledger-derived (boundary-triggered): @drep_distr@, @event_info@.
---
--- The @(tx_hash, proposal_index) -> gov_action_proposal.id@ cache
--- on 'ExtractState' carries proposal ids across blocks so the vote
--- pass and the boundary status-column updates can resolve their
--- @GovActionId@ references.
---
--- Empty cells:
---
---   * @event_info@ — never populated; FK target only.
---   * @voting_procedure.invalid@ — always 'Nothing' (FK target is
---     @event_info@).
---   * Cross-block vote references where the proposal predates the
---     cache's coverage window (i.e. the boot rebuild ran against a
---     pre-Conway PG) silently skip the row.
---   * Dijkstra parser arms emit empty lists; the extractor walks them
---     as no-ops.
+-- Nothing writes @event_info@; the table exists as an FK target only,
+-- so @voting_procedure.invalid@ is always 'Nothing'.
 module DbSync.Extractor.Governance
   ( governanceExtractor
   , runGovernanceBoundary
@@ -280,7 +258,6 @@ processCerts ctx tc =
 
       _ -> pure ()
 
--- | Write a @delegation_vote@ row from a Conway delegation cert.
 writeDelegationVoteRow
   :: ( HasResolver env
      , HasWriter env
@@ -301,8 +278,7 @@ writeDelegationVoteRow tc cert cred drepIdent = do
     , delegationVoteRedeemerId = redeemerIdAt tc (txCertRedeemerIx cert)
     }
 
--- | Project a 'DRepIdent' into a @drep_hash@ id, materialising the
--- corresponding dedup row on first sighting.
+-- | Writes the @drep_hash@ dedup row on first sighting.
 resolveDRep
   :: (HasResolver env, HasWriter env, MonadReader env m, MonadIO m)
   => DRepIdent -> m DrepHashId
@@ -421,8 +397,7 @@ processProposals ctx tc =
 
       _ -> pure ()
 
--- | Pick the previous-action reference embedded in a 'GenericGovAction'
--- arm, or 'Nothing' for arms that don't link an amendment chain.
+-- | 'Nothing' for the arms that do not link an amendment chain.
 prevRefFor :: GenericGovAction -> Maybe GovActionRef
 prevRefFor = \case
   GovParameterChange p _ _    -> p
@@ -432,7 +407,6 @@ prevRefFor = \case
   GovNewConstitution p _ _    -> p
   _                           -> Nothing
 
--- | The 'GovActionType' enum value for each action arm.
 govActionType :: GenericGovAction -> GovActionType
 govActionType = \case
   GovParameterChange  {}     -> ParameterChange
@@ -443,10 +417,8 @@ govActionType = \case
   GovNewConstitution  {}     -> NewConstitution
   GovInfoAction              -> InfoAction
 
--- | Materialise a @param_proposal@ row for a 'ParameterChange' arm,
--- writing the embedded cost model (if any) via dedup and returning
--- the row's id so 'gov_action_proposal.param_proposal' can reference
--- it.
+-- | Also writes the embedded cost model, if the proposal carries one,
+-- through the dedup path.
 writeParamProposalRow
   :: ( HasResolver env
      , HasWriter env
@@ -610,8 +582,7 @@ resolveVoter = \case
 -- * Anchor convenience
 -- ---------------------------------------------------------------------------
 
--- | Resolve an optional anchor reference. 'Nothing' on input passes
--- through; 'Just' triggers the dedup write with the given type.
+-- | A 'Just' triggers the dedup write with the given anchor type.
 resolveAnchor
   :: ( HasResolver env
      , HasWriter env
@@ -627,17 +598,18 @@ resolveAnchor ctx anchorType (Just a) =
 -- * Boundary handler
 -- ---------------------------------------------------------------------------
 
--- | Boundary entry point. Four jobs:
+-- | Boundary entry point. It does four jobs:
 --
---   * Stash @apGovExpiresAfter@ on 'ExtractState' so the next block's
---     proposal pass can compute @gov_action_proposal.expiration@.
---   * Resolve the currently enacted committee / no-confidence /
---     constitution ids from @apGovActionState@ and stash them so
---     @epoch_state@'s gov FK columns are populated.
---   * Apply @LedgerGovInfo@ events to set
---     @gov_action_proposal.{enacted,dropped,expired}_epoch@, and use
---     the ratify state to set @ratified_epoch@.
---   * Emit one @drep_distr@ row per pulsing-snapshot entry.
+--   * Stash @bndGovExpiresAfter@ on 'ExtractState', so the next
+--     block's proposal pass computes
+--     @gov_action_proposal.expiration@.
+--   * Resolve the enacted committee, no-confidence and constitution
+--     ids from @bndGovActionState@ and stash them, so @epoch_state@'s
+--     gov FK columns get values.
+--   * Apply @LedgerGovInfo@ events to
+--     @gov_action_proposal.{enacted,dropped,expired}_epoch@, and read
+--     the ratify state for @ratified_epoch@.
+--   * Write one @drep_distr@ row per pulsing-snapshot entry.
 runGovernanceBoundary
   :: ( HasResolver env
      , HasWriter env
@@ -669,9 +641,9 @@ runGovernanceBoundary applyResult blockId = do
         Strict.Just pulsingState ->
           emitDrepDistrAndRatify epoch pulsingState
 
--- | Walk @apEvents@ for the single 'LedgerGovInfo' entry (Conway+
--- emits at most one per boundary) and apply its enacted \/ dropped \/
--- expired action lists to @gov_action_proposal@.
+-- | Walk @bndEvents@ for the single 'LedgerGovInfo' entry; Conway+
+-- emits at most one per boundary. Its enacted, dropped and expired
+-- action lists update @gov_action_proposal@.
 applyGovInfoEvents
   :: ( HasResolver env
      , HasControlConnection env
@@ -756,14 +728,13 @@ refreshEnactedEpochStateIds applyResult genCommitteeId genConstitutionId = case 
       mGid <- liftIO $ lookupGovActionProposalId resolver txHashBs ix
       pure $ fmap getGovActionProposalId mGid
 
--- | Seed the Conway bootstrap committee and constitution — the ones
--- with no enacting proposal — on the first Conway boundary, so
--- @epoch_state@'s gov FKs and @committee_member@ populate from the
--- bootstrap epoch, matching the enacted snapshot. SELECT-guarded on
--- the NULL-proposal row, so it runs once and is resume-safe. Returns
--- the ids for the caller to thread into 'refreshEnactedEpochStateIds'
--- as the genesis fallback for the same boundary — the just-written
--- rows are not yet flushed for a SELECT during bulk ingest.
+-- | Seed the Conway bootstrap committee and constitution, the pair
+-- with no enacting proposal, on the first Conway boundary. A SELECT on
+-- the NULL-proposal row guards it, so it runs once and is resume-safe.
+-- The caller threads the returned ids into
+-- 'refreshEnactedEpochStateIds' as the genesis fallback for this same
+-- boundary, because bulk ingest has not yet flushed the new rows for a
+-- SELECT.
 seedGenesisGovIfNeeded
   :: ( HasResolver env
      , HasWriter env
@@ -852,7 +823,6 @@ emitDrepDistrAndRatify epoch pulsingState = do
       Just gid -> markGovActionExpired gid epochW
       Nothing  -> pure ()
 
--- | Project a ledger 'DRep' value to a @drep_hash@ row id.
 resolveDRepEntry
   :: ( HasResolver env
      , HasWriter env

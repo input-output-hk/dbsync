@@ -5,7 +5,7 @@
   "ledger": {
     "enabled": false
   },
-  "db_profile": {
+  "extractors": {
     "utxo": true,
     "multi_asset": true,
     "metadata": true,

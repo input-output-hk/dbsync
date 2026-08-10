@@ -16,14 +16,15 @@ The driver is [`DbSync.Phase.Preparing.Run`](https://github.com/input-output-hk/
 Ingest's COPY pipeline leaves three things in a transitional state:
 
 - **FK columns** on `tx_in`, `collateral_tx_in`, `reference_tx_in`, and
-  optionally `tx_out.consumed_by_tx_id` are NULL or unresolved. COPY can't
-  fill them because the producer rows weren't necessarily in PG yet at the
-  time the consumer rows were written.
-- **A few `tx` columns** — phase-2 fee, phase-2 deposit, the
-  ledger-disabled valid-contract deposit — can't be filled from the tx body
-  alone. The parser leaves a sentinel or NULL.
-- **Tables are UNLOGGED**, have no sequences attached, and have no
-  production indexes. The COPY pipeline ran flat-out without them.
+  optionally `tx_out.consumed_by_tx_id` are NULL or unresolved. COPY cannot
+  fill them, because the producer rows were not necessarily in PG when the
+  consumer rows were written.
+- **Columns the tx body cannot supply** — the phase-2 fee, the phase-2
+  deposit, the ledger-disabled valid-contract deposit, and
+  `redeemer.script_hash` for spend redeemers. The parser leaves a sentinel
+  or NULL.
+- **Tables are UNLOGGED**, carry no sequences, no production indexes, and
+  no ownership foreign keys. The COPY pipeline ran flat-out without them.
 
 The Preparing pass walks all of that.
 
@@ -42,12 +43,18 @@ flowchart TD
     Build["index build<br/>(production set, parallel pool,<br/>per index, built exactly once)"]
     EpochFin["backfill epoch_finalized<br/>(upsert needs its unique index)"]
     Analyze2["ANALYZE per table"]
+    FkAdd["add ownership foreign keys<br/>(NOT VALID)"]
+    FkVal["validate foreign keys<br/>(parallel pool)"]
     Seq["reset sequences<br/>past Ingest-assigned IDs"]
 
     GUCs --> PreIdx --> Resolve --> PostIdx --> Analyze1
     Analyze1 --> Backfill --> Drop --> Flip --> Build
-    Build --> EpochFin --> Analyze2 --> Seq
+    Build --> EpochFin --> Analyze2 --> FkAdd --> FkVal --> Seq
 ```
+
+The `Backfill` node covers four statements: the `tx` column backfills,
+`rebuildSpendScriptHash`, `applyDepositPending`, and the
+`epoch_param_pending` truncate.
 
 :::warning Step ordering matters
 Pre-resolve indexes must precede the FK rebuild — otherwise the
@@ -58,7 +65,14 @@ ALTER*, so an index alive at flip time is built twice. The
 `epoch_finalized` backfill must follow the index build — its
 `ON CONFLICT ("no")` upsert needs the unique index. Sequence reset
 must follow the flip — the sequence has to exist before `setval` can
-advance it. Resist the urge to reorder.
+advance it. Foreign keys go on last, after the data is final, so
+validation scans clean tables once. Resist the urge to reorder.
+:::
+
+:::note No enclosing transaction
+Prep has no outer `BEGIN`/`COMMIT`. Each step runs in its own implicit
+transaction, which is what lets a crash resume at a step boundary instead
+of replaying the whole pass.
 :::
 
 Every step is bracketed by a uniform log pair at the default `info`
@@ -98,11 +112,12 @@ Tables run UNLOGGED during Ingest so PostgreSQL skips WAL for every row
 written. The price is that UNLOGGED tables don't survive a crash. The
 flip rewrites each table's heap into the regular logged form:
 
-- On profiles with `wal_level = minimal`, the rewrite itself isn't
-  WAL-logged either — the whole transition is essentially free I/O-wise.
+- With `wal_level = minimal`, the rewrite itself is not WAL-logged
+  either, so the transition costs almost no extra I/O.
 - On `wal_level = replica` (the default), the rewrite *is* WAL-logged.
-  Operators get a warning at boot recommending the minimal setting for
-  the duration of an initial sync.
+  dbsync warns about this on the run that creates the schema, and
+  recommends `minimal` for the duration of an initial sync. It does not
+  repeat the warning on later boots.
 
 :::tip Operational lever
 The single biggest server-side knob on Prep wall-clock time is
@@ -139,14 +154,15 @@ arrives.
 
 ## Timing characteristics
 
-Preparing is bounded by I/O on the CTAS rebuilds, the flip's heap
-rewrites, and the index build. Throughput scales with
-`max_parallel_maintenance_workers`, `maintenance_work_mem`, and the
-pool size (all fixed in `DbSync.Phase.Preparing.Tuning`, sized for the
-4-core / 16 GB target deployment).
+I/O bounds this pass: the CTAS rebuilds, the flip's heap rewrites, and
+the index build. Throughput scales with
+`max_parallel_maintenance_workers`, `maintenance_work_mem`, and the pool
+size. All three are fixed in `DbSync.Phase.Preparing.Tuning`, sized for
+the 4-core / 16 GB target.
 
-For a mainnet `everything-profile` sync expect the pass to take tens of
-minutes; the wall-clock is dominated by the `tx_in` rebuild, the
-`UNLOGGED → LOGGED` heap rewrites, and the production index build (all
-proportional to total row count). The per-step `Starting | Completed`
-log pairs show where a given run spends its time.
+Three steps dominate the wall clock, and all three scale with total row
+count: the `tx_in` rebuild, the `UNLOGGED → LOGGED` heap rewrites, and
+the production index build.
+
+Read the per-step `Starting | Completed` log pairs to see where a given
+run spent its time.

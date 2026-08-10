@@ -125,21 +125,15 @@ import DbSync.Trace.Types (AppTracer)
 
 -- | Is the ledger feature enabled, or is it disabled?
 --
--- Pattern-match at every site where behaviour differs (starting the
--- 'LedgerWorker', taking a snapshot, reading a 'LedgerDB'
--- checkpoint, …). The 'LedgerDisabled' arm carries enough to keep
--- the rest of the system running (we still need a 'ProtocolInfo' to
--- deserialise blocks off the wire) but nothing ledger-stateful.
+-- Pattern-match at every site where behaviour differs. The
+-- 'LedgerDisabled' arm still carries a 'ProtocolInfo', because block
+-- deserialisation needs one, but nothing ledger-stateful.
 data HasLedgerEnv
   = LedgerEnabled  !LedgerEnv
   | LedgerDisabled !NoLedgerEnv
 
--- | Environment when the ledger feature is /disabled/.
---
--- Deliberately lean: no LSM session, no snapshot queue, no
--- 'LedgerDB'. This is what 'mkNoLedgerEnv' returns, and it's what
--- lives in 'DbSync.App.Env.IngestEnv' when the user has set
--- @ledger.enabled = false@ in the config.
+-- | Environment for @ledger.enabled = false@: no LSM session, no
+-- snapshot queue, no 'LedgerDB'.
 data NoLedgerEnv = NoLedgerEnv
   { nleTracer       :: !AppTracer
   , nleProtocolInfo :: !(Consensus.ProtocolInfo (CardanoBlock StandardCrypto))
@@ -147,24 +141,8 @@ data NoLedgerEnv = NoLedgerEnv
   , nleNetwork      :: !Ledger.Network
   }
 
--- | Environment when the ledger feature is /enabled/.
---
--- Contains everything the ledger subsystem needs:
---
--- * Protocol info \/ system start \/ network — shared with
---   'NoLedgerEnv'.
--- * The 'LedgerDB' checkpoint buffer (through 'leStateVar') and the
---   cached 'CardanoInterpreter' (@leInterpreter@).
--- * Three coordination primitives for inter-thread communication:
---   'leLedgerQueue' (receiver → worker),
---   'leEpochReady' (worker → main),
---   'leEpochWait' (main → worker).
--- * The async snapshot pipeline: 'leSnapshotQueue' (worker →
---   snapshot-writer) and 'leSnapshotManager' (consensus-side
---   save \/ load \/ list \/ cleanup).
--- * Two factory callbacks — 'leInitGenesis' \/ 'leLoadSnapshot' —
---   used at boot to produce the first 'DbSyncStateRef', either from
---   genesis or from a disk snapshot.
+-- | Environment when the ledger feature is enabled: the checkpoint
+-- buffer, the inter-thread queues, and the snapshot pipeline.
 data LedgerEnv = LedgerEnv
   { leTracer               :: !AppTracer
   , leRewardsCapture       :: !RewardsCapture
@@ -172,8 +150,8 @@ data LedgerEnv = LedgerEnv
     -- dropped at the consensus-event conversion boundary.
   , leProtocolInfo         :: !(Consensus.ProtocolInfo (CardanoBlock StandardCrypto))
   , leDir                  :: !FilePath
-    -- ^ Root state directory (LSM session + snapshot headers
-    -- both live under this path).
+    -- ^ Root state directory. The LSM session and the snapshot headers
+    -- both live under this path.
   , leNetwork              :: !Ledger.Network
   , leMaxSupply            :: !Word64
   , leSystemStart          :: !SystemStart
@@ -182,83 +160,72 @@ data LedgerEnv = LedgerEnv
     -- state. 'AbortOnPanic' tears the process down; 'LogAndContinue'
     -- records the error and keeps applying.
   , leSnapshotNearTipEpoch :: !Word64
-    -- ^ Epoch threshold past which we always snapshot every epoch,
-    -- regardless of sync-state cadence. Default 580.
+    -- ^ Epoch threshold past which every epoch snapshots, whatever the
+    -- sync-state cadence says. Default 580.
   , leLedgerBackend        :: !LedgerBackend
   , leInterpreter          :: !(StrictTVar IO (Strict.Maybe CardanoInterpreter))
   , leStateVar             :: !(StrictTVar IO (Strict.Maybe LedgerDB))
-    -- * Inter-thread coordination queues and TMVars
+
+    -- Inter-thread coordination queues and TMVars
   , leLedgerQueue          :: !(TBQueue ChainSyncMsg)
-    -- ^ @BlockReceiver → LedgerWorker@ — forward blocks to apply
-    -- against the LSM-backed ledger and rollback markers to apply
-    -- against the in-RAM 'LedgerDB' checkpoint buffer. 'MsgForward'
-    -- carries raw 'CardanoBlock' rather than parsed 'GenericBlock'
-    -- because 'applyBlock' calls 'tickThenReapplyLedgerResult'
-    -- which needs the consensus block shape.
+    -- ^ @BlockReceiver → LedgerWorker@. Forward blocks apply against
+    -- the LSM-backed ledger; rollback markers apply against the in-RAM
+    -- checkpoint buffer. 'MsgForward' carries a raw 'CardanoBlock', not
+    -- a parsed 'GenericBlock', because 'applyBlock' calls
+    -- 'tickThenReapplyLedgerResult' which needs the consensus shape.
   , leEpochReady           :: !(StrictTMVar IO EpochNo)
-    -- ^ @LedgerWorker → Main@ — \"epoch N's ledger data is ready\".
+    -- ^ Unused. The worker writes the epoch number here, but nothing
+    -- reads it — boundary coordination goes through
+    -- 'leBoundaryApplyResults'.
   , leEpochWait            :: !(StrictTMVar IO EpochNo)
-    -- ^ @Main → LedgerWorker@ — only used at the Ingest→Follow
-    -- transition: \"please reach epoch N so we can swap modes\".
-    -- * Consensus snapshot machinery (async writer + manager).
+    -- ^ Unused. The worker polls this, but nothing writes it.
+
+    -- Consensus snapshot machinery: async writer plus manager
   , leSnapshotQueue        :: !(TBQueue DbSyncStateRef)
-    -- ^ @LedgerWorker → LedgerSnapshotWriter@ — deferred snapshot
-    -- writes.
+    -- ^ @LedgerWorker → LedgerSnapshotWriter@. Deferred snapshot writes.
   , leSnapshotManager      :: !(SnapshotManager IO IO (CardanoBlock StandardCrypto) ConsensusStateRef)
   , leInitGenesis          :: !(IO ConsensusStateRef)
-    -- ^ Build the initial consensus 'StateRef' from genesis (used on
-    -- a cold start with no on-disk snapshots).
+    -- ^ Build the first consensus 'StateRef' from genesis, on a cold
+    -- start with no on-disk snapshots.
   , leLoadSnapshot         :: !(DiskSnapshot -> IO (Either Text ConsensusStateRef))
-    -- ^ Load a snapshot from disk via the configured backend (used
-    -- when resuming from an existing snapshot).
+    -- ^ Load a snapshot from disk through the configured backend.
   , leClose                :: !(IO ())
-    -- ^ Release the LSM session\/file lock at shutdown. The
-    -- consensus 'mkResources' helper allocates the session via
-    -- 'allocateTemp' (impossible-to-not-transfer), so the temp
-    -- registry does NOT close it on scope exit — we have to call
-    -- this explicitly.
+    -- ^ Release the LSM session and file lock at shutdown. Consensus
+    -- 'mkResources' allocates the session with 'allocateTemp', so the
+    -- temp registry does not close it on scope exit. This call must.
   , leLatestApplyResult    :: !(StrictTVar IO (Strict.Maybe ApplyResult))
-    -- ^ Latest 'ApplyResult' produced by the worker. Overwritten on
-    -- every applied block; used as a slot-reached barrier by
-    -- 'waitForApplyResultAt' and by Follow's per-block reads.
+    -- ^ Latest 'ApplyResult' from the worker, overwritten on every
+    -- applied block. 'waitForApplyResultAt' uses it as a slot-reached
+    -- barrier, and Follow reads it per block.
   , leBoundaryApplyResults :: !(TBQueue BoundaryApplyData)
-    -- ^ FIFO of boundary projections, one per epoch boundary. Each
-    -- entry is forced to normal form before enqueue, so a queued
-    -- boundary never pins the 'NewEpochState' generation it was
-    -- derived from. Drained one per boundary by the consumer; the
-    -- worker enqueues independently of 'apply' rate.
+    -- ^ FIFO of one entry per epoch boundary. Each entry is forced to
+    -- normal form before enqueue, so a queued boundary never pins the
+    -- 'NewEpochState' generation it came from.
   , leBlockApplyResults    :: !(TBQueue BlockApplyData)
-    -- ^ FIFO of per-block consumer projections. The worker enqueues
-    -- one fully-forced entry per applied block; the consumer drains
-    -- one per processed block (replay-window blocks drain and
-    -- discard). Bounded so the worker creates back-pressure when the
-    -- consumer falls behind.
+    -- ^ FIFO of one fully-forced entry per applied block. The consumer
+    -- drains one per processed block and discards replay-window
+    -- entries. Bounded, so a lagging consumer back-pressures the worker.
   , leRegisteredPoolsCache :: !(IORef (Maybe RegisteredPoolsCache))
-    -- ^ Worker-private pointer-identity cache backing
-    -- 'DbSync.Worker.Ledger.State.getRegisteredPools'; see
-    -- 'RegisteredPoolsCache'. Only the worker thread touches it.
+    -- ^ Worker-private cache behind
+    -- 'DbSync.Worker.Ledger.State.getRegisteredPools'. Only the worker
+    -- thread touches it.
   , leDepositAccumulator   :: !EpochParamsRef
-    -- ^ Per-epoch protocol-param deposit values (stake_key /
-    -- pool). The worker writes to this on every applied non-replay
-    -- block via
-    -- 'DbSync.Worker.Ledger.DepositAccumulator.recordEpochParams'; the
-    -- consumer drains completed epochs at each epoch boundary and
-    -- flushes them to @epoch_param_pending@ before advancing
+    -- ^ Per-epoch stake-key and pool deposit values. The worker records
+    -- each applied non-replay block. The consumer drains completed
+    -- epochs at each boundary and flushes them to
+    -- @epoch_param_pending@ before it advances
     -- @dbsync_sync_state.last_committed_slot@.
   , leControlConnection    :: !ControlConnection
-    -- ^ PG connection used by the snapshot-writer thread to record
-    -- successful snapshot completions in
-    -- @dbsync_sync_state.last_snapshot_slot@.
+    -- ^ PG connection the snapshot-writer thread uses to record
+    -- completions in @dbsync_sync_state.last_snapshot_slot@.
   , leCurrentPhase         :: !CurrentPhase
-    -- ^ Live lifecycle phase, shared with 'CoreEnv'. The worker
-    -- reads 'isFollowPath' on every apply to choose snapshot
-    -- cadence: lagging (every 10 epochs) during Ingest, near-tip
-    -- (every epoch) once Follow has started.
+    -- ^ Live lifecycle phase, shared with 'CoreEnv'. The worker reads
+    -- 'isFollowPath' on every apply to pick the snapshot cadence:
+    -- every 10 epochs during Ingest, every epoch once Follow starts.
   }
 
--- | Constructor for 'NoLedgerEnv'. In 'IO' purely to keep the shape
--- symmetric with @mkHasLedgerEnv@, which genuinely does need 'IO'
--- for @StrictTVar@ allocation and LSM session setup.
+-- | In 'IO' only to match @mkHasLedgerEnv@, which needs 'IO' for
+-- @StrictTVar@ allocation and LSM session setup.
 mkNoLedgerEnv
   :: AppTracer
   -> Consensus.ProtocolInfo (CardanoBlock StandardCrypto)
@@ -278,8 +245,7 @@ mkNoLedgerEnv tracer pinfo start network =
 -- * Configuration switches
 -- ---------------------------------------------------------------------------
 
--- | What the ledger worker does when it observes an invalid ledger
--- state.
+-- | What the ledger worker does when it sees an invalid ledger state.
 data PanicPolicy
   = AbortOnPanic
   | LogAndContinue
@@ -289,62 +255,54 @@ data PanicPolicy
 -- * LedgerDB and its elements
 -- ---------------------------------------------------------------------------
 
--- | In-memory LedgerDB: at most 100 recent 'DbSyncStateRef' values,
--- newest first. Shallow rollbacks are served entirely from this
--- buffer; deeper rollbacks fall back to disk snapshots.
+-- | In-RAM checkpoint buffer over the LSM-backed ledger: the most
+-- recent 'DbSyncStateRef' values, newest first. It serves shallow
+-- rollbacks; deeper ones fall back to disk snapshots.
 newtype LedgerDB = LedgerDB
   { ledgerDbCheckpoints :: StrictSeq DbSyncStateRef
   }
 
--- | A 'CardanoLedgerState' paired with its LSM tables handle and a
--- guard flag that a snapshot write toggles while it's using the
--- handle.
+-- | A 'CardanoLedgerState' with its LSM tables handle and a guard flag.
 --
--- The 'srCanClose' 'StrictTVar' is the explicit synchronisation point
--- between the snapshot writer and the checkpoint-buffer pruner: we
--- never 'close' a handle while a snapshot is mid-write.
+-- 'srCanClose' is the synchronisation point between the snapshot writer
+-- and the checkpoint-buffer pruner. A handle never closes while a
+-- snapshot write holds it.
 data DbSyncStateRef = DbSyncStateRef
   { srState    :: !CardanoLedgerState
   , srTables   :: !(LedgerTablesHandle IO (ExtLedgerState (CardanoBlock StandardCrypto)))
   , srCanClose :: !(StrictTVar IO Bool)
   }
 
--- | The pure parts of the ledger state — no tables, no handles. This
--- is cheap to copy and lives inside the 'LedgerDB' checkpoint
--- sequence.
+-- | The pure parts of the ledger state: no tables, no handles. Cheap to
+-- copy, and it lives inside the checkpoint sequence.
 data CardanoLedgerState = CardanoLedgerState
   { clsState        :: !(ExtLedgerState (CardanoBlock StandardCrypto) EmptyMK)
   , clsEpochBlockNo :: !EpochBlockNo
   }
 
--- | Block number within the current epoch.
+-- | Block number within the current epoch. 'ByronEpochBlockNo' is the
+-- \"not tracked\" tag, because pre-Shelley stake slicing has no
+-- meaning.
 --
--- 'EpochBlockNo' is a counter; 'ByronEpochBlockNo' is the
--- \"we don't track this in Byron\" tag (pre-Shelley stake slicing
--- isn't meaningful).
---
--- The derived 'Ord' orders 'ByronEpochBlockNo' last (constructor
--- order) — we never actually compare across the two constructors, so
--- any ordering is fine as long as 'EpochBlockNo' is monotone in its
--- payload.
+-- The derived 'Ord' puts 'ByronEpochBlockNo' last. Nothing compares
+-- across the two constructors, so only monotonicity in the
+-- 'EpochBlockNo' payload matters.
 data EpochBlockNo
   = EpochBlockNo !Word64
   | ByronEpochBlockNo
   deriving stock (Eq, Ord, Show)
 
--- | The consensus-layer 'StateRef' shape — what 'SnapshotManager'
--- APIs consume and produce. 'toConsensusStateRef' \/
--- 'fromConsensusStateRef' bridge between this and our
+-- | The 'StateRef' shape the 'SnapshotManager' API speaks.
+-- 'toConsensusStateRef' and 'fromConsensusStateRef' bridge it to
 -- 'DbSyncStateRef'.
 type ConsensusStateRef = Consensus.StateRef IO (ExtLedgerState (CardanoBlock StandardCrypto))
 
--- | Project a 'DbSyncStateRef' into the consensus-layer shape.
 toConsensusStateRef :: DbSyncStateRef -> ConsensusStateRef
 toConsensusStateRef sr =
   Consensus.StateRef (clsState $ srState sr) (srTables sr)
 
--- | Inject a consensus-layer 'StateRef' into our 'DbSyncStateRef',
--- allocating a fresh 'srCanClose' flag that starts @True@.
+-- | Wrap a consensus 'StateRef' as a 'DbSyncStateRef' with a fresh
+-- 'srCanClose' flag that starts @True@.
 fromConsensusStateRef :: EpochBlockNo -> ConsensusStateRef -> IO DbSyncStateRef
 fromConsensusStateRef ebn (Consensus.StateRef st tbl) = do
   canClose <- newTVarIO True
@@ -359,18 +317,15 @@ fromConsensusStateRef ebn (Consensus.StateRef st tbl) = do
       , srCanClose = canClose
       }
 
--- | Build the initial 'DbSyncStateRef' from genesis using
--- 'leInitGenesis'. Only callable in the 'LedgerEnabled' arm.
+-- | Build the first 'DbSyncStateRef' from genesis with 'leInitGenesis'.
 initCardanoLedgerState :: LedgerEnv -> IO DbSyncStateRef
 initCardanoLedgerState env = do
   consensusRef <- leInitGenesis env
   fromConsensusStateRef ByronEpochBlockNo consensusRef
 
--- | Derive 'EpochBlockNo' from a ledger state.
---
--- For Shelley+ eras sums 'nesBcur' (blocks made this epoch). For
--- Byron returns 'ByronEpochBlockNo' — pre-Shelley we don't need
--- stake-slicing indices.
+-- | Sums 'nesBcur', the blocks made this epoch, for Shelley and later.
+-- Byron gives 'ByronEpochBlockNo': pre-Shelley needs no stake-slicing
+-- index.
 deriveEpochBlockNo :: ExtLedgerState (CardanoBlock StandardCrypto) mk -> EpochBlockNo
 deriveEpochBlockNo st =
   case ledgerState st of
@@ -393,8 +348,8 @@ deriveEpochBlockNo st =
 -- * Snapshot bookkeeping
 -- ---------------------------------------------------------------------------
 
--- | Snapshot origin — on-disk (consensus 'DiskSnapshot') or
--- in-memory at a 'CardanoPoint' in the 'LedgerDB' buffer.
+-- | Snapshot origin: an on-disk 'DiskSnapshot', or a 'CardanoPoint' in
+-- the checkpoint buffer.
 data SnapshotPoint
   = OnDisk !DiskSnapshot
   | InMemory !CardanoPoint
@@ -403,9 +358,9 @@ data SnapshotPoint
 -- * Block application plumbing
 -- ---------------------------------------------------------------------------
 
--- | Map from tx-body hash to the deposit value charged for that tx
--- (reward / proposal / stake deposits). Populated incrementally from
--- deposit events; consumed by the tx-insertion path.
+-- | Tx-body hash to the deposit charged for that tx: reward, proposal
+-- or stake deposits. Filled from deposit events, read by the
+-- tx-insertion path.
 newtype DepositsMap = DepositsMap
   { unDepositsMap :: Map ByteString Coin
   }
@@ -414,40 +369,47 @@ newtype DepositsMap = DepositsMap
 instance NFData DepositsMap where
   rnf (DepositsMap m) = rnf m
 
--- | 'Just' the deposit for this tx-body hash, or 'Nothing' if no
--- deposit event was observed (plain transfer).
+-- | 'Nothing' when no deposit event fired for this tx: a plain transfer.
 lookupDepositsMap :: ByteString -> DepositsMap -> Maybe Coin
 lookupDepositsMap bs = Map.lookup bs . unDepositsMap
 
--- | An empty deposits map.
 emptyDepositsMap :: DepositsMap
 emptyDepositsMap = DepositsMap Map.empty
 
--- | Result of applying a single block.
+-- | Result of applying a single block, published on
+-- 'leLatestApplyResult'.
 --
--- Accumulates everything the downstream insert \/ epoch-boundary
--- paths need: the protocol params at this block, the rewards
--- ledger-event stream, the NewEpoch summary on epoch boundaries, and
--- the deposits map.
+-- The bulk per-block and per-boundary payloads travel on
+-- 'BlockApplyData' and 'BoundaryApplyData' instead, so the fields that
+-- would carry them here stay empty.
 data ApplyResult = ApplyResult
   { apPrices          :: !(Strict.Maybe Prices)
+    -- ^ Plutus execution prices; 'Strict.Nothing' pre-Alonzo.
   , apGovExpiresAfter :: !(Strict.Maybe Ledger.EpochInterval)
+    -- ^ Gov-action deposit lifetime; 'Strict.Nothing' pre-Conway.
   , apNewEpoch        :: !(Strict.Maybe Generic.NewEpoch)
     -- ^ Only 'Just' for the first block of a new epoch.
   , apDeposits        :: !(Strict.Maybe Generic.Deposits)
+    -- ^ Protocol-param deposits; 'Strict.Nothing' pre-Shelley.
   , apSlotDetails     :: !SlotDetails
+    -- ^ Slot, epoch and time of the applied block.
   , apStakeSlice      :: !Generic.StakeSliceRes
+    -- ^ Unused. Always 'Generic.NoSlices'; the live slice travels on
+    -- 'badStakeSlice'.
   , apEvents          :: ![LedgerEvent]
+    -- ^ Unused. Always empty; the live events travel on 'bndEvents'.
   , apGovActionState  :: !(Maybe (ConwayGovState ConwayEra))
+    -- ^ Unused. Always 'Nothing'; the live state travels on
+    -- 'bndGovActionState'.
   , apDepositsMap     :: !DepositsMap
+    -- ^ Unused. Always empty; the live map travels on 'badDepositsMap'.
   , apPoolsRegistered :: !(Set.Set ByteString)
-    -- ^ Raw pool-hash bytes registered in the ledger before this
-    -- block was applied. Drives the pool_update.active_epoch_no
-    -- reactivation offset.
+    -- ^ Unused. Always empty; the live set travels on
+    -- 'badPoolsRegistered'.
   }
 
--- | A no-op 'ApplyResult' that only carries 'SlotDetails'. Useful
--- seed value when no block events fired.
+-- | An 'ApplyResult' that carries only 'SlotDetails'. Seed value for
+-- when no block events fired.
 defaultApplyResult :: SlotDetails -> ApplyResult
 defaultApplyResult slotDetails =
   ApplyResult
@@ -463,20 +425,21 @@ defaultApplyResult slotDetails =
     , apPoolsRegistered = Set.empty
     }
 
--- | Pointer-identity cache for the registered-pools projection
--- ('DbSync.Worker.Ledger.State.getRegisteredPools'). The ledger's
--- registered-pool 'Map' is structure-shared across every block that
--- carries no pool certificate, so the projected hash-bytes set only
--- needs rebuilding when the underlying 'Map' object actually
--- changes. Keyed on the 'StableName' of that 'Map'; a false negative
--- (fresh object, same contents — e.g. across an era transition)
--- merely rebuilds.
+-- | Pointer-identity cache behind
+-- 'DbSync.Worker.Ledger.State.getRegisteredPools'.
+--
+-- The ledger's registered-pool 'Map' is structure-shared across every
+-- block with no pool certificate, so the hash-bytes set rebuilds only
+-- when the 'Map' object itself changes. The key is the 'StableName' of
+-- that 'Map'. A false negative, such as a fresh object with the same
+-- contents across an era transition, only causes a rebuild.
 data RegisteredPoolsCache =
   forall pools. RegisteredPoolsCache !(StableName pools) !(Set.Set ByteString)
 
--- | A committee member resolved from the ledger for a committee-updating
--- proposal, projected to the fields @committee_member@ needs so the
--- queued value holds no reference to the ledger state it came from.
+-- | A committee member resolved from the ledger for a
+-- committee-updating proposal, cut down to the fields
+-- @committee_member@ needs. The queued value therefore holds no
+-- reference to the ledger state it came from.
 data ProposedCommitteeMember = ProposedCommitteeMember
   { pcmColdKeyHash :: !ByteString
   , pcmIsScript    :: !Bool
@@ -487,10 +450,9 @@ instance NFData ProposedCommitteeMember where
   rnf (ProposedCommitteeMember coldKeyHash isScript expiryEpoch) =
     rnf (coldKeyHash, isScript, expiryEpoch)
 
--- | Per-block projection the consumer needs, carved out of the full
--- 'ApplyResult'. Built and forced to normal form before being
--- enqueued on 'leBlockApplyResults' so a buffered entry never pins
--- the ledger state it was derived from.
+-- | The per-block data the consumer needs. Forced to normal form before
+-- it goes on 'leBlockApplyResults', so a buffered entry never pins the
+-- ledger state it came from.
 data BlockApplyData = BlockApplyData
   { badDepositsMap      :: !DepositsMap
   , badStakeSlice       :: !Generic.StakeSliceRes
@@ -512,11 +474,11 @@ instance NFData BlockApplyData where
         , (govExpiresAfter, stakeKeyDeposit, poolDeposit, prices, committeeMembers)
         )
 
--- | Per-boundary projection the epoch-boundary consumer needs, carved
--- out of the full 'ApplyResult'. Built from the finalised ledger
--- state (so any DRep pulser is already complete) and forced to normal
--- form before being enqueued on 'leBoundaryApplyResults', so a queued
--- entry never pins the 'NewEpochState' generation it was derived from.
+-- | The per-boundary data the epoch-boundary consumer needs. Built from
+-- the finalised ledger state, so any DRep pulser is already complete,
+-- and forced to normal form before it goes on
+-- 'leBoundaryApplyResults'. A queued entry therefore never pins the
+-- 'NewEpochState' generation it came from.
 data BoundaryApplyData = BoundaryApplyData
   { bndNewEpoch          :: !(Strict.Maybe Generic.NewEpoch)
   , bndEvents            :: ![LedgerEvent]
@@ -530,8 +492,8 @@ data BoundaryApplyData = BoundaryApplyData
   }
 
 instance NFData BoundaryApplyData where
-  -- 'bndSlotDetails' is a strict field of small scalars (already WHNF when
-  -- the record is), so only the heavy projections need forcing to normal form.
+  -- 'bndSlotDetails' is a strict field of small scalars, already WHNF
+  -- when the record is, so only the heavy fields need forcing.
   rnf (BoundaryApplyData newEpoch events govActionState govExpiresAfter _slotDetails catchupSlice) =
     rnf ((newEpoch, events), (govActionState, govExpiresAfter, catchupSlice))
 
@@ -567,13 +529,12 @@ updatedCommittee membersToRemove membersToAdd newQuorum committee =
 -- * Per-era NewEpochState access
 -- ---------------------------------------------------------------------------
 
--- | Per-era 'NewEpochState' getter \/ setter.
+-- | Per-era 'NewEpochState' getter and setter.
 --
--- Note: this is a slight abuse of the @cardano-ledger@ \/
--- @ouroboros-consensus@ public APIs — ledger state isn't designed to
--- be mutated wholesale this way. We only do so in the replay loop
--- when patching an intermediate @NewEpochState@ back into the
--- hard-fork @LedgerState@, and it's confined to this class.
+-- This abuses the @cardano-ledger@ and @ouroboros-consensus@ public
+-- APIs: ledger state is not designed for wholesale mutation. The replay
+-- loop needs it to patch an intermediate @NewEpochState@ back into the
+-- hard-fork @LedgerState@, and this class confines the abuse.
 class HasNewEpochState era where
   getNewEpochState :: ExtLedgerState (CardanoBlock StandardCrypto) mk -> Maybe (NewEpochState era)
   applyNewEpochState

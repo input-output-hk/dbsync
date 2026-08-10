@@ -1,12 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Encoding helpers for the loader-stream wire format.
+-- | Encoding helpers for the COPY text wire format.
 --
--- Builder-based encoding pipeline producing one row per call, ready to
--- hand to the loader-stream transport (currently PostgreSQL @COPY ... FROM
--- STDIN@). Field values are constructed as 'Builder's, joined with tabs,
--- and materialised to a strict 'ByteString' once via 'buildCopyRow', so a
--- row is assembled in a single buffer with no intermediate ByteStrings.
+-- Each field becomes a 'Builder'. 'buildCopyRow' joins them with tabs and
+-- materialises one strict 'ByteString', so a row uses a single buffer and
+-- no intermediate 'ByteString's.
 module DbSync.Db.Loader.Encoder
   ( -- * Builder-based encoding
     CopyField
@@ -60,14 +58,12 @@ type CopyField = Maybe Builder
 -- * Row building
 -- ---------------------------------------------------------------------------
 
--- | Materialise a list of 'CopyField's into a single COPY text row.
+-- | One tab-separated, newline-terminated COPY text row.
 --
--- Tab-separated, newline-terminated. 'Nothing' → @\\N@.
---
--- Uses a 512-byte untrimmed first chunk rather than the default
--- 'Data.ByteString.Builder.toLazyByteString' strategy, which starts
--- with a larger buffer and trim-copies it. Most rows fit the chunk
--- exactly once; 'LBS.toStrict' then copies only the bytes used.
+-- The 512-byte untrimmed first chunk beats the default
+-- 'Data.ByteString.Builder.toLazyByteString' strategy, which starts with a
+-- larger buffer and then trim-copies it. Most rows fit the chunk once, and
+-- 'LBS.toStrict' copies only the bytes used.
 buildCopyRow :: [CopyField] -> ByteString
 buildCopyRow fields =
   LBS.toStrict

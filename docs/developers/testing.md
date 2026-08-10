@@ -1,7 +1,7 @@
 ---
 id: testing
 title: Testing
-sidebar_position: 8
+sidebar_position: 11
 ---
 
 # Testing
@@ -11,12 +11,13 @@ How the test suite is organised and how to run it.
 ## Layout
 
 Tests live in the [`tests/`](https://github.com/input-output-hk/dbsync/tree/main/tests)
-workspace as two cabal targets sharing a single package:
+workspace as three cabal targets sharing a single package:
 
 | Target | Path | Role |
 |---|---|---|
-| `dbsync-testlib` | `tests/lib/` | Shared helpers — mock-chain harness, mock-node server, PG fixtures, hasql helpers, hspec generators, invariant properties. Imported by every spec. |
-| `dbsync-test` | `tests/main/` | The runner. Hspec specs grouped into three tiers. |
+| `dbsync-testlib` | `tests/lib/` | Shared helpers — mock-chain harness, mock-node server, PG fixtures, hasql helpers, invariant checks. Imported by every spec. |
+| `dbsync-test` | `tests/main/` | The runner. Hspec specs grouped by cost. |
+| `dbsync-compare` | `tests/compare/` | The schema and row comparison tool. See [Comparing databases](db-compare). |
 
 Plus a separate cabal package:
 
@@ -35,10 +36,21 @@ The specs under `tests/main/` are split by cost:
 | End-to-end | `main/e2e/` | Full app through the mock chainsync server. Ingest → Prep → Follow lifecycle, restart scenarios, LSM persistence, replay-on-boot. | PG, plus the `dbsync-mock` forging chain. |
 
 [`tests/main/Main.hs`](https://github.com/input-output-hk/dbsync/blob/main/tests/main/Main.hs)
-wires each spec into one of three top-level `describe` blocks
-matching the directories. Per-tier timeouts cap individual specs (30s
-unit, 120s integration, 300s e2e) so a hang fails the run with a
-clear message instead of stalling CI.
+wires every spec into one of five top-level `describe` blocks:
+`"Unit tests"`, `"Property tests"`, `"Database integration"`,
+`"End-to-end"`, and `"Test harness"`. Those names are the `--match`
+prefixes.
+
+Per-tier timeouts cap each spec — 30s unit and property, 120s
+integration, 300s e2e — so a hang fails the run with a clear message
+instead of stalling CI.
+
+:::caution Do not add hspec `parallel`
+Integration and e2e specs share the single `dbsync_test` database. The
+migration-ladder spec issues `DROP SCHEMA public CASCADE`, so any spec
+running beside it would see its tables vanish. This is also why CI runs
+`cabal test all -j1`.
+:::
 
 ## Running
 
@@ -47,27 +59,33 @@ clear message instead of stalling CI.
 cabal test all
 
 # Unit tests only
-cabal test --test-options='--match "Unit"'
+cabal test --test-options='--match "Unit tests"'
 
-# A single integration spec
-cabal test --test-options='--match "Database integration/DbSync.Db.LoaderSpec"'
-
-# Single tier
+# One tier
 cabal test --test-options='--match "End-to-end"'
+
+# One spec
+cabal test --test-options='--match "Database integration/DbSync.Db.Loader"'
 ```
 
 :::tip
-The `--match` filter is hspec's substring matcher against the
-`describe` / `it` paths. Set it to whatever uniquely identifies the
-spec you want — including spaces and slashes.
+`--match` is hspec's substring matcher against the `describe` / `it`
+path, so it must match the spec's own `describe` string — not its
+module name. `DbSync.Db.LoaderSpec` matches nothing, because the spec
+calls itself `"DbSync.Db.Loader (multi-threaded, full pipeline)"`.
 :::
 
 :::note PG access
-PostgreSQL needs to be running and the user invoking `cabal test`
-needs `CREATEDB`. Integration and e2e specs create and tear down
-their own schema against the `dbsync_test` database (configurable
-via the `DBSYNC_TEST_DB` environment variable). See
+PostgreSQL must be running, and the `dbsync_test` database must already
+exist. **The tests do not create it.** CI provisions it through the
+service container's `POSTGRES_DB`.
+
+The name is the hard-coded constant `testDbName` in
 [`DbSync.Test.Database`](https://github.com/input-output-hk/dbsync/blob/main/tests/lib/DbSync/Test/Database.hs).
+No environment variable overrides it.
+
+Integration and e2e specs create and drop their own *schema* inside
+that database.
 :::
 
 ## Shared helpers
@@ -78,19 +96,22 @@ do the heavy lifting:
 
 | Module | Role |
 |---|---|
-| `AppHarness` | Build an `AppArgs` from a `MockNode` so tests can call `runApp` directly. Pre-baked profiles (`minimalProfile`, `defaultTestProfile`, `ledgerEnabledTestProfile`). |
-| `Database` | Test-DB lifecycle, `truncateAllTables`, the `dbsync_test` connection settings. |
-| `MockChain` | Forge Conway-era blocks through a real `Interpreter`, push them through `parseBlock` + the consumer pipeline. Used by integration specs that need ledger-derived data. |
+| `AppHarness` | Build an `AppArgs` from a `MockNode` so tests can call `runApp` directly. Config builders: `defaultTestConfig`, `ledgerEnabledTestConfig`, `configWithExtractors`, `allImplementedExtractors`. Also `withTempDir`, `waitForSyncComplete`, and the tracers. |
+| `Database` | Test-DB lifecycle, `truncateAllTables`, the hard-coded `dbsync_test` connection settings. |
+| `MockChain` | Forge Conway-era blocks through a real `Interpreter` and push them through `parseBlock` and the consumer pipeline. `forgeNextBlock`, `forgeNextBlocks`, `forgeUntilNextEpoch`, `buildRealisticTxs`. |
 | `MockNode` | Vendored `Cardano.Mock.ChainSync.Server`. Drives the full ChainSync socket path for e2e tests. |
+| `MockNode.Workload` | Pre-built block workloads for driving a mock node. |
 | `PgAssertions` | Helpers like `countRows`, `countNulls`, `sequenceAdvanced`. |
-| `PipelineEnv` | In-process `IdResolver` + collecting `Writer` for unit tests on extractor bodies. |
-| `Generators` | QuickCheck generators for parser types. |
-| `Property.Invariants` | Shared property-test invariants. |
+| `PipelineEnv` | In-process `IdResolver` and a collecting `Writer` for unit tests on extractor bodies: `mkTestPipelineEnv`, `mkTestPipelineEnvOn`, `mkTestPipelineEnvWith`. |
+| `Property.Invariants` | Pure pipeline runners: `runPureExtract`, `runPureExtractMany`, `syntheticSlotDetails`. Touches no PG. |
+| `RecomputeInvariants` | The PG-state invariant checks: `epochFinalizedDriftCount`, `blockTxCountDriftCount`, `txOutSumDriftCount`, `duplicateEpochRowGroupCount`, `epochContiguityGapCount`, `consumedByDriftCount`. |
+| `EpochRegression` | Epoch-boundary regression checks. |
 | `Fixtures` | Sample genesis files, pre-forged blocks, the Conway test config. |
-| `Lsm` | LSM-tree helpers for tests that touch the dedup stores or UTxO store. |
-| `E2E` | Common bootstrap for the e2e specs. |
-| `Hasql` | Connection helpers and `truncateAll`. |
-| `Helpers` | Misc: `waitFor`, temp directories. |
+| `Lsm` | LSM-tree helpers for tests that touch the dedup stores or the UTxO store. |
+| `Copy` | COPY-encoder helpers. |
+| `E2E` | Common bootstrap for the e2e specs: `withAppSession`, `withAppSessionResume`. |
+| `Hasql` | `withTestConnection`, `runStatement`, `runSession`. |
+| `Helpers` | `waitFor`. |
 | `Writer` | Lifecycle helpers for spinning up a Writer in isolation. |
 
 ## Test-fixture chains
@@ -115,27 +136,29 @@ show end-to-end patterns.
 
 The path of least resistance for a new extractor:
 
-1. **Unit test the pure projection** in `tests/main/unit/DbSync/Extractor/<Name>Spec.hs`.
-   Build a `GenericBlock` directly with `DbSync.Test.Generators`,
-   run the extractor under `PipelineEnv`, assert on the captured
-   `Writer` calls.
-2. **Add an e2e scenario** to an existing spec (or a new one under
-   `tests/main/e2e/`) covering the round-trip through Ingest + Prep +
-   Follow. The `MockChain` harness's `forgeNextBlocks` and
-   `fillEpochs` are the primitives; combine them with
-   `withTestDatabase` and `waitForSyncComplete` to drive a profile
-   that includes your extractor.
+1. **Unit test the block-to-rows function** in
+   `tests/main/unit/DbSync/Extractor/<Name>Spec.hs`. Build a
+   `GenericBlock`, run the extractor under `mkTestPipelineEnv`, and
+   assert on the captured `Writer` calls. `runPureExtract` from
+   `DbSync.Test.Property.Invariants` wraps that pattern.
+2. **Add an e2e scenario** to an existing spec, or a new one under
+   `tests/main/e2e/`, covering the round-trip through Ingest, Prep, and
+   Follow. `forgeNextBlocks` and `forgeUntilNextEpoch` from `MockChain`
+   are the primitives. Combine them with `withAppSession` and
+   `waitForSyncComplete` to drive a config that enables your extractor.
 3. **Add invariants** if your extractor touches anything cross-cutting
-   (FKs, dedup, rollback). The properties in
-   `DbSync.Test.Property.Invariants` run against every PG state the
-   tests produce.
+   such as foreign keys, dedup, or rollback. The checks in
+   `DbSync.Test.RecomputeInvariants` recompute a value from the
+   database and count the rows that disagree.
 
 Conway is the default mock-chain era; older-era specs are explicit
 about which era's primitives they use.
 
 ## CI
 
-CI runs `cabal test all` against the same profile-bearing config a
-local run uses. Unit + Property tiers run first; integration and e2e
-follow on machines with PG installed. The full pass is the gate for
-merging.
+CI runs every tier in **one job on one machine**, as
+`cabal test all -j1`, against a PostgreSQL service container. There is
+no tier split. The full pass is the merge gate.
+
+Run the same command locally. A plain `cabal test all` without `-j1`
+is a known source of flakes, for the reason given above.

@@ -1,12 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Mechanical schema diff.
+-- | Mechanical schema diff: the 'SchemaChange's that turn an @old@
+-- 'TableDef' list into a @new@ one.
 --
--- Compares an @old@ and a @new@ list of 'TableDef' and produces the
--- 'SchemaChange's that turn one into the other. Changes the differ can
--- apply without guessing are concrete (@AddTable@, @AddColumn@, …);
--- anything that could destroy or misread data — a possible rename, a
--- type change, a NOT NULL column with no default — is surfaced as an
+-- A change the differ can apply without guessing gets a concrete
+-- constructor. A change that could destroy or misread data — a possible
+-- rename, a type change, a NOT NULL column with no default — becomes an
 -- 'AmbiguousChange' for a human to resolve.
 module DbSync.Db.Schema.Migration.Diff
   ( SchemaChange (..)

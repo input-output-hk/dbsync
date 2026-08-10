@@ -3,28 +3,10 @@
 -- | Multi-threaded loader-stream writer with per-table 'TBQueue'
 -- fan-out.
 --
--- The 'LoaderStream' streams encoded rows to PostgreSQL via per-table
--- writer threads. Rows are accumulated into ~64KB chunks on the
--- producer side ('lsWriteRow' runs on the single consumer thread), so
--- the bounded per-table 'TBQueue's and the writer threads see one
--- element per chunk rather than per row — two STM transactions and
--- one transport call per ~64KB instead of per row. Each writer thread
--- drains its queue and pushes chunks down its dedicated loader
--- connection, which runs PostgreSQL's @COPY FROM STDIN@ protocol via
--- @libpq@ (accepting arbitrarily-chunked, non-row-aligned data); the
--- public API deliberately hides that detail.
---
--- Epoch-aligned commits use a sentinel\/barrier pattern:
---
---   1. Parser flushes each table's partial chunk, then writes
---      'Nothing' to all queues
---   2. Each writer drains remaining chunks, ends its stream, signals ready
---   3. Parser waits for all writers, then @COMMIT@ on all connections
---      concurrently
---   4. Parser calls 'lsReopen' to start new streams for the next epoch
---
--- Errors from worker threads propagate to the parent via @async@ + @link@.
--- All errors are 'AppDatabaseError' with source location tracking.
+-- Each table owns a bounded queue, a writer thread and a loader
+-- connection. 'lsWriteRow' batches rows into ~64KB chunks, so the
+-- queues and the transport see one element per chunk, not per row.
+-- Worker exceptions reach the parent through @async@ + @link@.
 module DbSync.Db.Loader
   ( -- * Types
     LoaderStream (..)
@@ -61,11 +43,8 @@ import DbSync.Error (throwInternal)
 -- * Types
 -- ---------------------------------------------------------------------------
 
--- | Multi-threaded loader-stream writer.
---
--- Each table has a dedicated 'TBQueue' and writer thread. The parser
--- thread dispatches encoded rows via 'lsWriteRow'. Commits are
--- coordinated via the sentinel\/barrier pattern in 'lsCommit'.
+-- | Handle the consumer thread drives. Every operation here runs on
+-- that one thread; the writer threads stay behind the queues.
 data LoaderStream = LoaderStream
   { lsWriteRow     :: !(Text -> ByteString -> IO ())
       -- ^ Append an encoded row to the named table's chunk buffer;
@@ -84,8 +63,7 @@ data LoaderStream = LoaderStream
       -- pulse) to surface downstream backpressure.
   }
 
--- | Access the multi-threaded loader-stream writer from env. Implemented
--- by 'IngestEnv' only.
+-- | Implemented by 'IngestEnv' only.
 class HasLoaderStream env where
   getLoaderStream :: env -> LoaderStream
 
@@ -97,9 +75,7 @@ data LoaderChannel = LoaderChannel
       -- 'Nothing' = sentinel (epoch boundary)
   , chBuffer     :: !(IORef ChunkBuffer)
       -- ^ Rows accumulated since the last chunk flush. Only the
-      -- consumer thread touches it (the same thread that calls
-      -- 'lsWriteRow' \/ 'lsCommit' \/ 'lsReopen'), so a plain
-      -- 'IORef' suffices.
+      -- consumer thread touches it, so a plain 'IORef' suffices.
   , chWorker     :: !(IORef (Async ()))
       -- ^ Mutable so 'lsReopen' can swap in the next epoch's worker.
   , chReady      :: !(MVar ())
@@ -137,11 +113,7 @@ chunkQueueBound = 64
 -- * Construction
 -- ---------------------------------------------------------------------------
 
--- | Create a multi-threaded 'LoaderStream'.
---
--- Opens one loader connection per table, creates bounded 'TBQueue's,
--- and spawns writer threads. Each writer thread is linked to the
--- calling thread so exceptions propagate immediately.
+-- | Open one loader connection, queue and writer thread per table.
 mkLoaderStream :: ByteString -> [TableDef] -> IO LoaderStream
 mkLoaderStream connStr tableDefs = do
   channels <- forM tableDefs $ \td -> do
@@ -174,12 +146,11 @@ mkLoaderStream connStr tableDefs = do
               else writeIORef (chBuffer ch) buf'
 
     , lsCommit = do
-        -- After a prior lsCommit and before the next lsReopen the
-        -- writer threads have exited (post putMVar) and their
-        -- replacements have not been spawned yet. A sentinel sent
-        -- in that window has no consumer, so takeMVar would block
-        -- forever — and there is nothing to commit either, since
-        -- the prior lsCommit already drained and committed. Skip.
+        -- Between an lsCommit and the next lsReopen the writer
+        -- threads have exited and their replacements do not exist
+        -- yet. A sentinel sent in that window has no consumer, so
+        -- takeMVar would block forever. Nothing is pending either,
+        -- so skip.
         allLive <- fmap and . forM (Map.elems channelMap) $ \ch -> do
           w <- readIORef (chWorker ch)
           isNothing <$> poll w
@@ -214,7 +185,6 @@ mkLoaderStream connStr tableDefs = do
           writeIORef (chWorker ch) worker'
 
     , lsClose = do
-        -- Cancel all workers and close connections
         forM_ channelMap $ \ch -> do
           readIORef (chWorker ch) >>= cancel
           closeLoaderConnection (chConnection ch)
@@ -235,7 +205,6 @@ flushChannel ch = do
     writeIORef (chBuffer ch) emptyChunkBuffer
     atomically $ writeTBQueue (chQueue ch) (Just (concatChunk buf))
 
--- | Close the 'LoaderStream', cancelling all threads and releasing connections.
 closeLoaderStream :: LoaderStream -> IO ()
 closeLoaderStream = lsClose
 
@@ -243,11 +212,8 @@ closeLoaderStream = lsClose
 -- * Worker thread
 -- ---------------------------------------------------------------------------
 
--- | Per-table writer thread loop.
---
--- Drains the 'TBQueue' and writes each chunk via 'writeStreamRow'.
--- On receiving 'Nothing' (sentinel), calls 'endStream' to close the
--- current stream and signals readiness on the 'MVar'.
+-- | Per-table writer thread loop. The sentinel ends the stream and
+-- signals the barrier; the thread then exits until 'lsReopen'.
 streamWorkerLoop :: LoaderConnection -> TBQueue (Maybe ByteString) -> MVar () -> IO ()
 streamWorkerLoop bc queue ready = go
   where
@@ -255,7 +221,6 @@ streamWorkerLoop bc queue ready = go
       mChunk <- atomically $ readTBQueue queue
       case mChunk of
         Nothing -> do
-          -- Sentinel received: end stream and signal ready
           endStream bc
           putMVar ready ()
         Just chunk -> do

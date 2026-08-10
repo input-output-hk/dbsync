@@ -71,8 +71,7 @@ type instance Key MaTxOut = MaTxOutId
 -- * Schema types
 -- ---------------------------------------------------------------------------
 
--- | The @multi_asset@ table.
--- One row per unique (policy, name) pair.
+-- | One row per unique (policy, name) pair.
 data MultiAsset = MultiAsset
   { multiAssetPolicy      :: !ByteString  -- ^ Policy ID (28 bytes)
   , multiAssetName        :: !ByteString  -- ^ Asset name (0-32 bytes)
@@ -80,8 +79,7 @@ data MultiAsset = MultiAsset
   }
   deriving stock (Eq, Show)
 
--- | The @ma_tx_mint@ table.
--- Tracks minting/burning events per transaction.
+-- | Tracks minting/burning events per transaction.
 data MaTxMint = MaTxMint
   { maTxMintQuantity :: !Integer   -- ^ Signed quantity (positive=mint, negative=burn)
   , maTxMintTxId     :: !TxId     -- ^ FK to tx
@@ -89,8 +87,7 @@ data MaTxMint = MaTxMint
   }
   deriving stock (Eq, Show)
 
--- | The @ma_tx_out@ table.
--- Tracks multi-asset quantities attached to transaction outputs.
+-- | Tracks multi-asset quantities attached to transaction outputs.
 data MaTxOut = MaTxOut
   { maTxOutQuantity :: !DbWord64       -- ^ Unsigned quantity
   , maTxOutTxOutId  :: !TxOutId       -- ^ FK to tx_out
@@ -288,6 +285,10 @@ encodeMaTxOutCopy m =
 -- ---------------------------------------------------------------------------
 -- * Hasql encoders / decoders
 -- ---------------------------------------------------------------------------
+--
+-- A @\<row>Encoder@ and @\<row>Decoder@ pair omits the @id@ column. An
+-- @entity\<Row>Decoder@ reads @id@ first, so its column order matches
+-- @SELECT *@ on the table.
 
 -- | Encoder/decoder for a signed 'Integer' over PostgreSQL @numeric@.
 -- Mints / burns can in principle exceed @int8@ range, so we route through
@@ -299,7 +300,6 @@ integerAsNumericEncoder = fromInteger >$< E.numeric
 integerAsNumericDecoder :: D.Value Integer
 integerAsNumericDecoder = floor <$> D.numeric
 
--- | Encoder for a 'MultiAsset', excluding the auto-generated @id@.
 multiAssetEncoder :: E.Params MultiAsset
 multiAssetEncoder = mconcat
   [ multiAssetPolicy      >$< E.param (E.nonNullable E.bytea)
@@ -307,7 +307,6 @@ multiAssetEncoder = mconcat
   , multiAssetFingerprint >$< E.param (E.nonNullable E.text)
   ]
 
--- | Decoder for the data columns of a 'MultiAsset' (excluding @id@).
 multiAssetDecoder :: D.Row MultiAsset
 multiAssetDecoder = MultiAsset
   <$> D.column (D.nonNullable D.bytea)
@@ -319,7 +318,6 @@ entityMultiAssetDecoder = (,)
   <$> idDecoder MultiAssetId
   <*> multiAssetDecoder
 
--- | Encoder for a 'MaTxMint', excluding the auto-generated @id@.
 maTxMintEncoder :: E.Params MaTxMint
 maTxMintEncoder = mconcat
   [ maTxMintQuantity >$< E.param (E.nonNullable integerAsNumericEncoder)
@@ -338,7 +336,6 @@ entityMaTxMintDecoder = (,)
   <$> idDecoder MaTxMintId
   <*> maTxMintDecoder
 
--- | Encoder for an 'MaTxOut', excluding the auto-generated @id@.
 maTxOutEncoder :: E.Params MaTxOut
 maTxOutEncoder = mconcat
   [ maTxOutQuantity    >$< E.param (E.nonNullable dbWord64ValueEncoder)

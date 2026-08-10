@@ -1,12 +1,10 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | CBOR extractor.
---
--- Stores raw CBOR-encoded transaction bytes alongside the parsed data,
--- enabling downstream consumers to re-serialise or replay transactions.
--- Disabled by default (config: @"cbor": { "enabled": false }@) since
--- the data is large and only needed for specific use cases.
+-- | Stores the raw CBOR bytes of each transaction, so downstream
+-- consumers can re-serialise or replay it. The config disables this
+-- extractor by default, because the data is large and few consumers
+-- need it.
 module DbSync.Extractor.Cbor
   ( cborExtractor
   ) where

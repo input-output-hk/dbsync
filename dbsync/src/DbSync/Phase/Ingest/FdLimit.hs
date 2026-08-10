@@ -1,18 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
--- | Raise the process's open-file soft limit at startup.
---
--- Defaults on common platforms leave the soft limit far below what
--- the ingest LSM session needs once merges accumulate (macOS
--- launchd-spawned processes inherit 256; many Linux distributions
--- ship 1024). Hitting the cap manifests as @FsTooManyOpenFiles@
--- mid-sync, often during background merge work.
---
--- 'raiseFdLimit' lifts the soft limit to the hard limit (capped at
--- 'fdSoftLimitTarget') so the running process gets all the headroom
--- the OS will grant it, and reports the outcome through the
--- application tracer.
+-- | Raise the process's open-file soft limit at startup. Platform
+-- defaults sit far below what the ingest LSM session needs once
+-- merges accumulate: macOS inherits 256, and many Linux
+-- distributions ship 1024. The cap surfaces as
+-- @FsTooManyOpenFiles@ mid-sync.
 module DbSync.Phase.Ingest.FdLimit
   ( raiseFdLimit
   , fdSoftLimitTarget
@@ -25,18 +18,16 @@ import qualified System.Posix.Resource as Posix
 
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..))
 
--- | Upper bound on what we attempt to set the soft limit to. The OS
--- hard limit caps this further if it is lower.
---
--- 1,048,576 matches Linux's typical @/proc/sys/fs/nr_open@ ceiling
--- and is well above macOS's @kern.maxfilesperproc@ default
--- (245,760). Any lower hard cap is respected automatically.
+-- | Upper bound on the soft limit this module requests. A lower OS
+-- hard limit caps it further. 1,048,576 matches Linux's typical
+-- @/proc/sys/fs/nr_open@ ceiling and sits above macOS's
+-- @kern.maxfilesperproc@ default of 245,760.
 fdSoftLimitTarget :: Integer
 fdSoftLimitTarget = 1_048_576
 
 -- | Read @RLIMIT_NOFILE@ and raise the soft limit to
--- @min(hard, 'fdSoftLimitTarget')@. Logged at 'Info' on success,
--- 'Warning' if the OS rejects the request.
+-- @min(hard, 'fdSoftLimitTarget')@. It logs at 'Info' on success and
+-- at 'Warning' when the OS rejects the request.
 raiseFdLimit :: AppTracer -> IO ()
 raiseFdLimit tracer = do
   result <- try @SomeException $ do
@@ -68,8 +59,8 @@ raiseFdLimit tracer = do
   where
     traceInfo msg = traceWith tracer $ LogMsg Info "FdLimit" msg
 
--- | Honour the hard limit. 'ResourceLimitInfinity' has no integer
--- value, so we fall back to 'fdSoftLimitTarget' in that case.
+-- | Honour the hard limit. 'ResourceLimitInfinity' carries no
+-- integer value, so that case falls back to 'fdSoftLimitTarget'.
 pickTarget :: Posix.ResourceLimit -> Posix.ResourceLimit
 pickTarget = \case
   Posix.ResourceLimitInfinity -> Posix.ResourceLimit fdSoftLimitTarget

@@ -2,22 +2,11 @@
 
 -- | Vote-specific glue for the off-chain fetch worker.
 --
--- The worker discovers anchors by polling PG via the work-queue
--- statements in 'DbSync.Db.Statement.Worker.OffChainVote'. Each anchor is
--- fetched via a pluggable 'OffChainFetcher': 'httpVoteFetcher' for
--- the live HTTP path, 'stubVoteFetcher' for tests.
---
--- Persistence handles all four outcomes the HTTP fetcher can produce:
---
---   * Network or hash failure → @off_chain_vote_fetch_error@ row.
---   * HTTP 200 + valid JSON + CIP-conforming →
---     @off_chain_vote_data@ (is_valid = TRUE) plus the per-anchor-kind
---     subtable rows (gov_action / drep / authors / references /
---     external_updates).
---   * HTTP 200 + valid JSON but schema mismatch →
---     @off_chain_vote_data@ (is_valid = FALSE), no subtables.
---   * HTTP 200 + body is not JSON →
---     @off_chain_vote_data@ (is_valid = NULL), no subtables.
+-- The worker polls PG for anchors through the work-queue statements in
+-- 'DbSync.Db.Statement.Worker.OffChainVote', then fetches each one with
+-- a pluggable 'OffChainFetcher'. A failed fetch writes an
+-- @off_chain_vote_fetch_error@ row; a successful one goes to
+-- 'writeSuccess'.
 module DbSync.Worker.OffChain.Vote
   ( OffChainVoteWorker
   , OffChainVoteConfig (..)
@@ -105,8 +94,7 @@ data OffChainVoteConfig = OffChainVoteConfig
     -- @ipfs://@. Empty disables IPFS resolution.
   }
 
--- | Production defaults: 5-minute cycle, 100 anchors per cycle, no
--- IPFS gateways. Tests override 'ovcSleepMicros' for fast cycles.
+-- | 5-minute cycle, 100 anchors per cycle, no IPFS gateways.
 defaultOffChainVoteConfig :: OffChainVoteConfig
 defaultOffChainVoteConfig = OffChainVoteConfig
   { ovcSleepMicros  = 5 * 60 * 1_000_000
@@ -154,7 +142,6 @@ runOneVoteCycle tracer conn batchSize fetcher =
 -- * Hooks
 -- ---------------------------------------------------------------------------
 
--- | The complete hook triple for a vote worker.
 voteHooks :: OffChainFetcher -> OffChainHooks PendingVoteFetch VoteMetadata
 voteHooks fetcher = OffChainHooks
   { ohLoadPending = loadPendingVoteFetches
@@ -178,8 +165,6 @@ isDue now pvf = case pvfPrevFetchTime pvf of
     let r = retryAgain (utcTimeToPOSIXSeconds t) (pvfPrevRetryCount pvf)
     in retryRetryTime r <= now
 
--- | Project a 'PendingVoteFetch' into the public 'VotingAnchorRef'
--- shape that 'OffChainFetcher' speaks.
 toFetchRef :: PendingVoteFetch -> VotingAnchorRef
 toFetchRef pvf = VotingAnchorRef
   { varUrl        = unVoteUrl (pvfUrl pvf)
@@ -246,11 +231,11 @@ writeSuccess conn vaId vm = do
   parentId <- runStmt conn parentRow insertOffChainVoteDataReturningIdStmt
   forM_ mVote (writeSubtables conn parentId)
 
--- | Insert every subtable row this anchor contributes. The anchor
--- kind decides which subtables apply: gov-action anchors land at
--- most one 'off_chain_vote_gov_action_data' row; drep anchors land
--- at most one 'off_chain_vote_drep_data' row; every kind can carry
--- author / reference / external-update rows.
+-- | Insert every subtable row this anchor contributes. The anchor kind
+-- decides which apply: a gov-action anchor writes at most one
+-- @off_chain_vote_gov_action_data@ row, a drep anchor at most one
+-- @off_chain_vote_drep_data@ row. Every kind can carry author,
+-- reference and external-update rows.
 writeSubtables
   :: Conn.Connection
   -> OffChainVoteDataId

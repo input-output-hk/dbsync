@@ -3,9 +3,8 @@
 -- | Phase environments: 'CoreEnv' (shared), 'IngestEnv' (bulk COPY
 -- phase), 'FollowEnv' (live chain-follow phase).
 --
--- Accessor-class instances are defined here as orphans to avoid
--- circular imports between class-defining modules and the concrete
--- env records.
+-- The accessor-class instances are orphans here to break the import
+-- cycle between the class modules and these records.
 module DbSync.App.Env
   ( -- * Environment types
     CoreEnv (..)
@@ -22,9 +21,6 @@ module DbSync.App.Env
   , HasSecurityParam (..)
 
     -- * Small env adapters
-    --
-    -- Used in boot code and tests; production phase envs satisfy the
-    -- same classes directly via the records above.
   , TracerWithControl (..)
   , TracerWithConn (..)
   , LoaderWithControl (..)
@@ -81,18 +77,15 @@ import DbSync.Writer (HasWriter (..), Writer)
 -- * Accessor classes
 -- ---------------------------------------------------------------------------
 
--- | Access the sync configuration from any environment.
 class HasConfig env where
   getConfig :: env -> SyncConfig
 
 -- | The protocol security parameter @k@ — the maximum rollback depth.
--- A run-time constant sourced from the topology config at boot.
--- Mainnet is 2160; testnets vary.
 class HasSecurityParam env where
   getSecurityParam :: env -> Word64
 
 -- | The state the chainsync receiver needs. Both 'IngestEnv' and
--- 'FollowEnv' provide it so the same receiver runs against either.
+-- 'FollowEnv' provide it, so the same receiver runs against either.
 class HasReceiverChannels env where
   getBlockQueue       :: env -> TBQueue ChainSyncMsg
   getLedgerQueue      :: env -> Maybe (TBQueue ChainSyncMsg)
@@ -105,207 +98,163 @@ class HasReceiverChannels env where
 -- * Environment types
 -- ---------------------------------------------------------------------------
 
--- | Shared core environment available in every phase.
---
--- Constructed once at startup; the phase ref is mutated by the
--- orchestrator and the Follow loop as the lifecycle progresses.
+-- | Shared core environment available in every phase. Built once at
+-- startup; only 'ceCurrentPhase' changes after that.
 data CoreEnv = CoreEnv
   { ceTracer      :: !AppTracer
-    -- ^ Structured logging tracer (contra-tracer)
   , ceMinSeverity :: !Severity
-    -- ^ Same value the tracer was built with. Subsystems that gate
-    -- allocation on log level (the per-epoch diagnostic) read it
-    -- rather than re-parsing the profile.
+    -- ^ The severity the tracer was built with. Subsystems that gate
+    -- allocation on log level read it instead of the config.
   , ceMetrics     :: !Metrics
-    -- ^ Prometheus metrics handles
   , ceConfig      :: !SyncConfig
-    -- ^ Parsed db-sync profile
   , ceNodeConfig  :: !NodeConfig
-    -- ^ Extracted cardano-node configuration
+    -- ^ Unused. No production caller reads this field.
   , ceExtractors  :: ![ExtractorDef]
-    -- ^ Active extractor definitions
   , ceNetwork     :: !Network
-    -- ^ Chain network ID from the Shelley genesis. Drives the HRP
-    -- on stake / reward Bech32 encodings.
+    -- ^ Network id from the Shelley genesis. Drives the HRP on the
+    -- stake and reward Bech32 encodings.
   , ceCurrentPhase :: !CurrentPhase
-    -- ^ Live lifecycle phase. Written by the orchestrator and the
-    -- Follow loop; read by extractors and logs.
+    -- ^ The orchestrator and the Follow loop write it. Extractors and
+    -- logs read it.
   , ceSecurityParam :: !Word64
-    -- ^ Protocol @k@ (max rollback depth). Read by the rollback path
-    -- to gate deletes past the k-safety horizon.
+    -- ^ Protocol @k@. The rollback path uses it to gate deletes past
+    -- the k-safety horizon.
   }
 
--- | Environment for the 'IngestChainHistory' phase.
---
--- Extends 'CoreEnv' with the runtime state needed for loader-stream ingestion
+-- | Environment for the 'IngestChainHistory' phase. Extends 'CoreEnv'
+-- with the state the loader-stream pipeline needs.
 data IngestEnv = IngestEnv
   { ieCore          :: !CoreEnv
-    -- ^ Shared core environment
   , ieBlockQueue    :: !(TBQueue ChainSyncMsg)
-    -- ^ Forward blocks and rollback markers received from the node,
-    -- awaiting parse + extraction. Rollback markers are unreachable
-    -- on this queue during 'IngestChainHistory' (the consumer exits
-    -- at the rollback boundary, so no volatile block ever arrives);
-    -- the consumer panics if one slips through.
+    -- ^ Blocks and rollback markers from the receiver. The consumer
+    -- exits at the rollback boundary, so it never reaches a rollback
+    -- marker; one that arrives anyway panics.
   , ieLoaderStream    :: !LoaderStream
-    -- ^ Multi-threaded loader-stream writer (per-table TBQueues + worker threads)
   , ieDedupStores   :: !DedupStores
-    -- ^ LSM-backed deduplication stores. Five tables on the shared
-    -- 'ieLsmSession'; each maps a natural key to its assigned
-    -- database id. Compacted alongside 'ieUtxoStore' at each epoch
-    -- boundary.
+    -- ^ Ten LSM tables on 'ieLsmSession'. Each maps a natural key to
+    -- its assigned database id.
   , ieAddressBuffer :: !AddressBufferRef
-    -- ^ Per-epoch buffer of address-resolution work for the
-    -- 'ieTxOutWorker'. The consumer hands the contents to the worker
-    -- at each epoch boundary and resets the ref to empty.
+    -- ^ Per-epoch buffer of address work for 'ieTxOutWorker'. The
+    -- consumer hands the contents to the worker at each epoch
+    -- boundary and resets the ref to empty.
   , ieTxOutWorker :: !TxOutWorker
-    -- ^ Background worker that drains 'ieAddressBuffer' and
-    -- 'ieConsumedByBuffer' on a single PG connection. Writes
-    -- @address@ rows, @tx_out.address_id@, @collateral_tx_out.address_id@,
-    -- and (when the flag is on) @tx_out.consumed_by_tx_id@ for the
-    -- epoch one boundary behind the main pipeline.
+    -- ^ Drains 'ieAddressBuffer' and 'ieConsumedByBuffer' on its own
+    -- PG connection, one epoch boundary behind the main pipeline.
   , ieOffChainPoolWorker :: !(Maybe OffChainPoolWorker)
-    -- ^ Off-chain stake-pool metadata fetcher. 'Nothing' when the
-    -- @off_chain_pools@ option is disabled. Polls PG on its own
-    -- connection for @pool_metadata_ref@ rows lacking a result and
-    -- writes either @off_chain_pool_data@ (success) or
-    -- @off_chain_pool_fetch_error@ (failure).
+    -- ^ Off-chain pool metadata fetcher. 'Nothing' when
+    -- @off_chain_pools@ is disabled.
   , ieOffChainVoteWorker :: !(Maybe OffChainVoteWorker)
-    -- ^ Off-chain governance-anchor fetcher. 'Nothing' when the
-    -- @off_chain_votes@ option is disabled. Polls PG on its own
-    -- connection for @voting_anchor@ rows lacking a result and
-    -- writes either @off_chain_vote_data@ (success) or
-    -- @off_chain_vote_fetch_error@ (failure).
+    -- ^ Off-chain governance anchor fetcher. 'Nothing' when
+    -- @off_chain_votes@ is disabled.
   , ieLsmSession :: !LsmSession
-    -- ^ Shared LSM session backing the ingest-phase scratch tables.
-    -- Closed on mid-flight crash; deleted after Prep completes.
+    -- ^ Backs the ingest scratch tables. Closed on a mid-flight
+    -- crash; deleted after Prep completes.
   , ieUtxoStore :: !UtxoStore
-    -- ^ Tx-hash → @(tx_id, [(tx_out_id, value)])@ store backed by
-    -- 'ieLsmSession'. Consulted by the UTxO extractor to resolve
-    -- inputs at COPY time; misses fall through to the post-load
-    -- resolve.
+    -- ^ Tx-hash → @(tx_id, [(tx_out_id, value)])@ store on
+    -- 'ieLsmSession'. The UTxO extractor resolves inputs against it
+    -- at COPY time; a miss falls through to the post-load resolve.
   , ieConsumedByBuffer :: !(Maybe ConsumedByBufferRef)
-    -- ^ Per-epoch buffer of @(producer_tx_out_id, consumer_tx_id)@
-    -- pairs destined for @tx_out.consumed_by_tx_id@. 'Nothing' when
-    -- @utxo.consumed_by_tx_id@ is off; the 'ieTxOutWorker' then
-    -- skips that sub-task.
+    -- ^ Per-epoch @(producer_tx_out_id, consumer_tx_id)@ pairs for
+    -- @tx_out.consumed_by_tx_id@. 'Nothing' when
+    -- @utxo.consumed_by_tx_id@ is off; 'ieTxOutWorker' then skips
+    -- that sub-task.
   , ieHasLedgerEnv  :: !HasLedgerEnv
-    -- ^ Ledger subsystem — either enabled (carrying its own queues,
-    -- 'LedgerDB', and snapshot machinery) or disabled (minimal).
   , ieStateQueryVar :: !StateQueryVar
-    -- ^ Handle for the LocalStateQuery 'Interpreter' used to compute
-    -- 'SlotDetails' (epoch number, slot-within-epoch, slot time) on
-    -- the consumer thread.
+    -- ^ LocalStateQuery 'Interpreter' handle. The consumer thread
+    -- uses it to compute 'SlotDetails'.
   , ieSystemStart   :: !SystemStart
-    -- ^ Network system-start time, sourced from the Shelley genesis.
-    -- Required by the state-query interpreter to compute slot times.
+    -- ^ From the Shelley genesis. The state-query interpreter needs
+    -- it to compute slot times.
   , ieResolver      :: !(IdResolver IO)
-    -- ^ Ingest-phase ID resolver ('DedupStores' + 'IdCounters' under the hood).
-    -- Built once from 'ieDedupStores' and 'ieExtractState' at startup.
   , ieWriter        :: !(Writer IO)
-    -- ^ Ingest-phase writer (the loader-stream adapter). Built once
-    -- from 'ieLoaderStream' at startup.
   , ieExtractState  :: !(IORef ExtractState)
-    -- ^ Per-block extraction state — carries the 'IdCounters' through
-    -- 'atomicModifyIORef'' so the resolver can hand out fresh IDs.
+    -- ^ Carries the 'IdCounters' through 'atomicModifyIORef'' so the
+    -- resolver can hand out fresh ids.
   , ieControlConnection :: !ControlConnection
-    -- ^ PG connection used by the consumer to advance
-    -- @dbsync_sync_state@ at each epoch boundary via 'commitEpoch'.
+    -- ^ The consumer advances @dbsync_sync_state@ over it at each
+    -- epoch boundary.
   , ieLastCommittedSlotAtBoot :: !(Maybe SlotNo)
-    -- ^ Upper edge of the replay window for a ledger-enabled
-    -- resume: the consumer skips 'processBlock' for any block at
-    -- or before this slot (already in PG). 'Nothing' otherwise.
+    -- ^ Upper edge of the replay window on a ledger-enabled resume.
+    -- The consumer skips 'processBlock' at or below this slot,
+    -- because PG already holds those blocks. 'Nothing' otherwise.
   , ieReplayStartSlot         :: !(Maybe SlotNo)
-    -- ^ Lower edge of the replay window (the chosen snapshot's
-    -- slot). Drives the percentage in the consumer\'s replay
-    -- progress log. 'Nothing' otherwise.
+    -- ^ Lower edge of the replay window: the chosen snapshot's slot.
+    -- Drives the percentage in the replay progress log. 'Nothing'
+    -- otherwise.
   , ieLatestReceivedPoint     :: !(TVar (Maybe CardanoPoint))
-    -- ^ The latest chain point the receiver has accepted (forward
-    -- or rollback). Read on every (re)connection so the chainsync
-    -- client resumes at our current position rather than the
-    -- boot-time intersect. Without this, a mid-run @cardano-node@
-    -- restart causes the node to intersect at the boot-time point
-    -- (Origin on a fresh sync) and roll our chain pointer back to
-    -- genesis; the LedgerWorker then crashes with a hash mismatch
-    -- when the genesis block arrives over our advanced state.
-    -- 'Nothing' on first connection (before any block is received).
-    -- A 'TVar' so the receiver can update it in the same STM
-    -- transaction as the queue writes — a point must never be
-    -- recorded without its block being enqueued, or vice versa.
+    -- ^ Latest chain point the receiver accepted. Every reconnection
+    -- reads it so chainsync resumes at the current position, not the
+    -- boot-time intersect. Without it, a mid-run @cardano-node@
+    -- restart intersects at the boot-time point (Origin on a fresh
+    -- sync) and rolls the chain pointer back to genesis; the ledger
+    -- worker then crashes with a hash mismatch when the genesis block
+    -- arrives over the advanced state. 'Nothing' until the first
+    -- block arrives. A 'TVar' so the receiver updates it in the same
+    -- STM transaction as the queue write — a point must never be
+    -- recorded without its block, or the reverse.
   , ieRollbackBoundary        :: !(TVar (Maybe BlockNo))
-    -- ^ Latest @nodeTip − k@ observed by the receiver, where @k@ is
-    -- the protocol security parameter. Below this block number the
-    -- chain is finalised and immune to rollback. 'Nothing' until the
-    -- first 'MsgRollForward' arrives, and while the chain is still
-    -- shorter than @k@ blocks (everything is volatile in that case).
-    -- The consumer compares each processed block against this and
-    -- exits 'IngestChainHistory' cleanly once it crosses, so the
-    -- caller can run 'PreparingForVolatileTail' before handing off to
-    -- 'FollowingChainTip'.
+    -- ^ Latest @nodeTip − k@ the receiver observed. Below this block
+    -- number the chain is final and immune to rollback. 'Nothing'
+    -- until the first 'MsgRollForward', and while the chain is
+    -- shorter than @k@ blocks. The consumer leaves
+    -- 'IngestChainHistory' once a processed block crosses it.
   , ieLatestTipBlock          :: !(TVar (Maybe BlockNo))
     -- ^ Server tip block number from every chainsync roll message.
-    -- The Follow flip predicate reads this directly so it does not
-    -- depend on the security parameter agreeing across two sources.
+    -- The Follow flip predicate reads it directly, so the flip does
+    -- not depend on @k@ agreeing across two sources.
   }
 
 -- ---------------------------------------------------------------------------
--- * Environment for the Follow (FollowingVolatileTail & FollowingChainTip).
+-- * Follow environment
 -- ---------------------------------------------------------------------------
+
+-- | Environment for 'FollowingVolatileTail' and 'FollowingChainTip'.
 --
--- Lighter than 'IngestEnv' — no COPY connections, no dedup stores, no
--- background address resolver. Reads from the same chainsync message
--- queue as the Ingest consumer did and runs per-block INSERTs with
--- rollback support against a single hasql connection.
+-- Lighter than 'IngestEnv': no COPY connections, no dedup stores, no
+-- background address resolver. It reads the same chainsync queue the
+-- Ingest consumer used and runs per-block INSERTs against a single
+-- hasql connection.
 data FollowEnv = FollowEnv
   { feCore                :: !CoreEnv
-    -- ^ Shared core environment
   , feBlockQueue          :: !(TBQueue ChainSyncMsg)
-    -- ^ Forward blocks and rollback markers from the chainsync
-    -- receiver. The Follow loop processes one message per
-    -- per-block PG transaction.
+    -- ^ Blocks and rollback markers from the receiver. The Follow
+    -- loop processes one message per PG transaction.
   , feHasLedgerEnv        :: !HasLedgerEnv
-    -- ^ Carried over so the LSM-backed worker keeps producing
+    -- ^ Carried over so the ledger worker keeps producing
     -- 'ApplyResult's while Follow runs.
   , feStateQueryVar       :: !StateQueryVar
-    -- ^ Slot-to-time interpreter, used by 'parseBlock'.
   , feSystemStart         :: !SystemStart
-    -- ^ Network system-start time; drives slot-to-time conversion.
   , feLatestReceivedPoint :: !(TVar (Maybe CardanoPoint))
-    -- ^ Latest chainsync point accepted; preserved across the phase flip.
+    -- ^ Latest chainsync point accepted. Survives the phase flip.
   , feHasqlConnection     :: !Conn.Connection
-    -- ^ Dedicated Follow connection — drives the resolver and writer
-    -- (INSERTs) and the per-block @BEGIN@/@COMMIT@ envelope. Distinct
-    -- from 'feControlConnection' so the rollback cascade and the
-    -- 'sync_state' advance don't fight for the same handle.
+    -- ^ Drives the resolver, the writer, and the per-block
+    -- @BEGIN@/@COMMIT@ envelope. Distinct from
+    -- 'feControlConnection' so the rollback cascade and the
+    -- @sync_state@ advance do not contend for one handle.
   , feResolver            :: !(IdResolver IO)
-    -- ^ Sequence-driven resolver: @nextval@ for non-dedup, SELECT
-    -- then @nextval@ for dedup tables.
+    -- ^ Sequence-driven: @nextval@ for non-dedup tables, SELECT then
+    -- @nextval@ for dedup tables.
   , feWriter              :: !(Writer IO)
-    -- ^ INSERT writer over 'feHasqlConnection'.
   , feControlConnection   :: !ControlConnection
-    -- ^ PG connection used by 'sync_state' advances at each
-    -- per-block commit.
+    -- ^ Carries the @sync_state@ advance at each per-block commit.
   , feRollbackBoundary    :: !(TVar (Maybe BlockNo))
-    -- ^ Tip-derived rollback boundary kept up to date by the
-    -- receiver. Unused by the Follow consumer (every block in
-    -- Follow is volatile by definition); held only so the receiver
-    -- has somewhere to publish it.
+    -- ^ The receiver keeps it current. The Follow consumer ignores
+    -- it, because every block in Follow is volatile; the field only
+    -- gives the receiver somewhere to publish.
   , feLatestTipBlock      :: !(TVar (Maybe BlockNo))
     -- ^ Server tip block number from every chainsync roll message.
     -- Drives the 'FollowingVolatileTail' -> 'FollowingChainTip' flip.
   , feReplayBootSlot      :: !(Maybe SlotNo)
     -- ^ Upper edge of the Follow replay window:
     -- @dbsync_sync_state.last_committed_slot@ when a ledger-enabled
-    -- Follow restart finds the on-disk snapshot below it. Blocks
-    -- with @slot <= this value@ are already in PG; Follow\'s
-    -- consumer skips them so the receiver can fan them out to the
-    -- ledger worker, which advances the in-RAM ledger to match PG.
-    -- 'Nothing' on the in-process Ingest → Prep → Follow handoff and
-    -- on restarts where the snapshot is already aligned with PG.
+    -- restart finds the on-disk snapshot below it. PG already holds
+    -- those blocks, so the consumer skips them and lets the receiver
+    -- fan them out to the ledger worker. 'Nothing' on the in-process
+    -- Ingest → Prep → Follow handoff, and when the snapshot already
+    -- aligns with PG.
   , feReplayStartSlot     :: !(Maybe SlotNo)
-    -- ^ Lower edge of the Follow replay window — the chosen
-    -- snapshot\'s slot. Drives the percentage segment of the replay
-    -- progress log. 'Just' iff 'feReplayBootSlot' is.
+    -- ^ Lower edge of the Follow replay window: the chosen snapshot's
+    -- slot. 'Just' exactly when 'feReplayBootSlot' is.
   , feOffChainPoolWorker  :: !(Maybe OffChainPoolWorker)
     -- ^ Carried over from 'IngestEnv' so the worker keeps polling
     -- across the phase boundary. 'Nothing' when disabled.
@@ -318,14 +267,11 @@ data FollowEnv = FollowEnv
 -- * Follow construction
 -- ---------------------------------------------------------------------------
 
--- | Build a 'FollowEnv' by reusing receiver-side state from the
+-- | Build a 'FollowEnv' that reuses the receiver-side state of an
 -- 'IngestEnv'. The block queue, state-query interpreter, and
--- latest-point ref are shared so the receiver keeps producing into
--- the same FIFO across the phase boundary.
---
--- The caller supplies the new Follow-only resources: a fresh hasql
--- connection (drives resolver + writer + per-block transactions) and
--- the resolver/writer pair built over it.
+-- latest-point ref stay shared, so the receiver keeps producing into
+-- the same FIFO across the phase boundary. The caller supplies the
+-- Follow-only hasql connection and the resolver/writer built over it.
 mkFollowEnvFromIngest
   :: IngestEnv
   -> Conn.Connection
@@ -542,9 +488,8 @@ instance HasSystemStart LedgerEnv where
 -- * Small env adapters
 -- ---------------------------------------------------------------------------
 
--- | Tracer + control connection. Drives 'rebuildDedupMaps' and any
--- other 'SyncStateM env m' action that just needs a logger and the
--- @sync_state@ connection.
+-- | Drives 'rebuildDedupMaps' and any other action that needs only a
+-- logger and the @sync_state@ connection.
 data TracerWithControl = TracerWithControl !AppTracer !ControlConnection
 
 instance HasTracer TracerWithControl where
@@ -553,9 +498,8 @@ instance HasTracer TracerWithControl where
 instance HasControlConnection TracerWithControl where
   getControlConnection (TracerWithControl _ c) = c
 
--- | Tracer + raw hasql connection + 'SyncConfig'. Drives Prep
--- helpers from test code (production boots them via 'CoreWithConn',
--- which projects the same instances out of 'CoreEnv').
+-- | Drives Prep helpers from test code. Production boots them via
+-- 'CoreWithConn', which projects the same instances out of 'CoreEnv'.
 data TracerWithConn = TracerWithConn !AppTracer !Conn.Connection !SyncConfig
 
 instance HasTracer TracerWithConn where
@@ -567,8 +511,8 @@ instance HasHasqlConnection TracerWithConn where
 instance HasConfig TracerWithConn where
   getConfig (TracerWithConn _ _ cfg) = cfg
 
--- | Loader stream + control connection. Drives 'commitEpoch' from
--- any caller that has both handles but isn't running inside 'IngestEnv'.
+-- | Drives 'commitEpoch' from a caller that holds both handles but
+-- does not run inside 'IngestEnv'.
 data LoaderWithControl = LoaderWithControl !LoaderStream !ControlConnection
 
 instance HasLoaderStream LoaderWithControl where
@@ -577,9 +521,8 @@ instance HasLoaderStream LoaderWithControl where
 instance HasControlConnection LoaderWithControl where
   getControlConnection (LoaderWithControl _ c) = c
 
--- | Full 'CoreEnv' plus a hasql connection. Used by boot-time and
--- CLI flows that need both the run-wide config (security param,
--- network, tracer) and a fresh PG connection.
+-- | For boot-time and CLI flows that need both the run-wide config
+-- and a fresh PG connection.
 data CoreWithConn = CoreWithConn !CoreEnv !Conn.Connection
 
 instance HasTracer CoreWithConn where

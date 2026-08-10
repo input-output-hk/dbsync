@@ -10,10 +10,10 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import System.IO (hFlush)
 
--- | Write the banner to stderr, the stream the log tracer also uses.
+-- | Writes to stderr, the stream the log tracer also uses.
 --
--- Encoded to UTF-8 here rather than through the handle's own encoder so
--- the block characters print under a non-UTF-8 locale instead of
+-- Encodes to UTF-8 here instead of through the handle's own encoder,
+-- so the block characters print under a non-UTF-8 locale rather than
 -- throwing.
 printBanner :: IO ()
 printBanner = do

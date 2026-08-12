@@ -21,7 +21,7 @@ module DbSync.Worker.Ledger.WorkerSpec
 
 import Cardano.Prelude
 
-import Control.Concurrent.STM (newTBQueueIO, writeTBQueue)
+import Control.Concurrent.STM (isEmptyTBQueue, newTBQueueIO, writeTBQueue)
 import qualified Control.Concurrent.Class.MonadSTM.Strict as Strict
 import qualified Data.Set as Set
 import qualified Data.Strict.Maybe as SMaybe
@@ -131,8 +131,9 @@ chainSyncDispatchLoopSpec = describe "chainSyncDispatchLoop" $ do
     let forwardH _blk = panic "forward handler must not be called for rollback-only test"
         rollbackH _p  = atomicModifyIORef' rollbackCalls (\n -> (n + 1, ()))
 
+    stopVar      <- Strict.newTVarIO False
     workerThread <- async $
-      chainSyncDispatchLoop Nothing forwardH rollbackH queue
+      chainSyncDispatchLoop Nothing forwardH rollbackH stopVar queue
 
     -- Push three rollback markers (all at GenesisPoint — the handler
     -- only counts, so the point payload doesn't matter).
@@ -146,20 +147,38 @@ chainSyncDispatchLoopSpec = describe "chainSyncDispatchLoop" $ do
     cancel workerThread
     readIORef rollbackCalls `shouldReturn` 3
 
-  it "stops cleanly when cancelled mid-loop" $ do
-    queue <- newTBQueueIO 10
+  -- The loop must stop on the flag, not on a cancellation: an async
+  -- exception thrown at a thread parked in 'readTBQueue' is not
+  -- delivered while the process is otherwise idle, which hangs shutdown.
+  it "stops on the flag while parked on an empty queue" $ do
+    queue   <- newTBQueueIO 10
+    stopVar <- Strict.newTVarIO False
     let forwardH _blk = pure ()
         rollbackH _p  = pure ()
 
     workerThread <- async $
-      chainSyncDispatchLoop Nothing forwardH rollbackH queue
+      chainSyncDispatchLoop Nothing forwardH rollbackH stopVar queue
 
-    -- No messages pushed; the worker is blocked on the queue.
-    cancel workerThread
-    result <- try (wait workerThread) :: IO (Either SomeException ())
-    case result of
-      Left _  -> pure ()
-      Right _ -> panic "dispatch loop exited normally; expected AsyncCancelled"
+    Strict.atomically $ Strict.writeTVar stopVar True
+    wait workerThread
+
+  it "drains queued messages before honouring the flag" $ do
+    queue         <- newTBQueueIO 10
+    rollbackCalls <- newIORef (0 :: Int)
+    stopVar       <- Strict.newTVarIO False
+    let forwardH _blk = panic "forward handler must not be called for rollback-only test"
+        rollbackH _p  = atomicModifyIORef' rollbackCalls (\n -> (n + 1, ()))
+
+    atomically $ do
+      writeTBQueue queue (MsgRollback GenesisPoint)
+      writeTBQueue queue (MsgRollback GenesisPoint)
+    Strict.atomically $ Strict.writeTVar stopVar True
+
+    workerThread <- async $
+      chainSyncDispatchLoop Nothing forwardH rollbackH stopVar queue
+    wait workerThread
+    readIORef rollbackCalls `shouldReturn` 2
+    atomically (isEmptyTBQueue queue) `shouldReturn` True
 
 -- ---------------------------------------------------------------------------
 -- Helpers

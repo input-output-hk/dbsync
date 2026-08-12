@@ -42,7 +42,7 @@ module DbSync.App.Boot
 
 import Cardano.Prelude
 
-import Control.Concurrent.STM (TVar, newTBQueueIO, newTVarIO, readTVar)
+import Control.Concurrent.STM (TVar, newTBQueueIO, newTVarIO, readTVar, writeTVar)
 import qualified Data.Text as T
 import qualified Hasql.Connection as Conn
 import qualified Hasql.Connection.Settings as HasqlSettings
@@ -946,11 +946,14 @@ runFollowSession
     -- covers crash recovery.
     runAppM followConn (setFollowSessionGUCs defaultFollowTuning)
     resolver <- FollowResolver.mkFollowResolver followConn consumedTracking
+    -- Cooperative stop; 'Follow.run' explains why a cancellation is
+    -- not safe here.
+    stopVar <- newTVarIO False
     let writer    = FollowingWriter.mkWriter followConn
         followEnv = mkFollowEnv followConn resolver writer
 
         followAction =
-          runAppM followEnv Follow.run
+          runAppM followEnv (Follow.run stopVar)
             `finally` do
               logInfoIO tracer component "Closing Follow hasql connection..."
               closeControlConnection followCtrl
@@ -958,13 +961,20 @@ runFollowSession
                   logErrorIO tracer component $
                     "Error closing Follow connection: " <> show e
 
-        racedFollow = case mShutdown of
+        signalledFollow = case mShutdown of
           Nothing      -> followAction
-          Just waitSig -> void (race waitSig followAction)
+          Just waitSig ->
+            withAsync (waitSig >> atomically (writeTVar stopVar True)) $
+              \_ -> followAction
 
     withAsync (runAppM followEnv $ connectToNode iomgr topLevelCfg networkMagic socketPath intersectReq) $ \nodeThread -> do
       link nodeThread
-      racedFollow
+      signalledFollow `finally` do
+        -- Explicit cancel: 'withAsync' cleanup is uninterruptible, so a
+        -- receiver that will not stop wedges teardown with no output.
+        logInfoIO tracer component "Stopping chainsync receiver..."
+        cancel nodeThread
+        logInfoIO tracer component "Chainsync receiver stopped."
 
 -- | Resolve the chainsync intersection point for a Follow restart. It
 -- loads the ledger snapshot and computes the replay window when the

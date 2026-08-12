@@ -309,6 +309,7 @@ mkHasLedgerEnv
     latestApplyVar  <- newTVarIO Strict.Nothing
     boundaryQueue   <- newTBQueueIO boundaryQueueBound
     blockApplyQueue <- newTBQueueIO blockApplyQueueBound
+    stopVar         <- newTVarIO False
     ledgerQueue     <- newTBQueueIO ledgerQueueBound
     depositAccumRef <- newEpochParamsRef
     epochReady      <- newEmptyTMVarIO
@@ -397,6 +398,7 @@ mkHasLedgerEnv
           , leLedgerBackend        = backend
           , leInterpreter          = interpreterVar
           , leStateVar             = stateVar
+          , leStopVar              = stopVar
           , leLedgerQueue          = ledgerQueue
           , leEpochReady           = epochReady
           , leEpochWait            = epochWait
@@ -672,12 +674,18 @@ applyBlock blk slotDetails suppressBoundary = do
         if isBoundary && not suppressBoundary
           then Just <$> liftIO (evaluate (force boundaryData))
           else pure Nothing
-      liftIO $ atomically $ do
-        writeTVar (leLatestApplyResult env) (Strict.Just appResult)
-        writeTBQueue (leBlockApplyResults env) blockData'
-        case mBoundaryData of
-          Just bd -> writeTBQueue (leBoundaryApplyResults env) bd
-          Nothing -> pure ()
+      -- Both queues are bounded and have a single consumer, which is
+      -- already gone by the time 'leStopVar' is set. Abandon the
+      -- hand-off in that case; a full queue would block forever.
+      liftIO $ atomically $
+        STM.orElse
+          (do
+            writeTVar (leLatestApplyResult env) (Strict.Just appResult)
+            writeTBQueue (leBlockApplyResults env) blockData'
+            case mBoundaryData of
+              Just bd -> writeTBQueue (leBoundaryApplyResults env) bd
+              Nothing -> pure ())
+          (readTVar (leStopVar env) >>= STM.check)
       pure (oldRef, appResult, pruned)
 
 -- | 'applyBlock' plus the snapshot-cadence decision and the close of
@@ -712,9 +720,14 @@ applyBlockAndSnapshot blk slotDetails phase mReplayBoundary = do
   when (not inReplayWindow
         && shouldSnapshotAtEpoch appResult phase proximity (leSnapshotNearTipEpoch env)) $
     DbSync.Worker.Ledger.Snapshot.saveCurrentLedgerState oldRef
+  -- On shutdown the writer may already be gone, so 'srCanClose' would
+  -- never flip. Leave the handle to the LSM session close instead.
   liftIO $ forM_ pruned $ \sr -> do
-    atomically $ readTVar (srCanClose sr) >>= STM.check
-    Consensus.close (srTables sr)
+    canClose <- atomically $
+      STM.orElse
+        (True <$ (readTVar (srCanClose sr) >>= STM.check))
+        (False <$ (readTVar (leStopVar env) >>= STM.check))
+    when canClose $ Consensus.close (srTables sr)
   pure appResult
 
 -- | Copy the 'ApplyResult' deposit data into the per-epoch

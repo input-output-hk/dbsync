@@ -147,12 +147,17 @@ getSlotNoSnapshot = \case
 -- enqueue, so the 'DbSync.Worker.Ledger.State' pruner cannot close the
 -- handle while the write is in flight. 'snapshotWriteLoop' flips it
 -- back. Retention runs there too, after each successful write.
+-- Skipped once 'leStopVar' is set: the writer is on its way out, so an
+-- enqueue on a full queue would never drain.
 saveCurrentLedgerState :: DbSyncStateRef -> LedgerM ()
 saveCurrentLedgerState sref = do
   env <- ask
-  liftIO $ atomically $ do
-    writeTVar (srCanClose sref) False
-    writeTBQueue (leSnapshotQueue env) sref
+  liftIO $ atomically $
+    orElse
+      (do
+        writeTVar (srCanClose sref) False
+        writeTBQueue (leSnapshotQueue env) sref)
+      (readTVar (leStopVar env) >>= check)
 
 -- ---------------------------------------------------------------------------
 -- * Async writer thread
@@ -209,10 +214,18 @@ snapshotWriteLoop = do
     traceWith (leTracer env) $
       LogMsg Info "LedgerSnapshot"
         "snapshot-writer starting (draining snapshot queue)"
-    forever $ do
-      sref <- atomically $ readTBQueue (leSnapshotQueue env)
-      processOneSnapshot env sref
-        `Exception.finally` atomically (writeTVar (srCanClose sref) True)
+    -- Queue first, so a snapshot already handed over still gets written.
+    let loop = do
+          mSref <- atomically $
+            (Just <$> readTBQueue (leSnapshotQueue env))
+              `orElse` (Nothing <$ (readTVar (leStopVar env) >>= check))
+          case mSref of
+            Nothing -> logMsg env Info "shutdown requested; snapshot writer exiting"
+            Just sref -> do
+              processOneSnapshot env sref
+                `Exception.finally` atomically (writeTVar (srCanClose sref) True)
+              loop
+    loop
   where
     logMsg :: LedgerEnv -> Severity -> Text -> IO ()
     logMsg env sev msg =

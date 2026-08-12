@@ -124,13 +124,23 @@ data FollowProgress = FollowProgress
     -- ^ Forward blocks observed in the current epoch.
   }
 
--- | Drain the chainsync queue forever. One @BEGIN@/@COMMIT@ envelope
--- covers each 'MsgForward' and also advances
+-- | What 'waitForMsgOrHeartbeat' woke up for.
+data FollowWakeup
+  = WakeMsg !ChainSyncMsg
+  | WakeHeartbeat
+  | WakeStop
+
+-- | Drain the chainsync queue until @stopVar@ flips. One
+-- @BEGIN@/@COMMIT@ envelope covers each 'MsgForward' and also advances
 -- @dbsync_sync_state.last_committed_slot@, so a crash between blocks
 -- never leaves rows past the recorded position. 'MsgRollback' runs
 -- the cascade and moves the same columns to the target slot.
-run :: FollowM ()
-run = do
+--
+-- The loop stops on a flag, not a cancellation. An async exception
+-- inside a hasql session sends hasql into a masked connection repair
+-- that no canceller can interrupt.
+run :: STM.TVar Bool -> FollowM ()
+run stopVar = do
   FollowEnv{feCore, feBlockQueue, feReplayBootSlot, feHasqlConnection} <- ask
   let tracer   = ceTracer    feCore
       phaseRef = ceCurrentPhase feCore
@@ -165,18 +175,25 @@ run = do
   -- 'processRollback' resets it, because post-rollback forwards
   -- legitimately carry lower block numbers.
   lastAppliedRef <- liftIO $ newIORef Nothing
-  forever $ do
-    mMsg <- liftIO $
-      waitForMsgOrHeartbeat feBlockQueue phaseRef idleHeartbeatMicros
-    case mMsg of
-      Just (MsgForward blk) -> do
-        redelivered <- liftIO $
-          dropRedeliveredForward tracer phaseRef lastAppliedRef blk
-        unless redelivered $
-          processForward progressRef replayRef lastAppliedRef blk
-      Just (MsgRollback point) ->
-        processRollback progressRef lastAppliedRef point
-      Nothing -> emitIdleHeartbeat progressRef
+  let loop = do
+        wakeup <- liftIO $
+          waitForMsgOrHeartbeat stopVar feBlockQueue phaseRef idleHeartbeatMicros
+        case wakeup of
+          WakeMsg (MsgForward blk) -> do
+            redelivered <- liftIO $
+              dropRedeliveredForward tracer phaseRef lastAppliedRef blk
+            unless redelivered $
+              processForward progressRef replayRef lastAppliedRef blk
+            loop
+          WakeMsg (MsgRollback point) -> do
+            processRollback progressRef lastAppliedRef point
+            loop
+          WakeHeartbeat -> emitIdleHeartbeat progressRef >> loop
+          WakeStop -> liftIO $ do
+            component <- readPhaseComponent phaseRef
+            traceWith tracer $ LogMsg Info component
+              "shutdown requested; consumer loop exiting"
+  loop
 
 -- | 'True' when this forward block sits at or below the last applied
 -- block number, which makes it a re-delivery. It logs at 'Warning':
@@ -201,26 +218,35 @@ dropRedeliveredForward tracer phaseRef lastAppliedRef blk = do
       pure True
     _ -> pure False
 
--- | Read the next message, or return 'Nothing' when the heartbeat
--- timer expires. The timer branch only fires in 'FollowingChainTip';
--- any other phase behaves like a plain 'readTBQueue'.
+-- | Read the next message, or wake on the stop flag or the heartbeat
+-- timer. The stop branch comes first, so a pending shutdown wins over
+-- a backlogged queue. The timer branch only fires in
+-- 'FollowingChainTip'; any other phase behaves like a plain
+-- 'readTBQueue'.
 waitForMsgOrHeartbeat
-  :: STM.TBQueue ChainSyncMsg
+  :: STM.TVar Bool
+  -> STM.TBQueue ChainSyncMsg
   -> CurrentPhase
   -> Int
-  -> IO (Maybe ChainSyncMsg)
-waitForMsgOrHeartbeat q phaseRef micros = do
+  -> IO FollowWakeup
+waitForMsgOrHeartbeat stopVar q phaseRef micros = do
   delayVar <- STM.registerDelay micros
   STM.atomically $
-    (Just <$> STM.readTBQueue q)
+    stopBranch
+      `STM.orElse` (WakeMsg <$> STM.readTBQueue q)
       `STM.orElse` heartbeatBranch delayVar
   where
+    stopBranch = do
+      stopping <- STM.readTVar stopVar
+      unless stopping STM.retry
+      pure WakeStop
+
     heartbeatBranch delayVar = do
       phase <- readCurrentPhaseSTM phaseRef
       when (phase /= FollowingChainTip) STM.retry
       expired <- STM.readTVar delayVar
       unless expired STM.retry
-      pure Nothing
+      pure WakeHeartbeat
 
 readPhaseComponent :: CurrentPhase -> IO Text
 readPhaseComponent = fmap renderPhase . readCurrentPhase

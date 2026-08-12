@@ -167,6 +167,12 @@ data LedgerEnv = LedgerEnv
   , leStateVar             :: !(StrictTVar IO (Strict.Maybe LedgerDB))
 
     -- Inter-thread coordination queues and TMVars
+  , leStopVar              :: !(StrictTVar IO Bool)
+    -- ^ Shutdown flag for the ledger worker and the snapshot writer.
+    -- Both park in @atomically readTBQueue@, and an async exception
+    -- thrown at a thread in that state is not delivered while the
+    -- process is otherwise idle. Flipping this TVar wakes them through
+    -- STM instead, so they finish the in-flight item and return.
   , leLedgerQueue          :: !(TBQueue ChainSyncMsg)
     -- ^ @BlockReceiver → LedgerWorker@. Forward blocks apply against
     -- the LSM-backed ledger; rollback markers apply against the in-RAM

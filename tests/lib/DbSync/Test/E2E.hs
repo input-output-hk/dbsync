@@ -167,12 +167,19 @@ runApp' mkArgs tracer cfg mn ledgerDir body = do
 -- | Wait at most 'shutdownTimeoutMicros' for an 'Async' to
 -- terminate. Panics on timeout. Use after firing the shutdown signal
 -- that the async is racing against.
+--
+-- The message reaches stderr before the throw: 'withAsync' cleanup
+-- cancels the still-running app and can block there forever, which
+-- swallows the panic and stalls the spec with no output.
 awaitShutdown :: Text -> Async () -> IO ()
 awaitShutdown name app = do
   mResult <- timeout shutdownTimeoutMicros (wait app)
   case mResult of
     Just () -> pure ()
-    Nothing -> panic $ name <> " did not return within 30s of shutdown signal"
+    Nothing -> do
+      let msg = name <> " did not return within 30s of shutdown signal"
+      hPutStrLn stderr msg
+      panic msg
 
 shutdownTimeoutMicros :: Int
 shutdownTimeoutMicros = 30_000_000

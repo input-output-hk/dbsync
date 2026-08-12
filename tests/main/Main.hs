@@ -132,6 +132,7 @@ import qualified DbSync.Schema.Migration.LadderSpec as SchemaMigrationLadderSpec
 import qualified DbSync.Phase.AlonzoInvalidTxSpec as PhaseAlonzoInvalidTxSpec
 import qualified DbSync.Phase.BoundaryRecrossSpec as PhaseBoundaryRecrossSpec
 import qualified DbSync.Phase.FollowAtTipSpec as PhaseFollowAtTipSpec
+import qualified DbSync.Phase.FollowShutdownSpec as PhaseFollowShutdownSpec
 import qualified DbSync.Phase.FollowEpochBoundarySpec as PhaseFollowEpochBoundarySpec
 import qualified DbSync.Phase.FollowGovernanceSpec as PhaseFollowGovernanceSpec
 import qualified DbSync.Phase.GovernanceGenesisSpec as PhaseGovernanceGenesisSpec
@@ -292,6 +293,7 @@ main = hspec $ do
     PhaseFollowNodeRestartSpec.spec
     PhaseFollowReplayOnBootSpec.spec
     PhaseFollowAtTipSpec.spec
+    PhaseFollowShutdownSpec.spec
     PhaseFollowEpochBoundarySpec.spec
     PhaseBoundaryRecrossSpec.spec
     PhaseFollowScriptsDatumsSpec.spec

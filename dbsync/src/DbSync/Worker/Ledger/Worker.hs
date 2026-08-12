@@ -25,6 +25,9 @@ import qualified Control.Concurrent.Class.MonadSTM.Strict as Strict
 import Control.Concurrent.STM (TBQueue, readTBQueue)
 import qualified Data.Strict.Maybe as SMaybe
 
+import GHC.Conc (threadStatus)
+import System.Timeout (timeout)
+
 import Cardano.Slotting.Slot (EpochNo (..), SlotNo (..), WithOrigin (..))
 import Control.Tracer (traceWith)
 import Ouroboros.Consensus.Block (blockSlot)
@@ -121,6 +124,7 @@ chainSyncWorkerLoop env hooks = do
     (Just (leTracer env))
     (applyForward env hooks)
     (handleRollback env)
+    (leStopVar env)
     (leLedgerQueue env)
 
 -- | Production forward handler. Applies the block; the two TMVar
@@ -184,18 +188,27 @@ chainSyncDispatchLoop
   :: Maybe AppTracer
   -> (CardanoBlock StandardCrypto -> IO ())
   -> (CardanoPoint -> IO ())
+  -> Strict.StrictTVar IO Bool -- ^ shutdown flag; set it to stop the loop
   -> TBQueue ChainSyncMsg
   -> IO ()
-chainSyncDispatchLoop mTracer forwardH rollbackH queue =
+chainSyncDispatchLoop mTracer forwardH rollbackH stopVar queue =
   loop `catch` \(e :: SomeException) -> do
     for_ mTracer (logThreadExit "LedgerWorker" e)
     throwIO e
   where
-    loop = forever $ do
-      msg <- atomically $ readTBQueue queue
-      case msg of
-        MsgForward  blk -> forwardH blk
-        MsgRollback p   -> rollbackH p
+    loop = do
+      -- Queue first, so blocks already handed over still get applied.
+      mMsg <- atomically $
+        (Just <$> readTBQueue queue)
+          `Strict.orElse` (Nothing <$ (Strict.readTVar stopVar >>= Strict.check))
+      case mMsg of
+        Nothing -> for_ mTracer $ \t -> traceWith t $
+          LogMsg Info "LedgerWorker" "shutdown requested; worker exiting"
+        Just msg -> do
+          case msg of
+            MsgForward  blk -> forwardH blk
+            MsgRollback p   -> rollbackH p
+          loop
 
 -- | Worker loop parameterised by the per-block hooks. Tests inject a
 -- fake apply hook and pass 'Nothing' for the tracer to stay quiet.
@@ -230,8 +243,8 @@ runLedgerWorkerWith mTracer hooks queue epochReady epochWait =
 {-# SCC runLedgerWorkerWith #-}
 
 -- | Run the ledger worker and snapshot-writer asyncs around the inner
--- action, and cancel both when it exits or raises. A no-op when the
--- ledger feature is disabled.
+-- action, then stop both through 'leStopVar' and wait for them. A
+-- no-op when the ledger feature is disabled.
 withLedgerThreads
   :: HasLedgerEnv
   -> Maybe SlotNo
@@ -244,4 +257,27 @@ withLedgerThreads hasLE@(LedgerEnabled lenv) replayBoundary sqv inner =
     link w
     withAsync (runLedgerStateWriteThread hasLE) $ \s -> do
       link s
-      inner
+      inner `finally` do
+        note "Stopping ledger threads..."
+        atomically $ Strict.writeTVar (leStopVar lenv) True
+        _ <- waitCatch s
+        -- The worker drains its queue before honouring the flag. Bound the
+        -- wait: if it is wedged on a blocking point the flag does not cover,
+        -- an idle process delivers neither throwTo nor RTS deadlock
+        -- detection promptly, so an unbounded wait here becomes a
+        -- minutes-long silent shutdown hang.
+        mr <- timeout workerStopGraceMicros (waitCatch w)
+        case mr of
+          Just _ -> note "Ledger threads stopped."
+          Nothing -> do
+            st <- threadStatus (asyncThreadId w)
+            traceWith (leTracer lenv) $ LogMsg Warning "App" $
+              "Ledger worker still not stopped "
+                <> show (workerStopGraceMicros `div` 1_000_000)
+                <> "s after the stop flag (thread status: " <> show st
+                <> "); abandoning the wait and proceeding with shutdown"
+  where
+    note msg = traceWith (leTracer lenv) (LogMsg Info "App" msg)
+
+    workerStopGraceMicros :: Int
+    workerStopGraceMicros = 15_000_000

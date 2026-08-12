@@ -133,5 +133,9 @@ jobs:
 
       # -j1: the integration and e2e tiers share the single dbsync_test
       # database, and one spec issues DROP SCHEMA public CASCADE.
+      #
+      # timeout-minutes: a wedged suite fails visibly here instead of
+      # burning the runner's 6h default in silence.
       - name: Test
+        timeout-minutes: 25
         run: cabal test all -j1 --test-show-details=direct

@@ -10,7 +10,7 @@ repository cardano-haskell-packages
     d4a35cd3121aa00d18544bb0ac01c3e1691d618f462c46129271bccf39f7e8ee
 
 index-state:
-  , hackage.haskell.org 2026-06-23T11:04:38Z
+  , hackage.haskell.org 2026-07-22T00:00:00Z
   , cardano-haskell-packages 2026-05-21T00:00:00Z
 
 active-repositories:
@@ -142,27 +142,16 @@ write-ghc-environment-files: always
 -- Source repository packages
 -- ---------------------------------------------------------------------------
 --
--- Both stanzas pin against personal forks while EarlyN2C work is in flight.
--- Workflow when iterating:
---   1. Commit + push to the fork branch named in the `branch:` comment.
---   2. Copy the new commit SHA into the matching `tag:` line below.
---   3. `cabal build all` -- cabal sees the changed tag, re-fetches.
--- (Branch names alone won't trigger a refetch: cabal caches by tag-value.)
--- Once the work is upstreamed / nix is in, switch back to upstream tags
--- and add `--sha256:` lines.
+-- cardano-node is not published to CHaP as a library, so it is pinned to the
+-- upstream release tag. ouroboros-consensus (with its lsm / cardano / protocol
+-- / diffusion sublibraries), ouroboros-network, lsm-tree and blockio all
+-- resolve from CHaP / Hackage via the index-state above.
 
 source-repository-package
-  -- branch: early-n2c on git@github.com:Cmdv/cardano-node.git
   type: git
-  location: https://github.com/Cmdv/cardano-node
-  tag: e1649fa092e484faf26a8d9e83efc02147fffac4
+  location: https://github.com/IntersectMBO/cardano-node
+  tag: 11.0.1
   subdir:
     cardano-node
     trace-forward
     trace-resources
-
-source-repository-package
-  -- branch: early-n2c-11.0.1 on git@github.com:Cmdv/ouroboros-consensus.git
-  type: git
-  location: https://github.com/Cmdv/ouroboros-consensus
-  tag: e2835a74abd0ba1e489eae5e01edec6cb8a63c1d

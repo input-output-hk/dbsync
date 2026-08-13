@@ -268,9 +268,8 @@ library
     -- Internal
     , dbsync-db
 
-    -- Cardano ecosystem (from CHaP)
-    -- Pins removed: we rely on index-state + CHaP to resolve to the
-    -- cardano-node 10.7.1 / LedgerDB V2 ecosystem (see cabal.project).
+    -- Cardano ecosystem (CHaP, pinned by index-state to the versions
+    -- cardano-node 11.0.1 uses; ouroboros-consensus resolves to 3.0.1.0).
     , cardano-binary
     , cardano-crypto
     , cardano-crypto-wrapper

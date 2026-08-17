@@ -86,8 +86,8 @@ manifest + smoke ~1 min.
 - **Cost of iteration** depends on where it failed: anything before or
   after the `cabal build --only-dependencies` layer is minutes; a
   failure *inside* that layer costs a full cold rebuild (buildx only
-  exports the registry cache on success). Early steps (ghcup, protoc,
-  `build-iog-libs.sh`) reproduce locally in minutes with
+  exports the registry cache on success). Early steps (GHC/cabal
+  bindists, protoc, `build-iog-libs.sh`) reproduce locally in minutes with
   `docker build --target builder .` — the failing step aborts the build
   long before the expensive layer.
 

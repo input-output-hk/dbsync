@@ -20,17 +20,42 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG PROTOC_VERSION=25.1
 RUN arch="$(uname -m)" \
     && case "$arch" in x86_64) parch=x86_64 ;; aarch64) parch=aarch_64 ;; *) echo "unsupported arch $arch" >&2; exit 1 ;; esac \
-    && curl -sfL "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-${parch}.zip" -o /tmp/protoc.zip \
+    && curl -sfL --retry 10 --retry-delay 6 "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-${parch}.zip" -o /tmp/protoc.zip \
     && unzip -q /tmp/protoc.zip -d /usr/local bin/protoc 'include/*' \
     && rm /tmp/protoc.zip
 
+# GHC + cabal bindists straight from downloads.haskell.org — ghcup's metadata
+# lives on raw.githubusercontent.com, which 429s the shared runner IPs. URLs
+# and sha256s are the ones ghcup's own metadata pins for this base per arch;
+# re-read them from ghcup-0.1.0.yaml when bumping either version.
 ARG GHC_VERSION=9.14.1
 ARG CABAL_VERSION=3.16.1.0
-RUN curl -sfL "https://downloads.haskell.org/~ghcup/$(uname -m)-linux-ghcup" -o /usr/local/bin/ghcup \
-    && chmod +x /usr/local/bin/ghcup \
-    && ghcup install ghc "$GHC_VERSION" --set \
-    && ghcup install cabal "$CABAL_VERSION" --set
-ENV PATH=/root/.ghcup/bin:$PATH
+RUN set -eu; arch="$(uname -m)"; \
+    case "$arch" in \
+      x86_64) \
+        ghc_url="https://downloads.haskell.org/~ghc/${GHC_VERSION}/ghc-${GHC_VERSION}-x86_64-ubuntu22_04-linux.tar.xz"; \
+        ghc_sha=29410b9856dcb47fe5038e69478fbcf96137166ced8a789e566440747c2b9393; \
+        cabal_url="https://downloads.haskell.org/~ghcup/unofficial-bindists/cabal/${CABAL_VERSION}/cabal-install-${CABAL_VERSION}-x86_64-linux-glibc.tar.xz"; \
+        cabal_sha=dbb9e9964a918602924cf9f3aa6e21962c449bfce9f7a1c00504b5d3787af41a ;; \
+      aarch64) \
+        ghc_url="https://downloads.haskell.org/~ghc/${GHC_VERSION}/ghc-${GHC_VERSION}-aarch64-deb10-linux.tar.xz"; \
+        ghc_sha=526c352cceddbf6c580e17ade7e782e3b21b4182d328b2d454c9f13ca7c08992; \
+        cabal_url="https://downloads.haskell.org/~ghcup/unofficial-bindists/cabal/${CABAL_VERSION}/cabal-install-${CABAL_VERSION}-aarch64-linux-deb10.tar.xz"; \
+        cabal_sha=f90264ff9503f638ada33353c0b39dd99d30f7849c5fa373d1abcbf0bc01945e ;; \
+      *) echo "unsupported arch $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -sfL --retry 10 --retry-delay 6 "$ghc_url" -o /tmp/ghc.tar.xz; \
+    echo "$ghc_sha  /tmp/ghc.tar.xz" | sha256sum -c -; \
+    tar -xJf /tmp/ghc.tar.xz -C /tmp; \
+    ( cd "/tmp/ghc-${GHC_VERSION}-${arch}-unknown-linux" \
+      && ./configure --prefix=/usr/local && make install ); \
+    rm -rf /tmp/ghc.tar.xz "/tmp/ghc-${GHC_VERSION}-${arch}-unknown-linux"; \
+    curl -sfL --retry 10 --retry-delay 6 "$cabal_url" -o /tmp/cabal.tar.xz; \
+    echo "$cabal_sha  /tmp/cabal.tar.xz" | sha256sum -c -; \
+    mkdir /tmp/cabal; tar -xJf /tmp/cabal.tar.xz -C /tmp/cabal; \
+    install -m 755 /tmp/cabal/cabal /usr/local/bin/cabal; \
+    rm -rf /tmp/cabal.tar.xz /tmp/cabal; \
+    ghc --version; cabal --version
 
 # IOG C libs (libsodium VRF fork, secp256k1, blst), static-only, revisions
 # pinned to cardano-node's own flake.lock — see scripts/release/.
@@ -77,7 +102,8 @@ RUN set -eu; \
       mkdir -p "/opt/cardano/$net"; \
       for f in config.json byron-genesis.json shelley-genesis.json \
                alonzo-genesis.json conway-genesis.json; do \
-        curl -sfL "https://book.play.dev.cardano.org/environments/$net/$f" \
+        curl -sfL --retry 10 --retry-delay 6 \
+          "https://book.play.dev.cardano.org/environments/$net/$f" \
           -o "/opt/cardano/$net/$f"; \
       done; \
     done

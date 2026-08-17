@@ -192,5 +192,6 @@ jobs:
             ```
 
             Linux binaries are dynamically linked against glibc ≥ 2.35
-            (Ubuntu 22.04+); runtime packages: libpq5 libsnappy1v5 liburing2
-            libgmp10. The IOG crypto libraries are statically linked.
+            (Ubuntu 22.04+); runtime packages: libpq5 liblmdb0 libsnappy1v5
+            liburing2 libgmp10. The IOG crypto libraries are statically
+            linked.

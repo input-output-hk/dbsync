@@ -10,9 +10,9 @@ FROM ubuntu:22.04 AS builder
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
 RUN apt-get update && apt-get install -y --no-install-recommends \
       autoconf automake build-essential ca-certificates curl git jq \
-      libffi-dev libgmp-dev libncurses-dev libnuma-dev libpq-dev \
-      libsnappy-dev libtinfo-dev libtool liburing-dev pkg-config unzip \
-      zlib1g-dev \
+      libffi-dev libgmp-dev liblmdb-dev libncurses-dev libnuma-dev \
+      libpq-dev libsnappy-dev libtinfo-dev libtool liburing-dev \
+      pkg-config unzip zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # protoc from the official release: jammy's 3.12 predates proto3 optional,
@@ -89,8 +89,8 @@ RUN set -eu; \
 FROM ubuntu:22.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates libffi8 libgmp10 libnuma1 libpq5 libsnappy1v5 \
-      libstdc++6 libtinfo6 liburing2 zlib1g \
+      ca-certificates libffi8 libgmp10 liblmdb0 libnuma1 libpq5 \
+      libsnappy1v5 libstdc++6 libtinfo6 liburing2 zlib1g \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --create-home --uid 10001 dbsync \
     && install -d -o dbsync -g dbsync /ipc /var/lib/dbsync

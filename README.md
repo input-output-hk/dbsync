@@ -37,6 +37,16 @@ Byron through Conway, governance included: **16 independent projections across
 - **Checkable against the original.** The repo ships `dbsync-compare`, which
   diffs this database against an original cardano-db-sync one table by table and row by row.
 
+## Documentation
+
+<div align="center">
+
+| [**User documentation**](https://input-output-hk.github.io/dbsync/users/intro) | [**Developer documentation**](https://input-output-hk.github.io/dbsync/developers/intro) |
+| :---: | :---: |
+| Install, configure, run, and operate dbsync. | Architecture, extractors, contribution guide. |
+
+</div>
+
 ## Performance
 
 Genesis to mainnet tip in **~9 hours**.
@@ -146,16 +156,6 @@ each usable on its own:
 - **Re-derivation** — re-reads blocks from your own node and compares row by
   row. Costs one chain pass, and is the complete answer for anyone whose data
   has to be right.
-
-## Documentation
-
-| | |
-|---|---|
-| **[User documentation](https://input-output-hk.github.io/dbsync/users/intro)** | Install, configure, run, and operate dbsync. |
-| **[Preset configs](https://input-output-hk.github.io/dbsync/users/profiles/presets)** | What each profile contains and who it suits. |
-| **[Running dbsync](https://input-output-hk.github.io/dbsync/users/running)** | CLI flags, credentials, first-run expectations. |
-| **[Developer documentation](https://input-output-hk.github.io/dbsync/developers/intro)** | Architecture, extractors, contribution guide. |
-| **[Extractor reference](https://input-output-hk.github.io/dbsync/developers/extractors/existing)** | Every projection and the tables it owns. |
 
 ## Repository layout
 

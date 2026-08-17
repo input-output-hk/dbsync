@@ -1,0 +1,10 @@
+# Keep the build context to what `cabal build dbsync:exe:dbsync` needs.
+.git
+.github
+dist-newstyle
+**/dist-newstyle
+docs
+
+# Would silently change the build plan inside the image.
+cabal.project.local
+cabal.project.freeze

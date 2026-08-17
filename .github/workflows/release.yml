@@ -1,0 +1,198 @@
+name: Release
+
+# Tag runs build everything into a *draft* release and push the
+# version-tagged image; nothing is announced and `:latest` never moves here.
+# Publishing the draft is the human gate — promote-release.yml then flips
+# `:latest`. A workflow_dispatch run is the same minus the draft release,
+# so the pipeline can be rehearsed from any branch.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Version & pin consistency
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      image: ${{ steps.meta.outputs.image }}
+      node_tag: ${{ steps.meta.outputs.node_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version, node tag, image name
+        id: meta
+        run: |
+          version=$(sed -n 's/^version:[[:space:]]*//p' dbsync/dbsync.cabal)
+          node_tag=$(awk '/location:.*IntersectMBO\/cardano-node$/ { found = 1; next }
+                          found && /tag:/ { print $2; exit }' cabal.project)
+          [ -n "$version" ] && [ -n "$node_tag" ]
+          {
+            echo "version=$version"
+            echo "node_tag=$node_tag"
+            echo "image=ghcr.io/${GITHUB_REPOSITORY@L}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Tag matches cabal version
+        if: github.ref_type == 'tag'
+        run: |
+          [ "$GITHUB_REF_NAME" = "v${{ steps.meta.outputs.version }}" ] || {
+            echo "tag $GITHUB_REF_NAME != v${{ steps.meta.outputs.version }} (dbsync/dbsync.cabal)" >&2
+            exit 1
+          }
+
+      # Fails if the cardano-node tag moved without regenerating the vendored
+      # IOG C library pins — never silently ship a stale libsodium/blst.
+      - name: IOG lib pins are fresh
+        run: scripts/release/update-iog-lib-pins.sh --check
+
+  build-linux:
+    name: linux/${{ matrix.arch }} image + tarball
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            asset_arch: x86_64
+          # Native arm runner — never QEMU for a GHC build.
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            asset_arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ${{ needs.check.outputs.image }}
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Registry layer cache: the dependency layer is far larger than the
+      # 10 GB GHA cache quota, so it lives as a buildcache image per arch.
+      - name: Build image (push by digest)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache-${{ matrix.arch }}
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache-${{ matrix.arch }},mode=max
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest='${{ steps.build.outputs.digest }}'
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+
+      # Same build, different target: the artifact stage is fully cached, so
+      # this only exports the binary out of the builder.
+      - name: Extract binary
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          target: artifact
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache-${{ matrix.arch }}
+          outputs: type=local,dest=out
+
+      - name: Tarball
+        run: |
+          tar -C out -czf "dbsync-$VERSION-linux-${{ matrix.asset_arch }}.tar.gz" dbsync
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball-linux-${{ matrix.asset_arch }}
+          path: dbsync-*.tar.gz
+          if-no-files-found: error
+
+  docker-manifest:
+    name: Multi-arch manifest
+    needs: [check, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ${{ needs.check.outputs.image }}
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # No :latest here — publishing the draft GitHub Release promotes it
+      # (promote-release.yml).
+      - name: Create manifest
+        run: |
+          cd /tmp/digests
+          # shellcheck disable=SC2046
+          docker buildx imagetools create -t "$IMAGE:$VERSION" $(printf "$IMAGE@sha256:%s " *)
+
+      - name: Smoke test
+        run: docker run --rm "$IMAGE:$VERSION" --help
+
+  release:
+    name: Draft GitHub release
+    if: github.ref_type == 'tag'
+    needs: [check, build-linux, docker-manifest]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tarball-*
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: cd dist && sha256sum -- * > SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: dist/*
+          body: |
+            Tested with cardano-node **${{ needs.check.outputs.node_tag }}**.
+
+            Docker image (linux/amd64, linux/arm64):
+
+            ```
+            docker pull ${{ needs.check.outputs.image }}:${{ needs.check.outputs.version }}
+            ```
+
+            Linux binaries are dynamically linked against glibc ≥ 2.35
+            (Ubuntu 22.04+); runtime packages: libpq5 liblmdb0 libsnappy1v5
+            liburing2 libgmp10. The IOG crypto libraries are statically
+            linked.

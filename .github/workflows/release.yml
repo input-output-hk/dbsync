@@ -1,8 +1,10 @@
 name: Release
 
-# Tags-only cadence (plus manual dry-runs). A dispatch run builds and pushes
-# the version-tagged image but never `latest` and never a GitHub Release, so
-# the whole pipeline can be rehearsed from a branch.
+# Tag runs build everything into a *draft* release and push the
+# version-tagged image; nothing is announced and `:latest` never moves here.
+# Publishing the draft is the human gate — promote-release.yml then flips
+# `:latest`. A workflow_dispatch run is the same minus the draft release,
+# so the pipeline can be rehearsed from any branch.
 on:
   push:
     tags: ['v*']
@@ -148,15 +150,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # No :latest here — publishing the draft GitHub Release promotes it
+      # (promote-release.yml).
       - name: Create manifest
         run: |
-          tags="-t $IMAGE:$VERSION"
-          if [ '${{ github.ref_type }}' = tag ]; then
-            tags="$tags -t $IMAGE:latest"
-          fi
           cd /tmp/digests
           # shellcheck disable=SC2046
-          docker buildx imagetools create $tags $(printf "$IMAGE@sha256:%s " *)
+          docker buildx imagetools create -t "$IMAGE:$VERSION" $(printf "$IMAGE@sha256:%s " *)
 
       - name: Smoke test
         run: docker run --rm "$IMAGE:$VERSION" --help
@@ -181,6 +181,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           draft: true
+          generate_release_notes: true
           files: dist/*
           body: |
             Tested with cardano-node **${{ needs.check.outputs.node_tag }}**.

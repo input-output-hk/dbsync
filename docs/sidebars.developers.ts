@@ -36,6 +36,7 @@ const sidebars: SidebarsConfig = {
     'db-compare',
     'repository-layout',
     'contributing',
+    'releasing',
   ],
 };
 

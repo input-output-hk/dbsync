@@ -1,0 +1,29 @@
+name: Promote release
+
+# Publishing the draft GitHub Release is the human gate of the release
+# cycle: only then does the already-built version image become `:latest`.
+# Fails loudly if the version image was never built.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  promote:
+    name: Point :latest at the released version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Retag
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY@L}"
+          version="${GITHUB_REF_NAME#v}"
+          docker buildx imagetools create -t "$image:latest" "$image:$version"

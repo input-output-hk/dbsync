@@ -29,7 +29,10 @@ fetch() { # owner/repo, rev, dest — full clone: blst needs tags for its versio
 fetch "$SODIUM_REPO" "$SODIUM_REV" "$workdir/sodium"
 (
   cd "$workdir/sodium"
-  ./autogen.sh
+  # Skip autogen's config.guess/config.sub refresh: savannah's gitweb serves
+  # an anti-bot HTML page to curl, which then shadows the good scripts
+  # autoreconf just installed. Those cover every target we build.
+  DO_NOT_UPDATE_CONFIG_SCRIPTS=1 ./autogen.sh
   ./configure --prefix="$prefix" --disable-shared --enable-static --with-pic
   make -j"$jobs"
   make install

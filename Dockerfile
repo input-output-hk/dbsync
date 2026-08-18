@@ -74,7 +74,7 @@ COPY dbsync-smash/dbsync-smash.cabal dbsync-smash/
 COPY tests/dbsync-tests.cabal tests/
 COPY tests/dbsync-mock/dbsync-mock.cabal tests/dbsync-mock/
 RUN cabal update
-RUN cabal build dbsync:exe:dbsync --only-dependencies
+RUN cabal build all --only-dependencies
 
 COPY . .
 RUN cabal build dbsync:exe:dbsync \

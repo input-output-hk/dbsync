@@ -111,17 +111,24 @@
           inputMap = { "https://chap.intersectmbo.org/" = inputs.CHaP; };
 
           modules = [
-            {
-              doHaddock = false;
+            ({ pkgs, ... }:
+              let
+                # protoc for proto-lens code generation. haskell.nix musl
+                # builds export LD_LIBRARY_PATH pointing at the musl
+                # cross-gcc's libs (for TH that loads C++); the native glibc
+                # protoc picks up the musl libstdc++ from it and segfaults,
+                # so scrub the variable around the invocation.
+                protoc = pkgs.buildPackages.writeShellScriptBin "protoc" ''
+                  unset LD_LIBRARY_PATH
+                  exec ${pkgs.buildPackages.protobuf}/bin/protoc "$@"
+                '';
+              in {
+                doHaddock = false;
 
-              # protoc for proto-lens code generation.
-              packages.proto-lens-protobuf-types.components.library.build-tools =
-                [ pkgs.buildPackages.protobuf ];
-              packages.cardano-rpc.components.library.build-tools =
-                [ pkgs.buildPackages.protobuf ];
-              packages.cardano-rpc.components.sublibs.gen.build-tools =
-                [ pkgs.buildPackages.protobuf ];
-            }
+                packages.proto-lens-protobuf-types.components.library.build-tools = [ protoc ];
+                packages.cardano-rpc.components.library.build-tools = [ protoc ];
+                packages.cardano-rpc.components.sublibs.gen.build-tools = [ protoc ];
+              })
 
             # Static libpq carries no dependency metadata: pull in pgcommon /
             # pgport and OpenSSL explicitly (-lssl must precede -lcrypto).

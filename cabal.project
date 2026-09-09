@@ -151,6 +151,7 @@ source-repository-package
   type: git
   location: https://github.com/IntersectMBO/cardano-node
   tag: 11.0.1
+  --sha256: sha256-+dod+EL73MICgbgflyJnwDlxbCeaBbBLrr2tLX59hAA=
   subdir:
     cardano-node
     trace-forward

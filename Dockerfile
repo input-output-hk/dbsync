@@ -128,6 +128,7 @@ RUN rm /opt/dbsync/profiles/pg-config.example.json
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 USER dbsync
-ENV SOCKET_PATH=/ipc/node.socket \
+ENV LANG=C.UTF-8 \
+    SOCKET_PATH=/ipc/node.socket \
     LEDGER_STATE_DIR=/var/lib/dbsync
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

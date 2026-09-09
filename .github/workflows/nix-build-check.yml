@@ -16,7 +16,6 @@ jobs:
         with:
           extra_nix_config: |
             accept-flake-config = true
-      - uses: DeterminateSystems/magic-nix-cache-action@v9
       - run: nix build .#dbsync-static --print-build-logs
       - run: file result/bin/dbsync
       - run: ldd result/bin/dbsync || true
@@ -35,7 +34,6 @@ jobs:
         with:
           extra_nix_config: |
             accept-flake-config = true
-      - uses: DeterminateSystems/magic-nix-cache-action@v9
       - run: nix build .#dbsync-static --print-build-logs
       - run: file result/bin/dbsync
       - run: ldd result/bin/dbsync || true
@@ -54,7 +52,6 @@ jobs:
         with:
           extra_nix_config: |
             accept-flake-config = true
-      - uses: DeterminateSystems/magic-nix-cache-action@v9
       - run: nix build .#dbsync-macos --print-build-logs
       - run: otool -L result/bin/dbsync
       - run: codesign -dv result/bin/dbsync

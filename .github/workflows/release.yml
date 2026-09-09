@@ -5,6 +5,10 @@ name: Release
 # Publishing the draft is the human gate — promote-release.yml then flips
 # `:latest`. A workflow_dispatch run is the same minus the draft release,
 # so the pipeline can be rehearsed from any branch.
+#
+# Binaries are nix-built (flake.nix) against cache.iog.io: if Hydra already
+# built the revision the builds are substitutions (minutes); a cold build
+# takes hours but never blocks on IOG infra.
 on:
   push:
     tags: ['v*']
@@ -45,13 +49,13 @@ jobs:
             exit 1
           }
 
-      # Fails if the cardano-node tag moved without regenerating the vendored
-      # IOG C library pins — never silently ship a stale libsodium/blst.
-      - name: IOG lib pins are fresh
-        run: scripts/release/update-iog-lib-pins.sh --check
+      # Fails if flake.lock's crypto-lib revisions (sodium/secp256k1/blst via
+      # iohkNix) drifted from cardano-node's own at the cabal.project tag.
+      - name: Crypto pins match cardano-node
+        run: scripts/release/check-crypto-pins.sh
 
   build-linux:
-    name: linux/${{ matrix.arch }} image + tarball
+    name: linux/${{ matrix.arch }} static binary
     needs: check
     strategy:
       fail-fast: false
@@ -65,61 +69,27 @@ jobs:
             runner: ubuntu-24.04-arm
             asset_arch: aarch64
     runs-on: ${{ matrix.runner }}
-    permissions:
-      contents: read
-      packages: write
     env:
-      IMAGE: ${{ needs.check.outputs.image }}
       VERSION: ${{ needs.check.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
+      - uses: input-output-hk/install-nix-action@v31
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          extra_nix_config: |
+            accept-flake-config = true
 
-      # Registry layer cache: the dependency layer is far larger than the
-      # 10 GB GHA cache quota, so it lives as a buildcache image per arch.
-      - name: Build image (push by digest)
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/${{ matrix.arch }}
-          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache-${{ matrix.arch }}
-          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache-${{ matrix.arch }},mode=max
-          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+      - name: Build static binary
+        run: nix build .#dbsync-static --print-build-logs
 
-      - name: Export digest
+      - name: Static sanity + --help in bare alpine (no glibc at all)
         run: |
-          mkdir -p /tmp/digests
-          digest='${{ steps.build.outputs.digest }}'
-          touch "/tmp/digests/${digest#sha256:}"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: digest-${{ matrix.arch }}
-          path: /tmp/digests/*
-          if-no-files-found: error
-
-      # Same build, different target: the artifact stage is fully cached, so
-      # this only exports the binary out of the builder.
-      - name: Extract binary
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/${{ matrix.arch }}
-          target: artifact
-          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache-${{ matrix.arch }}
-          outputs: type=local,dest=out
+          file result/bin/dbsync
+          ldd result/bin/dbsync || true
+          docker run --rm -v "$PWD/result/bin:/b:ro" alpine /b/dbsync --help
 
       - name: Tarball
-        run: |
-          tar -C out -czf "dbsync-$VERSION-linux-${{ matrix.asset_arch }}.tar.gz" dbsync
+        run: tar -C result/bin -czf "dbsync-$VERSION-linux-${{ matrix.asset_arch }}.tar.gz" dbsync
 
       - uses: actions/upload-artifact@v4
         with:
@@ -127,8 +97,40 @@ jobs:
           path: dbsync-*.tar.gz
           if-no-files-found: error
 
-  docker-manifest:
-    name: Multi-arch manifest
+  build-macos:
+    name: macOS aarch64 tarball
+    needs: check
+    runs-on: macos-15
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: input-output-hk/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            accept-flake-config = true
+
+      - name: Build relocatable binary
+        run: nix build .#dbsync-macos --print-build-logs
+
+      - name: Smoke test
+        run: |
+          otool -L result/bin/dbsync
+          ./result/bin/dbsync --help
+
+      # bin/ holds the executable plus its rewritten dylibs — ship all of it.
+      - name: Tarball
+        run: tar -C result/bin -czf "dbsync-$VERSION-macos-aarch64.tar.gz" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball-macos-aarch64
+          path: dbsync-*.tar.gz
+          if-no-files-found: error
+
+  docker:
+    name: Multi-arch image
     needs: [check, build-linux]
     runs-on: ubuntu-latest
     permissions:
@@ -138,11 +140,25 @@ jobs:
       IMAGE: ${{ needs.check.outputs.image }}
       VERSION: ${{ needs.check.outputs.version }}
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
-          pattern: digest-*
-          path: /tmp/digests
+          pattern: tarball-linux-*
+          path: dist
           merge-multiple: true
+
+      # The Dockerfile COPYs docker/bin/${TARGETARCH}/dbsync.
+      - name: Stage binaries per arch
+        run: |
+          mkdir -p docker/bin/amd64 docker/bin/arm64
+          tar -C docker/bin/amd64 -xzf "dist/dbsync-$VERSION-linux-x86_64.tar.gz"
+          tar -C docker/bin/arm64 -xzf "dist/dbsync-$VERSION-linux-aarch64.tar.gz"
+
+      # QEMU only runs the image's small apt-get/useradd layers for the
+      # arm64 leg — the binary is prebuilt, nothing expensive is emulated.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
         with:
@@ -152,19 +168,41 @@ jobs:
 
       # No :latest here — publishing the draft GitHub Release promotes it
       # (promote-release.yml).
-      - name: Create manifest
-        run: |
-          cd /tmp/digests
-          # shellcheck disable=SC2046
-          docker buildx imagetools create -t "$IMAGE:$VERSION" $(printf "$IMAGE@sha256:%s " *)
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ env.IMAGE }}:${{ env.VERSION }}
+          push: true
 
-      - name: Smoke test
+      - name: Smoke test (amd64)
         run: docker run --rm "$IMAGE:$VERSION" --help
+
+  # Catches a wrong-architecture binary in the arm64 leg — the amd64 smoke
+  # test can't, and buildx won't run the target arch's binary during build.
+  smoke-arm64:
+    name: arm64 image smoke test
+    needs: [check, docker]
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      packages: read
+    env:
+      IMAGE: ${{ needs.check.outputs.image }}
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - run: docker run --rm "$IMAGE:$VERSION" --help
 
   release:
     name: Draft GitHub release
     if: github.ref_type == 'tag'
-    needs: [check, build-linux, docker-manifest]
+    needs: [check, build-macos, docker, smoke-arm64]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -192,7 +230,7 @@ jobs:
             docker pull ${{ needs.check.outputs.image }}:${{ needs.check.outputs.version }}
             ```
 
-            Linux binaries are dynamically linked against glibc ≥ 2.35
-            (Ubuntu 22.04+); runtime packages: libpq5 liblmdb0 libsnappy1v5
-            liburing2 libgmp10. The IOG crypto libraries are statically
-            linked.
+            Linux binaries are fully static (musl) — no runtime library
+            dependencies, any distro. The macOS binary is native
+            aarch64 with its dylibs bundled relocatable — no nix or
+            homebrew needed.

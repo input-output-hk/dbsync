@@ -14,6 +14,9 @@ hie-bios/
 .envrc
 result*
 
+# Binaries staged for docker buildx (release.yml / local image builds)
+docker/bin/
+
 # MacOS
 .DS_Store
 

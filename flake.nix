@@ -36,6 +36,16 @@
           overlays = builtins.attrValues inputs.iohkNix.overlays ++ [
             inputs.haskellNix.overlay
 
+            # iohk-nix's haskellBuildUtils (rewrite-libs, used for the
+            # macOS release tarball) defaults to a GHC too old for this
+            # haskell.nix; pin it to ours.
+            (final: prev: {
+              haskellBuildUtils = prev.haskellBuildUtils.override {
+                compiler-nix-name = "ghc9141";
+                index-state = "2026-07-22T00:00:00Z";
+              };
+            })
+
             # pkgconfig-depends name -> nixpkgs attribute, for the system
             # libraries the cabal plan resolves via pkg-config.
             (final: prev: {
@@ -139,6 +149,30 @@
         } // lib.optionalAttrs (muslProject != null) {
           # Fully static: this is the release-tarball and docker-image binary.
           dbsync-static = muslProject.hsPkgs.dbsync.components.exes.dbsync;
+        } // lib.optionalAttrs (system == "aarch64-darwin") {
+          # Native build with its dylib deps copied alongside and
+          # install_name_tool-rewritten to @executable_path, then
+          # re-signed (required on Apple Silicon after any load-command
+          # edit) — runs standalone, no nix or homebrew needed.
+          dbsync-macos = pkgs.runCommand "dbsync-macos"
+            {
+              # rewrite-libs shells out to nix-store itself, hence pkgs.nix;
+              # darwin.sigtool provides a sandbox-safe codesign stand-in for
+              # the real Apple tool, which the build sandbox can't reach.
+              nativeBuildInputs = [
+                pkgs.haskellBuildUtils
+                pkgs.bintools
+                pkgs.nix
+                pkgs.darwin.sigtool
+              ];
+            }
+            ''
+              mkdir -p $out/bin
+              cp ${packages.dbsync}/bin/dbsync $out/bin/dbsync
+              chmod +w $out/bin/dbsync
+              rewrite-libs $out/bin $out/bin/dbsync
+              codesign -f -s - $out/bin/dbsync
+            '';
         };
       in
       {

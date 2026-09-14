@@ -126,7 +126,11 @@ import DbSync.Worker.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..))
 import DbSync.Worker.Ledger.Worker (withLedgerThreads)
 import DbSync.Worker.OffChain.Pool (closeOffChainPoolWorker)
 import DbSync.Worker.OffChain.Vote (closeOffChainVoteWorker)
-import DbSync.App.Setup (setupOffChainPoolWorker, setupOffChainVoteWorker)
+import DbSync.App.Setup
+  ( applyUtxoWriterOptions
+  , setupOffChainPoolWorker
+  , setupOffChainVoteWorker
+  )
 import DbSync.App.Config.Types
   ( Extractors (..)
   , SyncConfig (..)
@@ -947,14 +951,11 @@ runBootFollowRestart
 
           let mLastBlock = ssrLastCommittedBlockNo (frcSyncState frc)
               kBlocks    = ceSecurityParam coreEnv
-              consumedTracking =
-                if uoConsumedByTxId (exUtxo (scExtractors (ceConfig coreEnv)))
-                  then TrackConsumedBy
-                  else SkipConsumedBy
+              utxoOpts   = exUtxo (scExtractors (ceConfig coreEnv))
           withAsync (checkResumeGap tracer kBlocks mLastBlock rollbackBoundary) $ \gapThread -> do
             link gapThread
             runFollowSession tracer "Boot" iomgr hasqlSettings topLevelCfg
-              networkMagic socketPath intersectReq consumedTracking mShutdown mkEnv
+              networkMagic socketPath intersectReq utxoOpts mShutdown mkEnv
 
 -- | Open a dedicated Follow hasql connection, build its resolver and
 -- writer, pass them to the caller's 'FollowEnv' builder, and run
@@ -972,7 +973,7 @@ runFollowSession
   -> NetworkMagic
   -> FilePath                                          -- ^ socketPath
   -> IntersectionRequirement
-  -> ConsumedTracking
+  -> UtxoOption
   -> Maybe (IO ())                                     -- ^ mShutdown
   -> (Conn.Connection -> IdResolver IO -> Writer IO -> FollowEnv)
        -- ^ Receives the just-opened Follow connection with its
@@ -980,9 +981,11 @@ runFollowSession
   -> IO ()
 runFollowSession
   tracer component iomgr hasqlSettings topLevelCfg networkMagic
-  socketPath intersectReq consumedTracking mShutdown mkFollowEnv = do
+  socketPath intersectReq utxoOpts mShutdown mkFollowEnv = do
     followCtrl <- openControlConnection hasqlSettings
     let followConn = unControlConnection followCtrl
+        consumedTracking =
+          if uoConsumedByTxId utxoOpts then TrackConsumedBy else SkipConsumedBy
     -- @synchronous_commit = off@: a per-block COMMIT does not wait on
     -- the WAL fsync. Chainsync replay from @last_committed_slot@
     -- covers crash recovery.
@@ -991,7 +994,7 @@ runFollowSession
     -- Cooperative stop; 'Follow.run' explains why a cancellation is
     -- not safe here.
     stopVar <- newTVarIO False
-    let writer    = FollowingWriter.mkWriter followConn
+    let writer    = applyUtxoWriterOptions utxoOpts (FollowingWriter.mkWriter followConn)
         followEnv = mkFollowEnv followConn resolver writer
 
         followAction =

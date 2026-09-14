@@ -7,6 +7,7 @@ module DbSync.App.Setup
 
     -- * Extractor list construction (exported for testing)
   , buildExtractors
+  , applyUtxoWriterOptions
 
     -- * Constants
   , cardanoSecurityParam
@@ -48,6 +49,7 @@ import DbSync.Extractor.Registry (allKnownExtractors)
 import DbSync.Trace.Types (AppTracer, LogMsg (..), Severity (..), severityFromText)
 import DbSync.AppM (CoreM)
 import DbSync.Worker.OffChain.Http (newRestrictedManager)
+import DbSync.Writer (Writer (..))
 import DbSync.Worker.OffChain.Pool
   ( OffChainPoolWorker
   , defaultOffChainPoolConfig
@@ -136,6 +138,14 @@ buildExtractors pc =
       , ("off_chain_pools",         prEnabled (exOffChainPools pc))
       , ("off_chain_votes",         prEnabled (exOffChainVotes pc))
       ]
+
+-- | Disable the writer fields the utxo options turn off. Applied at
+-- every 'Writer' construction site (Ingest and Follow), so
+-- 'DbSync.Extractor.UTxO.processUTxO' never needs to read config.
+applyUtxoWriterOptions :: Applicative m => UtxoOption -> Writer m -> Writer m
+applyUtxoWriterOptions opts w
+  | uoTxIn opts = w
+  | otherwise   = w { writeTxIn = const (pure ()) }
 
 -- | Placeholder extractor — name only, no real extraction logic yet.
 stubExtractor :: Text -> ExtractorDef

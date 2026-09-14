@@ -14,6 +14,7 @@ module DbSync.Db.Statement.Indexes
   , ingestResolveIndexStatements
   , preResolveIndexStatements
   , postResolveIndexStatements
+  , consumedByResolveIndexStatement
   , resolveScaffoldingIndexNames
   , dropIndexSql
   , uniqueConstraintIndexName
@@ -379,6 +380,16 @@ preResolveIndexStatements =
       [withdrawalCols.wcTxId.tcName]
   ]
 
+-- | Scaffolding for the consumed-by fee/deposit backfill alternates
+-- (@utxo.tx_in@ off). Built on demand by Prep, torn down with the
+-- other scaffolding.
+consumedByResolveIndexStatement :: IndexStatement
+consumedByResolveIndexStatement =
+  renderIndex NonConcurrent NonUnique
+    "tx_out_consumed_by_scaffold_idx"
+    (tdName txOutTableDef)
+    [txOutCols.tocConsumedByTxId.tcName]
+
 -- | Built /after/ the CTAS rebuilds. The CTAS DROPs and replaces
 -- @tx_in@ and @collateral_tx_in@, so any index on those tables built
 -- earlier would be lost.
@@ -409,6 +420,7 @@ resolveScaffoldingIndexNames =
     ingestResolveIndexStatements
       <> preResolveIndexStatements
       <> postResolveIndexStatements
+      <> [consumedByResolveIndexStatement]
 
 dropIndexSql :: Text -> Text
 dropIndexSql idxName = "DROP INDEX IF EXISTS " <> quoteIdent idxName

@@ -126,6 +126,7 @@ import qualified DbSync.Phase.Following.RollbackSpec as PhaseRollbackSpec
 import qualified DbSync.Phase.Following.RunSpec as PhaseFollowRunSpec
 import qualified DbSync.Phase.Following.SameBlockSpendSpec as PhaseFollowSameBlockSpendSpec
 import qualified DbSync.Phase.Preparing.RunSpec as PhasePrepSpec
+import qualified DbSync.Phase.Preparing.TxInOffSpec as PhasePrepTxInOffSpec
 import qualified DbSync.Schema.InitSpec as SchemaInitSpec
 import qualified DbSync.Schema.Migration.LadderSpec as SchemaMigrationLadderSpec
 
@@ -277,6 +278,7 @@ main = hspec $ do
     PhaseFollowRunSpec.spec
     PhaseFollowSameBlockSpendSpec.spec
     PhasePrepSpec.spec
+    PhasePrepTxInOffSpec.spec
     PhaseRollbackSpec.cascadeSpec
     PhaseRollbackSpec.kSafetyGuardSpec
     PhaseRollbackSpec.rollbackToSlotSpec

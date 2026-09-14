@@ -345,11 +345,6 @@ instance FromJSON UtxoOption where
     consumedByTxId <- o .:? "consumed_by_tx_id" .!= uoConsumedByTxId defaultUtxoOption
     txIn           <- o .:? "tx_in"             .!= uoTxIn defaultUtxoOption
     strategy       <- o .:? "strategy"          .!= uoStrategy defaultUtxoOption
-    unless txIn $
-      Aeson.parseFail
-        "utxo.tx_in: false is not yet implemented. The deposit backfill \
-        \joins through tx_in.tx_out_id; an alternate backfill via \
-        \tx_out.consumed_by_tx_id is planned but not landed."
     case strategy of
       StrategyArchive    -> pure ()
       StrategyPrune      -> Aeson.parseFail

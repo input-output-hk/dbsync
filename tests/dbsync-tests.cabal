@@ -218,6 +218,7 @@ test-suite dbsync-test
     DbSync.Phase.MockNodeSpec
     DbSync.Phase.RecomputeInvariantsSpec
     DbSync.Phase.Preparing.RunSpec
+    DbSync.Phase.Preparing.TxInOffSpec
     DbSync.StateQuery.ObservedSummarySpec
     DbSync.StateQuery.SlotDetailsSpec
     DbSync.Trace.ReplaySpec

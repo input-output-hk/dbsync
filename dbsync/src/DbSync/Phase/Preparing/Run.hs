@@ -16,7 +16,8 @@ import Data.List (sortOn)
 import qualified Hasql.Connection.Settings as ConnSettings
 import qualified Hasql.Session as Sess
 
-import DbSync.App.Env (HasConfig)
+import DbSync.App.Config.Types (Extractors (..), SyncConfig (..), UtxoOption (..))
+import DbSync.App.Env (HasConfig (..))
 import DbSync.Db.Pool (forPooled_, usePool, withPrepPool)
 import DbSync.Db.Run (useConn)
 import DbSync.Db.Schema.Address (addressTableDef)
@@ -35,7 +36,9 @@ import DbSync.Db.Schema.UTxO
   , txOutTableDef
   )
 import DbSync.Db.Statement.Indexes
-  ( dropIndexSql
+  ( IndexStatement (..)
+  , consumedByResolveIndexStatement
+  , dropIndexSql
   , resolveScaffoldingIndexNames
   )
 import DbSync.Db.Transaction (HasHasqlConnection (..))
@@ -69,6 +72,13 @@ run
   -> [TableDef]
   -> m ()
 run connSettings tuning tables = step PhaseStep "post-load pass" $ do
+  utxoOpts <- asks (exUtxo . scExtractors . getConfig)
+  let inputSource
+        | not (hasTable (tdName txOutTableDef)) = Backfill.NoInputSource
+        | uoTxIn utxoOpts                       = Backfill.InputsViaTxIn
+        | uoConsumedByTxId utxoOpts             = Backfill.InputsViaConsumedBy
+        | otherwise                             = Backfill.NoInputSource
+
   -- Set first, so every later index build and ANALYZE on the control
   -- connection picks them up. Pool backends set the same GUCs in
   -- their initSession hook.
@@ -93,10 +103,18 @@ run connSettings tuning tables = step PhaseStep "post-load pass" $ do
     for_ (filter (hasTable . tdName) backfillAnalyzeTables) $ \td ->
       runDdl (analyzeSql (tdName td))
 
-  _ <- Backfill.backfillTxColumns tables
-  -- Needs both tables: the hash comes off the spent output that
-  -- @tx_in@ points at, and lands on a @redeemer@ row.
-  when (hasTable (tdName redeemerTableDef) && hasTable (tdName txInTableDef))
+  -- The consumed-by alternates correlate on @tx_out.consumed_by_tx_id@,
+  -- which has no index until the production build.
+  when (inputSource == Backfill.InputsViaConsumedBy) $
+    step IndexStep (isName consumedByResolveIndexStatement) $
+      runDdl (isSql consumedByResolveIndexStatement)
+
+  _ <- Backfill.backfillTxColumns inputSource tables
+  -- Needs both tables populated: the hash comes off the spent output
+  -- that @tx_in@ points at, and lands on a @redeemer@ row. With
+  -- @utxo.tx_in@ off the spend hashes are unrecoverable and stay NULL.
+  when (hasTable (tdName redeemerTableDef) && hasTable (tdName txInTableDef)
+          && uoTxIn utxoOpts)
     Backfill.rebuildSpendScriptHash
   _ <- Backfill.applyDepositPending
   step CleanupStep "truncate epoch_param_pending"

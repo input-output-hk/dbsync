@@ -51,6 +51,7 @@ import DbSync.App.Config.Types
   , UtxoOption (..)
   )
 import DbSync.App.Env (CoreEnv (..), FollowEnv (..), HasConfig (..), HasNetwork)
+import DbSync.App.Setup (applyUtxoWriterOptions)
 import DbSync.Extractor (ExtractorDef (..), cborCaptureEnabled, takeBlockLedgerData)
 import DbSync.Extractor.EpochBoundary (runEpochBoundary)
 import DbSync.Extractor.Governance (runGovernanceBoundary)
@@ -297,8 +298,9 @@ processForward progressRef replayRef lastAppliedRef cardanoBlock = do
       let !cborEnabled = cborCaptureEnabled (ceExtractors feCore)
           epochViewOn = any ((== tdName epochFinalizedTableDef) . tdName)
                             (concatMap pdTables (ceExtractors feCore))
+          utxoOpts = exUtxo (scExtractors (getConfig env))
           consumedTracking =
-            if uoConsumedByTxId (exUtxo (scExtractors (getConfig env)))
+            if uoConsumedByTxId utxoOpts
               then TrackConsumedBy
               else SkipConsumedBy
           !genBlock = parseBlock cborEnabled sd cardanoBlock
@@ -321,7 +323,7 @@ processForward progressRef replayRef lastAppliedRef cardanoBlock = do
         preAllocated <- allocateAllIds feHasqlConnection counts
         buf          <- newWriteBuffer
         resolver     <- mkBufferedFollowResolver feHasqlConnection preAllocated buf consumedTracking
-        let writer      = mkBufferedWriter buf
+        let writer      = applyUtxoWriterOptions utxoOpts (mkBufferedWriter buf)
             bufferedEnv = env { feResolver = resolver, feWriter = writer }
         runAppM bufferedEnv (processBlock genBlock)
         case (boundaryCrossed, prevEpoch) of

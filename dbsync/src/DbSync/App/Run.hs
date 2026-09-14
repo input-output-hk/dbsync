@@ -38,7 +38,8 @@ import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (listSnapshots)
 import Ouroboros.Network.Magic (NetworkMagic (..))
 
 import DbSync.App.Setup
-  ( buildCoreEnv
+  ( applyUtxoWriterOptions
+  , buildCoreEnv
   , runStartup
   , setupOffChainPoolWorker
   , setupOffChainVoteWorker
@@ -90,7 +91,6 @@ import DbSync.Db.Schema.Init
 import DbSync.Schema.Version (Fingerprint, currentSchemaVersion, unFingerprint)
 import DbSync.Extractor.Registry (declaredSchemaFingerprint)
 import DbSync.Extractor (ExtractorDef (..))
-import DbSync.Phase.Following.Resolver (ConsumedTracking (..))
 import DbSync.Phase.Ingest.DedupStore (DedupStores, closeStores)
 import DbSync.Phase.Ingest.Consumer (runConsumer)
 import DbSync.Phase.Ingest.Gauge (withPipelineGauge)
@@ -623,7 +623,10 @@ runIngestThenFollow
     latestTipBlock   <- newTVarIO Nothing
 
     let resolver = mkIngestResolver extractStateRef dedupStores addrBuffer utxoStore mConsumedByBuf
-        writer   = IngestWriter.mkWriter loaderStream
+        writer   =
+          applyUtxoWriterOptions
+            (exUtxo (scExtractors validConfig))
+            (IngestWriter.mkWriter loaderStream)
 
     let ingestEnv = IngestEnv
           { ieCore                    = coreEnv
@@ -849,12 +852,9 @@ handoffToFollow
 
     -- The receiver runs under 'followEnv', so its block queue and
     -- rollback-boundary refs are the ones 'IngestEnv' carried.
-    let consumedTracking =
-          if uoConsumedByTxId (exUtxo (scExtractors (ceConfig (ieCore ie))))
-            then TrackConsumedBy
-            else SkipConsumedBy
     runFollowSession tracer "App" iomgr hasqlSettings topLevelCfg
-      networkMagic socketPath intersectReq consumedTracking mShutdown
+      networkMagic socketPath intersectReq
+      (exUtxo (scExtractors (ceConfig (ieCore ie)))) mShutdown
       (mkFollowEnvFromIngest ie)
 
 

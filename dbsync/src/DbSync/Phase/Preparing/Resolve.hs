@@ -53,7 +53,9 @@ resolveInputTxOutIds = do
     runScript resolveReferenceTxInScript
   step AnalyzeStep "rebuilt input tables" $
     for_ rebuiltTables (runScript . analyzeSql . tdName)
-  when (uoConsumedByTxId utxoOpts) $
+  -- The residual joins @tx_in@, so it needs both flags: with
+  -- @utxo.tx_in@ off the per-epoch worker is the only source.
+  when (uoConsumedByTxId utxoOpts && uoTxIn utxoOpts) $
     void $ stepRows ResolveStep "tx_out.consumed_by_tx_id (residual)" $ do
       conn <- asks getHasqlConnection
       useConn "Phase.Preparing.Resolve" conn

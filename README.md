@@ -24,6 +24,74 @@ table via **profiles**.
 Byron through Conway, governance included: **16 independent projections across
 71 tables**, and you enable only the ones your queries need.
 
+## Quick start
+
+You'll need PostgreSQL ≥ 16 and a running `cardano-node`. See the
+[user docs](https://input-output-hk.github.io/dbsync/users/intro) for the
+full setup and prerequisites by platform.
+
+### Docker
+
+Multi-arch images (linux/amd64, linux/arm64) are on ghcr — every published
+version is listed on the
+[container page](https://github.com/input-output-hk/dbsync/pkgs/container/dbsync).
+The image bakes the [config profiles](#profiles) and the
+mainnet/preprod/preview network bundles, so a run is just env vars plus the
+node socket:
+
+```bash
+docker run -d \
+  -e NETWORK=mainnet \
+  -e PROFILE=utxo-only \
+  -e POSTGRES_HOST=your-postgres-host \
+  -e POSTGRES_DB=dbsync \
+  -e POSTGRES_PASSWORD_FILE=/run/secrets/pg-password \
+  -v /path/to/pg-password:/run/secrets/pg-password:ro \
+  -v /path/to/node-ipc:/ipc \
+  ghcr.io/input-output-hk/dbsync:latest
+```
+
+The password only ever arrives via a mounted file (`POSTGRES_PASSWORD_FILE`),
+never an env var; omit it entirely for trust/peer auth.
+
+Passing any CLI args instead switches the container to manual mode with your
+mounted configs — the full env contract is documented in
+[`docker/entrypoint.sh`](docker/entrypoint.sh).
+
+### Prebuilt binaries
+
+Every [release](https://github.com/input-output-hk/dbsync/releases) ships
+tarballs plus a `SHA256SUMS`:
+
+- `dbsync-X.Y.Z-linux-{x86_64,aarch64}.tar.gz` — fully static, no runtime
+  dependencies, runs on any distro
+- `dbsync-X.Y.Z-macos-aarch64.tar.gz` — native Apple Silicon, dylibs bundled
+
+Unpack and point it at a running node and an empty database — the preset
+configs live in [`config-examples/`](config-examples), grab the one you need
+or [write your own](https://input-output-hk.github.io/dbsync/users/config/custom):
+
+```bash
+dbsync \
+  --config           ./config-examples/dapp.json \
+  --pg-config        ~/cardano/pg-config.json \
+  --node-config      ~/cardano/mainnet/config.json \
+  --socket-path      ~/cardano/mainnet/db/node.socket \
+  --ledger-state-dir ~/cardano/mainnet
+```
+
+### Build from source
+
+Requires **GHC 9.14.1** and **cabal-install 3.16.1.0** — install both via
+[ghcup](https://www.haskell.org/ghcup/). Other combinations may fail to solve
+against the pinned `index-state`.
+
+```bash
+git clone https://github.com/input-output-hk/dbsync.git
+cd dbsync
+cabal build all
+```
+
 ## Why dbsync
 
 - **Profiles, not all-or-nothing.** Disabling a projection skips the parsing
@@ -106,34 +174,6 @@ flowchart TD
 The shape is identical across the run; only the writer changes between phases,
 along with how row IDs are obtained. Deep dive:
 [Architecture](https://input-output-hk.github.io/dbsync/developers/architecture).
-
-## Quick start
-
-### Docker images (planed)
-
-There will be docker images provided as well as ledger/db snapshots that can be used with *fast onboarding* (see bellow).
-
-### Manually 
-
-You'll need PostgreSQL ≥ 16 and a running `cardano-node`. See the [user docs](https://input-output-hk.github.io/dbsync/users/intro) for the full setup and prerequisites by platform.
-
-Requires **GHC 9.14.1** and **cabal-install 3.16.1.0** — install both via [ghcup](https://www.haskell.org/ghcup/). Other combinations may fail to solve against the pinned `index-state`.
-
-```bash
-git clone https://github.com/input-output-hk/dbsync.git
-cd dbsync
-cabal build all
-```
-Then point it at a running node and an empty database:
-
-```bash
-dbsync \
-  --config           ./config-examples/dapp.json \
-  --pg-config        ~/cardano/pg-config.json \
-  --node-config      ~/cardano/mainnet/config.json \
-  --socket-path      ~/cardano/mainnet/db/node.socket \
-  --ledger-state-dir ~/cardano/mainnet
-```
 
 ## Planned: fast onboarding
 

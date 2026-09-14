@@ -17,6 +17,8 @@ module DbSync.App.Boot
   , FollowRestartContext (..)
   , FollowRestartMode (..)
   , BootError (..)
+  , Stored (..)
+  , Configured (..)
   , IngestBootState (..)
 
     -- * Pure decision
@@ -254,6 +256,19 @@ data BootError
   | BootNetworkMismatch !NetworkMagic !NetworkMagic
     -- ^ The database's recorded @network_magic@ differs from the magic in
     -- the configured genesis. Fields: @(database, config)@.
+  | BootConsumedByTxIdMismatch !(Stored Bool) !(Configured Bool)
+    -- ^ @utxo_consumed_by_tx_id@ vs the config's @utxo.consumed_by_tx_id@.
+  | BootUtxoStrategyMismatch !(Stored Text) !(Configured Text)
+    -- ^ @utxo_strategy@ vs the config's @utxo.strategy@.
+  deriving stock (Eq, Show)
+
+-- | What the database recorded at seed time. Pairs with 'Configured'
+-- so same-typed gate comparisons cannot swap sides.
+newtype Stored a = Stored a
+  deriving stock (Eq, Show)
+
+-- | What the current config file says.
+newtype Configured a = Configured a
   deriving stock (Eq, Show)
 
 -- ---------------------------------------------------------------------------
@@ -532,6 +547,33 @@ renderBootError = \case
     where
       renderNetwork m =
         networkNameFromMagic m <> " (magic " <> show (unNetworkMagic m) <> ")"
+
+  BootConsumedByTxIdMismatch (Stored rowSays) (Configured cfgSays) ->
+    T.unlines
+      [ "Cannot resume: utxo.consumed_by_tx_id has flipped between runs."
+      , ""
+      , "  dbsync_sync_state.utxo_consumed_by_tx_id = " <> show rowSays
+      , "  current config utxo.consumed_by_tx_id    = " <> show cfgSays
+      , ""
+      , "Resuming with a different setting would leave tx_out.consumed_by_tx_id"
+      , "partially populated: rows written under the other setting would"
+      , "disagree with rows written from here on. Recovery options:"
+      , "  - Restore the previous config so it matches the database."
+      , "  - Restart with --resync-from-genesis to wipe and re-sync."
+      ]
+
+  BootUtxoStrategyMismatch (Stored rowSays) (Configured cfgSays) ->
+    T.unlines
+      [ "Cannot resume: utxo.strategy has changed between runs."
+      , ""
+      , "  dbsync_sync_state.utxo_strategy = " <> show rowSays
+      , "  current config utxo.strategy    = " <> show cfgSays
+      , ""
+      , "The strategy decides which tx_out rows exist at all, so a database"
+      , "built under one strategy is incomplete under another. Recovery options:"
+      , "  - Restore the previous config so it matches the database."
+      , "  - Restart with --resync-from-genesis to wipe and re-sync."
+      ]
 
 -- ---------------------------------------------------------------------------
 -- * Lifecycle

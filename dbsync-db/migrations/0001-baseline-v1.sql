@@ -39,6 +39,8 @@ CREATE TABLE "dbsync_sync_state" (
   "extractors" TEXT[] NOT NULL,
   "network_magic" BIGINT NOT NULL,
   "network_name" TEXT NOT NULL,
+  "utxo_consumed_by_tx_id" BOOLEAN NOT NULL,
+  "utxo_strategy" TEXT NOT NULL,
   "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
   PRIMARY KEY ("id"),
   CHECK ("id" = 1)

@@ -106,6 +106,7 @@ import qualified DbSync.PropertySpec as PropertySpec
 
 -- Database integration
 import qualified DbSync.App.NetworkGateSpec as NetworkGateSpec
+import qualified DbSync.App.UtxoConfigGateSpec as UtxoConfigGateSpec
 import qualified DbSync.ChainSync.DeliverSpec as ChainSyncDeliverSpec
 import qualified DbSync.SyncState.ManagerSpec as SyncStateManagerSpec
 import qualified DbSync.SyncState.ResumeSpec as SyncStateResumeSpec
@@ -259,6 +260,7 @@ main = hspec $ do
 
   describe "Database integration" $ withTimeoutSeconds integrationTimeoutSeconds $ do
     NetworkGateSpec.spec
+    UtxoConfigGateSpec.spec
     ChainSyncDeliverSpec.spec
     SyncStateManagerSpec.spec
     SyncStateResumeSpec.spec

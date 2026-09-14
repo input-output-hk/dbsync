@@ -38,12 +38,12 @@ spec = describe "runNetworkGate" $
 
     it "passes when the stored magic matches the configured genesis" $
       withGate $ \gate conn -> do
-        runAppM conn (seedSyncState 1 testFp False [] 42 "magic-42")
+        runAppM conn (seedSyncState 1 testFp False [] 42 "magic-42" True "archive")
         gate (NetworkMagic 42)
 
     it "aborts when the stored magic differs" $
       withGate $ \gate conn -> do
-        runAppM conn (seedSyncState 1 testFp False [] 2 "preview")
+        runAppM conn (seedSyncState 1 testFp False [] 2 "preview" True "archive")
         gate (NetworkMagic 764824073) `shouldThrow` (== ExitFailure 1)
 
     it "passes quietly while the sync-state row is missing" $

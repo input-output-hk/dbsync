@@ -8,10 +8,40 @@ module DbSync.App.Config.ValidationSpec
 import Cardano.Prelude
 
 import qualified Data.Text as Text
-import DbSync.App.Config.Types (parseConfig)
-import DbSync.App.Config.Types (ConfigError (..), SyncConfig)
+import DbSync.App.Config.Types
+  ( ConfigError (..)
+  , Extractors (..)
+  , LedgerConfig (..)
+  , SyncConfig (..)
+  , UtxoOption (..)
+  , UtxoStrategy (..)
+  , defaultExtractors
+  , defaultLedgerConfig
+  , defaultLoggingConfig
+  , defaultMetricsConfig
+  , defaultSyncSettings
+  , defaultUtxoOption
+  , parseConfig
+  )
 import DbSync.App.Config.Validation (validateConfig)
 import Test.Hspec (Spec, describe, it, shouldSatisfy)
+
+-- | A defaults config with the utxo extractor enabled and the given
+-- strategy / consumed_by_tx_id / ledger.enabled combination.
+configWith :: UtxoStrategy -> Bool -> Bool -> SyncConfig
+configWith strategy consumedByTxId ledgerEnabled = SyncConfig
+  { scSync       = defaultSyncSettings
+  , scLedger     = defaultLedgerConfig { lcEnabled = ledgerEnabled }
+  , scExtractors = defaultExtractors
+      { exUtxo = defaultUtxoOption
+          { uoEnabled        = True
+          , uoConsumedByTxId = consumedByTxId
+          , uoStrategy       = strategy
+          }
+      }
+  , scMetrics    = defaultMetricsConfig
+  , scLogging    = defaultLoggingConfig
+  }
 
 -- | Helper: parse then validate, returning all errors.
 parseAndValidate :: FilePath -> IO (Either [ConfigError] SyncConfig)
@@ -56,6 +86,32 @@ spec = describe "DbSync.App.Config.Validation" $ do
           let msgs = [t | ConfigValidationError t <- errs]
           msgs `shouldSatisfy` any (Text.isInfixOf "multi_asset")
         Right _ -> panic "Expected validation error"
+
+    -- "prune" and "from_ledger" are still rejected at parse time, so
+    -- these rules are exercised on directly constructed configs.
+    it "rejects strategy prune without consumed_by_tx_id" $ do
+      let cfg = configWith StrategyPrune False False
+      case validateConfig cfg of
+        Left errs -> do
+          let msgs = [t | ConfigValidationError t <- errs]
+          msgs `shouldSatisfy` any (Text.isInfixOf "consumed_by_tx_id")
+        Right _ -> panic "Expected validation error"
+
+    it "accepts strategy prune with consumed_by_tx_id" $
+      validateConfig (configWith StrategyPrune True False)
+        `shouldSatisfy` isRight
+
+    it "rejects strategy from_ledger without ledger" $ do
+      let cfg = configWith StrategyFromLedger True False
+      case validateConfig cfg of
+        Left errs -> do
+          let msgs = [t | ConfigValidationError t <- errs]
+          msgs `shouldSatisfy` any (Text.isInfixOf "from_ledger")
+        Right _ -> panic "Expected validation error"
+
+    it "accepts strategy from_ledger with ledger" $
+      validateConfig (configWith StrategyFromLedger True True)
+        `shouldSatisfy` isRight
 
     it "collects multiple errors at once" $ do
       -- The fixture violates two independent rules (epoch_boundary

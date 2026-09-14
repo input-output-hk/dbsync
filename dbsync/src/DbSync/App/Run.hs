@@ -8,8 +8,9 @@
 module DbSync.App.Run
   ( runApp
 
-    -- * Exported for the network-gate integration tests
+    -- * Exported for the gate integration tests
   , runNetworkGate
+  , runUtxoConfigGate
   ) where
 
 import Cardano.Prelude
@@ -52,6 +53,7 @@ import DbSync.SyncState.Row
   , openControlConnection
   , readNetwork
   , readSyncState
+  , readUtxoConfig
   , seedSyncState
   )
 import DbSync.App.Env
@@ -70,7 +72,8 @@ import DbSync.App.Config.Types
     ( LedgerConfig(..),
       SyncConfig(..),
       Extractors(..),
-      UtxoOption(..) )
+      UtxoOption(..),
+      renderUtxoStrategy )
 import DbSync.Db.Loader (LoaderStream (..), closeLoaderStream, mkLoaderStream)
 import DbSync.Db.Schema.Types (TableDef)
 import DbSync.Db.Schema.Migration (MigrationOutcome (..), runMigrations)
@@ -117,7 +120,9 @@ import DbSync.ChainSync.Connection
 import DbSync.App.Boot
   ( BootDecision (..)
   , BootError (..)
+  , Configured (..)
   , IngestBootState (..)
+  , Stored (..)
   , abortBoot
   , decideBoot
   , handlePreBootRollback
@@ -230,21 +235,23 @@ runApp tracer args = do
       connStrTxt       = TE.decodeUtf8 connStr
       schemaVersion    = currentSchemaVersion
       ledgerEnabledCfg = lcEnabled (scLedger validConfig)
+      utxoCfg          = exUtxo (scExtractors validConfig)
   freshInit <- setupSchema
     tracer ledgerEnabledCfg ledgerStateDir
     tableDefs extractorNames connStrTxt (aaResyncFromGenesis args)
 
   -- 6. Open the consumer's control connection, seed
-  -- @dbsync_sync_state@ on a fresh schema, then run the two gates.
+  -- @dbsync_sync_state@ on a fresh schema, then run the gates.
   consumerCtrlConn <- openControlConnection hasqlSettings
   when freshInit $
     setupFreshSyncState
       tracer consumerCtrlConn connStrTxt
       schemaVersion declaredSchemaFingerprint ledgerEnabledCfg extractorNames
-      networkMagic
+      networkMagic utxoCfg
   runMigrationGate
     tracer consumerCtrlConn schemaVersion declaredSchemaFingerprint extractorNames
   runNetworkGate tracer consumerCtrlConn networkMagic
+  runUtxoConfigGate tracer consumerCtrlConn utxoCfg
 
   -- 7. SystemStart and the ledger subsystem.
   let systemStart = SystemStart (sgSystemStart $ scConfig $ gcShelley genesisCfg)
@@ -368,6 +375,27 @@ runNetworkGate tracer ctrlConn networkMagic = do
     "Network: " <> networkNameFromMagic networkMagic
       <> " (magic " <> show (unNetworkMagic networkMagic) <> ")"
 
+-- | Abort when the utxo settings recorded at seed time differ from
+-- the current config. Both are sticky: flipping @consumed_by_tx_id@
+-- leaves the column partially populated; changing @strategy@ changes
+-- which tx_out rows exist. Passes quietly while the sync-state row is
+-- missing, because 'decideBoot' classifies that case.
+runUtxoConfigGate :: AppTracer -> ControlConnection -> UtxoOption -> IO ()
+runUtxoConfigGate tracer ctrlConn utxoCfg = do
+  mStored <- runAppM ctrlConn readUtxoConfig
+  for_ mStored $ \(storedConsumed, storedStrategy) -> do
+    when (storedConsumed /= uoConsumedByTxId utxoCfg) $
+      abortBoot tracer $
+        BootConsumedByTxIdMismatch
+          (Stored storedConsumed)
+          (Configured (uoConsumedByTxId utxoCfg))
+    let cfgStrategy = renderUtxoStrategy (uoStrategy utxoCfg)
+    when (storedStrategy /= cfgStrategy) $
+      abortBoot tracer $
+        BootUtxoStrategyMismatch
+          (Stored storedStrategy)
+          (Configured cfgStrategy)
+
 -- | Classify the boot with 'decideSchemaAction' and run the matching
 -- effect: init, drop and init, no-op, or abort.
 -- @--resync-from-genesis@ also wipes the ledger state directory, so a
@@ -428,12 +456,15 @@ setupFreshSyncState
   -> Bool                         -- ^ @ledger.enabled@
   -> [Text]                       -- ^ enabled extractor names
   -> NetworkMagic
+  -> UtxoOption
   -> IO ()
-setupFreshSyncState tracer ctrl connStrTxt schemaVersion fingerprint ledgerEnabledCfg extractorNames networkMagic = do
+setupFreshSyncState tracer ctrl connStrTxt schemaVersion fingerprint
+                    ledgerEnabledCfg extractorNames networkMagic utxoCfg = do
   runAppM ctrl $
     seedSyncState
       schemaVersion fingerprint ledgerEnabledCfg extractorNames
       (unNetworkMagic networkMagic) (networkNameFromMagic networkMagic)
+      (uoConsumedByTxId utxoCfg) (renderUtxoStrategy (uoStrategy utxoCfg))
   logInfoIO tracer "App" "Sync-state seeded"
   walLevel <- showWalLevel connStrTxt
   unless (walLevel == "minimal") $

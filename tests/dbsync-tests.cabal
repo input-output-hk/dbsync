@@ -110,6 +110,7 @@ test-suite dbsync-test
     DbSync.AppSpec
     DbSync.App.CliSpec
     DbSync.App.NetworkGateSpec
+    DbSync.App.UtxoConfigGateSpec
     DbSync.ChainSync.ConnectionSpec
     DbSync.ChainSync.DeliverSpec
     DbSync.App.Config.TypesSpec

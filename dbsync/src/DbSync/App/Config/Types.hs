@@ -21,6 +21,7 @@ module DbSync.App.Config.Types
   , OptionFlag (..)
   , UtxoOption (..)
   , UtxoStrategy (..)
+  , renderUtxoStrategy
   , MetadataFormat (..)
   , GovernanceVariant (..)
 
@@ -364,6 +365,14 @@ instance FromJSON UtxoOption where
       , uoTxIn           = txIn
       , uoStrategy       = strategy
       }
+
+-- | Inverse of the 'FromJSON' spelling; also the on-disk form in the
+-- @dbsync_sync_state.utxo_strategy@ column.
+renderUtxoStrategy :: UtxoStrategy -> Text
+renderUtxoStrategy = \case
+  StrategyArchive    -> "archive"
+  StrategyPrune      -> "prune"
+  StrategyFromLedger -> "from_ledger"
 
 instance FromJSON UtxoStrategy where
   parseJSON = Aeson.withText "UtxoStrategy" $ \case

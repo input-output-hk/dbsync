@@ -23,6 +23,7 @@ const sidebars: SidebarsConfig = {
         'config/overview',
         'config/presets',
         'config/custom',
+        'config/converting',
       ],
     },
     'running',

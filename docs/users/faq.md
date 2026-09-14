@@ -76,6 +76,9 @@ Most queries that worked against the original work against this one
 with a matching extractor set. The schema is close but not identical,
 so validate your queries against a sample sync before you switch.
 
+For a per-option mapping of the original's `insert_options` to the new
+config, see [Converting from cardano-db-sync](config/converting).
+
 ## Can I run several dbsync instances against one node?
 
 Yes, if each one has its own PostgreSQL database and its own

@@ -24,7 +24,9 @@ on sync time and disk usage.
 | `everything.json` | every extractor, ledger on | on |
 
 Sizes for each preset are in
-[Prerequisites](../installation/prerequisites#disk-space).
+[Prerequisites](../installation/prerequisites#disk-space). Coming from
+the original cardano-db-sync? See
+[Converting from cardano-db-sync](converting).
 
 Two extractors run in more presets than the table shows:
 

@@ -52,12 +52,19 @@ Outputs, inputs, addresses, collateral, reference inputs.
 |---|---|---|
 | `enabled` | `false` | Master switch. `false` leaves `tx_out`, `tx_in`, and `ma_tx_out` empty. |
 | `consumed_by_tx_id` | `true` | Write `tx_out.consumed_by_tx_id`, the back-pointer from a UTxO to the transaction that spent it. |
-| `tx_in` | `true` | Write `tx_in` rows. The parser rejects `false`. |
+| `tx_in` | `true` | Write `tx_in` rows. `false` leaves the table empty and drops spend-redeemer script hashes (see below). |
 | `strategy` | `"archive"` | `archive` keeps every output ever produced. The parser rejects `prune` and `from_ledger`. |
 
-The parser, not the validator, rejects the reserved values. dbsync
-therefore fails while reading the file, before any dependency check
-runs.
+With `tx_in: false`, transaction fees and deposits are still
+backfilled — they read input sums through
+`tx_out.consumed_by_tx_id` instead of the `tx_in` join. Two things
+are lost: the redeemer link and index of each input, and
+`redeemer.script_hash` for spend redeemers, which stays `NULL`
+because rebuilding it needs the input's producing output.
+
+The parser, not the validator, rejects the reserved `strategy`
+values. dbsync therefore fails while reading the file, before any
+dependency check runs.
 
 Either `"utxo": true` (shorthand for the defaults with `enabled: true`)
 or the full object form is accepted.

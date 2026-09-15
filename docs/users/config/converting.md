@@ -74,6 +74,11 @@ booleans, both on by default:
 All four combinations are valid, except that a `prune` strategy will
 require `consumed_by_tx_id` (pruning deletes rows marked consumed).
 
+Converting `"value": "consumed"` without `force_tx_in` therefore means
+`tx_in: false`, which keeps fees and deposits intact but leaves
+`redeemer.script_hash` `NULL` for spend redeemers. See
+[`utxo`](custom#utxo).
+
 ## Presets
 
 The old `preset` enum is gone. Copy the closest

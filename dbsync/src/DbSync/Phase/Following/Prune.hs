@@ -31,10 +31,9 @@ pruneSafeBlockDepth k = 2 * k
 
 -- | Delete outputs consumed outside the rollback window.
 --
--- Runs after the crossing block's transaction commits, not inside it:
--- the delete is unbounded in size, and a failure here must not undo a
--- committed block. It is idempotent, so a skipped boundary is picked
--- up by the next one.
+-- Runs after the crossing block commits, never inside its transaction:
+-- the delete is unbounded and must not be able to undo the block.
+-- Idempotent, so a skipped boundary is caught by the next.
 pruneConsumedAtBoundary :: AppTracer -> Conn.Connection -> Word64 -> IO ()
 pruneConsumedAtBoundary tracer conn k = do
   mWatermark <- runStmt (pruneSafeBlockDepth k) queryPruneWatermarkStmt

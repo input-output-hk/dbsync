@@ -8,6 +8,7 @@ module DbSync.App.Setup
     -- * Extractor list construction (exported for testing)
   , buildExtractors
   , applyUtxoWriterOptions
+  , silenceFromLedgerOutputs
 
     -- * Constants
   , cardanoSecurityParam
@@ -37,6 +38,7 @@ import DbSync.App.Config.Types
   , Extractors (..)
   , SyncConfig (..)
   , UtxoOption (..)
+  , UtxoStrategy (..)
   )
 import DbSync.Phase.Type (SyncPhase (..))
 import DbSync.App.Env (CoreEnv (..))
@@ -146,6 +148,18 @@ applyUtxoWriterOptions :: Applicative m => UtxoOption -> Writer m -> Writer m
 applyUtxoWriterOptions opts w
   | uoTxIn opts = w
   | otherwise   = w { writeTxIn = const (pure ()) }
+
+-- | Under @from_ledger@ the output writers go quiet for the whole
+-- catchup: 'DbSync.Phase.Ingest.UtxoLoad' writes the surviving outputs
+-- once at the end, from the ledger's UTxO set. Ingest-only — Follow
+-- writes outputs normally after the handoff.
+silenceFromLedgerOutputs :: Applicative m => UtxoOption -> Writer m -> Writer m
+silenceFromLedgerOutputs opts w
+  | uoStrategy opts /= StrategyFromLedger = w
+  | otherwise = w
+      { writeTxOut   = \_ _ -> pure ()
+      , writeMaTxOut = const (pure ())
+      }
 
 -- | Placeholder extractor — name only, no real extraction logic yet.
 stubExtractor :: Text -> ExtractorDef

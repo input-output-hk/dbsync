@@ -345,12 +345,6 @@ instance FromJSON UtxoOption where
     consumedByTxId <- o .:? "consumed_by_tx_id" .!= uoConsumedByTxId defaultUtxoOption
     txIn           <- o .:? "tx_in"             .!= uoTxIn defaultUtxoOption
     strategy       <- o .:? "strategy"          .!= uoStrategy defaultUtxoOption
-    case strategy of
-      StrategyFromLedger -> Aeson.parseFail
-        "utxo.strategy: \"from_ledger\" is not yet implemented. The \
-        \Prep step that bulk-loads live UTxO from the ledger state \
-        \has not landed."
-      _ -> pure ()
     pure UtxoOption
       { uoEnabled        = enabled
       , uoConsumedByTxId = consumedByTxId

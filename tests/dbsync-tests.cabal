@@ -210,6 +210,7 @@ test-suite dbsync-test
     DbSync.Phase.FollowRestartSpec
     DbSync.Phase.FollowNodeRestartSpec
     DbSync.Phase.HandoffRedeliverySpec
+    DbSync.Phase.UtxoFromLedgerSpec
     DbSync.Phase.FollowReplayOnBootSpec
     DbSync.Phase.IngestPrepFollowSpec
     DbSync.Phase.IngestRestartSpec

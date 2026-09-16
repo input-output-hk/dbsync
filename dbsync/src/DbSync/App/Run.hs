@@ -43,6 +43,7 @@ import DbSync.App.Setup
   , runStartup
   , setupOffChainPoolWorker
   , setupOffChainVoteWorker
+  , silenceFromLedgerOutputs
   )
 import DbSync.App.Args (AppArgs (..))
 import DbSync.AppM (runAppM)
@@ -74,9 +75,10 @@ import DbSync.App.Config.Types
       SyncConfig(..),
       Extractors(..),
       UtxoOption(..),
+      UtxoStrategy(..),
       renderUtxoStrategy )
 import DbSync.Db.Loader (LoaderStream (..), closeLoaderStream, mkLoaderStream)
-import DbSync.Db.Schema.Types (TableDef)
+import DbSync.Db.Schema.Types (TableDef, tdName)
 import DbSync.Db.Schema.Migration (MigrationOutcome (..), runMigrations)
 import DbSync.Db.Schema.Init
   ( SchemaAction (..)
@@ -87,6 +89,7 @@ import DbSync.Db.Schema.Init
   , renderSchemaMismatch
   , showWalLevel
   , truncateDataTables
+  , truncateTables
   )
 import DbSync.Schema.Version (Fingerprint, currentSchemaVersion, unFingerprint)
 import DbSync.Extractor.Registry (declaredSchemaFingerprint)
@@ -310,7 +313,14 @@ runApp tracer args = do
                 "Fresh boot on a non-empty schema; purging orphan rows from an aborted pre-boundary leg"
               truncateDataTables tableDefs connStrTxt
             Just <$> resolveFreshBoot tracer hasLedgerEnv lsmSession
-          BootResume rc ->
+          BootResume rc -> do
+            -- Under from_ledger, tx_out/ma_tx_out hold only rows from an
+            -- aborted final load; resume-cleanup cannot classify them by
+            -- slot, so the load restarts from empty tables.
+            when (uoStrategy utxoCfg == StrategyFromLedger) $
+              truncateTables
+                (filter ((`elem` ["tx_out", "ma_tx_out"]) . tdName) tableDefs)
+                connStrTxt
             Just <$> resolveResumeBoot
               tracer topLevelCfg
               stateQueryVar hasLedgerEnv consumerCtrlConn tableDefs lsmSession rc
@@ -615,7 +625,11 @@ runIngestThenFollow
     mVoteWorker      <-
       setupOffChainVoteWorker tracer hasqlSettings (scExtractors validConfig)
     utxoStore        <- openUtxoStore lsmSession
-    let consumedByOn = uoConsumedByTxId (exUtxo (scExtractors validConfig))
+    -- from_ledger writes no tx_out during catchup, so there is nothing
+    -- to stamp; every row the load writes is unspent by definition.
+    let ingestUtxoCfg = exUtxo (scExtractors validConfig)
+        consumedByOn  = uoConsumedByTxId ingestUtxoCfg
+                          && uoStrategy ingestUtxoCfg /= StrategyFromLedger
     mConsumedByBuf <-
       if consumedByOn then Just <$> newConsumedByBufferRef else pure Nothing
     latestPointRef   <- newTVarIO Nothing
@@ -624,9 +638,8 @@ runIngestThenFollow
 
     let resolver = mkIngestResolver extractStateRef dedupStores addrBuffer utxoStore mConsumedByBuf
         writer   =
-          applyUtxoWriterOptions
-            (exUtxo (scExtractors validConfig))
-            (IngestWriter.mkWriter loaderStream)
+          silenceFromLedgerOutputs ingestUtxoCfg $
+            applyUtxoWriterOptions ingestUtxoCfg (IngestWriter.mkWriter loaderStream)
 
     let ingestEnv = IngestEnv
           { ieCore                    = coreEnv

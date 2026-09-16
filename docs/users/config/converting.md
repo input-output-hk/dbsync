@@ -41,8 +41,8 @@ unconditional:
 | `tx_out.value: "enable"` | `extractors.utxo: true` | |
 | `tx_out.value: "disable"` | `extractors.utxo: false` | The default. |
 | `tx_out.value: "consumed"` | `utxo: true` | `consumed_by_tx_id` is on by default. |
-| `tx_out.value: "prune"` | `utxo.strategy: "prune"` | Not yet implemented — the parser rejects it. |
-| `tx_out.value: "bootstrap"` | `utxo.strategy: "from_ledger"` | Not yet implemented — the parser rejects it. |
+| `tx_out.value: "prune"` | `utxo.strategy: "prune"` | Consumed outputs are deleted at the end of catchup. |
+| `tx_out.value: "bootstrap"` | `utxo.strategy: "from_ledger"` | Bulk-loads the live UTxO set from the ledger at the end of catchup. Needs `ledger.enabled: true`. |
 | `tx_out.force_tx_in: true` | `utxo.tx_in: true` | See [`tx_in` below](#tx_in-is-independent). |
 | `tx_out.use_address_table` | — | Always on. |
 | `ledger: "enable"` | `ledger.enabled: true` | |

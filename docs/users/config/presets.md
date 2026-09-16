@@ -77,9 +77,9 @@ Suitable for:
 each `tx_out` to the transaction that spent it. `tx_in` is on by
 default too.
 
-The `archive` strategy stores every output ever produced. It is the
-only strategy that works: the parser rejects `prune` and
-`from_ledger`.
+The default `archive` strategy stores every output ever produced.
+`prune` and `from_ledger` trade history for size — see
+[the custom-configuration reference](custom.md#utxo).
 
 ## `spo`
 

@@ -146,6 +146,7 @@ import qualified DbSync.Phase.FollowReplayOnBootSpec as PhaseFollowReplayOnBootS
 import qualified DbSync.Phase.FollowRestartSpec as PhaseFollowRestartSpec
 import qualified DbSync.Phase.FollowNodeRestartSpec as PhaseFollowNodeRestartSpec
 import qualified DbSync.Phase.HandoffRedeliverySpec as PhaseHandoffRedeliverySpec
+import qualified DbSync.Phase.UtxoFromLedgerSpec as PhaseUtxoFromLedgerSpec
 import qualified DbSync.Phase.IngestPrepFollowSpec as PhaseIngestPrepFollowSpec
 import qualified DbSync.Phase.RecomputeInvariantsSpec as PhaseRecomputeInvariantsSpec
 import qualified DbSync.Phase.IngestRestartSpec as PhaseIngestRestartSpec
@@ -293,6 +294,7 @@ main = hspec $ do
     PhaseAlonzoInvalidTxSpec.spec
     PhaseIngestPrepFollowSpec.spec
     PhaseHandoffRedeliverySpec.spec
+    PhaseUtxoFromLedgerSpec.spec
     PhaseIngestRestartSpec.spec
     PhaseLsmLifecycleSpec.spec
     PhaseFollowRestartSpec.spec

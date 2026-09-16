@@ -79,11 +79,15 @@ run
   -> m ()
 run connSettings tuning tables = step PhaseStep "post-load pass" $ do
   utxoOpts <- asks (exUtxo . scExtractors . getConfig)
+  -- from_ledger: spent outputs never got tx_out rows, so any
+  -- input-side sum over them is impossible; fees and deposits keep
+  -- their sentinels.
   let inputSource
-        | not (hasTable (tdName txOutTableDef)) = Backfill.NoInputSource
-        | uoTxIn utxoOpts                       = Backfill.InputsViaTxIn
-        | uoConsumedByTxId utxoOpts             = Backfill.InputsViaConsumedBy
-        | otherwise                             = Backfill.NoInputSource
+        | not (hasTable (tdName txOutTableDef))      = Backfill.NoInputSource
+        | uoStrategy utxoOpts == StrategyFromLedger  = Backfill.NoInputSource
+        | uoTxIn utxoOpts                            = Backfill.InputsViaTxIn
+        | uoConsumedByTxId utxoOpts                  = Backfill.InputsViaConsumedBy
+        | otherwise                                  = Backfill.NoInputSource
 
   -- Set first, so every later index build and ANALYZE on the control
   -- connection picks them up. Pool backends set the same GUCs in
@@ -118,9 +122,10 @@ run connSettings tuning tables = step PhaseStep "post-load pass" $ do
   _ <- Backfill.backfillTxColumns inputSource tables
   -- Needs both tables populated: the hash comes off the spent output
   -- that @tx_in@ points at, and lands on a @redeemer@ row. With
-  -- @utxo.tx_in@ off the spend hashes are unrecoverable and stay NULL.
+  -- @utxo.tx_in@ off the spend hashes are unrecoverable and stay NULL;
+  -- under from_ledger the spent outputs have no rows to read them from.
   when (hasTable (tdName redeemerTableDef) && hasTable (tdName txInTableDef)
-          && uoTxIn utxoOpts)
+          && uoTxIn utxoOpts && uoStrategy utxoOpts /= StrategyFromLedger)
     Backfill.rebuildSpendScriptHash
   _ <- Backfill.applyDepositPending
   step CleanupStep "truncate epoch_param_pending"

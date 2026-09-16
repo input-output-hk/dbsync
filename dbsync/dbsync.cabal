@@ -156,6 +156,7 @@ library
     DbSync.Phase.Ingest.Resolver.ScriptsDatums
     DbSync.Phase.Ingest.Resolver.StakeDelegation
     DbSync.Phase.Ingest.Resolver.UTxO
+    DbSync.Phase.Ingest.UtxoLoad
     DbSync.Phase.Ingest.UtxoStore
     DbSync.Phase.Ingest.Writer
     DbSync.Phase.Ingest.Writer.Cbor
@@ -237,6 +238,7 @@ library
     DbSync.Worker.Ledger.StakeDist
     DbSync.Worker.Ledger.State
     DbSync.Worker.Ledger.Types
+    DbSync.Worker.Ledger.Utxo
     DbSync.Worker.Ledger.Worker
     DbSync.Worker.OffChain.Fetcher
     DbSync.Worker.OffChain.Http

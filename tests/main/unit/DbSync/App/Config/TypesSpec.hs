@@ -191,14 +191,12 @@ spec = describe "DbSync.App.Config.Types" $ do
         Right cfg ->
           uoStrategy (exUtxo (scExtractors cfg)) `shouldBe` StrategyPrune
 
-  describe "utxo parser rejects values without an implementation" $ do
-    it "rejects strategy: from_ledger" $ do
+    it "accepts strategy: from_ledger" $ do
       result <- parseConfig "fixtures/utxo-strategy-from-ledger.json"
       case result of
-        Right _ ->
-          panic "Expected parse failure for utxo.strategy = \"from_ledger\""
-        Left err ->
-          Text.pack (show err) `shouldSatisfy` ("from_ledger" `Text.isInfixOf`)
+        Left err  -> panic $ "Expected parse success: " <> Text.pack (show err)
+        Right cfg ->
+          uoStrategy (exUtxo (scExtractors cfg)) `shouldBe` StrategyFromLedger
 
   describe "utxo boolean shorthand" $ do
     it "\"utxo\": true means defaults with enabled set" $

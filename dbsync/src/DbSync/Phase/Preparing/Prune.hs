@@ -27,13 +27,12 @@ import DbSync.Db.Transaction (HasHasqlConnection (..))
 import DbSync.Phase.Preparing.Step (StepKind (..), step, stepRows, stepSkipped)
 import DbSync.Trace (HasTracer (..))
 
--- | Delete every consumed output. Runs at the Ingest handoff, where
--- the tip is already @k@ blocks back, so no surviving fork can reach
--- the deleted rows and no safety window is needed.
+-- | Delete every consumed output. No safety window: the handoff tip is
+-- already @k@ blocks back, so no fork can reach these rows.
 --
--- Must run after the fee and deposit backfills, which read the values
--- of the outputs this removes, and before the flip and index build,
--- so neither touches a doomed row.
+-- Ordering is load-bearing — after the fee and deposit backfills,
+-- which read the values this removes; before the flip and index
+-- build, so neither touches a doomed row.
 pruneConsumedOutputs
   :: (HasTracer env, HasHasqlConnection env, MonadReader env m, MonadUnliftIO m)
   => [TableDef] -> m Int64

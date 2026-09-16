@@ -17,6 +17,8 @@ module DbSync.App.Boot
   , FollowRestartContext (..)
   , FollowRestartMode (..)
   , BootError (..)
+  , Stored (..)
+  , Configured (..)
   , IngestBootState (..)
 
     -- * Pure decision
@@ -124,7 +126,11 @@ import DbSync.Worker.Ledger.Types (HasLedgerEnv (..), LedgerEnv (..))
 import DbSync.Worker.Ledger.Worker (withLedgerThreads)
 import DbSync.Worker.OffChain.Pool (closeOffChainPoolWorker)
 import DbSync.Worker.OffChain.Vote (closeOffChainVoteWorker)
-import DbSync.App.Setup (setupOffChainPoolWorker, setupOffChainVoteWorker)
+import DbSync.App.Setup
+  ( applyUtxoWriterOptions
+  , setupOffChainPoolWorker
+  , setupOffChainVoteWorker
+  )
 import DbSync.App.Config.Types
   ( Extractors (..)
   , SyncConfig (..)
@@ -254,6 +260,19 @@ data BootError
   | BootNetworkMismatch !NetworkMagic !NetworkMagic
     -- ^ The database's recorded @network_magic@ differs from the magic in
     -- the configured genesis. Fields: @(database, config)@.
+  | BootConsumedByTxIdMismatch !(Stored Bool) !(Configured Bool)
+    -- ^ @utxo_consumed_by_tx_id@ vs the config's @utxo.consumed_by_tx_id@.
+  | BootUtxoStrategyMismatch !(Stored Text) !(Configured Text)
+    -- ^ @utxo_strategy@ vs the config's @utxo.strategy@.
+  deriving stock (Eq, Show)
+
+-- | What the database recorded at seed time. Pairs with 'Configured'
+-- so same-typed gate comparisons cannot swap sides.
+newtype Stored a = Stored a
+  deriving stock (Eq, Show)
+
+-- | What the current config file says.
+newtype Configured a = Configured a
   deriving stock (Eq, Show)
 
 -- ---------------------------------------------------------------------------
@@ -532,6 +551,33 @@ renderBootError = \case
     where
       renderNetwork m =
         networkNameFromMagic m <> " (magic " <> show (unNetworkMagic m) <> ")"
+
+  BootConsumedByTxIdMismatch (Stored rowSays) (Configured cfgSays) ->
+    T.unlines
+      [ "Cannot resume: utxo.consumed_by_tx_id has flipped between runs."
+      , ""
+      , "  dbsync_sync_state.utxo_consumed_by_tx_id = " <> show rowSays
+      , "  current config utxo.consumed_by_tx_id    = " <> show cfgSays
+      , ""
+      , "Resuming with a different setting would leave tx_out.consumed_by_tx_id"
+      , "partially populated: rows written under the other setting would"
+      , "disagree with rows written from here on. Recovery options:"
+      , "  - Restore the previous config so it matches the database."
+      , "  - Restart with --resync-from-genesis to wipe and re-sync."
+      ]
+
+  BootUtxoStrategyMismatch (Stored rowSays) (Configured cfgSays) ->
+    T.unlines
+      [ "Cannot resume: utxo.strategy has changed between runs."
+      , ""
+      , "  dbsync_sync_state.utxo_strategy = " <> show rowSays
+      , "  current config utxo.strategy    = " <> show cfgSays
+      , ""
+      , "The strategy decides which tx_out rows exist at all, so a database"
+      , "built under one strategy is incomplete under another. Recovery options:"
+      , "  - Restore the previous config so it matches the database."
+      , "  - Restart with --resync-from-genesis to wipe and re-sync."
+      ]
 
 -- ---------------------------------------------------------------------------
 -- * Lifecycle
@@ -905,14 +951,11 @@ runBootFollowRestart
 
           let mLastBlock = ssrLastCommittedBlockNo (frcSyncState frc)
               kBlocks    = ceSecurityParam coreEnv
-              consumedTracking =
-                if uoConsumedByTxId (exUtxo (scExtractors (ceConfig coreEnv)))
-                  then TrackConsumedBy
-                  else SkipConsumedBy
+              utxoOpts   = exUtxo (scExtractors (ceConfig coreEnv))
           withAsync (checkResumeGap tracer kBlocks mLastBlock rollbackBoundary) $ \gapThread -> do
             link gapThread
             runFollowSession tracer "Boot" iomgr hasqlSettings topLevelCfg
-              networkMagic socketPath intersectReq consumedTracking mShutdown mkEnv
+              networkMagic socketPath intersectReq utxoOpts mShutdown mkEnv
 
 -- | Open a dedicated Follow hasql connection, build its resolver and
 -- writer, pass them to the caller's 'FollowEnv' builder, and run
@@ -930,7 +973,7 @@ runFollowSession
   -> NetworkMagic
   -> FilePath                                          -- ^ socketPath
   -> IntersectionRequirement
-  -> ConsumedTracking
+  -> UtxoOption
   -> Maybe (IO ())                                     -- ^ mShutdown
   -> (Conn.Connection -> IdResolver IO -> Writer IO -> FollowEnv)
        -- ^ Receives the just-opened Follow connection with its
@@ -938,9 +981,11 @@ runFollowSession
   -> IO ()
 runFollowSession
   tracer component iomgr hasqlSettings topLevelCfg networkMagic
-  socketPath intersectReq consumedTracking mShutdown mkFollowEnv = do
+  socketPath intersectReq utxoOpts mShutdown mkFollowEnv = do
     followCtrl <- openControlConnection hasqlSettings
     let followConn = unControlConnection followCtrl
+        consumedTracking =
+          if uoConsumedByTxId utxoOpts then TrackConsumedBy else SkipConsumedBy
     -- @synchronous_commit = off@: a per-block COMMIT does not wait on
     -- the WAL fsync. Chainsync replay from @last_committed_slot@
     -- covers crash recovery.
@@ -949,7 +994,7 @@ runFollowSession
     -- Cooperative stop; 'Follow.run' explains why a cancellation is
     -- not safe here.
     stopVar <- newTVarIO False
-    let writer    = FollowingWriter.mkWriter followConn
+    let writer    = applyUtxoWriterOptions utxoOpts (FollowingWriter.mkWriter followConn)
         followEnv = mkFollowEnv followConn resolver writer
 
         followAction =

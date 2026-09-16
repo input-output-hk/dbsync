@@ -1,4 +1,5 @@
 name: Release
+run-name: ${{ github.ref_type == 'tag' && format('Release {0}', github.ref_name) || format('Release rehearsal ({0})', github.ref_name) }}
 
 # Tag runs build everything into a *draft* release and push the
 # version-tagged image; nothing is announced and `:latest` never moves here.
@@ -230,7 +231,8 @@ jobs:
             docker pull ${{ needs.check.outputs.image }}:${{ needs.check.outputs.version }}
             ```
 
+            All published image versions: https://github.com/${{ github.repository }}/pkgs/container/dbsync
+
             Linux binaries are fully static (musl) — no runtime library
             dependencies, any distro. The macOS binary is native
-            aarch64 with its dylibs bundled relocatable — no nix or
-            homebrew needed.
+            aarch64 with its dylibs bundled relocatable.

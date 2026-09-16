@@ -110,6 +110,7 @@ test-suite dbsync-test
     DbSync.AppSpec
     DbSync.App.CliSpec
     DbSync.App.NetworkGateSpec
+    DbSync.App.UtxoConfigGateSpec
     DbSync.ChainSync.ConnectionSpec
     DbSync.ChainSync.DeliverSpec
     DbSync.App.Config.TypesSpec
@@ -209,6 +210,7 @@ test-suite dbsync-test
     DbSync.Phase.FollowRestartSpec
     DbSync.Phase.FollowNodeRestartSpec
     DbSync.Phase.HandoffRedeliverySpec
+    DbSync.Phase.UtxoFromLedgerSpec
     DbSync.Phase.FollowReplayOnBootSpec
     DbSync.Phase.IngestPrepFollowSpec
     DbSync.Phase.IngestRestartSpec
@@ -217,6 +219,8 @@ test-suite dbsync-test
     DbSync.Phase.MockNodeSpec
     DbSync.Phase.RecomputeInvariantsSpec
     DbSync.Phase.Preparing.RunSpec
+    DbSync.Phase.Preparing.PruneSpec
+    DbSync.Phase.Preparing.TxInOffSpec
     DbSync.StateQuery.ObservedSummarySpec
     DbSync.StateQuery.SlotDetailsSpec
     DbSync.Trace.ReplaySpec

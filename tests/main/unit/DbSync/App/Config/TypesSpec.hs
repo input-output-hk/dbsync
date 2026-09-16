@@ -175,30 +175,28 @@ spec = describe "DbSync.App.Config.Types" $ do
         Left err ->
           Text.pack (show err) `shouldSatisfy` ("inmemory" `Text.isInfixOf`)
 
-  describe "utxo parser rejects values without an implementation" $ do
-    it "rejects tx_in: false (deposit backfill joins through tx_in)" $ do
+  describe "utxo parser" $ do
+    it "accepts tx_in: false" $ do
       result <- parseConfig "fixtures/utxo-tx-in-disabled.json"
       case result of
-        Right _ ->
-          panic "Expected parse failure for utxo.tx_in = false"
-        Left err ->
-          Text.pack (show err) `shouldSatisfy` ("tx_in" `Text.isInfixOf`)
+        Left err  -> panic $ "Expected parse success: " <> Text.pack (show err)
+        Right cfg -> do
+          uoTxIn (exUtxo (scExtractors cfg)) `shouldBe` False
+          uoConsumedByTxId (exUtxo (scExtractors cfg)) `shouldBe` True
 
-    it "rejects strategy: prune" $ do
+    it "accepts strategy: prune" $ do
       result <- parseConfig "fixtures/utxo-strategy-prune.json"
       case result of
-        Right _ ->
-          panic "Expected parse failure for utxo.strategy = \"prune\""
-        Left err ->
-          Text.pack (show err) `shouldSatisfy` ("prune" `Text.isInfixOf`)
+        Left err  -> panic $ "Expected parse success: " <> Text.pack (show err)
+        Right cfg ->
+          uoStrategy (exUtxo (scExtractors cfg)) `shouldBe` StrategyPrune
 
-    it "rejects strategy: from_ledger" $ do
+    it "accepts strategy: from_ledger" $ do
       result <- parseConfig "fixtures/utxo-strategy-from-ledger.json"
       case result of
-        Right _ ->
-          panic "Expected parse failure for utxo.strategy = \"from_ledger\""
-        Left err ->
-          Text.pack (show err) `shouldSatisfy` ("from_ledger" `Text.isInfixOf`)
+        Left err  -> panic $ "Expected parse success: " <> Text.pack (show err)
+        Right cfg ->
+          uoStrategy (exUtxo (scExtractors cfg)) `shouldBe` StrategyFromLedger
 
   describe "utxo boolean shorthand" $ do
     it "\"utxo\": true means defaults with enabled set" $

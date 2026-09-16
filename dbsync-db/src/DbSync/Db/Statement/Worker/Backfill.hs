@@ -12,6 +12,14 @@ module DbSync.Db.Statement.Worker.Backfill
   , backfillPhaseTwoDepositStmt
   , backfillValidContractDepositStmt
   , backfillByronFeeStmt
+    -- * Alternates via @tx_out.consumed_by_tx_id@
+    --
+    -- Used when @utxo.tx_in@ is off: the @tx_in@ table is empty, so the
+    -- input sums come from the consumed-by back-pointer instead. They
+    -- rely on the consumed-by scaffolding index.
+  , backfillPhaseTwoFeeViaConsumedByStmt
+  , backfillValidContractDepositViaConsumedByStmt
+  , backfillByronFeeViaConsumedByStmt
     -- * Deposit-affecting source tables
   , depositSourceTxIds
     -- * Raw SQL strings
@@ -23,6 +31,9 @@ module DbSync.Db.Statement.Worker.Backfill
   , backfillPhaseTwoDepositSql
   , backfillValidContractDepositSql
   , backfillByronFeeSql
+  , backfillPhaseTwoFeeViaConsumedBySql
+  , backfillValidContractDepositViaConsumedBySql
+  , backfillByronFeeViaConsumedBySql
   ) where
 
 import Cardano.Prelude
@@ -104,6 +115,30 @@ backfillPhaseTwoFeeSql = T.unwords
   , "  AND EXISTS ("
   , "    SELECT 1 FROM", table txInTableDef, "ti"
   , "    WHERE", qcol "ti" txInCols.ticTxInId
+  ,         "= tx.", col txCols.tcId, ")"
+  ]
+
+-- | 'backfillPhaseTwoFeeStmt' with the input sum read off
+-- @tx_out.consumed_by_tx_id@ instead of the @tx_in@ join.
+backfillPhaseTwoFeeViaConsumedByStmt :: Stmt.Statement () Int64
+backfillPhaseTwoFeeViaConsumedByStmt =
+  Stmt.preparable backfillPhaseTwoFeeViaConsumedBySql E.noParams D.rowsAffected
+
+backfillPhaseTwoFeeViaConsumedBySql :: Text
+backfillPhaseTwoFeeViaConsumedBySql = T.unwords
+  [ "UPDATE", table txTableDef
+  , "SET",    col txCols.tcFee, "= COALESCE("
+  , "  (SELECT SUM(p.", col txOutCols.tocValue, ")"
+  , "   FROM", table txOutTableDef, "p"
+  , "   WHERE", qcol "p" txOutCols.tocConsumedByTxId
+  ,        "= tx.", col txCols.tcId, "),"
+  , "  0)"
+  , "- tx.", col txCols.tcOutSum
+  , "WHERE", col txCols.tcValidContract, "= FALSE"
+  , "  AND", col txCols.tcFee, "= 0"
+  , "  AND EXISTS ("
+  , "    SELECT 1 FROM", table txOutTableDef, "p"
+  , "    WHERE", qcol "p" txOutCols.tocConsumedByTxId
   ,         "= tx.", col txCols.tcId, ")"
   ]
 
@@ -193,6 +228,54 @@ backfillValidContractDepositSql sources = T.unwords
     sourceSelect c = T.unwords
       ["SELECT", col c, "AS tx_id FROM", table c.tcTable]
 
+-- | 'backfillValidContractDepositStmt' with @in_sum@ aggregated over
+-- @tx_out.consumed_by_tx_id@ instead of the @tx_in@ join.
+backfillValidContractDepositViaConsumedByStmt :: [TableColumn] -> Stmt.Statement () Int64
+backfillValidContractDepositViaConsumedByStmt sources =
+  Stmt.preparable
+    (backfillValidContractDepositViaConsumedBySql sources)
+    E.noParams
+    D.rowsAffected
+
+backfillValidContractDepositViaConsumedBySql :: [TableColumn] -> Text
+backfillValidContractDepositViaConsumedBySql sources = T.unwords
+  [ "WITH affected_txs AS ("
+  , T.intercalate " UNION ALL " (map sourceSelect sources)
+  , "), targets AS ("
+  , "  SELECT DISTINCT a.tx_id"
+  , "  FROM affected_txs a"
+  , "  JOIN", table txTableDef, "ON tx.", col txCols.tcId, "= a.tx_id"
+  , "  WHERE tx.", col txCols.tcValidContract, "= TRUE"
+  , "    AND tx.", col txCols.tcDeposit, "IS NULL"
+  , "), in_sum AS ("
+  , "  SELECT", qcol "p" txOutCols.tocConsumedByTxId, "AS tx_id,"
+  , "         SUM(p.", col txOutCols.tocValue, ") AS total"
+  , "  FROM",  table txOutTableDef, "p"
+  , "  WHERE", qcol "p" txOutCols.tocConsumedByTxId
+  ,        "IN (SELECT tx_id FROM targets)"
+  , "  GROUP BY", qcol "p" txOutCols.tocConsumedByTxId
+  , "), withdraw_sum AS ("
+  , "  SELECT", col withdrawalCols.wcTxId, ","
+  , "         SUM(", col withdrawalCols.wcAmount, ") AS total"
+  , "  FROM",  table withdrawalTableDef
+  , "  WHERE", col withdrawalCols.wcTxId
+  ,        "IN (SELECT tx_id FROM targets)"
+  , "  GROUP BY", col withdrawalCols.wcTxId
+  , ")"
+  , "UPDATE", table txTableDef
+  , "SET", col txCols.tcDeposit, "="
+  , "  COALESCE(i.total, 0) + COALESCE(w.total, 0)"
+  , "  - tx.", col txCols.tcOutSum
+  , "  - tx.", col txCols.tcFee
+  , "  - tx.", col txCols.tcTreasuryDonation
+  , "FROM in_sum i"
+  , "LEFT JOIN withdraw_sum w ON w.tx_id = i.tx_id"
+  , "WHERE tx.", col txCols.tcId, "= i.tx_id"
+  ]
+  where
+    sourceSelect c = T.unwords
+      ["SELECT", col c, "AS tx_id FROM", table c.tcTable]
+
 -- | @fee = inputs - outputs@ for Byron-era txs whose @fee@ is still
 -- the @0@ sentinel. Byron blocks are identified via @block.vrf_key IS
 -- NULL@ (a Shelley+ header field): the final Byron epoch already
@@ -228,5 +311,32 @@ backfillByronFeeSql = T.unwords
   , "  AND EXISTS ("
   , "    SELECT 1 FROM", table txInTableDef, "ti"
   , "    WHERE", qcol "ti" txInCols.ticTxInId
+  ,         "= tx.", col txCols.tcId, ")"
+  ]
+
+-- | 'backfillByronFeeStmt' with the input sum read off
+-- @tx_out.consumed_by_tx_id@ instead of the @tx_in@ join.
+backfillByronFeeViaConsumedByStmt :: Stmt.Statement () Int64
+backfillByronFeeViaConsumedByStmt =
+  Stmt.preparable backfillByronFeeViaConsumedBySql E.noParams D.rowsAffected
+
+backfillByronFeeViaConsumedBySql :: Text
+backfillByronFeeViaConsumedBySql = T.unwords
+  [ "UPDATE", table txTableDef
+  , "SET",    col txCols.tcFee, "= COALESCE("
+  , "  (SELECT SUM(p.", col txOutCols.tocValue, ")"
+  , "   FROM", table txOutTableDef, "p"
+  , "   WHERE", qcol "p" txOutCols.tocConsumedByTxId
+  ,        "= tx.", col txCols.tcId, "),"
+  , "  0)"
+  , "- tx.", col txCols.tcOutSum
+  , "FROM", table blockTableDef, "b"
+  , "WHERE tx.", col txCols.tcBlockId
+  ,         "= b.", col blockCols.bcId
+  , "  AND b.", col blockCols.bcVrfKey, "IS NULL"
+  , "  AND tx.", col txCols.tcFee, "= 0"
+  , "  AND EXISTS ("
+  , "    SELECT 1 FROM", table txOutTableDef, "p"
+  , "    WHERE", qcol "p" txOutCols.tocConsumedByTxId
   ,         "= tx.", col txCols.tcId, ")"
   ]

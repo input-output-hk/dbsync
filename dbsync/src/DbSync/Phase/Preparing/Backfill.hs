@@ -6,7 +6,8 @@
 -- 'DbSync.Db.Statement.Worker.RedeemerScriptHash' /
 -- 'DbSync.Db.Statement.Worker.EpochParamPending'.
 module DbSync.Phase.Preparing.Backfill
-  ( backfillTxColumns
+  ( InputSource (..)
+  , backfillTxColumns
   , rebuildSpendScriptHash
   , applyDepositPending
   , truncateDepositPending
@@ -23,9 +24,12 @@ import DbSync.Db.Run (useConn)
 import DbSync.Db.Schema.Types (TableColumn (..), TableDef)
 import DbSync.Db.Statement.Worker.Backfill
   ( backfillByronFeeStmt
+  , backfillByronFeeViaConsumedByStmt
   , backfillPhaseTwoDepositStmt
   , backfillPhaseTwoFeeStmt
+  , backfillPhaseTwoFeeViaConsumedByStmt
   , backfillValidContractDepositStmt
+  , backfillValidContractDepositViaConsumedByStmt
   , depositSourceTxIds
   )
 import DbSync.Db.Statement.EpochView (backfillEpochFinalizedStmt)
@@ -39,6 +43,18 @@ import DbSync.Db.Transaction (HasHasqlConnection (..))
 import DbSync.Phase.Preparing.Step (StepKind (..), step, stepRows)
 import DbSync.Trace (HasTracer (..))
 
+-- | Where the fee/deposit backfills read input values from.
+data InputSource
+  = InputsViaTxIn
+    -- ^ The @tx_in@ → @tx_out@ join. Requires the CTAS resolve.
+  | InputsViaConsumedBy
+    -- ^ @tx_out.consumed_by_tx_id@. Used when @utxo.tx_in@ is off.
+      -- Requires the consumed-by scaffolding index.
+  | NoInputSource
+    -- ^ Neither table carries spend info; fee/deposit sums are
+      -- skipped and keep their sentinels.
+  deriving stock (Eq, Show)
+
 -- | Execute the four backfill UPDATEs. Must run after
 -- 'DbSync.Phase.Preparing.Resolve.resolveInputTxOutIds' so
 -- that @tx_in.tx_out_id@ / @collateral_tx_in.tx_out_id@ are
@@ -49,19 +65,27 @@ import DbSync.Trace (HasTracer (..))
 -- when none of them are.
 backfillTxColumns
   :: (HasTracer env, HasHasqlConnection env, MonadReader env m, MonadUnliftIO m)
-  => [TableDef] -> m Int64
-backfillTxColumns tables = do
-  n1 <- stepRows BackfillStep "tx.fee (phase-2 failed txs)" $
-          runRowsAffected backfillPhaseTwoFeeStmt
-  n2 <- stepRows BackfillStep "tx.fee (Byron txs)" $
-          runRowsAffected backfillByronFeeStmt
+  => InputSource -> [TableDef] -> m Int64
+backfillTxColumns inputSource tables = do
+  n1 <- forSource "tx.fee (phase-2 failed txs)"
+          backfillPhaseTwoFeeStmt
+          backfillPhaseTwoFeeViaConsumedByStmt
+  n2 <- forSource "tx.fee (Byron txs)"
+          backfillByronFeeStmt
+          backfillByronFeeViaConsumedByStmt
   n3 <- stepRows BackfillStep "tx.deposit (phase-2 failed txs)" $
           runRowsAffected backfillPhaseTwoDepositStmt
   n4 <- case filter ((`elem` tables) . tcTable) depositSourceTxIds of
           []      -> pure 0
-          sources -> stepRows BackfillStep "tx.deposit (valid-contract txs)" $
-                       runRowsAffected (backfillValidContractDepositStmt sources)
+          sources -> forSource "tx.deposit (valid-contract txs)"
+                       (backfillValidContractDepositStmt sources)
+                       (backfillValidContractDepositViaConsumedByStmt sources)
   pure (n1 + n2 + n3 + n4)
+  where
+    forSource label viaTxIn viaConsumedBy = case inputSource of
+      InputsViaTxIn       -> stepRows BackfillStep label (runRowsAffected viaTxIn)
+      InputsViaConsumedBy -> stepRows BackfillStep label (runRowsAffected viaConsumedBy)
+      NoInputSource       -> pure 0
 
 -- | Rebuild @redeemer@ with @script_hash@ filled for spend redeemers
 -- from the payment credential of the output each one unlocks. Must run

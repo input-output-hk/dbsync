@@ -151,6 +151,8 @@ syncStateTableDef = TableDef
       , ColumnDef "extractors"                      PgTextArray   False
       , ColumnDef "network_magic"                   PgBigInt      False
       , ColumnDef "network_name"                    PgText        False
+      , ColumnDef "utxo_consumed_by_tx_id"          PgBoolean     False
+      , ColumnDef "utxo_strategy"                   PgText        False
       , ColumnDef "updated_at"                      PgTimestampTz False
       ]
   , tdMode          = TableLogged
@@ -264,6 +266,8 @@ data SyncStateCols = SyncStateCols
   , sscExtractors                  :: !TableColumn
   , sscNetworkMagic                :: !TableColumn
   , sscNetworkName                 :: !TableColumn
+  , sscUtxoConsumedByTxId          :: !TableColumn
+  , sscUtxoStrategy                :: !TableColumn
   , sscUpdatedAt                   :: !TableColumn
   }
 
@@ -304,6 +308,8 @@ syncStateCols =
        , sscExtractors                 = c "extractors"
        , sscNetworkMagic               = c "network_magic"
        , sscNetworkName                = c "network_name"
+       , sscUtxoConsumedByTxId         = c "utxo_consumed_by_tx_id"
+       , sscUtxoStrategy               = c "utxo_strategy"
        , sscUpdatedAt                  = c "updated_at"
        }
 
@@ -342,6 +348,8 @@ syncStateColsList =
   , syncStateCols.sscExtractors
   , syncStateCols.sscNetworkMagic
   , syncStateCols.sscNetworkName
+  , syncStateCols.sscUtxoConsumedByTxId
+  , syncStateCols.sscUtxoStrategy
   , syncStateCols.sscUpdatedAt
   ]
 
@@ -393,9 +401,10 @@ syncStateRowEncoder =
 --
 -- It consumes every column in 'tdColumns' order, so the statement can use
 -- a plain @SELECT *@. It discards the leading @id@ and the trailing
--- @schema_fingerprint@, @extractors@, @network_magic@, @network_name@ and
--- @updated_at@: the schema-version gate, the network gate and the @SET@
--- clause own those, not 'SyncStateRow'.
+-- @schema_fingerprint@, @extractors@, @network_magic@, @network_name@,
+-- @utxo_consumed_by_tx_id@, @utxo_strategy@ and @updated_at@: the
+-- schema-version gate, the network gate, the utxo-config gate and the
+-- @SET@ clause own those, not 'SyncStateRow'.
 syncStateRowDecoder :: D.Row SyncStateRow
 syncStateRowDecoder =
        skipCol D.int2                                          -- id
@@ -433,6 +442,8 @@ syncStateRowDecoder =
     <* skipCol (D.array (D.dimension replicateM (D.element (D.nonNullable D.text))))  -- extractors
     <* skipCol D.int8                                          -- network_magic
     <* skipCol D.text                                          -- network_name
+    <* skipCol D.bool                                          -- utxo_consumed_by_tx_id
+    <* skipCol D.text                                          -- utxo_strategy
     <* skipCol D.timestamptz                                   -- updated_at
   where
     -- Advance past one column and discard the value; the type is

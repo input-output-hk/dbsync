@@ -156,6 +156,7 @@ library
     DbSync.Phase.Ingest.Resolver.ScriptsDatums
     DbSync.Phase.Ingest.Resolver.StakeDelegation
     DbSync.Phase.Ingest.Resolver.UTxO
+    DbSync.Phase.Ingest.UtxoLoad
     DbSync.Phase.Ingest.UtxoStore
     DbSync.Phase.Ingest.Writer
     DbSync.Phase.Ingest.Writer.Cbor
@@ -179,6 +180,7 @@ library
     DbSync.Phase.Preparing.Constraints
     DbSync.Phase.Preparing.Indexes
     DbSync.Phase.Preparing.PreResolveIndexes
+    DbSync.Phase.Preparing.Prune
     DbSync.Phase.Preparing.Resolve
     DbSync.Phase.Preparing.Run
     DbSync.Phase.Preparing.Sequences
@@ -188,6 +190,7 @@ library
     -- Phase: Following
     DbSync.Phase.Following.IdAllocator
     DbSync.Phase.Following.IdCounts
+    DbSync.Phase.Following.Prune
     DbSync.Phase.Following.Resolver
     DbSync.Phase.Following.Resolver.Core
     DbSync.Phase.Following.Resolver.Epoch
@@ -235,6 +238,7 @@ library
     DbSync.Worker.Ledger.StakeDist
     DbSync.Worker.Ledger.State
     DbSync.Worker.Ledger.Types
+    DbSync.Worker.Ledger.Utxo
     DbSync.Worker.Ledger.Worker
     DbSync.Worker.OffChain.Fetcher
     DbSync.Worker.OffChain.Http

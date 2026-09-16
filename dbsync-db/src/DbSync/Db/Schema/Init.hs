@@ -11,6 +11,7 @@ module DbSync.Db.Schema.Init
   , initSchemaStatements
   , dropSchema
   , truncateDataTables
+  , truncateTables
   , prepareSchemaForFollowTip
 
     -- * Extractor presence
@@ -168,13 +169,19 @@ dropSchema tableDefs connStr = do
 -- the aborted leg survive and collide with the genesis re-COPY.
 -- @RESTART IDENTITY@ rewinds the sequences, so the re-COPY starts at 1.
 truncateDataTables :: [TableDef] -> Text -> IO ()
-truncateDataTables tableDefs connStr =
+truncateDataTables tableDefs =
+  truncateByName (map tdName tableDefs <> [epochParamPendingTableName])
+
+-- | Empty exactly the given tables, nothing else.
+truncateTables :: [TableDef] -> Text -> IO ()
+truncateTables = truncateByName . map tdName
+
+truncateByName :: [Text] -> Text -> IO ()
+truncateByName names connStr =
   unless (null names) $
     execPsql connStr $
       "TRUNCATE TABLE " <> T.intercalate ", " (map quoteIdent names)
         <> " RESTART IDENTITY CASCADE;"
-  where
-    names = map tdName tableDefs <> [epochParamPendingTableName]
 
 -- | Flip UNLOGGED extractor tables to LOGGED and attach an
 -- @<table>_id_seq@. Idempotent. Precondition for hasql INSERTs.

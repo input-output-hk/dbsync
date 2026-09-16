@@ -16,7 +16,13 @@ import Data.List (sortOn)
 import qualified Hasql.Connection.Settings as ConnSettings
 import qualified Hasql.Session as Sess
 
-import DbSync.App.Env (HasConfig)
+import DbSync.App.Config.Types
+  ( Extractors (..)
+  , SyncConfig (..)
+  , UtxoOption (..)
+  , UtxoStrategy (..)
+  )
+import DbSync.App.Env (HasConfig (..))
 import DbSync.Db.Pool (forPooled_, usePool, withPrepPool)
 import DbSync.Db.Run (useConn)
 import DbSync.Db.Schema.Address (addressTableDef)
@@ -35,7 +41,9 @@ import DbSync.Db.Schema.UTxO
   , txOutTableDef
   )
 import DbSync.Db.Statement.Indexes
-  ( dropIndexSql
+  ( IndexStatement (..)
+  , consumedByResolveIndexStatement
+  , dropIndexSql
   , resolveScaffoldingIndexNames
   )
 import DbSync.Db.Transaction (HasHasqlConnection (..))
@@ -43,6 +51,7 @@ import qualified DbSync.Phase.Preparing.Backfill as Backfill
 import qualified DbSync.Phase.Preparing.Constraints as Constraints
 import qualified DbSync.Phase.Preparing.Indexes as Indexes
 import qualified DbSync.Phase.Preparing.PreResolveIndexes as PreResolveIndexes
+import qualified DbSync.Phase.Preparing.Prune as Prune
 import qualified DbSync.Phase.Preparing.Resolve as Resolve
 import qualified DbSync.Phase.Preparing.Sequences as Sequences
 import DbSync.Phase.Preparing.Step (StepKind (..), step)
@@ -69,6 +78,17 @@ run
   -> [TableDef]
   -> m ()
 run connSettings tuning tables = step PhaseStep "post-load pass" $ do
+  utxoOpts <- asks (exUtxo . scExtractors . getConfig)
+  -- from_ledger: spent outputs never got tx_out rows, so any
+  -- input-side sum over them is impossible; fees and deposits keep
+  -- their sentinels.
+  let inputSource
+        | not (hasTable (tdName txOutTableDef))      = Backfill.NoInputSource
+        | uoStrategy utxoOpts == StrategyFromLedger  = Backfill.NoInputSource
+        | uoTxIn utxoOpts                            = Backfill.InputsViaTxIn
+        | uoConsumedByTxId utxoOpts                  = Backfill.InputsViaConsumedBy
+        | otherwise                                  = Backfill.NoInputSource
+
   -- Set first, so every later index build and ANALYZE on the control
   -- connection picks them up. Pool backends set the same GUCs in
   -- their initSession hook.
@@ -93,14 +113,29 @@ run connSettings tuning tables = step PhaseStep "post-load pass" $ do
     for_ (filter (hasTable . tdName) backfillAnalyzeTables) $ \td ->
       runDdl (analyzeSql (tdName td))
 
-  _ <- Backfill.backfillTxColumns tables
-  -- Needs both tables: the hash comes off the spent output that
-  -- @tx_in@ points at, and lands on a @redeemer@ row.
-  when (hasTable (tdName redeemerTableDef) && hasTable (tdName txInTableDef))
+  -- The consumed-by alternates correlate on @tx_out.consumed_by_tx_id@,
+  -- which has no index until the production build.
+  when (inputSource == Backfill.InputsViaConsumedBy) $
+    step IndexStep (isName consumedByResolveIndexStatement) $
+      runDdl (isSql consumedByResolveIndexStatement)
+
+  _ <- Backfill.backfillTxColumns inputSource tables
+  -- Needs both tables populated: the hash comes off the spent output
+  -- that @tx_in@ points at, and lands on a @redeemer@ row. With
+  -- @utxo.tx_in@ off the spend hashes are unrecoverable and stay NULL;
+  -- under from_ledger the spent outputs have no rows to read them from.
+  when (hasTable (tdName redeemerTableDef) && hasTable (tdName txInTableDef)
+          && uoTxIn utxoOpts && uoStrategy utxoOpts /= StrategyFromLedger)
     Backfill.rebuildSpendScriptHash
   _ <- Backfill.applyDepositPending
   step CleanupStep "truncate epoch_param_pending"
     Backfill.truncateDepositPending
+
+  -- After every backfill above: they read the values of the outputs
+  -- this deletes. Before the flip and index build: neither should
+  -- touch a row that is about to go.
+  when (uoStrategy utxoOpts == StrategyPrune && hasTable (tdName txOutTableDef)) $
+    void $ Prune.pruneConsumedOutputs tables
 
   -- No step below reads through the scaffolding indexes. Drop them
   -- before the flip: @ALTER TABLE … SET LOGGED@ rewrites the heap and

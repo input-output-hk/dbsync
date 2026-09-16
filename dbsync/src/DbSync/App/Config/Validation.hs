@@ -14,6 +14,7 @@ import DbSync.App.Config.Types
   , Extractors (..)
   , SyncConfig (..)
   , UtxoOption (..)
+  , UtxoStrategy (..)
   )
 
 validateConfig :: SyncConfig -> Either [ConfigError] SyncConfig
@@ -30,6 +31,8 @@ validateConfig cfg =
       , checkMultiAssetRequiresUtxo cfg
       , checkOffChainPoolsRequiresPool cfg
       , checkOffChainVotesRequiresGovernance cfg
+      , checkPruneRequiresConsumedByTxId cfg
+      , checkFromLedgerRequiresLedger cfg
       ]
 
 -- ---------------------------------------------------------------------------
@@ -124,3 +127,25 @@ checkOffChainVotesRequiresGovernance cfg
   | otherwise = []
   where
     extractors = scExtractors cfg
+
+checkPruneRequiresConsumedByTxId :: SyncConfig -> [ConfigError]
+checkPruneRequiresConsumedByTxId cfg
+  | uoStrategy utxo == StrategyPrune && not (uoConsumedByTxId utxo) =
+      [ ConfigValidationError
+          "utxo.strategy \"prune\" requires utxo.consumed_by_tx_id = true. \
+          \Pruning deletes tx_out rows marked consumed."
+      ]
+  | otherwise = []
+  where
+    utxo = exUtxo (scExtractors cfg)
+
+checkFromLedgerRequiresLedger :: SyncConfig -> [ConfigError]
+checkFromLedgerRequiresLedger cfg
+  | uoStrategy utxo == StrategyFromLedger && not (lcEnabled (scLedger cfg)) =
+      [ ConfigValidationError
+          "utxo.strategy \"from_ledger\" requires ledger.enabled = true. \
+          \The UTxO set is bulk-loaded from the ledger state at tip."
+      ]
+  | otherwise = []
+  where
+    utxo = exUtxo (scExtractors cfg)

@@ -8,8 +8,9 @@
 module DbSync.App.Run
   ( runApp
 
-    -- * Exported for the network-gate integration tests
+    -- * Exported for the gate integration tests
   , runNetworkGate
+  , runUtxoConfigGate
   ) where
 
 import Cardano.Prelude
@@ -37,10 +38,12 @@ import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (listSnapshots)
 import Ouroboros.Network.Magic (NetworkMagic (..))
 
 import DbSync.App.Setup
-  ( buildCoreEnv
+  ( applyUtxoWriterOptions
+  , buildCoreEnv
   , runStartup
   , setupOffChainPoolWorker
   , setupOffChainVoteWorker
+  , silenceFromLedgerOutputs
   )
 import DbSync.App.Args (AppArgs (..))
 import DbSync.AppM (runAppM)
@@ -52,6 +55,7 @@ import DbSync.SyncState.Row
   , openControlConnection
   , readNetwork
   , readSyncState
+  , readUtxoConfig
   , seedSyncState
   )
 import DbSync.App.Env
@@ -70,9 +74,11 @@ import DbSync.App.Config.Types
     ( LedgerConfig(..),
       SyncConfig(..),
       Extractors(..),
-      UtxoOption(..) )
+      UtxoOption(..),
+      UtxoStrategy(..),
+      renderUtxoStrategy )
 import DbSync.Db.Loader (LoaderStream (..), closeLoaderStream, mkLoaderStream)
-import DbSync.Db.Schema.Types (TableDef)
+import DbSync.Db.Schema.Types (TableDef, tdName)
 import DbSync.Db.Schema.Migration (MigrationOutcome (..), runMigrations)
 import DbSync.Db.Schema.Init
   ( SchemaAction (..)
@@ -83,11 +89,11 @@ import DbSync.Db.Schema.Init
   , renderSchemaMismatch
   , showWalLevel
   , truncateDataTables
+  , truncateTables
   )
 import DbSync.Schema.Version (Fingerprint, currentSchemaVersion, unFingerprint)
 import DbSync.Extractor.Registry (declaredSchemaFingerprint)
 import DbSync.Extractor (ExtractorDef (..))
-import DbSync.Phase.Following.Resolver (ConsumedTracking (..))
 import DbSync.Phase.Ingest.DedupStore (DedupStores, closeStores)
 import DbSync.Phase.Ingest.Consumer (runConsumer)
 import DbSync.Phase.Ingest.Gauge (withPipelineGauge)
@@ -117,7 +123,9 @@ import DbSync.ChainSync.Connection
 import DbSync.App.Boot
   ( BootDecision (..)
   , BootError (..)
+  , Configured (..)
   , IngestBootState (..)
+  , Stored (..)
   , abortBoot
   , decideBoot
   , handlePreBootRollback
@@ -230,21 +238,23 @@ runApp tracer args = do
       connStrTxt       = TE.decodeUtf8 connStr
       schemaVersion    = currentSchemaVersion
       ledgerEnabledCfg = lcEnabled (scLedger validConfig)
+      utxoCfg          = exUtxo (scExtractors validConfig)
   freshInit <- setupSchema
     tracer ledgerEnabledCfg ledgerStateDir
     tableDefs extractorNames connStrTxt (aaResyncFromGenesis args)
 
   -- 6. Open the consumer's control connection, seed
-  -- @dbsync_sync_state@ on a fresh schema, then run the two gates.
+  -- @dbsync_sync_state@ on a fresh schema, then run the gates.
   consumerCtrlConn <- openControlConnection hasqlSettings
   when freshInit $
     setupFreshSyncState
       tracer consumerCtrlConn connStrTxt
       schemaVersion declaredSchemaFingerprint ledgerEnabledCfg extractorNames
-      networkMagic
+      networkMagic utxoCfg
   runMigrationGate
     tracer consumerCtrlConn schemaVersion declaredSchemaFingerprint extractorNames
   runNetworkGate tracer consumerCtrlConn networkMagic
+  runUtxoConfigGate tracer consumerCtrlConn utxoCfg
 
   -- 7. SystemStart and the ledger subsystem.
   let systemStart = SystemStart (sgSystemStart $ scConfig $ gcShelley genesisCfg)
@@ -303,7 +313,14 @@ runApp tracer args = do
                 "Fresh boot on a non-empty schema; purging orphan rows from an aborted pre-boundary leg"
               truncateDataTables tableDefs connStrTxt
             Just <$> resolveFreshBoot tracer hasLedgerEnv lsmSession
-          BootResume rc ->
+          BootResume rc -> do
+            -- Under from_ledger, tx_out/ma_tx_out hold only rows from an
+            -- aborted final load; resume-cleanup cannot classify them by
+            -- slot, so the load restarts from empty tables.
+            when (uoStrategy utxoCfg == StrategyFromLedger) $
+              truncateTables
+                (filter ((`elem` ["tx_out", "ma_tx_out"]) . tdName) tableDefs)
+                connStrTxt
             Just <$> resolveResumeBoot
               tracer topLevelCfg
               stateQueryVar hasLedgerEnv consumerCtrlConn tableDefs lsmSession rc
@@ -368,6 +385,27 @@ runNetworkGate tracer ctrlConn networkMagic = do
     "Network: " <> networkNameFromMagic networkMagic
       <> " (magic " <> show (unNetworkMagic networkMagic) <> ")"
 
+-- | Abort when the utxo settings recorded at seed time differ from
+-- the current config. Both are sticky: flipping @consumed_by_tx_id@
+-- leaves the column partially populated; changing @strategy@ changes
+-- which tx_out rows exist. Passes quietly while the sync-state row is
+-- missing, because 'decideBoot' classifies that case.
+runUtxoConfigGate :: AppTracer -> ControlConnection -> UtxoOption -> IO ()
+runUtxoConfigGate tracer ctrlConn utxoCfg = do
+  mStored <- runAppM ctrlConn readUtxoConfig
+  for_ mStored $ \(storedConsumed, storedStrategy) -> do
+    when (storedConsumed /= uoConsumedByTxId utxoCfg) $
+      abortBoot tracer $
+        BootConsumedByTxIdMismatch
+          (Stored storedConsumed)
+          (Configured (uoConsumedByTxId utxoCfg))
+    let cfgStrategy = renderUtxoStrategy (uoStrategy utxoCfg)
+    when (storedStrategy /= cfgStrategy) $
+      abortBoot tracer $
+        BootUtxoStrategyMismatch
+          (Stored storedStrategy)
+          (Configured cfgStrategy)
+
 -- | Classify the boot with 'decideSchemaAction' and run the matching
 -- effect: init, drop and init, no-op, or abort.
 -- @--resync-from-genesis@ also wipes the ledger state directory, so a
@@ -428,12 +466,15 @@ setupFreshSyncState
   -> Bool                         -- ^ @ledger.enabled@
   -> [Text]                       -- ^ enabled extractor names
   -> NetworkMagic
+  -> UtxoOption
   -> IO ()
-setupFreshSyncState tracer ctrl connStrTxt schemaVersion fingerprint ledgerEnabledCfg extractorNames networkMagic = do
+setupFreshSyncState tracer ctrl connStrTxt schemaVersion fingerprint
+                    ledgerEnabledCfg extractorNames networkMagic utxoCfg = do
   runAppM ctrl $
     seedSyncState
       schemaVersion fingerprint ledgerEnabledCfg extractorNames
       (unNetworkMagic networkMagic) (networkNameFromMagic networkMagic)
+      (uoConsumedByTxId utxoCfg) (renderUtxoStrategy (uoStrategy utxoCfg))
   logInfoIO tracer "App" "Sync-state seeded"
   walLevel <- showWalLevel connStrTxt
   unless (walLevel == "minimal") $
@@ -584,7 +625,11 @@ runIngestThenFollow
     mVoteWorker      <-
       setupOffChainVoteWorker tracer hasqlSettings (scExtractors validConfig)
     utxoStore        <- openUtxoStore lsmSession
-    let consumedByOn = uoConsumedByTxId (exUtxo (scExtractors validConfig))
+    -- from_ledger writes no tx_out during catchup, so there is nothing
+    -- to stamp; every row the load writes is unspent by definition.
+    let ingestUtxoCfg = exUtxo (scExtractors validConfig)
+        consumedByOn  = uoConsumedByTxId ingestUtxoCfg
+                          && uoStrategy ingestUtxoCfg /= StrategyFromLedger
     mConsumedByBuf <-
       if consumedByOn then Just <$> newConsumedByBufferRef else pure Nothing
     latestPointRef   <- newTVarIO Nothing
@@ -592,7 +637,9 @@ runIngestThenFollow
     latestTipBlock   <- newTVarIO Nothing
 
     let resolver = mkIngestResolver extractStateRef dedupStores addrBuffer utxoStore mConsumedByBuf
-        writer   = IngestWriter.mkWriter loaderStream
+        writer   =
+          silenceFromLedgerOutputs ingestUtxoCfg $
+            applyUtxoWriterOptions ingestUtxoCfg (IngestWriter.mkWriter loaderStream)
 
     let ingestEnv = IngestEnv
           { ieCore                    = coreEnv
@@ -818,12 +865,9 @@ handoffToFollow
 
     -- The receiver runs under 'followEnv', so its block queue and
     -- rollback-boundary refs are the ones 'IngestEnv' carried.
-    let consumedTracking =
-          if uoConsumedByTxId (exUtxo (scExtractors (ceConfig (ieCore ie))))
-            then TrackConsumedBy
-            else SkipConsumedBy
     runFollowSession tracer "App" iomgr hasqlSettings topLevelCfg
-      networkMagic socketPath intersectReq consumedTracking mShutdown
+      networkMagic socketPath intersectReq
+      (exUtxo (scExtractors (ceConfig (ieCore ie)))) mShutdown
       (mkFollowEnvFromIngest ie)
 
 

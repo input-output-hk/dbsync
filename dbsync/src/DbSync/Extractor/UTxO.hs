@@ -12,6 +12,7 @@ module DbSync.Extractor.UTxO
     -- * Internal helpers (exported for tests)
   , extractPaymentCred
   , extractStakeCred
+  , mkDatum
   , mkTxOut
   , rawHasScript
   ) where

@@ -78,6 +78,13 @@ Run workflow. A dispatch run is identical to a tag run except no draft
 release is created (and the tag==version check is skipped). Use it to
 rehearse the pipeline after workflow changes without touching tags.
 
+There is no artifact hand-off from a rehearsal to a release — "promoting"
+a green rehearsal simply means tagging the same commit. The tag run
+rebuilds the identical nix derivations (same commit, same drvs — anything
+already cached substitutes) and produces the draft; the image push
+overwrites `:X.Y.Z` with byte-identical content. The rehearsal's job is to
+prove the pipeline, not to produce the goods.
+
 Timings are dominated by one question: has Hydra (or a previous run)
 already populated `cache.iog.io` for this revision? Substituted: each
 build job is minutes. Cold: ~3 h per platform (full GHC bootstrap

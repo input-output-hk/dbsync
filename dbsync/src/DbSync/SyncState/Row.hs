@@ -14,6 +14,7 @@ module DbSync.SyncState.Row
     -- * Read \/ write
   , readSyncState
   , readNetwork
+  , readUtxoConfig
   , writeSyncState
   , seedSyncState
   , markSnapshotComplete
@@ -109,6 +110,7 @@ import DbSync.Db.Statement.SyncState
   , markSnapshotCompleteStmt
   , markSyncCompleteStmt
   , readNetworkStmt
+  , readUtxoConfigStmt
   , readPendingRollbackSlotStmt
   , readSyncStateStmt
   , seedSyncStateStmt
@@ -178,6 +180,13 @@ readNetwork
   => m (Maybe (Int64, Text))
 readNetwork = runCtrlStmt "readNetwork" () readNetworkStmt
 
+-- | The @(utxo_consumed_by_tx_id, utxo_strategy)@ pair recorded when
+-- the singleton was seeded. 'Nothing' if it has never been seeded.
+readUtxoConfig
+  :: (HasControlConnection env, MonadReader env m, MonadIO m)
+  => m (Maybe (Bool, Text))
+readUtxoConfig = runCtrlStmt "readUtxoConfig" () readUtxoConfigStmt
+
 -- | Overwrite the consumer-owned columns of the singleton row.
 -- Throws 'AppDatabaseError' when it affects zero rows, which means
 -- nobody called 'seedSyncState'.
@@ -200,8 +209,11 @@ seedSyncState
   -> [Text]       -- ^ enabled extractor names (@extractors@)
   -> Word32       -- ^ @network_magic@
   -> Text         -- ^ @network_name@
+  -> Bool         -- ^ @utxo_consumed_by_tx_id@
+  -> Text         -- ^ @utxo_strategy@
   -> m ()
-seedSyncState schemaVersion fingerprint ledgerEnabled extractorNames networkMagic networkName =
+seedSyncState schemaVersion fingerprint ledgerEnabled extractorNames
+              networkMagic networkName consumedByTxId utxoStrategy =
   runCtrlStmt "seedSyncState"
     ( fromIntegral schemaVersion
     , unFingerprint fingerprint
@@ -209,6 +221,8 @@ seedSyncState schemaVersion fingerprint ledgerEnabled extractorNames networkMagi
     , extractorNames
     , fromIntegral networkMagic
     , networkName
+    , consumedByTxId
+    , utxoStrategy
     )
     seedSyncStateStmt
 

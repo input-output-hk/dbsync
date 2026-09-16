@@ -20,6 +20,9 @@ module DbSync.Parser.Tx
   , fromConwayTx
   , fromDijkstraTx
 
+    -- * Ledger UTxO entries
+  , fromLedgerUtxoTxOut
+
     -- * Internal helpers (exported for tests)
   , drepToIdent
   , anchorData
@@ -127,7 +130,9 @@ import Ouroboros.Consensus.Cardano.Block
   , DijkstraEra
   , MaryEra
   , ShelleyEra
+  , StandardCrypto
   )
+import Ouroboros.Consensus.Cardano.Ledger (CardanoTxOut (..))
 
 import DbSync.Parser.Types
   ( GenericTx (..)
@@ -584,6 +589,30 @@ getBabbageDatum txOut =
             , gtdValue = Just (ScriptData.plutusDataToJson d)
             }
       in (Just (gtdHash gtd), Just gtd)
+
+-- | Rebuild a 'GenericTxOut' from an output in the ledger's UTxO set.
+--
+-- Shares 'mkMaryTxOut' with the block parsers, so a bulk-loaded row
+-- matches what Ingest would have written. The tip era decides how the
+-- whole set deserialises, so a pre-Babbage result means the caller
+-- asked too early rather than that this output is unusual.
+fromLedgerUtxoTxOut :: Word16 -> CardanoTxOut StandardCrypto -> Either Text GenericTxOut
+fromLedgerUtxoTxOut idx = \case
+  BabbageTxOut o ->
+    Right $ mkMaryTxOut getBabbageDatum (outputRefScript (fromAlonzoEraScript babbagePlutusType)) idx o
+  ConwayTxOut o ->
+    Right $ mkMaryTxOut getBabbageDatum (outputRefScript (fromAlonzoEraScript conwayPlutusType)) idx o
+  DijkstraTxOut o ->
+    Right $ mkMaryTxOut getBabbageDatum (outputRefScript (fromDijkstraEraScript dijkstraPlutusType)) idx o
+  ShelleyTxOut _ -> Left (preBabbage "Shelley")
+  AllegraTxOut _ -> Left (preBabbage "Allegra")
+  MaryTxOut _    -> Left (preBabbage "Mary")
+  AlonzoTxOut _  -> Left (preBabbage "Alonzo")
+  where
+    preBabbage era = mconcat
+      [ "utxo.strategy \"from_ledger\" needs a Babbage or later ledger "
+      , "state; the UTxO set deserialised as ", era
+      ]
 
 -- | Extract the Babbage+ collateral-return output, if present.
 --

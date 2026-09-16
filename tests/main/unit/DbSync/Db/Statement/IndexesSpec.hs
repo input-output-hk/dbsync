@@ -240,6 +240,7 @@ spec = describe "DbSync.Db.Statement.Indexes" $ do
         , "withdrawal_tx_id_idx"
         , "tx_in_tx_in_id_idx"
         , "collateral_tx_in_tx_in_id_idx"
+        , "tx_out_consumed_by_scaffold_idx"
         ]
 
   describe "dropIndexSql" $

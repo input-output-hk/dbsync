@@ -94,9 +94,13 @@ import DbSync.App.Config.Types
   , SyncConfig (..)
   , OptionFlag (..)
   , Extractors (..)
+  , UtxoOption (..)
+  , UtxoStrategy (..)
   )
 import DbSync.App.Env (HasConfig (..))
+import DbSync.Phase.Ingest.UtxoLoad (loadUtxoFromLedger)
 import DbSync.Worker.Ledger.Types (HasLedgerEnv (..))
+import DbSync.Worker.Ledger.Utxo (PinnedUtxo (..), pinUtxoAtOrAfter, unpinUtxo)
 import DbSync.Worker.TxOut.AddressBuffer (emptyEpochAddressBuffer)
 import qualified DbSync.Worker.TxOut.ConsumedByBuffer as ConsumedByBuffer
 import DbSync.Worker.TxOut.Worker
@@ -147,6 +151,7 @@ runConsumer = do
       reached <- liftIO $ rollbackBoundaryReached (clsLastBlock cls) boundaryVar
       if reached
         then do
+          runFromLedgerLoad cls
           finalFlushSyncState cls
           mLast <- liftIO $ readIORef (clsLastBlock cls)
           liftIO $ traceWith tracer $ LogMsg Info "Ingest"
@@ -162,6 +167,44 @@ runConsumer = do
       Nothing                 -> "(no block processed yet)"
       Just (slot, blk, _hash) ->
         "block " <> show blk <> " (slot " <> show slot <> ")"
+
+    -- Under from_ledger, bulk-load the live UTxO set before the final
+    -- flush. The worker usually sits ahead of the consumer, so the pin
+    -- lands at or past the consumer's last block; the run-out then
+    -- processes queued blocks up to exactly the pinned tip, making the
+    -- committed rows and the pinned set describe the same block. The
+    -- queue remainder stays for Follow.
+    runFromLedgerLoad :: ConsumerLoopState -> IngestM ()
+    runFromLedgerLoad cls = do
+      utxoOpts <- asks (exUtxo . scExtractors . getConfig)
+      when (uoEnabled utxoOpts && uoStrategy utxoOpts == StrategyFromLedger) $ do
+        hasLedger <- asks ieHasLedgerEnv
+        case hasLedger of
+          LedgerDisabled _ ->
+            panic "utxo.strategy \"from_ledger\" requires the ledger worker; config validation should have rejected this"
+          LedgerEnabled lenv -> do
+            mLast <- liftIO $ readIORef (clsLastBlock cls)
+            for_ mLast $ \(lastSlot, _blk, _hash) -> do
+              pinned <- liftIO $ pinUtxoAtOrAfter lenv (SlotNo lastSlot)
+              runOutTo cls (unSlotNo (puSlot pinned))
+              withRunInIO $ \runInIO ->
+                runInIO (loadUtxoFromLedger pinned)
+                  `Exception.finally` unpinUtxo pinned
+
+    -- Process queued blocks one at a time until the last processed
+    -- block sits at @target@. Every block up to the pinned tip is
+    -- already in the queue: the receiver enqueues here and to the
+    -- worker in one transaction, so the worker cannot be ahead of
+    -- this queue.
+    runOutTo :: ConsumerLoopState -> Word64 -> IngestM ()
+    runOutTo cls target = do
+      mLast <- liftIO $ readIORef (clsLastBlock cls)
+      let current = maybe 0 (\(s, _, _) -> s) mLast
+      when (current < target) $ do
+        queue <- asks ieBlockQueue
+        msg <- liftIO $ atomically $ readTBQueue queue
+        processBatch cls [msg]
+        runOutTo cls target
 
     -- Drain the final queued resolve job and advance @sync_state@ to
     -- the last completed epoch. The consumer exits mid-epoch at the

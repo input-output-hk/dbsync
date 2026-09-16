@@ -21,6 +21,7 @@ module DbSync.App.Config.Types
   , OptionFlag (..)
   , UtxoOption (..)
   , UtxoStrategy (..)
+  , renderUtxoStrategy
   , MetadataFormat (..)
   , GovernanceVariant (..)
 
@@ -344,26 +345,20 @@ instance FromJSON UtxoOption where
     consumedByTxId <- o .:? "consumed_by_tx_id" .!= uoConsumedByTxId defaultUtxoOption
     txIn           <- o .:? "tx_in"             .!= uoTxIn defaultUtxoOption
     strategy       <- o .:? "strategy"          .!= uoStrategy defaultUtxoOption
-    unless txIn $
-      Aeson.parseFail
-        "utxo.tx_in: false is not yet implemented. The deposit backfill \
-        \joins through tx_in.tx_out_id; an alternate backfill via \
-        \tx_out.consumed_by_tx_id is planned but not landed."
-    case strategy of
-      StrategyArchive    -> pure ()
-      StrategyPrune      -> Aeson.parseFail
-        "utxo.strategy: \"prune\" is not yet implemented. The Prep \
-        \step that DELETEs consumed tx_out rows has not landed."
-      StrategyFromLedger -> Aeson.parseFail
-        "utxo.strategy: \"from_ledger\" is not yet implemented. The \
-        \Prep step that bulk-loads live UTxO from the ledger state \
-        \has not landed."
     pure UtxoOption
       { uoEnabled        = enabled
       , uoConsumedByTxId = consumedByTxId
       , uoTxIn           = txIn
       , uoStrategy       = strategy
       }
+
+-- | Inverse of the 'FromJSON' spelling; also the on-disk form in the
+-- @dbsync_sync_state.utxo_strategy@ column.
+renderUtxoStrategy :: UtxoStrategy -> Text
+renderUtxoStrategy = \case
+  StrategyArchive    -> "archive"
+  StrategyPrune      -> "prune"
+  StrategyFromLedger -> "from_ledger"
 
 instance FromJSON UtxoStrategy where
   parseJSON = Aeson.withText "UtxoStrategy" $ \case

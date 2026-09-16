@@ -24,7 +24,9 @@ on sync time and disk usage.
 | `everything.json` | every extractor, ledger on | on |
 
 Sizes for each preset are in
-[Prerequisites](../installation/prerequisites#disk-space).
+[Prerequisites](../installation/prerequisites#disk-space). Coming from
+the original cardano-db-sync? See
+[Converting from cardano-db-sync](converting).
 
 Two extractors run in more presets than the table shows:
 
@@ -75,9 +77,9 @@ Suitable for:
 each `tx_out` to the transaction that spent it. `tx_in` is on by
 default too.
 
-The `archive` strategy stores every output ever produced. It is the
-only strategy that works: the parser rejects `prune` and
-`from_ledger`.
+The default `archive` strategy stores every output ever produced.
+`prune` and `from_ledger` trade history for size — see
+[the custom-configuration reference](custom.md#utxo).
 
 ## `spo`
 

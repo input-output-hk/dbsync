@@ -346,14 +346,11 @@ instance FromJSON UtxoOption where
     txIn           <- o .:? "tx_in"             .!= uoTxIn defaultUtxoOption
     strategy       <- o .:? "strategy"          .!= uoStrategy defaultUtxoOption
     case strategy of
-      StrategyArchive    -> pure ()
-      StrategyPrune      -> Aeson.parseFail
-        "utxo.strategy: \"prune\" is not yet implemented. The Prep \
-        \step that DELETEs consumed tx_out rows has not landed."
       StrategyFromLedger -> Aeson.parseFail
         "utxo.strategy: \"from_ledger\" is not yet implemented. The \
         \Prep step that bulk-loads live UTxO from the ledger state \
         \has not landed."
+      _ -> pure ()
     pure UtxoOption
       { uoEnabled        = enabled
       , uoConsumedByTxId = consumedByTxId

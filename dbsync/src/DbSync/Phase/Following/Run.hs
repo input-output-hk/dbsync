@@ -49,8 +49,15 @@ import DbSync.App.Config.Types
   , OptionFlag (..)
   , Extractors (..)
   , UtxoOption (..)
+  , UtxoStrategy (..)
   )
-import DbSync.App.Env (CoreEnv (..), FollowEnv (..), HasConfig (..), HasNetwork)
+import DbSync.App.Env
+  ( CoreEnv (..)
+  , FollowEnv (..)
+  , HasConfig (..)
+  , HasNetwork
+  , HasSecurityParam (..)
+  )
 import DbSync.App.Setup (applyUtxoWriterOptions)
 import DbSync.Extractor (ExtractorDef (..), cborCaptureEnabled, takeBlockLedgerData)
 import DbSync.Extractor.EpochBoundary (runEpochBoundary)
@@ -61,6 +68,7 @@ import DbSync.Extractor.Pipeline (processBlock)
 import DbSync.ChainSync.Msg (ChainSyncMsg (..))
 import DbSync.Phase.Following.IdAllocator (allocateAllIds)
 import DbSync.Phase.Following.IdCounts (countAssignableIds)
+import DbSync.Phase.Following.Prune (pruneConsumedAtBoundary)
 import DbSync.Phase.Following.Resolver (ConsumedTracking (..), mkBufferedFollowResolver)
 import qualified DbSync.Phase.Following.Rollback as Rollback
 import DbSync.Phase.Following.WriteBuffer (drain, newWriteBuffer)
@@ -349,6 +357,10 @@ processForward progressRef replayRef lastAppliedRef cardanoBlock = do
         -- transaction has committed; a crash before this point must
         -- leave the guard at the previous block.
         writeIORef lastAppliedRef (Just (blkBlockNo genBlock))
+        -- Outside the block transaction: the delete is unbounded in
+        -- size and must not be able to undo the committed block.
+        when (boundaryCrossed && uoStrategy utxoOpts == StrategyPrune) $
+          pruneConsumedAtBoundary tracer feHasqlConnection (getSecurityParam env)
       maybeFlipToTip (blkSlotNo genBlock) (blkBlockNo genBlock)
       maybeLogProgress progressRef now genBlock
 

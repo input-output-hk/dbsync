@@ -16,7 +16,12 @@ import Data.List (sortOn)
 import qualified Hasql.Connection.Settings as ConnSettings
 import qualified Hasql.Session as Sess
 
-import DbSync.App.Config.Types (Extractors (..), SyncConfig (..), UtxoOption (..))
+import DbSync.App.Config.Types
+  ( Extractors (..)
+  , SyncConfig (..)
+  , UtxoOption (..)
+  , UtxoStrategy (..)
+  )
 import DbSync.App.Env (HasConfig (..))
 import DbSync.Db.Pool (forPooled_, usePool, withPrepPool)
 import DbSync.Db.Run (useConn)
@@ -46,6 +51,7 @@ import qualified DbSync.Phase.Preparing.Backfill as Backfill
 import qualified DbSync.Phase.Preparing.Constraints as Constraints
 import qualified DbSync.Phase.Preparing.Indexes as Indexes
 import qualified DbSync.Phase.Preparing.PreResolveIndexes as PreResolveIndexes
+import qualified DbSync.Phase.Preparing.Prune as Prune
 import qualified DbSync.Phase.Preparing.Resolve as Resolve
 import qualified DbSync.Phase.Preparing.Sequences as Sequences
 import DbSync.Phase.Preparing.Step (StepKind (..), step)
@@ -119,6 +125,12 @@ run connSettings tuning tables = step PhaseStep "post-load pass" $ do
   _ <- Backfill.applyDepositPending
   step CleanupStep "truncate epoch_param_pending"
     Backfill.truncateDepositPending
+
+  -- After every backfill above: they read the values of the outputs
+  -- this deletes. Before the flip and index build: neither should
+  -- touch a row that is about to go.
+  when (uoStrategy utxoOpts == StrategyPrune && hasTable (tdName txOutTableDef)) $
+    void $ Prune.pruneConsumedOutputs tables
 
   -- No step below reads through the scaffolding indexes. Drop them
   -- before the flip: @ALTER TABLE … SET LOGGED@ rewrites the heap and

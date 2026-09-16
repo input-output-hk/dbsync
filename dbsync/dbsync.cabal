@@ -179,6 +179,7 @@ library
     DbSync.Phase.Preparing.Constraints
     DbSync.Phase.Preparing.Indexes
     DbSync.Phase.Preparing.PreResolveIndexes
+    DbSync.Phase.Preparing.Prune
     DbSync.Phase.Preparing.Resolve
     DbSync.Phase.Preparing.Run
     DbSync.Phase.Preparing.Sequences
@@ -188,6 +189,7 @@ library
     -- Phase: Following
     DbSync.Phase.Following.IdAllocator
     DbSync.Phase.Following.IdCounts
+    DbSync.Phase.Following.Prune
     DbSync.Phase.Following.Resolver
     DbSync.Phase.Following.Resolver.Core
     DbSync.Phase.Following.Resolver.Epoch

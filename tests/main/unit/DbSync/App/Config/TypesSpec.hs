@@ -184,15 +184,14 @@ spec = describe "DbSync.App.Config.Types" $ do
           uoTxIn (exUtxo (scExtractors cfg)) `shouldBe` False
           uoConsumedByTxId (exUtxo (scExtractors cfg)) `shouldBe` True
 
-  describe "utxo parser rejects values without an implementation" $ do
-    it "rejects strategy: prune" $ do
+    it "accepts strategy: prune" $ do
       result <- parseConfig "fixtures/utxo-strategy-prune.json"
       case result of
-        Right _ ->
-          panic "Expected parse failure for utxo.strategy = \"prune\""
-        Left err ->
-          Text.pack (show err) `shouldSatisfy` ("prune" `Text.isInfixOf`)
+        Left err  -> panic $ "Expected parse success: " <> Text.pack (show err)
+        Right cfg ->
+          uoStrategy (exUtxo (scExtractors cfg)) `shouldBe` StrategyPrune
 
+  describe "utxo parser rejects values without an implementation" $ do
     it "rejects strategy: from_ledger" $ do
       result <- parseConfig "fixtures/utxo-strategy-from-ledger.json"
       case result of

@@ -685,7 +685,10 @@ governanceSpecs =
       "gov_action_proposal_id"
       "gov_action_proposal"
       "tx_id"
-      [both "gov_action" (govActionRef "gov_action_proposal_id"), both "stake_addr" (stakeRef "stake_address_id")]
+      [ both "gov_action" (govActionRef "gov_action_proposal_id")
+      , both "gov_action_index" (govActionIndexRef "gov_action_proposal_id")
+      , both "stake_addr" (stakeRef "stake_address_id")
+      ]
       [numeric "amount"]
   , parentScopedSpec
       "committee"

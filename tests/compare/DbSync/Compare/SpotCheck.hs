@@ -8,6 +8,7 @@ import Data.IORef (newIORef, readIORef, writeIORef)
 import qualified Data.Text as T
 import DbSync.Compare.Check (Check (..), CheckItem (..), CheckOutcome (..))
 import DbSync.Compare.Connect (DbConn, queryBool, queryMaybeInt, queryRows, queryScalarInt)
+import DbSync.Compare.Introspect (AddressShape (..))
 import DbSync.Compare.Normalize (asText, bytea, floatText, jsonbCanonical, numericText, timestampEpoch)
 import DbSync.Compare.RowCompare (KeyedRow, RowDiff (..), compareRowSets, toKeyedRow)
 import System.Random (mkStdGen, randomR)
@@ -20,6 +21,8 @@ data SpotCheckConfig = SpotCheckConfig
   { scSeed :: !Int
   , scSamples :: !Int -- ^ Width of the block window sampled per era.
   , scEraFilter :: !(Maybe [Text]) -- ^ Restrict to these eras; Nothing means all.
+  , scOldAddressShape :: !AddressShape -- ^ How the old side stores tx_out address columns.
+  , scNewAddressShape :: !AddressShape -- ^ How the new side stores tx_out address columns.
   }
 
 -- ---------------------------------------------------------------------------
@@ -328,22 +331,36 @@ txFields =
 txOutKeys :: [FieldSpec]
 txOutKeys = [plain "index"]
 
--- Address columns are inline on the old side and normalised behind address_id
--- on the new side; stake_address joins identically on both.
-txOutFields :: [FieldSpec]
-txOutFields =
-  [ FieldSpec "address" (asText "t.address") (asText "(SELECT a.address FROM address a WHERE a.id = t.address_id)")
-  , FieldSpec "has_script" (asText "t.address_has_script") (asText "(SELECT a.has_script FROM address a WHERE a.id = t.address_id)")
-  , FieldSpec "payment_cred" (bytea "t.payment_cred") (bytea "(SELECT a.payment_cred FROM address a WHERE a.id = t.address_id)")
+data AddressColumn = AddrRaw | AddrHasScript | AddrPaymentCred
+
+addressColExpr :: AddressShape -> AddressColumn -> Text
+addressColExpr AddressInline col = case col of
+  AddrRaw -> "t.address"
+  AddrHasScript -> "t.address_has_script"
+  AddrPaymentCred -> "t.payment_cred"
+addressColExpr (AddressNormalised rawCol) col =
+  let name = case col of
+        AddrRaw -> rawCol
+        AddrHasScript -> "has_script"
+        AddrPaymentCred -> "payment_cred"
+   in "(SELECT a." <> name <> " FROM address a WHERE a.id = t.address_id)"
+
+addressFieldSpec
+  :: AddressShape -> AddressShape -> Text -> AddressColumn -> (Text -> Text) -> FieldSpec
+addressFieldSpec oldS newS label col wrap =
+  FieldSpec label (wrap (addressColExpr oldS col)) (wrap (addressColExpr newS col))
+
+txOutFields :: AddressShape -> AddressShape -> [FieldSpec]
+txOutFields oldS newS =
+  [ addressFieldSpec oldS newS "address" AddrRaw asText
+  , addressFieldSpec oldS newS "has_script" AddrHasScript asText
+  , addressFieldSpec oldS newS "payment_cred" AddrPaymentCred bytea
   , both "stake_addr" (stakeRef "stake_address_id")
   , numeric "value"
   , hexed "data_hash"
   ]
 
--- multi_assets_descr is a denormalised human-readable string the two dbsyncs
--- render differently (Show of a MultiAsset map vs a tuple list); the canonical
--- asset data lives in ma_tx_out, so the description is left out of the compare.
-collateralTxOutFields :: [FieldSpec]
+collateralTxOutFields :: AddressShape -> AddressShape -> [FieldSpec]
 collateralTxOutFields = txOutFields
 
 -- The consumed output is named by tx hash + index on both sides; old resolves
@@ -513,15 +530,15 @@ orRanges col lo hi scopes =
 parens :: Text -> Text
 parens t = "(" <> t <> ")"
 
-tableSpecs :: [TableSpec]
-tableSpecs =
+tableSpecs :: AddressShape -> AddressShape -> [TableSpec]
+tableSpecs oldS newS =
   [ blockSpec
   , txSpec
-  , childSpec "tx_out" "tx_id" txOutKeys txOutFields
+  , childSpec "tx_out" "tx_id" txOutKeys (txOutFields oldS newS)
   , childSpec "tx_in" "tx_in_id" txInKeys []
   , childSpec "collateral_tx_in" "tx_in_id" txInKeys []
   , childSpec "reference_tx_in" "tx_in_id" txInKeys []
-  , childSpec "collateral_tx_out" "tx_id" txOutKeys collateralTxOutFields
+  , childSpec "collateral_tx_out" "tx_id" txOutKeys (collateralTxOutFields oldS newS)
   , childSpec "withdrawal" "tx_id" [both "addr" (stakeRef "addr_id")] [numeric "amount"]
   , childSpec "tx_metadata" "tx_id" [plain "key"] [jsonb "json", hexed "bytes"]
   , childSpec "ma_tx_mint" "tx_id" [both "policy" assetPolicy, both "name" assetName] [numeric "quantity"]
@@ -668,7 +685,10 @@ governanceSpecs =
       "gov_action_proposal_id"
       "gov_action_proposal"
       "tx_id"
-      [both "gov_action" (govActionRef "gov_action_proposal_id"), both "stake_addr" (stakeRef "stake_address_id")]
+      [ both "gov_action" (govActionRef "gov_action_proposal_id")
+      , both "gov_action_index" (govActionIndexRef "gov_action_proposal_id")
+      , both "stake_addr" (stakeRef "stake_address_id")
+      ]
       [numeric "amount"]
   , parentScopedSpec
       "committee"
@@ -782,7 +802,7 @@ spotCheckChecks cfg epochCeiling = do
     Section "spot checks"
       : concat
         [ Section ("era " <> eraName era)
-            : [Item (mkCheck entry ref ts) | ts <- tableSpecs]
+            : [Item (mkCheck entry ref ts) | ts <- tableSpecs (scOldAddressShape cfg) (scNewAddressShape cfg)]
         | (entry@(era, _, _), ref) <- caches
         ]
   where

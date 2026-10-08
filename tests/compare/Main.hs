@@ -3,7 +3,7 @@ module Main (main) where
 import Cardano.Prelude
 import DbSync.Compare.Check (CheckItem (..), runChecks)
 import DbSync.Compare.Connect (DbRole (..), mkSettings, withDb)
-import DbSync.Compare.Introspect (computeBlockCeiling, computeCeiling, gatherFacts)
+import DbSync.Compare.Introspect (DbFacts (..), computeBlockCeiling, computeCeiling, gatherFacts)
 import DbSync.Compare.Options (Config (..), parseConfig)
 import DbSync.Compare.RowCounts (rowCountsChecks)
 import DbSync.Compare.SchemaCoverage
@@ -44,7 +44,13 @@ main = do
         if cfgSpotCheck cfg
           then
             spotCheckChecks
-              SpotCheckConfig {scSeed = cfgSeed cfg, scSamples = cfgSamples cfg, scEraFilter = cfgEras cfg}
+              SpotCheckConfig
+                { scSeed = cfgSeed cfg
+                , scSamples = cfgSamples cfg
+                , scEraFilter = cfgEras cfg
+                , scOldAddressShape = dfAddressShape oldFacts
+                , scNewAddressShape = dfAddressShape newFacts
+                }
               epochCeiling
           else pure []
 

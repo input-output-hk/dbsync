@@ -49,7 +49,7 @@ mkFollowResolver conn consumedTracking = do
       assignBlockId     = Core.assignBlockIdFollow    conn lastBlock
     , assignTxId        = Core.assignTxIdConn         conn
     , resolveSlotLeader = Core.resolveSlotLeaderConn  conn
-    , resolvePrevBlock  = Core.resolvePrevBlockFollow lastBlock
+    , resolvePrevBlock  = Core.resolvePrevBlockFollow conn lastBlock
     , lookupLastBlockId = readIORef                    lastBlock
 
       -- UTxO
@@ -146,7 +146,7 @@ mkBufferedFollowResolver conn preAlloc buf consumedTracking = do
       assignBlockId     = Core.assignBlockIdFollow    conn lastBlock
     , assignTxId        = Core.assignTxIdBuf          preAlloc
     , resolveSlotLeader = Core.resolveSlotLeaderBuf   conn cache
-    , resolvePrevBlock  = Core.resolvePrevBlockFollow lastBlock
+    , resolvePrevBlock  = Core.resolvePrevBlockFollow conn lastBlock
     , lookupLastBlockId = readIORef                    lastBlock
 
       -- UTxO

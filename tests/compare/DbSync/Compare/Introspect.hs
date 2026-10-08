@@ -1,6 +1,8 @@
 module DbSync.Compare.Introspect
   ( DbFacts (..)
+  , AddressShape (..)
   , gatherFacts
+  , columnExists
   , tableNonEmpty
   , approxRowCount
   , computeCeiling
@@ -16,6 +18,14 @@ import DbSync.Compare.Connect
 -- * Database facts
 -- ---------------------------------------------------------------------------
 
+-- | How @tx_out@ stores its address columns on one side. 'AddressNormalised'
+-- carries the raw-bytes column name on @address@ (@address@ in the rewrite,
+-- @raw@ in legacy).
+data AddressShape
+  = AddressInline
+  | AddressNormalised !Text
+  deriving stock (Eq, Show)
+
 data DbFacts = DbFacts
   { dfRole :: !DbRole
   , dfDbName :: !Text
@@ -24,6 +34,7 @@ data DbFacts = DbFacts
   , dfMaxEpoch :: !(Maybe Int64)
   , dfMaxBlockNo :: !(Maybe Int64)
   , dfPresentTables :: ![Text]
+  , dfAddressShape :: !AddressShape
   }
   deriving stock (Eq, Show)
 
@@ -37,6 +48,32 @@ gatherFacts conn =
     <*> queryTextList
       conn
       "SELECT table_name::text FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"
+    <*> detectAddressShape conn
+
+columnExists :: DbConn -> Text -> Text -> IO Bool
+columnExists conn table col =
+  queryBool conn $
+    T.concat
+      [ "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
+      , "WHERE table_schema = 'public' AND table_name = '"
+      , table
+      , "' AND column_name = '"
+      , col
+      , "')"
+      ]
+
+detectAddressShape :: DbConn -> IO AddressShape
+detectAddressShape conn = do
+  inline <- columnExists conn "tx_out" "address"
+  if inline
+    then pure AddressInline
+    else do
+      hasAddr <- columnExists conn "address" "address"
+      if hasAddr
+        then pure (AddressNormalised "address")
+        else do
+          hasRaw <- columnExists conn "address" "raw"
+          pure $ if hasRaw then AddressNormalised "raw" else AddressInline
 
 -- ---------------------------------------------------------------------------
 -- * Per-table probes

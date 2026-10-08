@@ -21,7 +21,7 @@ import qualified Hasql.Connection as Conn
 
 import DbSync.Db.Schema.Core (SlotLeader)
 import DbSync.Db.Schema.Ids (BlockId, SlotLeaderId, TxId)
-import DbSync.Db.Statement.Core (nextBlockIdStmt)
+import DbSync.Db.Statement.Core (nextBlockIdStmt, queryBlockIdByHashStmt)
 import DbSync.Db.Statement.Core (nextSlotLeaderIdStmt, querySlotLeaderIdStmt)
 import DbSync.Db.Statement.Core (nextTxIdStmt)
 import DbSync.Phase.Following.IdAllocator (PreAllocatedIds (..), popHead)
@@ -41,11 +41,15 @@ assignBlockIdFollow conn lastBlock = do
   writeIORef lastBlock (Just bid)
   pure bid
 
--- | Read the most-recently-assigned 'BlockId'. The hash argument is
--- ignored: in Follow the in-process @lastBlock@ ref is authoritative
--- between block writes.
-resolvePrevBlockFollow :: IORef (Maybe BlockId) -> ByteString -> IO (Maybe BlockId)
-resolvePrevBlockFollow lastBlock _ = readIORef lastBlock
+-- | Falls back to a PG lookup by hash because the resolver is rebuilt
+-- per block, so the ref is empty on entry.
+resolvePrevBlockFollow
+  :: Conn.Connection -> IORef (Maybe BlockId) -> ByteString -> IO (Maybe BlockId)
+resolvePrevBlockFollow conn lastBlock prevHash = do
+  cached <- readIORef lastBlock
+  case cached of
+    Just _  -> pure cached
+    Nothing -> runStmt conn prevHash queryBlockIdByHashStmt
 
 -- ---------------------------------------------------------------------------
 -- * Direct flavour
